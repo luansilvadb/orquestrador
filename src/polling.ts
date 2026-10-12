@@ -1,7 +1,7 @@
 // Atualização periódica de telas (lista de arquivos, branch, painel Git e aba de alterações).
 import { useEffect, useLayoutEffect, useRef } from 'react';
 
-export const POLL_MS = 1500;
+const POLL_MS = 1500;
 
 /** Repete `task` com o componente montado: uma rodada por vez, e nenhuma com a janela oculta. `task` não lança. */
 export function usePolling(task: () => Promise<void>) {

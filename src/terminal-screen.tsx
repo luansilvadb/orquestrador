@@ -23,6 +23,11 @@ export const STATES: Record<NodeState, { label: string; icon: typeof Clock; vari
 };
 export const FINISHED: NodeState[] = ['done', 'stopped', 'failed'];
 const CANCELLABLE: NodeState[] = ['queued', 'running', 'awaiting-orchestrator'];
+// Texto da camada que cobre o terminal do executor, por estado; os outros estados mostram o terminal direto.
+const COVER_TEXT: Partial<Record<NodeState, string>> = {
+  'awaiting-choice': 'Aguardando a escolha dos executores.',
+  queued: 'Na fila: começa quando um executor terminar ou o teto de simultâneos subir.',
+};
 
 /** Camada que cobre o terminal do executor com um aviso, sem sair da aba. */
 const Cover = ({ children }: { children: ReactNode }) => (
@@ -73,12 +78,12 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
         <TabsList className="h-9 w-full justify-start overflow-x-auto overflow-y-hidden rounded-full [scrollbar-width:none]">
           <TabsTrigger value={ORCHESTRATOR} className="flex-none rounded-full px-3">Orquestrador</TabsTrigger>
           {orchestrator && executors.map((e) => {
-            const meta = STATES[e.state];
-            const Icon = meta.icon;
-            const label = `Executor #${e.index + 1}, ${meta.label}: ${e.title}`;
+            const info = STATES[e.state];
+            const Icon = info.icon;
+            const label = `Executor #${e.index + 1}, ${info.label}: ${e.title}`;
             return (
               <TabsTrigger key={e.id} value={e.id} title={label} aria-label={label} className="flex-none rounded-full px-3">
-                <Icon className={cn(meta.tone, e.state === 'running' && 'animate-spin')} />
+                <Icon className={cn(info.tone, e.state === 'running' && 'animate-spin')} />
                 <span className="font-mono">#{e.index + 1}</span>
               </TabsTrigger>
             );
@@ -87,36 +92,38 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
       </Tabs>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
-        {orchestrator && node && meta && (
+        {orchestrator && (
           <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 text-xs">
-            <Badge variant={meta.variant} className={cn('gap-1', meta.className)}>
-              <meta.icon className={node.state === 'running' ? 'animate-spin' : undefined} />
-              {meta.label}
-            </Badge>
-            <span className="font-mono text-muted-foreground">#{node.index + 1}</span>
-            <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
-            {node.choice && <span className="truncate font-mono text-muted-foreground">{describeChoice(node.choice)}</span>}
-            {CANCELLABLE.includes(node.state) && (
-              <Button variant="outline" size="xs" title="Interrompe só este executor" onClick={() => onStop(node.id)}>
-                parar
-              </Button>
-            )}
-            {fullButton}
-          </div>
-        )}
-        {orchestrator && !node && (
-          <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 text-xs">
-            <Badge variant="secondary">orquestrador</Badge>
-            <span className="min-w-0 truncate font-mono text-muted-foreground">{orchestrator.title}</span>
-            <span className="flex-1" />
-            {orchestrator.started && (
-              <Button
-                variant="outline" size="xs" className="font-mono"
-                title="Escolha dos executores; a troca vale para os próximos"
-                onClick={onExecutorChoice}
-              >
-                executores: {executorChoice ? describeChoice(executorChoice) : 'ainda não escolhido'}
-              </Button>
+            {node && meta ? (
+              <>
+                <Badge variant={meta.variant} className={cn('gap-1', meta.className)}>
+                  <meta.icon className={node.state === 'running' ? 'animate-spin' : undefined} />
+                  {meta.label}
+                </Badge>
+                <span className="font-mono text-muted-foreground">#{node.index + 1}</span>
+                <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
+                {node.choice && <span className="truncate font-mono text-muted-foreground">{describeChoice(node.choice)}</span>}
+                {CANCELLABLE.includes(node.state) && (
+                  <Button variant="outline" size="xs" title="Interrompe só este executor" onClick={() => onStop(node.id)}>
+                    parar
+                  </Button>
+                )}
+              </>
+            ) : (
+              <>
+                <Badge variant="secondary">orquestrador</Badge>
+                <span className="min-w-0 truncate font-mono text-muted-foreground">{orchestrator.title}</span>
+                <span className="flex-1" />
+                {orchestrator.started && (
+                  <Button
+                    variant="outline" size="xs" className="font-mono"
+                    title="Escolha dos executores; a troca vale para os próximos"
+                    onClick={onExecutorChoice}
+                  >
+                    executores: {executorChoice ? describeChoice(executorChoice) : 'ainda não escolhido'}
+                  </Button>
+                )}
+              </>
             )}
             {fullButton}
           </div>
@@ -138,16 +145,9 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
               )}
             >
               <TermHost id={e.id} writable={false} onReady={attachExecutor} />
-              {e.state === 'awaiting-choice' && (
+              {COVER_TEXT[e.state] && (
                 <Cover>
-                  <p className="max-w-[300px] text-center text-sm text-muted-foreground">Aguardando a escolha dos executores.</p>
-                </Cover>
-              )}
-              {e.state === 'queued' && (
-                <Cover>
-                  <p className="max-w-[300px] text-center text-sm text-muted-foreground">
-                    Na fila: começa quando um executor terminar ou o teto de simultâneos subir.
-                  </p>
+                  <p className="max-w-[300px] text-center text-sm text-muted-foreground">{COVER_TEXT[e.state]}</p>
                 </Cover>
               )}
             </div>

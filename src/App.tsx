@@ -15,7 +15,7 @@ import { ChoiceForm } from './choice-form';
 import { FilesScreen, Nav, StatusBar } from './explorer';
 import { GitScreen, useGitStatus } from './git';
 import { useRoute, type Route } from './route';
-import { FINISHED, TerminalsScreen } from './terminal-screen';
+import { FINISHED, STATES, TerminalsScreen } from './terminal-screen';
 import { terminals } from './terminals';
 import {
   describeChoice, ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus,
@@ -129,7 +129,6 @@ export function App() {
   const [maxText, setMaxText] = useState('');
   const maxParallel = state.options?.maxParallel;
   useEffect(() => setMaxText(maxParallel === undefined ? '' : String(maxParallel)), [maxParallel]);
-  const booted = useRef(false);
 
   // ---------- ações ----------
 
@@ -193,8 +192,6 @@ export function App() {
   }
 
   useEffect(() => {
-    if (booted.current) return;
-    booted.current = true;
     void boot();
   }, []);
 
@@ -251,12 +248,9 @@ export function App() {
     dispatch({ type: 'overlay', overlay: 'executor' });
   }
 
-  async function saveExecutorChoice(choice: Choice, closeOverlay: boolean) {
+  async function saveExecutorChoice(choice: Choice) {
     await backend.setExecutorChoice(choice);
-    if (closeOverlay) {
-      dispatch({ type: 'overlay', overlay: null });
-      terminals.get(ORCHESTRATOR)?.term.focus();
-    }
+    dispatch({ type: 'overlay', overlay: null });
   }
 
   // Foco das janelas de escolha: ao fechar, o Dialog não devolve o foco ao botão que as abriu.
@@ -293,13 +287,12 @@ export function App() {
   const ready = update.phase === 'ready';
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
   const busy = executors.some((e) => !FINISHED.includes(e.state));
-  const count = (...states: NodeState[]) => executors.filter((e) => states.includes(e.state)).length;
-  const parts = [
-    [count('running'), 'executando', 'executando'], [count('queued'), 'na fila', 'na fila'],
-    [count('awaiting-choice'), 'aguardando escolha', 'aguardando escolha'],
-    [count('awaiting-orchestrator'), 'aguardando orquestrador', 'aguardando orquestrador'],
-  ] as const;
-  const counts = parts.filter(([n]) => n).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`).join(' · ');
+  const count = (state: NodeState) => executors.filter((e) => e.state === state).length;
+  const counts = (['running', 'queued', 'awaiting-choice', 'awaiting-orchestrator'] as const)
+    .map((state) => [count(state), STATES[state].label] as const)
+    .filter(([n]) => n)
+    .map(([n, label]) => `${n} ${label}`)
+    .join(' · ');
   const changed = git.status?.files.length ?? 0;
   // As duas telas ficam montadas; a rota só escolhe qual aparece. Inativa vai para invisible, nunca para display none.
   const shown = (to: Route) => cn('absolute inset-0', route !== to && 'invisible');
@@ -402,7 +395,7 @@ export function App() {
                   executors={executors}
                   executorChoice={state.executorChoice}
                   notice={state.notice}
-                  onOpen={() => openOrchestrator()}
+                  onOpen={openOrchestrator}
                   onExecutorChoice={toggleExecutorChoice}
                   onStop={(id) => backend.stopExecutor(id).catch(report)}
                 />
@@ -415,7 +408,7 @@ export function App() {
         </main>
       </div>
 
-      <StatusBar />
+      <StatusBar branch={git.status?.branch} />
 
       <Toaster position="bottom-right" />
       {/* As três escolhas são janelas: a do orquestrador (início e executores) e uma só para os executores aguardando. */}
@@ -434,14 +427,14 @@ export function App() {
             hint="Ferramenta, modelo e esforço dos próximos executores. Os que já estão rodando não mudam."
             options={options} initial={state.executorChoice ?? options.last.executor} confirmLabel="Usar nos executores"
             onCancel={() => dispatch({ type: 'overlay', overlay: null })}
-            onConfirm={(choice) => saveExecutorChoice(choice, true)} onClosed={focusOrchestrator}
+            onConfirm={(choice) => saveExecutorChoice(choice)} onClosed={focusOrchestrator}
           />
           <ChoiceForm
             open={count('awaiting-choice') > 0}
             title="Escolha dos executores"
             hint="Vale para este e para os próximos executores enquanto o orquestrador estiver aberto."
             options={options} initial={state.executorChoice ?? options.last.executor} confirmLabel="Usar nos executores"
-            onConfirm={(choice) => saveExecutorChoice(choice, true)} onClosed={focusOrchestrator}
+            onConfirm={(choice) => saveExecutorChoice(choice)} onClosed={focusOrchestrator}
           />
         </>
       )}

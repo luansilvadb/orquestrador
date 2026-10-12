@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub const TOOLS: [&str; 2] = ["claude", "codex"];
-pub const ROLES: [&str; 2] = ["orchestrator", "executor"];
 
 /// Esforços aceitos por ferramenta, conferidos nos CLIs instalados (`claude --help`, união de
 /// `codex debug models`). Vazio mantém o padrão do CLI.

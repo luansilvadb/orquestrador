@@ -53,7 +53,6 @@ export const backend = {
   shutdown: () => call<void>('shutdown'),
   // Caminho relativo à pasta do projeto, com "/"; '' é a raiz.
   listDir: (path: string) => call<DirEntry[]>('list_dir', { path }),
-  gitBranch: () => call<string>('git_branch'),
   // Painel Git. Caminhos relativos à raiz do projeto, com "/"; lista vazia em stage/unstage vale para tudo.
   gitStatus: () => call<GitStatus>('git_status'),
   gitDiff: (path: string, staged: boolean) => call<GitDiff>('git_diff', { path, staged }),

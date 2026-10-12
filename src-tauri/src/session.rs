@@ -254,15 +254,12 @@ fn owner_dead(dir: &Path, name: &str) -> bool {
     owner_of(dir).is_some_and(|(pid, started, session)| session == name && owner_state(pid, started) == Owner::Dead)
 }
 
-/// Se a primeira linha é a regra que este app escreveu para a pasta `dir`: a atual, do adaptador da
-/// sessão, ou a da versão anterior, que liberava o launcher `delegate.ps1` pelo caminho absoluto. Compara
-/// com o texto exato que `rule` escreve, sem interpretar o TOML: uma linha parecida, com outro token ou
-/// com mais tokens, não é nossa e fica.
+/// Se a primeira linha é a regra que este app escreveu para a pasta `dir`, a do adaptador da sessão.
+/// Compara com o texto exato que `rule` escreve, sem interpretar o TOML: uma linha parecida, com outro
+/// token ou com mais tokens, não é nossa e fica.
 fn is_delegate_rule(line: &str, dir: &Path) -> bool {
     let Some(name) = dir.file_name().and_then(|n| n.to_str()) else { return false };
-    let current = rule(&command_for(name));
-    let legacy = rule(&dir.join("delegate.ps1").to_string_lossy());
-    [current, legacy].iter().any(|expected| expected.trim_end() == line)
+    rule(&command_for(name)).trim_end() == line
 }
 
 /// Uma sessão morta à força deixa a regra do Codex valendo enquanto a pasta dela existir, e a
@@ -423,7 +420,7 @@ pub mod tests {
         let p = places("orphans");
         std::fs::create_dir_all(&p.codex_rules).unwrap();
         let temp = PathBuf::from(clean(&p.temp));
-        // `first` escolhe a primeira linha: a regra atual, a legada, ou uma estrangeira.
+        // `first` escolhe a primeira linha: a regra atual ou uma estrangeira.
         let make = |id: char, owner: Option<String>, first: &dyn Fn(&Path) -> String| {
             let name = format!("strategist-{}", id.to_string().repeat(32));
             let dir = temp.join(&name);
@@ -437,7 +434,6 @@ pub mod tests {
         };
         let me = std::process::id();
         let current = |dir: &Path| rule(&command_for(&dir.file_name().unwrap().to_string_lossy()));
-        let legacy = |dir: &Path| rule(&dir.join("delegate.ps1").to_string_lossy());
         let foreign = |_: &Path| "prefix_rule(pattern=[\"outra\"])\n".to_string();
         // Quase iguais à nossa: um token a mais, e um token com espaço no fim.
         let two_tokens = |dir: &Path| format!("prefix_rule(pattern=[{}, \"x\"], decision=\"allow\", justification=\"{JUSTIFICATION}\")\n", toml_str(&command_for(&dir.file_name().unwrap().to_string_lossy())));
@@ -448,9 +444,6 @@ pub mod tests {
         let gone = make('c', None, &current);
         let foreign_dead = make('d', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &foreign);
         let misnamed = make('e', Some(format!("{me} 1 strategist-outra")), &current);
-        let legacy_dead = make('f', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &legacy);
-        let legacy_alive = make('0', Some(format!("{me} {} {{name}}", start_time(me).unwrap())), &legacy);
-        let legacy_gone = make('1', None, &legacy);
         let two_dead = make('2', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &two_tokens);
         let token_dead = make('3', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &wrong_token);
         std::fs::write(p.codex_rules.join("default.rules"), "x").unwrap();
@@ -462,9 +455,6 @@ pub mod tests {
         assert!(!gone.1.exists(), "pasta sumida: a regra sai");
         assert!(foreign_dead.1.exists() && !foreign_dead.0.exists(), "regra de primeira linha diferente fica; a pasta de dono morto sai");
         assert!(misnamed.0.exists() && misnamed.1.exists(), "owner de outra sessão fica");
-        assert!(!legacy_dead.0.exists() && !legacy_dead.1.exists(), "formato legado com dono morto: regra e pasta saem");
-        assert!(legacy_alive.0.exists() && legacy_alive.1.exists(), "formato legado com dono vivo fica");
-        assert!(!legacy_gone.1.exists(), "formato legado com pasta sumida: a regra sai");
         assert!(two_dead.1.exists() && !two_dead.0.exists(), "regra com dois tokens não é nossa: fica");
         assert!(token_dead.1.exists() && !token_dead.0.exists(), "token com espaço a mais não é nosso: fica");
         assert!(p.codex_rules.join("default.rules").exists());

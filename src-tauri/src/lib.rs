@@ -44,55 +44,48 @@ fn get_options(core: State<Core>, gate: State<Gate>) -> Result<Options, String> 
 #[tauri::command(async)]
 fn list_dir(core: State<Core>, gate: State<Gate>, path: String) -> Result<Vec<files::Entry>, String> {
     gate.ensure_open()?;
-    core.list_dir(&path)
-}
-
-/// A branch atual do projeto, ou o hash curto em HEAD destacado.
-#[tauri::command(async)]
-fn git_branch(core: State<Core>, gate: State<Gate>) -> Result<String, String> {
-    gate.ensure_open()?;
-    core.git_branch()
+    files::list(&core.repo()?, &path)
 }
 
 /// O estado do Git do projeto para o painel: branch, upstream, ahead/behind e os arquivos alterados.
 #[tauri::command(async)]
 fn git_status(core: State<Core>, gate: State<Gate>) -> Result<git::Status, String> {
     gate.ensure_open()?;
-    core.git_status()
+    git::status(&core.repo()?)
 }
 
 /// O diff de um arquivo. `staged` compara o índice com o HEAD; senão, a pasta de trabalho com o índice.
 #[tauri::command(async)]
 fn git_diff(core: State<Core>, gate: State<Gate>, path: String, staged: bool) -> Result<git::Diff, String> {
     gate.ensure_open()?;
-    core.git_diff(&path, staged)
+    git::diff(&core.repo()?, &path, staged)
 }
 
 /// Prepara os caminhos. Lista vazia prepara tudo, inclusive o não rastreado e o apagado.
 #[tauri::command(async)]
 fn git_stage(core: State<Core>, gate: State<Gate>, paths: Vec<String>) -> Result<(), String> {
     gate.ensure_open()?;
-    core.git_stage(&paths)
+    git::stage(&core.repo()?, &paths)
 }
 
 /// Tira os caminhos do índice. Lista vazia tira tudo.
 #[tauri::command(async)]
 fn git_unstage(core: State<Core>, gate: State<Gate>, paths: Vec<String>) -> Result<(), String> {
     gate.ensure_open()?;
-    core.git_unstage(&paths)
+    git::unstage(&core.repo()?, &paths)
 }
 
 #[tauri::command(async)]
 fn git_commit(core: State<Core>, gate: State<Gate>, message: String) -> Result<(), String> {
     gate.ensure_open()?;
-    core.git_commit(&message)
+    git::commit(&core.repo()?, &message)
 }
 
 /// A saída do `git fetch`, para a tela mostrar.
 #[tauri::command(async)]
 fn git_fetch(core: State<Core>, gate: State<Gate>) -> Result<String, String> {
     gate.ensure_open()?;
-    core.git_fetch()
+    git::fetch(&core.repo()?)
 }
 
 /// Recusado enquanto houver executor trabalhando.
@@ -106,13 +99,13 @@ fn git_pull(core: State<Core>, gate: State<Gate>) -> Result<String, String> {
 #[tauri::command(async)]
 fn git_push(core: State<Core>, gate: State<Gate>) -> Result<String, String> {
     gate.ensure_open()?;
-    core.git_push()
+    git::push(&core.repo()?)
 }
 
 #[tauri::command(async)]
 fn git_branches(core: State<Core>, gate: State<Gate>) -> Result<git::Branches, String> {
     gate.ensure_open()?;
-    core.git_branches()
+    git::branches(&core.repo()?)
 }
 
 /// Troca para uma branch local existente. Recusado enquanto houver executor trabalhando.
@@ -233,7 +226,6 @@ pub fn run(context: tauri::Context) {
             choose_project,
             get_options,
             list_dir,
-            git_branch,
             git_status,
             git_diff,
             git_stage,

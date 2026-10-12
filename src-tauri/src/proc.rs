@@ -21,15 +21,6 @@ pub fn quiet(program: &str) -> Command {
     cmd
 }
 
-/// A saída do Git lida como UTF-8, ou o motivo da falha.
-pub fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = quiet("git").arg("-C").arg(dir).args(args).output().map_err(|e| format!("git não pôde ser executado: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("código {}", out.status.code().unwrap_or(-1)));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
 /// Roda o Git sem nada que espere digitação: sem entrada, sem pedido de credencial, sem editor. Sucesso
 /// devolve (stdout, stderr); falha devolve o que o Git escreveu (stderr e stdout, aparados), ou o código
 /// de saída quando ele não escreveu nada. Os caminhos são pathspec literal e o nome sai em UTF-8 sem aspas.
@@ -69,7 +60,7 @@ pub fn git_root(folder: &Path) -> Option<String> {
     if !folder.is_dir() {
         return None;
     }
-    let top = git(folder, &["rev-parse", "--show-toplevel"]).ok()?;
+    let top = git_saida(folder, &["rev-parse", "--show-toplevel"]).ok()?;
     let top = top.trim();
     (!top.is_empty()).then(|| top.replace('/', "\\"))
 }
@@ -77,10 +68,10 @@ pub fn git_root(folder: &Path) -> Option<String> {
 /// Nome da branch atual; em HEAD destacado, o hash curto do commit. Erro se nem isso der para ler.
 pub fn branch(dir: &Path) -> Result<String, String> {
     // `symbolic-ref` também acha a branch de um repositório sem commit; `-q` deixa o HEAD destacado sair com erro.
-    if let Ok(name) = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"]) {
+    if let Ok(name) = git_saida(dir, &["symbolic-ref", "--short", "-q", "HEAD"]) {
         return Ok(name.trim().to_string());
     }
-    let hash = git(dir, &["rev-parse", "--short", "HEAD"]).map_err(|why| format!("Não foi possível ler a branch: {why}"))?;
+    let hash = git_saida(dir, &["rev-parse", "--short", "HEAD"]).map_err(|why| format!("Não foi possível ler a branch: {why}"))?;
     Ok(hash.trim().to_string())
 }
 
@@ -205,14 +196,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("orq-proc-{}-branch", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        git(&dir, &["init", "-q"]).unwrap();
+        git_saida(&dir, &["init", "-q"]).unwrap();
         // Sem commit ainda: a branch já tem nome, mesmo sem nascer.
-        git(&dir, &["symbolic-ref", "HEAD", "refs/heads/trabalho"]).unwrap();
+        git_saida(&dir, &["symbolic-ref", "HEAD", "refs/heads/trabalho"]).unwrap();
         assert_eq!(branch(&dir).unwrap(), "trabalho");
-        git(&dir, &["-c", "user.name=teste", "-c", "user.email=teste@teste", "commit", "--allow-empty", "-q", "-m", "x"]).unwrap();
+        git_saida(&dir, &["-c", "user.name=teste", "-c", "user.email=teste@teste", "commit", "--allow-empty", "-q", "-m", "x"]).unwrap();
         assert_eq!(branch(&dir).unwrap(), "trabalho");
-        git(&dir, &["checkout", "--detach", "-q"]).unwrap();
-        let hash = git(&dir, &["rev-parse", "--short", "HEAD"]).unwrap();
+        git_saida(&dir, &["checkout", "--detach", "-q"]).unwrap();
+        let hash = git_saida(&dir, &["rev-parse", "--short", "HEAD"]).unwrap();
         assert_eq!(branch(&dir).unwrap(), hash.trim());
         let _ = std::fs::remove_dir_all(&dir);
     }

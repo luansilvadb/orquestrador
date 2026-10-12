@@ -1,5 +1,5 @@
 // A navegação da coluna de ícones, a árvore de pastas (na tela principal) e a barra de status com a branch.
-// A árvore e a branch se atualizam sozinhas (usePolling). O status do Git vem do App, que o usa no contador da navegação.
+// A árvore se atualiza sozinha (usePolling). O status do Git vem do App, que o usa no contador da navegação e na barra de status.
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, File, Files, Folder, FolderOpen, GitBranch, GitCommitHorizontal } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -137,15 +137,7 @@ export function FilesScreen() {
 }
 
 /** Barra de status fina embaixo da tela principal: só a branch atual do projeto. */
-export function StatusBar() {
-  const [branch, setBranch] = useState<string | null>(null);
-  usePolling(async () => {
-    try {
-      setBranch(await backend.gitBranch());
-    } catch {
-      setBranch(null);
-    }
-  });
+export function StatusBar({ branch }: { branch: string | undefined }) {
   return (
     <footer className="flex h-6 shrink-0 items-center gap-1.5 border-t bg-card px-3 text-xs text-muted-foreground">
       {branch && (

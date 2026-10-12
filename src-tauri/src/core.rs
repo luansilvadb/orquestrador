@@ -2,7 +2,6 @@
 //! Tauri: os eventos saem por `Emit`, que os testes trocam por um canal.
 use crate::cli::{self, Exes};
 use crate::config::{self, Choice, Options};
-use crate::files::{self, Entry};
 use crate::git;
 use crate::hook;
 use crate::proc;
@@ -213,61 +212,19 @@ impl Core {
         Ok(root)
     }
 
-    /// Um nível da pasta `path` (relativa ao projeto; vazio é a raiz) para o explorador de arquivos.
-    pub fn list_dir(&self, path: &str) -> Result<Vec<Entry>, String> {
-        files::list(Path::new(&self.project()?), path)
-    }
-
-    /// A branch atual do projeto, ou o hash curto em HEAD destacado.
-    pub fn git_branch(&self) -> Result<String, String> {
-        proc::branch(Path::new(&self.project()?))
-    }
-
     fn project(&self) -> Result<String, String> {
         self.inner.lock().unwrap().project.clone().ok_or_else(|| "Escolha a pasta do projeto primeiro.".into())
     }
 
-    fn repo(&self) -> Result<PathBuf, String> {
+    /// A pasta do projeto como caminho, para os comandos que a recebem.
+    pub fn repo(&self) -> Result<PathBuf, String> {
         self.project().map(PathBuf::from)
-    }
-
-    /// O estado do Git do projeto para o painel.
-    pub fn git_status(&self) -> Result<git::Status, String> {
-        git::status(&self.repo()?)
-    }
-
-    pub fn git_diff(&self, path: &str, staged: bool) -> Result<git::Diff, String> {
-        git::diff(&self.repo()?, path, staged)
-    }
-
-    pub fn git_stage(&self, paths: &[String]) -> Result<(), String> {
-        git::stage(&self.repo()?, paths)
-    }
-
-    pub fn git_unstage(&self, paths: &[String]) -> Result<(), String> {
-        git::unstage(&self.repo()?, paths)
-    }
-
-    pub fn git_commit(&self, message: &str) -> Result<(), String> {
-        git::commit(&self.repo()?, message)
-    }
-
-    pub fn git_fetch(&self) -> Result<String, String> {
-        git::fetch(&self.repo()?)
     }
 
     /// Puxa commits só sem executor pendente. Roda fora do lock do Core, com `git_exclusive` marcado: o app
     /// segue respondendo e nenhum executor começa até o pull terminar (ver `git_idle`).
     pub fn git_pull(&self) -> Result<String, String> {
         self.git_idle(git::pull)
-    }
-
-    pub fn git_push(&self) -> Result<String, String> {
-        git::push(&self.repo()?)
-    }
-
-    pub fn git_branches(&self) -> Result<git::Branches, String> {
-        git::branches(&self.repo()?)
     }
 
     pub fn git_switch(&self, name: &str) -> Result<(), String> {
@@ -679,7 +636,7 @@ impl Core {
         let done = inner.batches.remove(pos);
         let items: Vec<(String, Outcome)> = done.titles.into_iter().zip(done.outcomes.into_iter().flatten()).collect();
         let project = inner.project.clone().unwrap_or_default();
-        let git = proc::git(Path::new(&project), &["status", "--porcelain", "--untracked-files=all"]);
+        let git = proc::git_saida(Path::new(&project), &["status", "--porcelain", "--untracked-files=all"]);
         let (code, text) = if items.is_empty() {
             (4, "wrapper_error: o lote chegou sem tarefas.\n--- FIM ---\n".to_string())
         } else {
@@ -766,7 +723,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let git = |args: &[&str]| proc::git(&repo, args).unwrap();
+        let git = |args: &[&str]| proc::git_saida(&repo, args).unwrap();
         git(&["init", "-q", "-b", "main"]);
         for (key, value) in [("user.name", "teste"), ("user.email", "teste@teste"), ("core.autocrlf", "false")] {
             git(&["config", key, value]);
@@ -800,11 +757,11 @@ mod tests {
             assert_eq!(core.git_pull().unwrap_err(), TRAVA, "{state:?}");
             assert_eq!(core.git_switch("outra").unwrap_err(), TRAVA, "{state:?}");
             assert_eq!(core.git_create_branch("nova").unwrap_err(), TRAVA, "{state:?}");
-            assert!(core.git_status().is_ok(), "o status nunca é travado ({state:?})");
-            assert!(core.git_branches().is_ok(), "a lista de branches nunca é travada ({state:?})");
+            assert!(git::status(&core.repo().unwrap()).is_ok(), "o status nunca é travado ({state:?})");
+            assert!(git::branches(&core.repo().unwrap()).is_ok(), "a lista de branches nunca é travada ({state:?})");
         }
         // Recusados não mudaram nada: continua em `main`, sem a branch nova.
-        let b = core.git_branches().unwrap();
+        let b = git::branches(&core.repo().unwrap()).unwrap();
         assert_eq!((b.current.as_str(), b.local), ("main", vec!["main".to_string(), "outra".to_string()]));
 
         for state in [NodeState::Done, NodeState::Stopped, NodeState::Failed] {
@@ -815,7 +772,7 @@ mod tests {
             assert_ne!(core.git_pull().unwrap_err(), TRAVA, "{state:?}");
         }
         assert_eq!(core.git_create_branch("nova"), Ok(()));
-        assert_eq!(core.git_branches().unwrap().current, "nova");
+        assert_eq!(git::branches(&core.repo().unwrap()).unwrap().current, "nova");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -831,8 +788,8 @@ mod tests {
         assert_eq!(core.git_switch("outra").unwrap_err(), EM_CURSO);
         assert_eq!(core.git_create_branch("nova").unwrap_err(), EM_CURSO);
         assert_eq!(core.git_pull().unwrap_err(), EM_CURSO);
-        assert!(core.git_status().is_ok());
-        assert!(core.git_branches().is_ok());
+        assert!(git::status(&core.repo().unwrap()).is_ok());
+        assert!(git::branches(&core.repo().unwrap()).is_ok());
         // A recusa não solta a marca de quem está rodando.
         assert!(git_exclusivo(&core));
         core.inner.lock().unwrap().git_exclusive = false;
@@ -862,11 +819,11 @@ mod tests {
 
     #[test]
     fn o_lock_do_core_fica_livre_enquanto_o_git_roda() {
-        // Com o lock segurado durante o comando, `git_branch` (que pega o lock) travaria este teste.
+        // Com o lock segurado durante o comando, `core.repo()` (que pega o lock) travaria este teste.
         let (core, root) = git_core("livre");
         let branch = core.git_idle(|_| {
             assert!(git_exclusivo(&core), "marcado enquanto o comando roda");
-            core.git_branch()
+            git::branches(&core.repo()?).map(|b| b.current)
         });
         assert_eq!(branch, Ok("main".to_string()));
         assert!(!git_exclusivo(&core));

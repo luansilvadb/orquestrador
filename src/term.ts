@@ -31,7 +31,6 @@ export class TermView {
     this.term = new Terminal({
       theme, fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace',
       fontSize: 13, lineHeight: 1.15, scrollback: 10000, cursorBlink: writable, disableStdin: !writable,
-      allowProposedApi: false,
     });
     this.term.loadAddon(this.fitAddon);
     this.term.open(host);

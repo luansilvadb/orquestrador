@@ -413,7 +413,7 @@ mod tests {
     }
 
     fn git(dir: &Path, args: &[&str]) -> String {
-        proc::git(dir, args).unwrap()
+        proc::git_saida(dir, args).unwrap()
     }
 
     /// Identidade e fim de linha fixos na configuração local: nada do usuário nem do Windows entra no teste.
@@ -506,7 +506,7 @@ mod tests {
         write(&dir, "x.txt", "main\n");
         commit_all(&dir, "main");
         // O merge para no conflito; o erro é o esperado.
-        let _ = proc::git(&dir, &["merge", "-q", "outra"]);
+        let _ = proc::git_saida(&dir, &["merge", "-q", "outra"]);
         let st = git_status_of(&dir);
         assert_eq!(find(&st, "x.txt").staged, None);
         assert_eq!(find(&st, "x.txt").unstaged, Some(Kind::Conflicted));

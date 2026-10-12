@@ -13,7 +13,7 @@ import { backend, message } from './backend';
 import { usePolling } from './polling';
 import type { GitBranches, GitDiff, GitFile, GitKind, GitStatus } from './types';
 
-export const LOCKED_TITLE = 'Há executores trabalhando. Espere o lote terminar.';
+const LOCKED_TITLE = 'Há executores trabalhando. Espere o lote terminar.';
 const KIND: Record<GitKind, { letter: string; title: string }> = {
   modified: { letter: 'M', title: 'modificado' },
   added: { letter: 'A', title: 'novo' },
@@ -31,29 +31,40 @@ const commits = (n: number) => `${n} ${n === 1 ? 'commit' : 'commits'}`;
 // Caminhos de um arquivo para preparar ou tirar: renomeado leva o nome antigo junto.
 const pathsOf = (f: GitFile) => (f.origPath ? [f.path, f.origPath] : [f.path]);
 
-/** Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta. */
-export function useGitStatus(enabled: boolean) {
-  const [status, setStatus] = useState<GitStatus | null>(null);
+/**
+ * Consulta repetida (usePolling) e a mesma consulta sob demanda (`refresh`). O estado só muda quando a resposta é outra, para não piscar.
+ * `enabled` falso não consulta; `clearOnError` zera o dado quando a consulta falha, em vez de manter o anterior.
+ */
+function usePolled<T>(read: () => Promise<T>, enabled: boolean, clearOnError: boolean) {
+  const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState('');
   const last = useRef('');
   const refresh = async () => {
     if (!enabled) return;
     try {
-      const next = await backend.gitStatus();
+      const next = await read();
       const text = JSON.stringify(next);
       setError('');
       if (text !== last.current) {
         last.current = text;
-        setStatus(next);
+        setData(next);
       }
     } catch (e) {
-      last.current = '';
-      setStatus(null);
+      if (clearOnError) {
+        last.current = '';
+        setData(null);
+      }
       setError(message(e));
     }
   };
   usePolling(refresh);
-  return { status, error, refresh };
+  return { data, error, refresh };
+}
+
+/** Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta. */
+export function useGitStatus(enabled: boolean) {
+  const { data, error, refresh } = usePolled(() => backend.gitStatus(), enabled, true);
+  return { status: data, error, refresh };
 }
 
 type Op = 'fetch' | 'pull' | 'push';
@@ -64,12 +75,12 @@ const REMOTE: Record<Op, { run: () => Promise<string>; done: string }> = {
 };
 
 /** Arquivo selecionado na tela Git: o caminho e o lado (preparado ou não) da seção clicada. */
-export type Selection = { path: string; staged: boolean };
+type Selection = { path: string; staged: boolean };
 const WIDTH = { initial: 240, min: 160, max: 600 };
 const clampWidth = (v: number) => Math.min(WIDTH.max, Math.max(WIDTH.min, v));
 
 /** Painel do Git: de cima para baixo, a linha da branch, o commit e as seções Preparadas e Alterações. */
-export function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
+function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
   status: GitStatus | null;
   error: string;
   refresh: () => Promise<void>;
@@ -227,10 +238,10 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
     }
   }
 
-  async function choose(target: string) {
-    if (target === branches?.current) return;
+  // Trocar ou criar: o popover fecha se deu certo; erro vai para toast, e o status é relido de qualquer jeito.
+  async function change(task: () => Promise<void>) {
     try {
-      await backend.gitSwitch(target);
+      await task();
       setOpen(false);
     } catch (e) {
       fail(e);
@@ -239,17 +250,15 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
     }
   }
 
+  async function choose(target: string) {
+    if (target === branches?.current) return;
+    await change(() => backend.gitSwitch(target));
+  }
+
   async function create() {
     const target = name.trim();
     if (!target || locked) return;
-    try {
-      await backend.gitCreateBranch(target);
-      setOpen(false);
-    } catch (e) {
-      fail(e);
-    } finally {
-      await refresh();
-    }
+    await change(() => backend.gitCreateBranch(target));
   }
 
   return (
@@ -412,24 +421,8 @@ export function GitScreen({ git, locked, active }: { git: ReturnType<typeof useG
  * Alterações de um arquivo: uma coluna monoespaçada, com números antes e depois, sinal e rolagem.
  * Atualiza só enquanto a tela Git está visível (`active`); o que não mudou não é trocado, então a rolagem fica como está.
  */
-export function DiffView({ path, staged, active }: { path: string; staged: boolean; active: boolean }) {
-  const [diff, setDiff] = useState<GitDiff | null>(null);
-  const [error, setError] = useState('');
-  const last = useRef('');
-  usePolling(async () => {
-    if (!active) return;
-    try {
-      const next = await backend.gitDiff(path, staged);
-      const text = JSON.stringify(next);
-      setError('');
-      if (text !== last.current) {
-        last.current = text;
-        setDiff(next);
-      }
-    } catch (e) {
-      setError(message(e));
-    }
-  });
+function DiffView({ path, staged, active }: { path: string; staged: boolean; active: boolean }) {
+  const { data: diff, error } = usePolled<GitDiff>(() => backend.gitDiff(path, staged), active, false);
 
   const note = (text: string, tone = 'text-muted-foreground') => (
     <p role="status" className={cn('p-4 text-sm', tone)}>{text}</p>

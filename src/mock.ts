@@ -5,9 +5,9 @@
 // `?update=download` simula o download (`indeterminado` e `total-zero`: tamanho desconhecido). Sem parâmetro, o uso já vem liberado, como no build de desenvolvimento.
 // No console: `__mock.close()` simula fechar a janela; `__mock.writes` e `__mock.sizes` registram o que chegou.
 // `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto (a lista da tela some com ele sozinha).
-// A árvore (`list_dir`) e o Git (`git_*`) são um repositório simulado, em memória, coerente com ela: começa com
-// alguns arquivos alterados (um só em duas seções, um binário, um grande demais para o diff) e um não rastreado.
-// Preparar, tirar, commitar, criar e trocar branch funcionam; fetch, pull e push mexem em ahead/behind (push recusa
+// A árvore (`list_dir`) e o Git (`git_*`) são dados em memória: a árvore muda só com o executor e `__mock.remove`.
+// O Git é uma lista fixa de alterações (um arquivo em duas seções, um binário, um grande demais para o diff, um não
+// rastreado), com os diffs escritos à mão. Preparar, tirar, commitar, criar e trocar branch funcionam; fetch, pull e push mexem em ahead/behind (push recusa
 // se o remoto tem commits novos). Um executor que termina bem cria `src/tarefa-<lote>-<n>.ts`, que aparece como não rastreado.
 // Com executor não finalizado, pull, troca e criação de branch são recusados, como no backend.
 import type { Transport } from './backend';
@@ -75,23 +75,34 @@ const tree = folder({
   tests: folder(),
 });
 
-// Repositório simulado: cada arquivo tem o conteúdo no HEAD, no índice (preparado) e no disco. `null` = não existe ali.
-type Doc = { head: string | null; index: string | null; work: string | null };
-const repo = new Map<string, Doc>();
-const seed = (path: string, head: string | null, index: string | null, work: string | null) => repo.set(path, { head, index, work });
-const same = (path: string, text: string) => seed(path, text, text, text);
-for (const path of ['.gitignore', 'package.json', 'src/index.css', 'src/main.tsx', 'src/components/ui/button.tsx', 'src/components/ui/card.tsx', 'src/lib/utils.ts']) {
-  same(path, `conteúdo de ${path}\n`);
-}
-const app = 'export function App() {\n  return <main />;\n}\n';
-seed('README.md', '# Orquestrador\n', '# Orquestrador\n', '# Orquestrador\n\nPainel Git em andamento.\n');
-seed('docs/design-system.md', '# Design system\n', '# Design system\n\nTokens semânticos.\n', '# Design system\n\nTokens semânticos.\n');
-seed('docs/rascunho-painel.md', null, null, '# Rascunho\n\nIdeias para o painel Git.\n');
-seed('src/App.tsx', 'export function App() {\n  return null;\n}\n', app, `${app}\n// TODO: abas\n`);
-// Um arquivo grande (acima de 1000 linhas: tooLarge) e um binário (binary).
-const big = (change = -1) =>`{\n${Array.from({ length: 1200 }, (_, i) => `  "item-${i}": ${i === change ? 11 : i},`).join('\n')}\n}\n`;
-seed('dados/exportacao.json', big(), big(), big(10));
-seed('assets/logo.png', 'PNG-antigo\u0000', 'PNG-antigo\u0000', 'PNG-novo\u0000');
+// Lista do Git: só os arquivos alterados, com o lado preparado (`staged`) e o das alterações (`unstaged`).
+const entry = (path: string, staged: GitKind | null, unstaged: GitKind | null): GitFile => ({ path, origPath: null, staged, unstaged });
+const byPath = (a: GitFile, b: GitFile) => a.path.localeCompare(b.path, 'pt-BR');
+let files: GitFile[] = [
+  entry('README.md', null, 'modified'),
+  entry('docs/design-system.md', 'modified', null),
+  entry('docs/rascunho-painel.md', null, 'untracked'),
+  entry('src/App.tsx', 'modified', 'modified'),
+  entry('dados/exportacao.json', null, 'modified'),
+  entry('assets/logo.png', null, 'modified'),
+];
+// Diffs escritos à mão, por lado e caminho: `staged:` é o preparado contra o HEAD; `unstaged:`, as alterações contra o preparado.
+const ctx = (old: number, nw: number, text: string): DiffLine => ({ kind: 'context', old, new: nw, text });
+const add = (nw: number, text: string): DiffLine => ({ kind: 'add', old: null, new: nw, text });
+const del = (old: number, text: string): DiffLine => ({ kind: 'del', old, new: null, text });
+const HUNKS: Record<string, DiffHunk[]> = {
+  'unstaged:README.md': [{ header: '@@ -1 +1,3 @@', lines: [ctx(1, 1, '# Orquestrador'), add(2, ''), add(3, 'Painel Git em andamento.')] }],
+  'staged:docs/design-system.md': [{ header: '@@ -1 +1,3 @@', lines: [ctx(1, 1, '# Design system'), add(2, ''), add(3, 'Tokens semânticos.')] }],
+  'unstaged:docs/rascunho-painel.md': [{ header: '@@ -0,0 +1,3 @@', lines: [add(1, '# Rascunho'), add(2, ''), add(3, 'Ideias para o painel Git.')] }],
+  'staged:src/App.tsx': [{
+    header: '@@ -1,3 +1,3 @@',
+    lines: [ctx(1, 1, 'export function App() {'), del(2, '  return null;'), add(2, '  return <main />;'), ctx(3, 3, '}')],
+  }],
+  'unstaged:src/App.tsx': [{
+    header: '@@ -1,3 +1,5 @@',
+    lines: [ctx(1, 1, 'export function App() {'), ctx(2, 2, '  return <main />;'), ctx(3, 3, '}'), add(4, ''), add(5, '// TODO: abas')],
+  }],
+};
 const branches = ['main', 'feat/painel-git'];
 let branch = 'main', ahead = 1, behind = 0;
 const BUSY = 'Há executores trabalhando. Espere o lote terminar.';
@@ -111,18 +122,20 @@ function addFile(dirPath: string, name: string) {
   const dir = folderAt(dirPath);
   if (!dir) return;
   dir.children[name] = file();
-  seed(`${dirPath}/${name}`, null, null, 'export {};\n');
+  files.push(entry(`${dirPath}/${name}`, null, 'untracked'));
 }
 // Apagar pela árvore: o arquivo some do disco (apagado, se estava no Git; some de vez, se era não rastreado).
 function removePath(path: string) {
   const parts = path.split('/'), name = parts.pop()!;
   const dir = folderAt(parts.join('/'));
-  if (dir) delete dir.children[name];
-  const doc = repo.get(path);
-  if (doc) {
-    doc.work = null;
-    if (doc.head === null && doc.index === null) repo.delete(path);
-  }
+  const child = dir?.children[name];
+  if (!dir || !child) return;
+  delete dir.children[name];
+  if (child.dir) return;
+  const f = files.find((x) => x.path === path);
+  if (f?.unstaged === 'untracked') files = files.filter((x) => x !== f);
+  else if (f) f.unstaged = 'deleted';
+  else files.push(entry(path, null, 'deleted'));
 }
 
 let alive = false, line = '', batches = 0, executorChoice: Choice | null = null, closeHandler: (() => Promise<boolean>) | null = null;
@@ -261,57 +274,41 @@ function typed(data: string) {
 
 // ---------- Git simulado ----------
 
-const statusOf = (path: string, d: Doc): GitFile | null => {
-  let staged: GitKind | null = null, unstaged: GitKind | null = null;
-  if (d.head === null && d.index !== null) staged = 'added';
-  else if (d.head !== null && d.index === null) staged = 'deleted';
-  else if (d.head !== null && d.index !== null && d.head !== d.index) staged = 'modified';
-  if (d.index === null) {
-    if (d.head === null && d.work !== null) unstaged = 'untracked';
-  } else if (d.work === null) unstaged = 'deleted';
-  else if (d.work !== d.index) unstaged = 'modified';
-  return staged || unstaged ? { path, origPath: null, staged, unstaged } : null;
-};
-const gitFiles = () => [...repo]
-  .map(([path, d]) => statusOf(path, d))
-  .filter((f): f is GitFile => f !== null)
-  .sort((a, b) => a.path.localeCompare(b.path, 'pt-BR'));
-// Arquivo sem nada em lugar nenhum sai do repositório simulado.
-const prune = (path: string) => {
-  const d = repo.get(path);
-  if (d && d.head === null && d.index === null && d.work === null) repo.delete(path);
-};
 // Executor ou orquestrador com tarefa aberta: a mesma trava do backend para pull, troca e criação de branch.
 const busy = () => [...jobs.values()].some((j) => !['done', 'stopped', 'failed'].includes(j.state));
 
 // Lista vazia vale para tudo, como no backend.
+const known = (path: string) => {
+  const f = files.find((x) => x.path === path);
+  if (!f) throw `Arquivo não encontrado no repositório: ${path}`;
+  return f;
+};
 function stage(paths: string[]) {
-  const targets = paths.length ? paths : gitFiles().filter((f) => f.unstaged).map((f) => f.path);
+  const targets = paths.length ? paths : files.filter((f) => f.unstaged).map((f) => f.path);
   for (const path of targets) {
-    const d = repo.get(path);
-    if (!d) throw `Arquivo não encontrado no repositório: ${path}`;
-    d.index = d.work;
-    prune(path);
+    const f = known(path);
+    if (!f.unstaged) continue;
+    // O que estava nas alterações vai para o preparado; arquivo novo continua novo.
+    f.staged = f.staged === 'added' || f.unstaged === 'untracked' ? 'added' : f.unstaged;
+    f.unstaged = null;
   }
 }
 function unstage(paths: string[]) {
-  const targets = paths.length ? paths : gitFiles().filter((f) => f.staged).map((f) => f.path);
+  const targets = paths.length ? paths : files.filter((f) => f.staged).map((f) => f.path);
   for (const path of targets) {
-    const d = repo.get(path);
-    if (!d) throw `Arquivo não encontrado no repositório: ${path}`;
-    d.index = d.head;
-    prune(path);
+    const f = known(path);
+    if (!f.staged) continue;
+    // Tirado do preparo, o que era novo volta a não rastreado.
+    f.unstaged = f.staged === 'added' ? 'untracked' : f.staged;
+    f.staged = null;
   }
 }
 function commit(message: string) {
   if (!message.trim()) throw 'A mensagem do commit está vazia.';
-  const staged = gitFiles().filter((f) => f.staged);
-  if (!staged.length) throw 'Nada preparado para commitar.';
-  for (const f of staged) {
-    const d = repo.get(f.path)!;
-    d.head = d.index;
-    prune(f.path);
-  }
+  if (!files.some((f) => f.staged)) throw 'Nada preparado para commitar.';
+  for (const f of files) f.staged = null;
+  // O que não sobrou em alterações sai da lista.
+  files = files.filter((f) => f.unstaged);
   ahead++;
 }
 // Remoto simulado: fetch traz 2 commits de fora; pull os recebe; push só envia se nada novo chegou do remoto.
@@ -334,58 +331,12 @@ const pushRemote = () => {
   return `Enviando ${n} commit(s) para origin/${branch}\n   1a2b3c4..5d6e7f8  ${branch} -> ${branch}\n`;
 };
 
-// Diff simulado: LCS linha a linha e trechos com três linhas de contexto, no formato do git.
-const linesOf = (text: string | null) => (text ? text.replace(/\n$/, '').split('\n') : []);
-function lineOps(a: string[], b: string[]): DiffLine[] {
-  const n = a.length, m = b.length;
-  const best = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      best[i][j] = a[i] === b[j] ? best[i + 1][j + 1] + 1 : Math.max(best[i + 1][j], best[i][j + 1]);
-    }
-  }
-  const ops: DiffLine[] = [];
-  let i = 0, j = 0;
-  while (i < n || j < m) {
-    if (i < n && j < m && a[i] === b[j]) {
-      ops.push({ kind: 'context', old: i + 1, new: j + 1, text: a[i] });
-      i++;
-      j++;
-    } else if (i < n && (j >= m || best[i + 1][j] >= best[i][j + 1])) {
-      ops.push({ kind: 'del', old: i + 1, new: null, text: a[i] });
-      i++;
-    } else {
-      ops.push({ kind: 'add', old: null, new: j + 1, text: b[j] });
-      j++;
-    }
-  }
-  return ops;
-}
-function hunksOf(ops: DiffLine[]): DiffHunk[] {
-  const ranges: [number, number][] = [];
-  ops.forEach((op, i) => {
-    if (op.kind === 'context') return;
-    const lo = Math.max(0, i - 3), hi = Math.min(ops.length - 1, i + 3);
-    const last = ranges[ranges.length - 1];
-    if (last && lo <= last[1] + 1) last[1] = Math.max(last[1], hi);
-    else ranges.push([lo, hi]);
-  });
-  return ranges.map(([lo, hi]) => {
-    const lines = ops.slice(lo, hi + 1);
-    const oldStart = lines.find((l) => l.old !== null)?.old ?? 0;
-    const newStart = lines.find((l) => l.new !== null)?.new ?? 0;
-    const oldCount = lines.filter((l) => l.old !== null).length;
-    const newCount = lines.filter((l) => l.new !== null).length;
-    return { header: `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`, lines };
-  });
-}
+// Diff: o que não tem hunk escrito aqui sai sem trechos ("Sem alterações neste arquivo").
 function diffOf(path: string, staged: boolean): GitDiff {
-  const d = repo.get(path);
-  if (!d) throw `Arquivo não encontrado no repositório: ${path}`;
+  known(path);
   if (path.endsWith('.png')) return { binary: true, tooLarge: false, hunks: [] };
-  const a = linesOf(staged ? d.head : d.index), b = linesOf(staged ? d.index : d.work);
-  if (a.length + b.length > 1500) return { binary: false, tooLarge: true, hunks: [] };
-  return { binary: false, tooLarge: false, hunks: hunksOf(lineOps(a, b)) };
+  if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, hunks: [] };
+  return { binary: false, tooLarge: false, hunks: HUNKS[`${staged ? 'staged' : 'unstaged'}:${path}`] ?? [] };
 }
 
 const commands: Record<string, (args: any) => unknown> = {
@@ -430,8 +381,7 @@ const commands: Record<string, (args: any) => unknown> = {
     if (!dir) throw `Pasta não encontrada: ${path}`;
     return listing(dir);
   },
-  git_branch: () => branch,
-  git_status: () => ({ branch, upstream: `origin/${branch}`, ahead, behind, files: gitFiles() }),
+  git_status: () => ({ branch, upstream: `origin/${branch}`, ahead, behind, files: [...files].sort(byPath) }),
   git_diff: ({ path, staged }: { path: string; staged: boolean }) => diffOf(path, staged),
   git_stage: ({ paths }: { paths: string[] }) => { stage(paths); return null; },
   git_unstage: ({ paths }: { paths: string[] }) => { unstage(paths); return null; },
