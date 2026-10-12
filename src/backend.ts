@@ -2,7 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { Choice, DirEntry, Events, Options, Snapshot, UpdateStatus } from './types';
+import type { Choice, DirEntry, Events, GitBranches, GitDiff, GitStatus, Options, Snapshot, UpdateStatus } from './types';
 
 export interface Transport {
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
@@ -54,6 +54,18 @@ export const backend = {
   // Caminho relativo à pasta do projeto, com "/"; '' é a raiz.
   listDir: (path: string) => call<DirEntry[]>('list_dir', { path }),
   gitBranch: () => call<string>('git_branch'),
+  // Painel Git. Caminhos relativos à raiz do projeto, com "/"; lista vazia em stage/unstage vale para tudo.
+  gitStatus: () => call<GitStatus>('git_status'),
+  gitDiff: (path: string, staged: boolean) => call<GitDiff>('git_diff', { path, staged }),
+  gitStage: (paths: string[]) => call<void>('git_stage', { paths }),
+  gitUnstage: (paths: string[]) => call<void>('git_unstage', { paths }),
+  gitCommit: (message: string) => call<void>('git_commit', { message }),
+  gitFetch: () => call<string>('git_fetch'),
+  gitPull: () => call<string>('git_pull'),
+  gitPush: () => call<string>('git_push'),
+  gitBranches: () => call<GitBranches>('git_branches'),
+  gitSwitch: (name: string) => call<void>('git_switch', { name }),
+  gitCreateBranch: (name: string) => call<void>('git_create_branch', { name }),
 };
 
 /** Erros do backend já chegam como mensagem em português. */

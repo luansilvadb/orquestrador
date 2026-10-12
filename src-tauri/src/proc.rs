@@ -2,7 +2,7 @@
 //! de uma sessão.
 use std::os::windows::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, FILETIME, HANDLE};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
@@ -28,6 +28,40 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
         return Err(format!("código {}", out.status.code().unwrap_or(-1)));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Roda o Git sem nada que espere digitação: sem entrada, sem pedido de credencial, sem editor. Sucesso
+/// devolve (stdout, stderr); falha devolve o que o Git escreveu (stderr e stdout, aparados), ou o código
+/// de saída quando ele não escreveu nada. Os caminhos são pathspec literal e o nome sai em UTF-8 sem aspas.
+fn run(dir: &Path, args: &[&str]) -> Result<(String, String), String> {
+    let out = quiet("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["--literal-pathspecs", "-c", "core.quotepath=false"])
+        .args(args)
+        .stdin(Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_EDITOR", ":")
+        .env("GIT_MERGE_AUTOEDIT", "no")
+        .output()
+        .map_err(|e| format!("git não pôde ser executado: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if out.status.success() {
+        return Ok((stdout, stderr));
+    }
+    let why: Vec<&str> = [stderr.trim(), stdout.trim()].into_iter().filter(|s| !s.is_empty()).collect();
+    Err(if why.is_empty() { format!("código {}", out.status.code().unwrap_or(-1)) } else { why.join("\n") })
+}
+
+/// A saída (stdout) do Git sem espera de digitação. Na falha, o erro traz o texto do Git.
+pub fn git_saida(dir: &Path, args: &[&str]) -> Result<String, String> {
+    run(dir, args).map(|(out, _)| out)
+}
+
+/// A saída completa do Git (stdout e stderr juntos), para mostrar na tela. Na falha, o erro traz o texto do Git.
+pub fn git_completa(dir: &Path, args: &[&str]) -> Result<String, String> {
+    run(dir, args).map(|(out, err)| out + &err)
 }
 
 /// Pasta -> raiz do repositório Git (com barras invertidas), ou `None` fora de um work tree.

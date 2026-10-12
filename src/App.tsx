@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import { CircleCheck, CircleHelp, CircleX, Clock, Hourglass, LoaderCircle, Maximize, Square, ZoomIn, ZoomOut } from 'lucide-react';
+import { CircleCheck, CircleHelp, CircleX, Clock, Hourglass, LoaderCircle, Maximize, Square, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -9,12 +9,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Toaster } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { backend, connect, message } from './backend';
 import { Block, Canvas, freeSlot, moved, resized, type CanvasHandle, type Rect } from './canvas';
 import { ChoiceForm } from './choice-form';
 import { Explorer, StatusBar } from './explorer';
+import { DiffView } from './git';
 import { attachExecutor, TermHost, terminals } from './terminals';
 import {
   describeChoice, ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus,
@@ -36,6 +38,11 @@ const FINISHED: NodeState[] = ['done', 'stopped', 'failed'];
 const MB = 1024 * 1024;
 const EXECUTOR_BLOCK = { w: 660, h: 380 };
 const ORCHESTRATOR_RECT: Rect = { x: 0, y: 0, w: 800, h: 520 };
+// Abas da área central: o Canvas é a primeira, fixa; cada arquivo aberto pelo painel Git é uma aba de alterações.
+const CANVAS = 'canvas';
+type DiffTab = { key: string; path: string; staged: boolean };
+const tabKey = (path: string, staged: boolean) => `${staged ? 'preparado' : 'alteracoes'}:${path}`;
+const basename = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 
 type Overlay = 'start' | 'executor' | null;
 type State = {
@@ -173,6 +180,8 @@ export function App() {
   const [retrying, setRetrying] = useState(false);
   const [projectError, setProjectError] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [tabs, setTabs] = useState<DiffTab[]>([]);
+  const [active, setActive] = useState(CANVAS);
   const closeAnswer = useRef<((ok: boolean) => void) | null>(null);
   const updateEvents = useRef(0);
   const [maxText, setMaxText] = useState('');
@@ -334,10 +343,28 @@ export function App() {
     }
   }
 
+  // Arquivo do painel Git: abre (ou só ativa) a aba de alterações dele, no lado da seção clicada.
+  const openDiff = (path: string, staged: boolean) => {
+    const key = tabKey(path, staged);
+    setTabs((prev) => (prev.some((t) => t.key === key) ? prev : [...prev, { key, path, staged }]));
+    setActive(key);
+  };
+
+  // Fechar a aba ativa volta para a vizinha da esquerda (o Canvas, se for a primeira).
+  const closeTab = (key: string) => {
+    const order = [CANVAS, ...tabs.map((t) => t.key)];
+    const at = order.indexOf(key);
+    if (at < 1) return;
+    setTabs(tabs.filter((t) => t.key !== key));
+    if (active === key) setActive(order[at - 1]);
+  };
+
   // ---------- derivados ----------
 
   const { update, orchestrator, executors, layout, options } = state;
   const ready = update.phase === 'ready';
+  // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
+  const busy = executors.some((e) => !FINISHED.includes(e.state));
   const count = (...states: NodeState[]) => executors.filter((e) => states.includes(e.state)).length;
   const parts = [
     [count('running'), 'executando', 'executando'], [count('queued'), 'na fila', 'na fila'],
@@ -456,100 +483,132 @@ export function App() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <Explorer />
-        <main className="relative min-h-0 min-w-0 flex-1">
-          <Canvas
-            ref={canvas}
-            rects={layout}
-            links={links}
-            fit={state.fit}
-            onZoom={(zoom) => dispatch({ type: 'zoom', zoom })}
-          >
-            {orchestrator && (
-              <Block
-                rect={layout[ORCHESTRATOR]}
-                head={
-                  <>
-                    <Badge variant="secondary">orquestrador</Badge>
-                    <span className="min-w-0 truncate font-mono text-muted-foreground">{orchestrator.title}</span>
-                    <span className="flex-1" />
-                    {orchestrator.started && (
-                      <Button
-                        variant="outline" size="xs"
-                        className="font-mono"
-                        title="Escolha dos executores; a troca vale para os próximos"
-                        onClick={toggleExecutorChoice}
-                      >
-                        executores: {state.executorChoice ? describeChoice(state.executorChoice) : 'ainda não escolhido'}
-                      </Button>
-                    )}
-                  </>
-                }
-                onMove={(dx, dy) => dispatch({ type: 'move', id: ORCHESTRATOR, dx, dy, z: canvas.current?.zoom() ?? 1 })}
-                onResize={(dx, dy) => dispatch({ type: 'resize', id: ORCHESTRATOR, dx, dy, z: canvas.current?.zoom() ?? 1 })}
-              >
-                <TermHost id={ORCHESTRATOR} writable />
-              </Block>
-            )}
-
-            {orchestrator && executors.map((node) => {
-              const meta = STATES[node.state];
-              const Icon = meta.icon;
-              const cancellable = node.state === 'queued' || node.state === 'running' || node.state === 'awaiting-orchestrator';
-              return (
-                <Block
-                  key={node.id}
-                  rect={layout[node.id]}
-                  state={node.state}
-                  head={
-                    <>
-                      <Badge variant={meta.variant} className={cn('gap-1', meta.className)}>
-                        <Icon className={node.state === 'running' ? 'animate-spin' : undefined} />
-                        {meta.label}
-                      </Badge>
-                      <span className="font-mono text-muted-foreground">#{node.index + 1}</span>
-                      <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
-                      {node.choice && <span className="truncate font-mono text-muted-foreground">{describeChoice(node.choice)}</span>}
-                      {cancellable && (
-                        <Button variant="outline" size="xs" title="Interrompe só este executor"
-                          onClick={() => backend.stopExecutor(node.id).catch(report)}>
-                          parar
-                        </Button>
-                      )}
-                    </>
-                  }
-                  onMove={(dx, dy) => dispatch({ type: 'move', id: node.id, dx, dy, z: canvas.current?.zoom() ?? 1 })}
-                  onResize={(dx, dy) => dispatch({ type: 'resize', id: node.id, dx, dy, z: canvas.current?.zoom() ?? 1 })}
+        <Explorer busy={busy} onOpenDiff={openDiff} />
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <Tabs value={active} onValueChange={setActive} className="flex min-h-0 flex-1 flex-col gap-0">
+            <TabsList className="h-9 w-full shrink-0 justify-start gap-0 overflow-x-auto rounded-none border-b bg-card p-0">
+              <TabsTrigger value={CANVAS} className="h-full flex-none rounded-none border-0 px-3">Canvas</TabsTrigger>
+              {tabs.map((tab) => (
+                <div key={tab.key} className="flex h-full shrink-0 items-center border-r">
+                  <TabsTrigger
+                    value={tab.key} title={`${tab.path}${tab.staged ? ' (versão preparada)' : ''}`}
+                    className="h-full flex-none rounded-none border-0 px-3"
+                    onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(tab.key); } }}
+                  >
+                    <span className="max-w-[200px] truncate">{basename(tab.path)}</span>
+                    {tab.staged && <Badge variant="outline" className="font-normal">preparado</Badge>}
+                  </TabsTrigger>
+                  <Button
+                    variant="ghost" size="icon-xs" aria-label={`Fechar ${basename(tab.path)}`} title="Fechar aba"
+                    onClick={() => closeTab(tab.key)}
+                  >
+                    <X />
+                  </Button>
+                </div>
+              ))}
+            </TabsList>
+            <div className="relative min-h-0 flex-1">
+              <TabsContent value={CANVAS} forceMount className="absolute inset-0 mt-0 outline-none data-[state=inactive]:invisible">
+                <Canvas
+                  ref={canvas}
+                  rects={layout}
+                  links={links}
+                  fit={state.fit}
+                  onZoom={(zoom) => dispatch({ type: 'zoom', zoom })}
                 >
-                  <TermHost id={node.id} writable={false} onReady={attachExecutor} />
-                  {node.state === 'awaiting-choice' && (
-                    <BlockOverlay>
-                      <p className="max-w-[300px] text-center text-sm text-muted-foreground">Aguardando a escolha dos executores.</p>
-                    </BlockOverlay>
+                  {orchestrator && (
+                    <Block
+                      rect={layout[ORCHESTRATOR]}
+                      head={
+                        <>
+                          <Badge variant="secondary">orquestrador</Badge>
+                          <span className="min-w-0 truncate font-mono text-muted-foreground">{orchestrator.title}</span>
+                          <span className="flex-1" />
+                          {orchestrator.started && (
+                            <Button
+                              variant="outline" size="xs"
+                              className="font-mono"
+                              title="Escolha dos executores; a troca vale para os próximos"
+                              onClick={toggleExecutorChoice}
+                            >
+                              executores: {state.executorChoice ? describeChoice(state.executorChoice) : 'ainda não escolhido'}
+                            </Button>
+                          )}
+                        </>
+                      }
+                      onMove={(dx, dy) => dispatch({ type: 'move', id: ORCHESTRATOR, dx, dy, z: canvas.current?.zoom() ?? 1 })}
+                      onResize={(dx, dy) => dispatch({ type: 'resize', id: ORCHESTRATOR, dx, dy, z: canvas.current?.zoom() ?? 1 })}
+                    >
+                      <TermHost id={ORCHESTRATOR} writable />
+                    </Block>
                   )}
-                  {node.state === 'queued' && (
-                    <BlockOverlay>
-                      <p className="max-w-[300px] text-center text-sm text-muted-foreground">
-                        Na fila: começa quando um executor terminar ou o teto de simultâneos subir.
-                      </p>
-                    </BlockOverlay>
-                  )}
-                </Block>
-              );
-            })}
-          </Canvas>
 
-          {!orchestrator && (
-            <div className="absolute inset-0 m-auto grid h-fit w-[min(380px,calc(100%-32px))] justify-items-center gap-3 p-4 text-center">
-              {state.notice && (
-                <p role="status" className="rounded-md border bg-card px-3 py-1.5 text-sm">{state.notice}</p>
-              )}
-              <Button onClick={() => openOrchestrator()}>Abrir terminal</Button>
-              <p className="text-xs text-muted-foreground">
-                Abre o orquestrador: o único terminal onde você digita. Os executores aparecem ao lado quando ele delega.
-              </p>
+                  {orchestrator && executors.map((node) => {
+                    const meta = STATES[node.state];
+                    const Icon = meta.icon;
+                    const cancellable = node.state === 'queued' || node.state === 'running' || node.state === 'awaiting-orchestrator';
+                    return (
+                      <Block
+                        key={node.id}
+                        rect={layout[node.id]}
+                        state={node.state}
+                        head={
+                          <>
+                            <Badge variant={meta.variant} className={cn('gap-1', meta.className)}>
+                              <Icon className={node.state === 'running' ? 'animate-spin' : undefined} />
+                              {meta.label}
+                            </Badge>
+                            <span className="font-mono text-muted-foreground">#{node.index + 1}</span>
+                            <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
+                            {node.choice && <span className="truncate font-mono text-muted-foreground">{describeChoice(node.choice)}</span>}
+                            {cancellable && (
+                              <Button variant="outline" size="xs" title="Interrompe só este executor"
+                                onClick={() => backend.stopExecutor(node.id).catch(report)}>
+                                parar
+                              </Button>
+                            )}
+                          </>
+                        }
+                        onMove={(dx, dy) => dispatch({ type: 'move', id: node.id, dx, dy, z: canvas.current?.zoom() ?? 1 })}
+                        onResize={(dx, dy) => dispatch({ type: 'resize', id: node.id, dx, dy, z: canvas.current?.zoom() ?? 1 })}
+                      >
+                        <TermHost id={node.id} writable={false} onReady={attachExecutor} />
+                        {node.state === 'awaiting-choice' && (
+                          <BlockOverlay>
+                            <p className="max-w-[300px] text-center text-sm text-muted-foreground">Aguardando a escolha dos executores.</p>
+                          </BlockOverlay>
+                        )}
+                        {node.state === 'queued' && (
+                          <BlockOverlay>
+                            <p className="max-w-[300px] text-center text-sm text-muted-foreground">
+                              Na fila: começa quando um executor terminar ou o teto de simultâneos subir.
+                            </p>
+                          </BlockOverlay>
+                        )}
+                      </Block>
+                    );
+                  })}
+                </Canvas>
+
+                {!orchestrator && (
+                  <div className="absolute inset-0 m-auto grid h-fit w-[min(380px,calc(100%-32px))] justify-items-center gap-3 p-4 text-center">
+                    {state.notice && (
+                      <p role="status" className="rounded-md border bg-card px-3 py-1.5 text-sm">{state.notice}</p>
+                    )}
+                    <Button onClick={() => openOrchestrator()}>Abrir terminal</Button>
+                    <p className="text-xs text-muted-foreground">
+                      Abre o orquestrador: o único terminal onde você digita. Os executores aparecem ao lado quando ele delega.
+                    </p>
+                  </div>
+                )}
+              </TabsContent>
+              {tabs.map((tab) => (
+                <TabsContent key={tab.key} value={tab.key} forceMount className="absolute inset-0 mt-0 outline-none data-[state=inactive]:hidden">
+                  <DiffView path={tab.path} staged={tab.staged} active={active === tab.key} />
+                </TabsContent>
+              ))}
             </div>
-          )}
+          </Tabs>
         </main>
       </div>
 

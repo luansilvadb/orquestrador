@@ -1,37 +1,18 @@
-// A moldura da tela principal: coluna de ícones, lista de arquivos do projeto e barra de status com a branch.
-// A lista e a branch se atualizam sozinhas (usePolling). O canvas não sabe deste arquivo.
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, File, Files, Folder, FolderOpen, GitBranch } from 'lucide-react';
+// A moldura da tela principal: coluna de ícones, um painel de cada vez (lista de arquivos ou Git) e barra de status com a branch.
+// A lista, o status do Git e a branch se atualizam sozinhos (usePolling). O canvas não sabe deste arquivo.
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { ChevronDown, ChevronRight, File, Files, Folder, FolderOpen, GitBranch, GitCommitHorizontal } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { backend, message } from './backend';
+import { GitPanel, useGitStatus } from './git';
+import { usePolling } from './polling';
 import type { DirEntry } from './types';
 
-const POLL_MS = 1500;
 const WIDTH = { initial: 240, min: 160, max: 600 };
 const clampWidth = (v: number) => Math.min(WIDTH.max, Math.max(WIDTH.min, v));
 // Recuo por nível: a seta (ou o espaço dela, nos arquivos) fica sempre na mesma coluna de cada nível.
 const indent = (depth: number) => 8 + depth * 16;
-
-/** Repete `task` com o componente montado: uma rodada por vez, e nenhuma com a janela oculta. `task` não lança. */
-function usePolling(task: () => Promise<void>) {
-  const run = useRef(task);
-  useLayoutEffect(() => {
-    run.current = task;
-  });
-  useEffect(() => {
-    let stop = false;
-    const loop = async () => {
-      while (!stop) {
-        if (!document.hidden) await run.current();
-        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-      }
-    };
-    void loop();
-    return () => {
-      stop = true;
-    };
-  }, []);
-}
 
 // Caminho relativo com "/" (como o backend); a raiz é ''.
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
@@ -46,9 +27,11 @@ const drop = (tree: Tree, path: string): Tree => ({
 const sameList = (a: DirEntry[] | undefined, b: DirEntry[]) =>
   !!a && a.length === b.length && a.every((e, i) => e.name === b[i].name && e.dir === b[i].dir);
 
-/** Lista de arquivos: a pasta do projeto como árvore, com a borda direita arrastável para mudar a largura. */
-export function Explorer() {
-  const [open, setOpen] = useState(true);
+type Panel = 'files' | 'git';
+
+/** Coluna de ícones, painel (lista de arquivos ou Git) com a borda direita arrastável para mudar a largura. */
+export function Explorer({ busy, onOpenDiff }: { busy: boolean; onOpenDiff: (path: string, staged: boolean) => void }) {
+  const [panel, setPanel] = useState<Panel | null>('files');
   const [width, setWidth] = useState(WIDTH.initial);
   const [tree, setTree] = useState<Tree>({ children: {}, expanded: [] });
   const [error, setError] = useState('');
@@ -57,6 +40,9 @@ export function Explorer() {
     expanded.current = tree.expanded;
   });
   const resize = useRef<{ x: number; width: number } | null>(null);
+  // O status do Git roda sempre: o contador no ícone precisa dele mesmo com o painel fechado.
+  const git = useGitStatus();
+  const changed = git.status?.files.length ?? 0;
 
   // Uma rodada consulta a raiz e cada pasta aberta. O estado só muda quando a resposta é diferente.
   // Pasta aberta que não lista mais sai da árvore sem erro na tela; falha na raiz aparece como texto, não como toast.
@@ -124,6 +110,9 @@ export function Explorer() {
       ];
     });
 
+  // Clicar no ícone do painel já aberto esconde o painel; clicar no outro troca.
+  const togglePanel = (next: Panel) => setPanel((current) => (current === next ? null : next));
+
   // A borda captura o ponteiro: o arrasto segue mesmo quando ele sai da faixa.
   const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -144,24 +133,43 @@ export function Explorer() {
 
   return (
     <>
-      <div className="flex w-11 shrink-0 flex-col items-center border-r bg-card py-2">
+      <div className="flex w-11 shrink-0 flex-col items-center gap-1 border-r bg-card py-2">
         <Button
-          variant={open ? 'secondary' : 'ghost'} size="icon-sm" aria-pressed={open}
+          variant={panel === 'files' ? 'secondary' : 'ghost'} size="icon-sm" aria-pressed={panel === 'files'}
           aria-label="Lista de arquivos" title="Lista de arquivos"
-          onClick={() => setOpen(!open)}
+          onClick={() => togglePanel('files')}
         >
           <Files />
         </Button>
+        <div className="relative">
+          <Button
+            variant={panel === 'git' ? 'secondary' : 'ghost'} size="icon-sm" aria-pressed={panel === 'git'}
+            aria-label={changed ? `Git (${changed} ${changed === 1 ? 'arquivo alterado' : 'arquivos alterados'})` : 'Git'}
+            title="Git"
+            onClick={() => togglePanel('git')}
+          >
+            <GitCommitHorizontal />
+          </Button>
+          {changed > 0 && (
+            <Badge aria-hidden="true" className="pointer-events-none absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px]">
+              {changed}
+            </Badge>
+          )}
+        </div>
       </div>
-      {open && (
+      {panel && (
         <aside style={{ width }} className="relative flex min-h-0 shrink-0 flex-col border-r bg-card">
-          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1">
-            {error && <p role="status" className="px-3 py-1 text-xs text-muted-foreground">{error}</p>}
-            {!tree.children[''] && !error && <p className="px-3 py-1 text-xs text-muted-foreground">Lendo a pasta…</p>}
-            {rows('', 0)}
-          </div>
+          {panel === 'files' ? (
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1">
+              {error && <p role="status" className="px-3 py-1 text-xs text-muted-foreground">{error}</p>}
+              {!tree.children[''] && !error && <p className="px-3 py-1 text-xs text-muted-foreground">Lendo a pasta…</p>}
+              {rows('', 0)}
+            </div>
+          ) : (
+            <GitPanel status={git.status} error={git.error} refresh={git.refresh} locked={busy} onOpenDiff={onOpenDiff} />
+          )}
           <div
-            role="separator" aria-orientation="vertical" aria-label="Largura da lista de arquivos"
+            role="separator" aria-orientation="vertical" aria-label="Largura do painel"
             aria-valuemin={WIDTH.min} aria-valuemax={WIDTH.max} aria-valuenow={width}
             tabIndex={0} title="Arraste para mudar a largura"
             onPointerDown={startResize} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize}

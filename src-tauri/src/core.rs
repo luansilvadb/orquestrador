@@ -3,6 +3,7 @@
 use crate::cli::{self, Exes};
 use crate::config::{self, Choice, Options};
 use crate::files::{self, Entry};
+use crate::git;
 use crate::hook;
 use crate::proc;
 use crate::pty::{Buffer, Shared, Term};
@@ -148,6 +149,29 @@ struct Inner {
     seen: HashSet<String>,
     counter: u64,
     epoch: u64,
+    /// Uma operação do Git (`git_idle`) roda sem o lock: enquanto esta marca estiver ligada, nenhum lote novo é aceito.
+    git_exclusive: bool,
+}
+
+impl Inner {
+    /// Recusa enquanto algum executor não terminou (esperando escolha, na fila, rodando ou esperando o
+    /// orquestrador): a branch não muda e os commits não entram no meio de um lote.
+    fn ensure_executors_done(&self) -> Result<(), String> {
+        if self.nodes.iter().any(|n| !n.info.state.is_final()) {
+            return Err("Há executores trabalhando. Espere o lote terminar.".into());
+        }
+        Ok(())
+    }
+}
+
+/// Desmarca `git_exclusive` ao sair de escopo. Vale também quando o comando do Git falha ou entra em pânico.
+struct GitExclusive(Arc<Mutex<Inner>>);
+
+impl Drop for GitExclusive {
+    fn drop(&mut self) {
+        // Um pânico em outra thread pode ter envenenado o lock, mas a marca tem que ser solta do mesmo jeito.
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).git_exclusive = false;
+    }
 }
 
 #[derive(Clone)]
@@ -172,6 +196,7 @@ impl Core {
             seen: HashSet::new(),
             counter: 0,
             epoch: 0,
+            git_exclusive: false,
         };
         Core { inner: Arc::new(Mutex::new(inner)), emit }
     }
@@ -200,6 +225,76 @@ impl Core {
 
     fn project(&self) -> Result<String, String> {
         self.inner.lock().unwrap().project.clone().ok_or_else(|| "Escolha a pasta do projeto primeiro.".into())
+    }
+
+    fn repo(&self) -> Result<PathBuf, String> {
+        self.project().map(PathBuf::from)
+    }
+
+    /// O estado do Git do projeto para o painel.
+    pub fn git_status(&self) -> Result<git::Status, String> {
+        git::status(&self.repo()?)
+    }
+
+    pub fn git_diff(&self, path: &str, staged: bool) -> Result<git::Diff, String> {
+        git::diff(&self.repo()?, path, staged)
+    }
+
+    pub fn git_stage(&self, paths: &[String]) -> Result<(), String> {
+        git::stage(&self.repo()?, paths)
+    }
+
+    pub fn git_unstage(&self, paths: &[String]) -> Result<(), String> {
+        git::unstage(&self.repo()?, paths)
+    }
+
+    pub fn git_commit(&self, message: &str) -> Result<(), String> {
+        git::commit(&self.repo()?, message)
+    }
+
+    pub fn git_fetch(&self) -> Result<String, String> {
+        git::fetch(&self.repo()?)
+    }
+
+    /// Puxa commits só sem executor pendente. Roda fora do lock do Core, com `git_exclusive` marcado: o app
+    /// segue respondendo e nenhum executor começa até o pull terminar (ver `git_idle`).
+    pub fn git_pull(&self) -> Result<String, String> {
+        self.git_idle(git::pull)
+    }
+
+    pub fn git_push(&self) -> Result<String, String> {
+        git::push(&self.repo()?)
+    }
+
+    pub fn git_branches(&self) -> Result<git::Branches, String> {
+        git::branches(&self.repo()?)
+    }
+
+    pub fn git_switch(&self, name: &str) -> Result<(), String> {
+        self.git_idle(|dir| git::switch(dir, name))
+    }
+
+    pub fn git_create_branch(&self, name: &str) -> Result<(), String> {
+        self.git_idle(|dir| git::create_branch(dir, name))
+    }
+
+    /// Roda `run` com a pasta do projeto, mas só se nenhum executor estiver pendente e nenhuma outra operação
+    /// do Git estiver em curso. Sob o lock, marca `git_exclusive` e solta o lock antes de rodar `run`: o
+    /// comando pode demorar (rede, janela de credencial) sem travar o app. Enquanto a marca estiver ligada,
+    /// `accept_batches` não aceita lote novo, então nenhum executor começa no meio do comando.
+    fn git_idle<T>(&self, run: impl FnOnce(&Path) -> Result<T, String>) -> Result<T, String> {
+        let project = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.ensure_executors_done()?;
+            if inner.git_exclusive {
+                return Err("Outra operação do Git está em andamento.".into());
+            }
+            let project = inner.project.clone().ok_or("Escolha a pasta do projeto primeiro.")?;
+            inner.git_exclusive = true;
+            project
+        };
+        let _exclusive = GitExclusive(self.inner.clone());
+        run(Path::new(&project))
     }
 
     pub fn options(&self) -> Result<Options, String> {
@@ -441,6 +536,11 @@ impl Core {
     }
 
     fn accept_batches(&self, inner: &mut Inner) {
+        // Com uma operação do Git em curso, o pedido fica na pasta `requests`: `seen` só marca o que foi aceito,
+        // então a volta seguinte do laço o lê, sem perder nem repetir o lote.
+        if inner.git_exclusive {
+            return;
+        }
         let Some(session) = &inner.session else { return };
         let (requests, exec) = (session.dir.join("requests"), session.dir.join("exec"));
         let mut ids: Vec<String> = std::fs::read_dir(&requests)
@@ -658,5 +758,140 @@ mod tests {
             "last-assistant-message": "{\"title\":\"Responda OK\"}" });
         assert_eq!(turn_end(&real.to_string(), prompt).as_deref(), Some("OK"));
         assert_eq!(turn_end(&title.to_string(), prompt), None);
+    }
+
+    /// Um Core com um repositório de teste (branch `main` e `outra`), sem CLI real nem configuração.
+    fn git_core(tag: &str) -> (Core, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("orq-core-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| proc::git(&repo, args).unwrap();
+        git(&["init", "-q", "-b", "main"]);
+        for (key, value) in [("user.name", "teste"), ("user.email", "teste@teste"), ("core.autocrlf", "false")] {
+            git(&["config", key, value]);
+        }
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "a"]);
+        git(&["branch", "outra"]);
+        let fake = String::from("fake");
+        let exes = Exes { claude: fake.clone(), codex: fake.clone(), app: fake.clone(), delegate: fake };
+        let places = session::Places { temp: root.join("temp"), codex_rules: root.join("rules"), global_dirs: vec![] };
+        let emit: Emit = Arc::new(|_: &str, _: Value| {});
+        let core = Core::new(exes, places, root.join("config.json"), emit);
+        core.set_project(&repo).unwrap();
+        (core, root)
+    }
+
+    fn set_executor_state(core: &Core, state: NodeState) {
+        let mut inner = core.inner.lock().unwrap();
+        inner.nodes.clear();
+        let info = ExecutorNode { id: "exec-1".into(), batch: "lote".into(), index: 0, title: "t".into(), state, choice: None };
+        inner.nodes.push(Node { info, dir: PathBuf::new(), prompt: String::new() });
+    }
+
+    #[test]
+    fn git_que_muda_o_repositorio_espera_os_executores_e_o_resto_nao() {
+        const TRAVA: &str = "Há executores trabalhando. Espere o lote terminar.";
+        let (core, root) = git_core("trava");
+        for state in [NodeState::AwaitingChoice, NodeState::Queued, NodeState::Running, NodeState::AwaitingOrchestrator] {
+            set_executor_state(&core, state);
+            assert_eq!(core.git_pull().unwrap_err(), TRAVA, "{state:?}");
+            assert_eq!(core.git_switch("outra").unwrap_err(), TRAVA, "{state:?}");
+            assert_eq!(core.git_create_branch("nova").unwrap_err(), TRAVA, "{state:?}");
+            assert!(core.git_status().is_ok(), "o status nunca é travado ({state:?})");
+            assert!(core.git_branches().is_ok(), "a lista de branches nunca é travada ({state:?})");
+        }
+        // Recusados não mudaram nada: continua em `main`, sem a branch nova.
+        let b = core.git_branches().unwrap();
+        assert_eq!((b.current.as_str(), b.local), ("main", vec!["main".to_string(), "outra".to_string()]));
+
+        for state in [NodeState::Done, NodeState::Stopped, NodeState::Failed] {
+            set_executor_state(&core, state);
+            assert_eq!(core.git_switch("outra"), Ok(()), "{state:?} já terminou");
+            assert_eq!(core.git_switch("main"), Ok(()));
+            // Sem remoto o pull falha pelo remoto, não pela trava.
+            assert_ne!(core.git_pull().unwrap_err(), TRAVA, "{state:?}");
+        }
+        assert_eq!(core.git_create_branch("nova"), Ok(()));
+        assert_eq!(core.git_branches().unwrap().current, "nova");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn git_exclusivo(core: &Core) -> bool {
+        core.inner.lock().unwrap().git_exclusive
+    }
+
+    #[test]
+    fn com_operacao_do_git_em_curso_outra_recusa_e_a_leitura_responde() {
+        const EM_CURSO: &str = "Outra operação do Git está em andamento.";
+        let (core, root) = git_core("em-curso");
+        core.inner.lock().unwrap().git_exclusive = true;
+        assert_eq!(core.git_switch("outra").unwrap_err(), EM_CURSO);
+        assert_eq!(core.git_create_branch("nova").unwrap_err(), EM_CURSO);
+        assert_eq!(core.git_pull().unwrap_err(), EM_CURSO);
+        assert!(core.git_status().is_ok());
+        assert!(core.git_branches().is_ok());
+        // A recusa não solta a marca de quem está rodando.
+        assert!(git_exclusivo(&core));
+        core.inner.lock().unwrap().git_exclusive = false;
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_marca_some_depois_de_sucesso_e_de_falha() {
+        let (core, root) = git_core("marca");
+        assert_eq!(core.git_switch("outra"), Ok(()));
+        assert!(!git_exclusivo(&core), "depois de sucesso");
+        assert!(core.git_switch("inexistente").is_err());
+        assert!(!git_exclusivo(&core), "depois de falha");
+        assert_eq!(core.git_switch("main"), Ok(()), "a operação seguinte passa");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_marca_some_mesmo_com_panico_no_comando() {
+        let (core, root) = git_core("panico");
+        let saiu = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| core.git_idle::<()>(|_| panic!("comando git travou"))));
+        assert!(saiu.is_err());
+        assert!(!git_exclusivo(&core));
+        assert_eq!(core.git_switch("outra"), Ok(()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn o_lock_do_core_fica_livre_enquanto_o_git_roda() {
+        // Com o lock segurado durante o comando, `git_branch` (que pega o lock) travaria este teste.
+        let (core, root) = git_core("livre");
+        let branch = core.git_idle(|_| {
+            assert!(git_exclusivo(&core), "marcado enquanto o comando roda");
+            core.git_branch()
+        });
+        assert_eq!(branch, Ok("main".to_string()));
+        assert!(!git_exclusivo(&core));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lote_pedido_durante_a_operacao_do_git_espera_e_entra_uma_vez() {
+        let (core, root) = git_core("lote");
+        let session = root.join("sessao");
+        let pedido = session.join("requests").join("lote1");
+        std::fs::create_dir_all(&pedido).unwrap();
+        std::fs::write(pedido.join("1.txt"), "Tarefa X\n").unwrap();
+        let mut inner = core.inner.lock().unwrap();
+        inner.session = Some(Session { dir: session.clone(), command: String::new(), rule: PathBuf::new(), global_dirs: vec![] });
+        inner.git_exclusive = true;
+        core.accept_batches(&mut inner);
+        assert!(inner.nodes.is_empty(), "com o git em curso, o lote não é aceito");
+        inner.git_exclusive = false;
+        core.accept_batches(&mut inner);
+        assert_eq!(inner.nodes.len(), 1);
+        assert_eq!(inner.nodes[0].info.batch, "lote1");
+        core.accept_batches(&mut inner);
+        assert_eq!(inner.nodes.len(), 1, "o lote não entra duas vezes");
+        drop(inner);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

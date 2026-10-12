@@ -29,6 +29,15 @@ export type UpdateStatus =
 // Uma entrada de `list_dir`: um nível só. A ordem é a do backend (pastas primeiro, depois arquivos, alfabética).
 export type DirEntry = { name: string; dir: boolean };
 
+// Painel Git (contrato do backend, JSON em camelCase). Um arquivo pode estar nas duas seções ao mesmo tempo.
+export type GitKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted';
+export type GitFile = { path: string; origPath: string | null; staged: GitKind | null; unstaged: GitKind | null };
+export type GitStatus = { branch: string; upstream: string | null; ahead: number; behind: number; files: GitFile[] };
+export type DiffLine = { kind: 'context' | 'add' | 'del'; old: number | null; new: number | null; text: string };
+export type DiffHunk = { header: string; lines: DiffLine[] };
+export type GitDiff = { binary: boolean; tooLarge: boolean; hunks: DiffHunk[] };
+export type GitBranches = { current: string; local: string[] };
+
 export type TermData = { id: string; seq: number; data: string };
 export type Snapshot = { seq: number; data: string };
 export type NodeStateEvent = { id: string; state: NodeState; choice: Choice | null };

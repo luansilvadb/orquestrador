@@ -5,9 +5,16 @@
 // `?update=download` simula o download (`indeterminado` e `total-zero`: tamanho desconhecido). Sem parâmetro, o uso já vem liberado, como no build de desenvolvimento.
 // No console: `__mock.close()` simula fechar a janela; `__mock.writes` e `__mock.sizes` registram o que chegou.
 // `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto (a lista da tela some com ele sozinha).
-// A árvore (`list_dir`, `git_branch`) não tem `.git`; um executor que termina bem cria `src/tarefa-<lote>-<n>.ts`.
+// A árvore (`list_dir`) e o Git (`git_*`) são um repositório simulado, em memória, coerente com ela: começa com
+// alguns arquivos alterados (um só em duas seções, um binário, um grande demais para o diff) e um não rastreado.
+// Preparar, tirar, commitar, criar e trocar branch funcionam; fetch, pull e push mexem em ahead/behind (push recusa
+// se o remoto tem commits novos). Um executor que termina bem cria `src/tarefa-<lote>-<n>.ts`, que aparece como não rastreado.
+// Com executor não finalizado, pull, troca e criação de branch são recusados, como no backend.
 import type { Transport } from './backend';
-import { ORCHESTRATOR, type Choice, type Events, type ExecutorNode, type NodeState, type Options, type UpdateStatus } from './types';
+import {
+  ORCHESTRATOR, type Choice, type DiffHunk, type DiffLine, type Events, type ExecutorNode, type GitDiff, type GitFile,
+  type GitKind, type NodeState, type Options, type UpdateStatus,
+} from './types';
 
 type Handler = (payload: never) => void;
 type Job = ExecutorNode & { timer?: number };
@@ -57,7 +64,9 @@ const tree = folder({
   '.gitignore': file(),
   'README.md': file(),
   'package.json': file(),
-  docs: folder({ 'design-system.md': file() }),
+  assets: folder({ 'logo.png': file() }),
+  dados: folder({ 'exportacao.json': file() }),
+  docs: folder({ 'design-system.md': file(), 'rascunho-painel.md': file() }),
   src: folder({
     'App.tsx': file(), 'index.css': file(), 'main.tsx': file(),
     components: folder({ ui: folder({ 'button.tsx': file(), 'card.tsx': file() }) }),
@@ -65,7 +74,27 @@ const tree = folder({
   }),
   tests: folder(),
 });
-const branch = 'main';
+
+// Repositório simulado: cada arquivo tem o conteúdo no HEAD, no índice (preparado) e no disco. `null` = não existe ali.
+type Doc = { head: string | null; index: string | null; work: string | null };
+const repo = new Map<string, Doc>();
+const seed = (path: string, head: string | null, index: string | null, work: string | null) => repo.set(path, { head, index, work });
+const same = (path: string, text: string) => seed(path, text, text, text);
+for (const path of ['.gitignore', 'package.json', 'src/index.css', 'src/main.tsx', 'src/components/ui/button.tsx', 'src/components/ui/card.tsx', 'src/lib/utils.ts']) {
+  same(path, `conteúdo de ${path}\n`);
+}
+const app = 'export function App() {\n  return <main />;\n}\n';
+seed('README.md', '# Orquestrador\n', '# Orquestrador\n', '# Orquestrador\n\nPainel Git em andamento.\n');
+seed('docs/design-system.md', '# Design system\n', '# Design system\n\nTokens semânticos.\n', '# Design system\n\nTokens semânticos.\n');
+seed('docs/rascunho-painel.md', null, null, '# Rascunho\n\nIdeias para o painel Git.\n');
+seed('src/App.tsx', 'export function App() {\n  return null;\n}\n', app, `${app}\n// TODO: abas\n`);
+// Um arquivo grande (acima de 1000 linhas: tooLarge) e um binário (binary).
+const big = (change = -1) =>`{\n${Array.from({ length: 1200 }, (_, i) => `  "item-${i}": ${i === change ? 11 : i},`).join('\n')}\n}\n`;
+seed('dados/exportacao.json', big(), big(), big(10));
+seed('assets/logo.png', 'PNG-antigo\u0000', 'PNG-antigo\u0000', 'PNG-novo\u0000');
+const branches = ['main', 'feat/painel-git'];
+let branch = 'main', ahead = 1, behind = 0;
+const BUSY = 'Há executores trabalhando. Espere o lote terminar.';
 
 /** Pasta pelo caminho relativo com "/" ('' é a raiz); arquivo ou caminho inexistente dá undefined. */
 function folderAt(path: string): Folder | undefined {
@@ -77,14 +106,23 @@ function folderAt(path: string): Folder | undefined {
 const listing = (dir: Folder) => Object.entries(dir.children)
   .map(([name, entry]) => ({ name, dir: entry.dir }))
   .sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name, 'pt-BR'));
+// Arquivo novo no disco, fora do índice: aparece como não rastreado no painel Git.
 function addFile(dirPath: string, name: string) {
   const dir = folderAt(dirPath);
-  if (dir) dir.children[name] = file();
+  if (!dir) return;
+  dir.children[name] = file();
+  seed(`${dirPath}/${name}`, null, null, 'export {};\n');
 }
+// Apagar pela árvore: o arquivo some do disco (apagado, se estava no Git; some de vez, se era não rastreado).
 function removePath(path: string) {
   const parts = path.split('/'), name = parts.pop()!;
   const dir = folderAt(parts.join('/'));
   if (dir) delete dir.children[name];
+  const doc = repo.get(path);
+  if (doc) {
+    doc.work = null;
+    if (doc.head === null && doc.index === null) repo.delete(path);
+  }
 }
 
 let alive = false, line = '', batches = 0, executorChoice: Choice | null = null, closeHandler: (() => Promise<boolean>) | null = null;
@@ -221,6 +259,135 @@ function typed(data: string) {
   }
 }
 
+// ---------- Git simulado ----------
+
+const statusOf = (path: string, d: Doc): GitFile | null => {
+  let staged: GitKind | null = null, unstaged: GitKind | null = null;
+  if (d.head === null && d.index !== null) staged = 'added';
+  else if (d.head !== null && d.index === null) staged = 'deleted';
+  else if (d.head !== null && d.index !== null && d.head !== d.index) staged = 'modified';
+  if (d.index === null) {
+    if (d.head === null && d.work !== null) unstaged = 'untracked';
+  } else if (d.work === null) unstaged = 'deleted';
+  else if (d.work !== d.index) unstaged = 'modified';
+  return staged || unstaged ? { path, origPath: null, staged, unstaged } : null;
+};
+const gitFiles = () => [...repo]
+  .map(([path, d]) => statusOf(path, d))
+  .filter((f): f is GitFile => f !== null)
+  .sort((a, b) => a.path.localeCompare(b.path, 'pt-BR'));
+// Arquivo sem nada em lugar nenhum sai do repositório simulado.
+const prune = (path: string) => {
+  const d = repo.get(path);
+  if (d && d.head === null && d.index === null && d.work === null) repo.delete(path);
+};
+// Executor ou orquestrador com tarefa aberta: a mesma trava do backend para pull, troca e criação de branch.
+const busy = () => [...jobs.values()].some((j) => !['done', 'stopped', 'failed'].includes(j.state));
+
+// Lista vazia vale para tudo, como no backend.
+function stage(paths: string[]) {
+  const targets = paths.length ? paths : gitFiles().filter((f) => f.unstaged).map((f) => f.path);
+  for (const path of targets) {
+    const d = repo.get(path);
+    if (!d) throw `Arquivo não encontrado no repositório: ${path}`;
+    d.index = d.work;
+    prune(path);
+  }
+}
+function unstage(paths: string[]) {
+  const targets = paths.length ? paths : gitFiles().filter((f) => f.staged).map((f) => f.path);
+  for (const path of targets) {
+    const d = repo.get(path);
+    if (!d) throw `Arquivo não encontrado no repositório: ${path}`;
+    d.index = d.head;
+    prune(path);
+  }
+}
+function commit(message: string) {
+  if (!message.trim()) throw 'A mensagem do commit está vazia.';
+  const staged = gitFiles().filter((f) => f.staged);
+  if (!staged.length) throw 'Nada preparado para commitar.';
+  for (const f of staged) {
+    const d = repo.get(f.path)!;
+    d.head = d.index;
+    prune(f.path);
+  }
+  ahead++;
+}
+// Remoto simulado: fetch traz 2 commits de fora; pull os recebe; push só envia se nada novo chegou do remoto.
+const fetchRemote = () => {
+  behind = Math.max(behind, 2);
+  return `From github.com:luansilvadb/orquestrador\n   1a2b3c4..5d6e7f8  ${branch} -> origin/${branch}\n`;
+};
+const pullRemote = () => {
+  if (busy()) throw BUSY;
+  if (!behind) return 'Already up to date.\n';
+  const n = behind;
+  behind = 0;
+  return `Atualizando de origin/${branch}\nFast-forward\n ${n} commits recebidos\n`;
+};
+const pushRemote = () => {
+  if (behind) throw 'O envio foi recusado: o remoto tem commits que você não recebeu. Receba antes e tente de novo.';
+  if (!ahead) return 'Everything up-to-date\n';
+  const n = ahead;
+  ahead = 0;
+  return `Enviando ${n} commit(s) para origin/${branch}\n   1a2b3c4..5d6e7f8  ${branch} -> ${branch}\n`;
+};
+
+// Diff simulado: LCS linha a linha e trechos com três linhas de contexto, no formato do git.
+const linesOf = (text: string | null) => (text ? text.replace(/\n$/, '').split('\n') : []);
+function lineOps(a: string[], b: string[]): DiffLine[] {
+  const n = a.length, m = b.length;
+  const best = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      best[i][j] = a[i] === b[j] ? best[i + 1][j + 1] + 1 : Math.max(best[i + 1][j], best[i][j + 1]);
+    }
+  }
+  const ops: DiffLine[] = [];
+  let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) {
+      ops.push({ kind: 'context', old: i + 1, new: j + 1, text: a[i] });
+      i++;
+      j++;
+    } else if (i < n && (j >= m || best[i + 1][j] >= best[i][j + 1])) {
+      ops.push({ kind: 'del', old: i + 1, new: null, text: a[i] });
+      i++;
+    } else {
+      ops.push({ kind: 'add', old: null, new: j + 1, text: b[j] });
+      j++;
+    }
+  }
+  return ops;
+}
+function hunksOf(ops: DiffLine[]): DiffHunk[] {
+  const ranges: [number, number][] = [];
+  ops.forEach((op, i) => {
+    if (op.kind === 'context') return;
+    const lo = Math.max(0, i - 3), hi = Math.min(ops.length - 1, i + 3);
+    const last = ranges[ranges.length - 1];
+    if (last && lo <= last[1] + 1) last[1] = Math.max(last[1], hi);
+    else ranges.push([lo, hi]);
+  });
+  return ranges.map(([lo, hi]) => {
+    const lines = ops.slice(lo, hi + 1);
+    const oldStart = lines.find((l) => l.old !== null)?.old ?? 0;
+    const newStart = lines.find((l) => l.new !== null)?.new ?? 0;
+    const oldCount = lines.filter((l) => l.old !== null).length;
+    const newCount = lines.filter((l) => l.new !== null).length;
+    return { header: `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`, lines };
+  });
+}
+function diffOf(path: string, staged: boolean): GitDiff {
+  const d = repo.get(path);
+  if (!d) throw `Arquivo não encontrado no repositório: ${path}`;
+  if (path.endsWith('.png')) return { binary: true, tooLarge: false, hunks: [] };
+  const a = linesOf(staged ? d.head : d.index), b = linesOf(staged ? d.index : d.work);
+  if (a.length + b.length > 1500) return { binary: false, tooLarge: true, hunks: [] };
+  return { binary: false, tooLarge: false, hunks: hunksOf(lineOps(a, b)) };
+}
+
 const commands: Record<string, (args: any) => unknown> = {
   update_status: () => update,
   retry_update: () => {
@@ -264,6 +431,30 @@ const commands: Record<string, (args: any) => unknown> = {
     return listing(dir);
   },
   git_branch: () => branch,
+  git_status: () => ({ branch, upstream: `origin/${branch}`, ahead, behind, files: gitFiles() }),
+  git_diff: ({ path, staged }: { path: string; staged: boolean }) => diffOf(path, staged),
+  git_stage: ({ paths }: { paths: string[] }) => { stage(paths); return null; },
+  git_unstage: ({ paths }: { paths: string[] }) => { unstage(paths); return null; },
+  git_commit: ({ message }: { message: string }) => { commit(message); return null; },
+  git_fetch: () => fetchRemote(),
+  git_pull: () => pullRemote(),
+  git_push: () => pushRemote(),
+  git_branches: () => ({ current: branch, local: [...branches] }),
+  git_switch: ({ name }: { name: string }) => {
+    if (busy()) throw BUSY;
+    if (!branches.includes(name)) throw `Branch não encontrada: ${name}`;
+    branch = name;
+    return null;
+  },
+  git_create_branch: ({ name }: { name: string }) => {
+    if (busy()) throw BUSY;
+    const next = name.trim();
+    if (!next) throw 'Informe o nome da branch.';
+    if (branches.includes(next)) throw `A branch ${next} já existe.`;
+    branches.push(next);
+    branch = next;
+    return null;
+  },
   term_resize: ({ id, cols, rows }: { id: string; cols: number; rows: number }) => { debug.sizes[id] = `${cols}x${rows}`; },
   term_snapshot: ({ id }: { id: string }) => {
     const term = terms.get(id);
