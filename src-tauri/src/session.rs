@@ -177,8 +177,13 @@ impl Session {
         let mut allow: Vec<String> = ["Read", "Glob", "Grep", "Skill"].iter().map(|s| s.to_string()).collect();
         allow.push(format!("PowerShell({} *)", self.command));
         allow.extend(GIT_PROGRAMS.iter().map(|g| format!("PowerShell({g} *)")));
+        // Medido no Claude Code 2.1.296: a regra casa o texto do comando, com as aspas. O orquestrador costuma
+        // pôr o caminho entre aspas (`node "C:\...\x.mjs" start`), e a regra sem aspas nega esse comando. Por
+        // isso cada programa entra nas três grafias: sem aspas, com aspas duplas e com aspas simples.
         for runner in RUNNERS {
-            allow.extend(skill_programs(&self.global_dirs, runner).iter().map(|f| format!("PowerShell({runner} {f} *)")));
+            for file in skill_programs(&self.global_dirs, runner) {
+                allow.extend(["", "\"", "'"].iter().map(|q| format!("PowerShell({runner} {q}{file}{q} *)")));
+            }
         }
         // Sem esta variável, o Claude Code 2.1.296 não expõe o PowerShell no Windows com Git Bash. Ela entra só
         // por este arquivo, passado com --settings: o ambiente do usuário não muda.
@@ -376,6 +381,9 @@ pub mod tests {
         assert_eq!(&allow[..7], ["Read", "Glob", "Grep", "Skill", &format!("PowerShell({} *)", s.command), "PowerShell(git *)", "PowerShell(git.exe *)"]);
         assert!(allow.iter().any(|a| a.starts_with("PowerShell(node ") && a.ends_with("canvas.mjs *)")));
         assert!(allow.iter().any(|a| a.starts_with("PowerShell(python ") && a.ends_with("tool.py *)")));
+        // O caminho entre aspas, como o orquestrador costuma escrever, também passa.
+        assert!(allow.iter().any(|a| a.starts_with("PowerShell(node \"") && a.ends_with("canvas.mjs\" *)")));
+        assert!(allow.iter().any(|a| a.starts_with("PowerShell(node '") && a.ends_with("canvas.mjs' *)")));
         assert!(allow.iter().all(|a| !a.contains("--hook") && !a.contains("--guard")), "os modos dos hooks não são liberados ao orquestrador");
         assert!(!s.rule.exists());
         assert_eq!(s.remove(), None);
