@@ -1,13 +1,14 @@
-//! A pasta temporária de uma sessão do orquestrador (`strategist-<guid>`), o launcher de
-//! delegação, a regra do Codex, a limpeza e a recuperação das sobras de sessões mortas.
+//! A pasta temporária de uma sessão do orquestrador (`strategist-<guid>`), o adaptador de delegação que
+//! ela libera (`orq-<guid>.ps1`), a regra do Codex, a limpeza e a recuperação das sobras de sessões mortas.
 use crate::config::Config;
+use crate::delegate;
 use crate::proc::{owner_state, start_time, Owner};
+use crate::roles;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-pub const STRATEGIST_MD: &str = include_str!("../../strategist.md");
-pub const EXECUTOR_MD: &str = include_str!("../../executor.md");
-const DELEGATE_PS1: &str = include_str!("delegate.ps1");
+/// A justificativa que a regra do Codex leva; é o que o Codex mostra ao aprovar a regra.
+const JUSTIFICATION: &str = "Delegacao autorizada ao executor";
 
 /// Onde a sessão vive e o que ela consulta fora de si. Os testes trocam tudo por pastas próprias.
 #[derive(Clone, Debug)]
@@ -32,7 +33,9 @@ impl Places {
 
 pub struct Session {
     pub dir: PathBuf,
-    pub launcher: PathBuf,
+    /// O comando de delegação como o orquestrador o digita: só o nome do adaptador. Ele fica na pasta da
+    /// sessão, que é a primeira entrada do PATH do orquestrador, então não precisa de caminho nem aspas.
+    pub command: String,
     pub rule: PathBuf,
     pub global_dirs: Vec<PathBuf>,
 }
@@ -45,8 +48,14 @@ fn toml_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-pub fn rule_text(launcher: &str) -> String {
-    format!("prefix_rule(pattern=[{}], decision=\"allow\", justification=\"Delegacao autorizada ao executor\")\n", toml_str(launcher))
+/// Uma regra `prefix_rule` do Codex para um único token, que é o programa liberado.
+fn rule(token: &str) -> String {
+    format!("prefix_rule(pattern=[{}], decision=\"allow\", justification=\"{JUSTIFICATION}\")\n", toml_str(token))
+}
+
+/// O comando de delegação de uma sessão: `orq-<id>.ps1`, com o id que dá nome à pasta `strategist-<id>`.
+fn command_for(name: &str) -> String {
+    format!("orq-{}.ps1", name.strip_prefix("strategist-").unwrap_or(name))
 }
 
 /// Os programas das skills globais, por interpretador, nas duas grafias de barra (o orquestrador
@@ -88,20 +97,29 @@ const RUNNERS: [&str; 2] = ["node", "python"];
 impl Session {
     /// Cria a pasta e tudo o que a sessão usa. O que falhar no meio é desfeito por quem chamou,
     /// com `remove`: por isso `dir` e `rule` são devolvidos mesmo no erro.
-    pub fn create(places: &Places, project: &str, cfg: &Config) -> (Session, Result<(), String>) {
+    pub fn create(places: &Places, delegate: &str, project: &str, cfg: &Config) -> (Session, Result<(), String>) {
         let name = format!("strategist-{}", uuid::Uuid::new_v4().simple());
-        let dir = PathBuf::from(clean(&places.temp)).join(&name);
         let session = Session {
-            launcher: dir.join("delegate.ps1"),
+            command: command_for(&name),
             rule: places.codex_rules.join(format!("{name}.rules")),
             global_dirs: places.global_dirs.clone(),
-            dir,
+            dir: PathBuf::from(clean(&places.temp)).join(&name),
         };
-        let result = session.fill(&name, project, cfg).map_err(|e| format!("Não foi possível criar a sessão em {}: {e}", session.dir.display()));
+        let result = if Path::new(delegate).is_file() {
+            delegate::adapter(Path::new(delegate), &session.dir).and_then(|script| {
+                session
+                    .fill(&name, project, cfg, &script)
+                    .map_err(|e| format!("Não foi possível criar a sessão em {}: {e}", session.dir.display()))
+            })
+        } else {
+            Err(format!(
+                "O programa de delegação não está em {delegate}. Ele vai junto com o app: em desenvolvimento, ele é compilado por `npm run dev:tauri`."
+            ))
+        };
         (session, result)
     }
 
-    fn fill(&self, name: &str, project: &str, cfg: &Config) -> std::io::Result<()> {
+    fn fill(&self, name: &str, project: &str, cfg: &Config, script: &str) -> std::io::Result<()> {
         let d = &self.dir;
         std::fs::create_dir(d)?;
         for sub in ["requests", "results", "exec"] {
@@ -109,10 +127,11 @@ impl Session {
         }
         let pid = std::process::id();
         std::fs::write(d.join("owner"), format!("{pid} {} {name}", start_time(pid).unwrap_or(0)))?;
-        std::fs::write(&self.launcher, DELEGATE_PS1.replace('\n', "\r\n").replace("\r\r\n", "\r\n"))?;
+        // Com BOM: o Windows PowerShell 5.1 lê um .ps1 sem BOM como ANSI, e o caminho dele sairia errado.
+        std::fs::write(d.join(&self.command), format!("\u{feff}{script}"))?;
         // Cópia congelada da configuração desta sessão.
         std::fs::write(d.join("session-config.json"), serde_json::to_string_pretty(cfg).unwrap())?;
-        let agents = STRATEGIST_MD.replace("{{DELEGATE}}", &self.launcher.to_string_lossy()).replace("{{PROJECT}}", project);
+        let agents = roles::ORCHESTRATOR.replace("{{DELEGATE}}", &self.command).replace("{{PROJECT}}", project);
         std::fs::write(d.join("AGENTS.md"), agents)?;
         if cfg.orchestrator.tool == "codex" {
             std::fs::create_dir_all(self.rule.parent().unwrap())?;
@@ -123,9 +142,9 @@ impl Session {
         Ok(())
     }
 
-    /// A regra do launcher e, depois dela, uma regra por interpretador com os programas das skills.
+    /// A regra do comando de delegação e, depois dela, uma regra por interpretador com os programas das skills.
     fn codex_rules(&self) -> String {
-        let mut text = rule_text(&self.launcher.to_string_lossy());
+        let mut text = rule(&self.command);
         for runner in RUNNERS {
             let files: Vec<String> = skill_programs(&self.global_dirs, runner).iter().map(|f| toml_str(f)).collect();
             if !files.is_empty() {
@@ -140,7 +159,7 @@ impl Session {
 
     fn claude_settings(&self) -> String {
         let mut allow: Vec<String> = ["Read", "Glob", "Grep", "Skill"].iter().map(|s| s.to_string()).collect();
-        allow.push(format!("PowerShell({} *)", self.launcher.display()));
+        allow.push(format!("PowerShell({} *)", self.command));
         for runner in RUNNERS {
             allow.extend(skill_programs(&self.global_dirs, runner).iter().map(|f| format!("PowerShell({runner} {f} *)")));
         }
@@ -189,19 +208,39 @@ fn is_session_name(name: &str) -> bool {
     name.strip_prefix("strategist-").is_some_and(|id| id.len() == 32 && id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')))
 }
 
-/// A pasta se declara aquela sessão e o dono está comprovadamente morto.
-fn owner_dead(dir: &Path, name: &str) -> bool {
+/// O dono que a pasta declara em `owner`: pid, hora de início e o nome da sessão.
+fn owner_of(dir: &Path) -> Option<(u32, u64, String)> {
     let owner = std::fs::read_to_string(dir.join("owner")).unwrap_or_default();
     let parts: Vec<&str> = owner.trim().split(' ').collect();
-    let [pid, started, session] = parts[..] else { return false };
-    let (Ok(pid), Ok(started)) = (pid.parse::<u32>(), started.parse::<u64>()) else { return false };
-    session == name && owner_state(pid, started) == Owner::Dead
+    let [pid, started, session] = parts[..] else { return None };
+    Some((pid.parse().ok()?, started.parse().ok()?, session.to_string()))
 }
 
-/// Uma sessão morta à força deixa a regra do Codex valendo enquanto o launcher dela existir, e a
-/// pasta para trás. As duas saem aqui, mas só com prova: a regra tem o nome e a primeira linha
-/// exatos que este app escreve para aquela pasta, a pasta se declara aquela sessão (`pid início
-/// sessão` em `owner`) e o dono está comprovadamente morto. Menos que isso fica intocado.
+/// A sessão desta pasta está viva: o dono que ela declara ainda está rodando.
+pub fn owner_alive(dir: &Path) -> bool {
+    owner_of(dir).is_some_and(|(pid, started, _)| owner_state(pid, started) == Owner::Alive)
+}
+
+/// A pasta se declara aquela sessão e o dono está comprovadamente morto.
+fn owner_dead(dir: &Path, name: &str) -> bool {
+    owner_of(dir).is_some_and(|(pid, started, session)| session == name && owner_state(pid, started) == Owner::Dead)
+}
+
+/// Se a primeira linha é a regra que este app escreveu para a pasta `dir`: a atual, do adaptador da
+/// sessão, ou a da versão anterior, que liberava o launcher `delegate.ps1` pelo caminho absoluto. Compara
+/// com o texto exato que `rule` escreve, sem interpretar o TOML: uma linha parecida, com outro token ou
+/// com mais tokens, não é nossa e fica.
+fn is_delegate_rule(line: &str, dir: &Path) -> bool {
+    let Some(name) = dir.file_name().and_then(|n| n.to_str()) else { return false };
+    let current = rule(&command_for(name));
+    let legacy = rule(&dir.join("delegate.ps1").to_string_lossy());
+    [current, legacy].iter().any(|expected| expected.trim_end() == line)
+}
+
+/// Uma sessão morta à força deixa a regra do Codex valendo enquanto a pasta dela existir, e a
+/// pasta para trás. As duas saem aqui, mas só com prova: a regra é a que este app escreveu para
+/// aquela pasta (`is_delegate_rule`), a pasta se declara aquela sessão (`pid início sessão` em `owner`)
+/// e o dono está comprovadamente morto. Menos que isso fica intocado.
 pub fn recover_orphans(places: &Places) {
     let temp = PathBuf::from(clean(&places.temp));
     for entry in std::fs::read_dir(&places.codex_rules).into_iter().flatten().flatten() {
@@ -211,9 +250,8 @@ pub fn recover_orphans(places: &Places) {
             continue;
         }
         let old = temp.join(name);
-        let expected = rule_text(&old.join("delegate.ps1").to_string_lossy());
         let first = std::fs::read_to_string(&path).ok().and_then(|t| t.lines().next().map(String::from));
-        if first.as_deref() != Some(expected.trim()) {
+        if !first.is_some_and(|line| is_delegate_rule(&line, &old)) {
             continue;
         }
         if !old.exists() {
@@ -243,11 +281,17 @@ pub mod tests {
         let skills = root.join("home").join(".agents").join("skills");
         std::fs::create_dir_all(skills.join("grilling").join("node_modules").join("dep")).unwrap();
         std::fs::create_dir_all(root.join("temp")).unwrap();
+        std::fs::write(root.join("orquestrador-delegar.exe"), "").unwrap();
         std::fs::write(skills.join("grilling").join("canvas.mjs"), "").unwrap();
         std::fs::write(skills.join("grilling").join("tool.py"), "").unwrap();
         std::fs::write(skills.join("grilling").join("SKILL.md"), "").unwrap();
         std::fs::write(skills.join("grilling").join("node_modules").join("dep").join("index.js"), "").unwrap();
         Places { temp: root.join("temp"), codex_rules: root.join("codex").join("rules"), global_dirs: vec![root.join("home").join(".agents")] }
+    }
+
+    /// O programa de delegação de mentira que `places` deixa na raiz do teste.
+    pub fn delegate_of(p: &Places) -> String {
+        p.temp.parent().unwrap().join("orquestrador-delegar.exe").to_string_lossy().into_owned()
     }
 
     pub fn discard(p: &Places) {
@@ -259,14 +303,19 @@ pub mod tests {
     }
 
     #[test]
-    fn sessao_codex_escreve_regra_agents_e_owner_e_limpa_tudo() {
+    fn sessao_codex_escreve_regra_adaptador_agents_e_owner_e_limpa_tudo() {
         let p = places("codex");
-        let (s, r) = Session::create(&p, r"C:\proj", &cfg("codex"));
+        let delegate = delegate_of(&p);
+        let (s, r) = Session::create(&p, &delegate, r"C:\proj", &cfg("codex"));
         r.unwrap();
         let name = s.dir.file_name().unwrap().to_string_lossy().to_string();
         assert!(is_session_name(&name));
+        assert_eq!(s.command, format!("orq-{}.ps1", &name["strategist-".len()..]));
+        assert!(!s.command.contains(['\\', '/', ' ', '\'']), "o comando é um nome só: {}", s.command);
+        let adapter = std::fs::read_to_string(s.dir.join(&s.command)).unwrap();
+        assert!(adapter.starts_with('\u{feff}') && adapter.contains("$program = '"), "{adapter}");
         let agents = std::fs::read_to_string(s.dir.join("AGENTS.md")).unwrap();
-        assert!(agents.contains(r"C:\proj") && agents.contains(&*s.launcher.to_string_lossy()));
+        assert!(agents.contains(r"C:\proj") && agents.contains(&s.command));
         assert!(!agents.contains("{{"));
         let owner = std::fs::read_to_string(s.dir.join("owner")).unwrap();
         assert_eq!(owner, format!("{} {} {name}", std::process::id(), start_time(std::process::id()).unwrap()));
@@ -275,11 +324,11 @@ pub mod tests {
 
         let rule = std::fs::read_to_string(&s.rule).unwrap();
         let lines: Vec<&str> = rule.lines().collect();
-        let escaped = s.launcher.to_string_lossy().replace('\\', "\\\\");
-        assert_eq!(lines[0], format!("prefix_rule(pattern=[\"{escaped}\"], decision=\"allow\", justification=\"Delegacao autorizada ao executor\")"));
+        assert_eq!(lines[0], format!("prefix_rule(pattern=[\"{}\"], decision=\"allow\", justification=\"Delegacao autorizada ao executor\")", s.command));
+        assert!(is_delegate_rule(lines[0], &s.dir));
         assert!(lines[1].starts_with("prefix_rule(pattern=[\"node\", [") && lines[1].contains("canvas.mjs") && lines[1].contains("grilling/canvas.mjs"));
         assert!(lines[2].starts_with("prefix_rule(pattern=[\"python\", [") && lines[2].contains("tool.py"));
-        assert!(!rule.contains("node_modules") && !rule.contains("SKILL.md"));
+        assert!(!rule.contains("node_modules") && !rule.contains("SKILL.md") && !rule.contains("orquestrador-delegar"));
         assert!(!s.dir.join("claude-settings.json").exists());
 
         // O que o app deixa na pasta durante o uso também sai.
@@ -293,15 +342,44 @@ pub mod tests {
     #[test]
     fn sessao_claude_escreve_settings_e_nenhuma_regra() {
         let p = places("claude");
-        let (s, r) = Session::create(&p, r"C:\proj", &cfg("claude"));
+        let (s, r) = Session::create(&p, &delegate_of(&p), r"C:\proj", &cfg("claude"));
         r.unwrap();
         let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("claude-settings.json")).unwrap()).unwrap();
         let allow: Vec<&str> = settings["permissions"]["allow"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
-        assert_eq!(&allow[..5], ["Read", "Glob", "Grep", "Skill", &format!("PowerShell({} *)", s.launcher.display())]);
+        assert_eq!(&allow[..5], ["Read", "Glob", "Grep", "Skill", &format!("PowerShell({} *)", s.command)]);
         assert!(allow.iter().any(|a| a.starts_with("PowerShell(node ") && a.ends_with("canvas.mjs *)")));
         assert!(allow.iter().any(|a| a.starts_with("PowerShell(python ") && a.ends_with("tool.py *)")));
+        assert!(allow.iter().all(|a| !a.contains("--hook") && !a.contains("--guard")), "os modos dos hooks não são liberados ao orquestrador");
         assert!(!s.rule.exists());
         assert_eq!(s.remove(), None);
+        discard(&p);
+    }
+
+    #[test]
+    fn caminho_com_espaco_acento_e_apostrofo_nao_precisa_de_nome_curto() {
+        // Nenhum nome 8.3 nem ativação de volume: a pasta e o programa têm caminhos comuns de usuário.
+        let mut p = places("caminho");
+        let odd = p.temp.parent().unwrap().join("pasta com ação").join("it's");
+        std::fs::create_dir_all(&odd).unwrap();
+        std::fs::write(odd.join("orquestrador-delegar.exe"), "").unwrap();
+        p.temp = p.temp.parent().unwrap().join("temp com espaço e açaí it's");
+        std::fs::create_dir_all(&p.temp).unwrap();
+        let delegate = odd.join("orquestrador-delegar.exe").to_string_lossy().into_owned();
+        let (s, r) = Session::create(&p, &delegate, r"C:\proj", &cfg("claude"));
+        r.unwrap();
+        assert!(s.dir.starts_with(&p.temp) && s.dir.join(&s.command).is_file());
+        let adapter = std::fs::read_to_string(s.dir.join(&s.command)).unwrap();
+        assert!(adapter.contains("$program = 'C:\\") && adapter.contains("it''s"), "{adapter}");
+        assert_eq!(s.remove(), None);
+        discard(&p);
+    }
+
+    #[test]
+    fn programa_inexistente_nao_cria_a_sessao() {
+        let p = places("sem-programa");
+        let (s, r) = Session::create(&p, r"C:\não existe\orquestrador-delegar.exe", r"C:\proj", &cfg("claude"));
+        assert!(r.unwrap_err().contains("não está em"));
+        assert!(!s.dir.exists());
         discard(&p);
     }
 
@@ -310,25 +388,36 @@ pub mod tests {
         let p = places("orphans");
         std::fs::create_dir_all(&p.codex_rules).unwrap();
         let temp = PathBuf::from(clean(&p.temp));
-        let make = |id: char, owner: Option<String>, first_line_ok: bool| {
+        // `first` escolhe a primeira linha: a regra atual, a legada, ou uma estrangeira.
+        let make = |id: char, owner: Option<String>, first: &dyn Fn(&Path) -> String| {
             let name = format!("strategist-{}", id.to_string().repeat(32));
             let dir = temp.join(&name);
             if let Some(owner) = owner {
                 std::fs::create_dir_all(&dir).unwrap();
-                std::fs::write(dir.join("delegate.ps1"), "").unwrap();
                 std::fs::write(dir.join("owner"), owner.replace("{name}", &name)).unwrap();
             }
-            let text = if first_line_ok { rule_text(&dir.join("delegate.ps1").to_string_lossy()) } else { "prefix_rule(pattern=[\"outra\"])\n".into() };
-            let rule = p.codex_rules.join(format!("{name}.rules"));
-            std::fs::write(&rule, text).unwrap();
-            (dir, rule)
+            let rule_file = p.codex_rules.join(format!("{name}.rules"));
+            std::fs::write(&rule_file, first(&dir)).unwrap();
+            (dir, rule_file)
         };
         let me = std::process::id();
-        let alive = make('a', Some(format!("{me} {} {{name}}", start_time(me).unwrap())), true);
-        let dead = make('b', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), true);
-        let gone = make('c', None, true);
-        let foreign = make('d', Some(format!("{me} 1 {{name}}")), false);
-        let misnamed = make('e', Some(format!("{me} 1 strategist-outra")), true);
+        let current = |dir: &Path| rule(&command_for(&dir.file_name().unwrap().to_string_lossy()));
+        let legacy = |dir: &Path| rule(&dir.join("delegate.ps1").to_string_lossy());
+        let foreign = |_: &Path| "prefix_rule(pattern=[\"outra\"])\n".to_string();
+        // Quase iguais à nossa: um token a mais, e um token com espaço no fim.
+        let two_tokens = |dir: &Path| format!("prefix_rule(pattern=[{}, \"x\"], decision=\"allow\", justification=\"{JUSTIFICATION}\")\n", toml_str(&command_for(&dir.file_name().unwrap().to_string_lossy())));
+        let wrong_token = |dir: &Path| rule(&format!("{} ", command_for(&dir.file_name().unwrap().to_string_lossy())));
+        // Ids só com hexadecimal, como o nome de sessão exige.
+        let alive = make('a', Some(format!("{me} {} {{name}}", start_time(me).unwrap())), &current);
+        let dead = make('b', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &current);
+        let gone = make('c', None, &current);
+        let foreign_dead = make('d', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &foreign);
+        let misnamed = make('e', Some(format!("{me} 1 strategist-outra")), &current);
+        let legacy_dead = make('f', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &legacy);
+        let legacy_alive = make('0', Some(format!("{me} {} {{name}}", start_time(me).unwrap())), &legacy);
+        let legacy_gone = make('1', None, &legacy);
+        let two_dead = make('2', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &two_tokens);
+        let token_dead = make('3', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &wrong_token);
         std::fs::write(p.codex_rules.join("default.rules"), "x").unwrap();
 
         recover_orphans(&p);
@@ -336,8 +425,13 @@ pub mod tests {
         assert!(alive.0.exists() && alive.1.exists(), "dono vivo fica");
         assert!(!dead.0.exists() && !dead.1.exists(), "dono morto: regra e pasta saem");
         assert!(!gone.1.exists(), "pasta sumida: a regra sai");
-        assert!(foreign.1.exists() && !foreign.0.exists(), "regra de primeira linha diferente fica; a pasta de dono morto sai");
+        assert!(foreign_dead.1.exists() && !foreign_dead.0.exists(), "regra de primeira linha diferente fica; a pasta de dono morto sai");
         assert!(misnamed.0.exists() && misnamed.1.exists(), "owner de outra sessão fica");
+        assert!(!legacy_dead.0.exists() && !legacy_dead.1.exists(), "formato legado com dono morto: regra e pasta saem");
+        assert!(legacy_alive.0.exists() && legacy_alive.1.exists(), "formato legado com dono vivo fica");
+        assert!(!legacy_gone.1.exists(), "formato legado com pasta sumida: a regra sai");
+        assert!(two_dead.1.exists() && !two_dead.0.exists(), "regra com dois tokens não é nossa: fica");
+        assert!(token_dead.1.exists() && !token_dead.0.exists(), "token com espaço a mais não é nosso: fica");
         assert!(p.codex_rules.join("default.rules").exists());
         discard(&p);
     }

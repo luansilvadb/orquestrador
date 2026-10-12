@@ -36,12 +36,19 @@ fn main() {
         child.wait().unwrap();
         println!("{answer}");
     } else {
-        // Orquestrador: ecoa o que for digitado; "sair" termina com código 7.
+        // Orquestrador: ecoa o que for digitado; "sair" termina com código 7. "which:<nome>" responde em
+        // que pasta do PATH deste processo o programa é achado (o índice), para o teste ver o ambiente real.
         println!("orquestrador falso pronto");
         for line in std::io::stdin().lock().lines() {
             let line = line.unwrap_or_default();
             if line.trim() == "sair" {
                 std::process::exit(7);
+            }
+            if let Some(name) = line.trim().strip_prefix("which:") {
+                let path = std::env::var("PATH").unwrap_or_default();
+                let found = path.split(';').position(|dir| std::path::Path::new(dir).join(name).is_file());
+                println!("achou:{}", found.map_or("nenhum".to_string(), |i| i.to_string()));
+                continue;
             }
             println!("eco:{}", line.trim());
         }

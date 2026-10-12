@@ -1,6 +1,6 @@
 [package]
 name = "orquestrador"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [lib]
@@ -10,6 +10,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "orquestrador"
 path = "src/main.rs"
+
+# Programa de console (sem `windows_subsystem`): o PowerShell espera por ele e recebe o código de saída.
+[[bin]]
+name = "orquestrador-delegar"
+path = "src/bin/orquestrador-delegar.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -22,6 +27,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_JobObjects"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Threading", "Win32_System_JobObjects"] }
 tauri-plugin-updater = "2"
 semver = "1"

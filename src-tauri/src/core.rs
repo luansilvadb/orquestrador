@@ -66,8 +66,8 @@ pub fn title(task: &str) -> String {
     task.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(80).collect()
 }
 
-/// A saída do `delegate.ps1` para um lote terminado e o código de saída dele: 0 se todas as
-/// tarefas concluíram.
+/// A saída do comando de delegação (`delegate.rs`) para um lote terminado e o código de saída
+/// dele: 0 se todas as tarefas concluíram.
 pub fn format_result(items: &[(String, Outcome)], git: &Result<String, String>) -> (i32, String) {
     let mut out = String::new();
     for (i, (title, outcome)) in items.iter().enumerate() {
@@ -201,7 +201,7 @@ impl Core {
         inner.max_parallel = cfg.max_parallel;
 
         session::recover_orphans(&inner.places);
-        let (session, created) = Session::create(&inner.places, &project, &cfg);
+        let (session, created) = Session::create(&inner.places, &inner.exes.delegate, &project, &cfg);
         let started = created.and_then(|_| {
             let spawn = cli::orchestrator(&inner.exes, &choice, &session, &project);
             inner.slots.remove(ORCHESTRATOR);
@@ -306,6 +306,11 @@ impl Core {
         self.inner.lock().unwrap().session.as_ref().map(|s| s.dir.clone())
     }
 
+    /// O comando de delegação da sessão viva, como o orquestrador o digita.
+    pub fn delegate_command(&self) -> Option<String> {
+        self.inner.lock().unwrap().session.as_ref().map(|s| s.command.clone())
+    }
+
     fn teardown(&self, inner: &mut Inner) {
         inner.epoch += 1;
         inner.slots.clear();
@@ -362,7 +367,7 @@ impl Core {
         }
     }
 
-    /// Laço da sessão: recebe os lotes pedidos pelo `delegate.ps1` e os sinais de fim de rodada.
+    /// Laço da sessão: recebe os lotes pedidos pelo comando de delegação e os sinais de fim de rodada.
     fn pump(&self, epoch: u64) {
         loop {
             std::thread::sleep(Duration::from_millis(200));
@@ -519,7 +524,7 @@ impl Core {
         self.deliver(inner, &batch);
     }
 
-    /// Com todas as tarefas do lote em estado final, escreve o resultado que o `delegate.ps1`
+    /// Com todas as tarefas do lote em estado final, escreve o resultado que o comando de delegação
     /// espera: primeira linha o código de saída, depois a saída. Publicado por renomeação.
     fn deliver(&self, inner: &mut Inner, batch: &str) {
         let Some(pos) = inner.batches.iter().position(|b| b.id == batch && b.outcomes.iter().all(Option::is_some)) else { return };

@@ -1,13 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Orquestrador",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "dev.luansilvadb.orquestrador",
   "build": {
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "npm run dev:tauri",
+    "beforeBuildCommand": "npm run build:tauri",
+    "beforeBundleCommand": "npm run copy:delegar"
   },
   "app": {
     "windows": [{ "label": "main", "title": "Orquestrador", "width": 1400, "height": 900 }],
@@ -18,6 +19,7 @@
     "targets": ["nsis"],
     "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico"],
+    "resources": { "target/delegar/": "" },
     "windows": { "nsis": { "installMode": "currentUser" } }
   },
   "plugins": {

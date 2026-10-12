@@ -1,21 +1,29 @@
 //! As linhas de comando dos dois CLIs nos dois papéis.
 use crate::config::Choice;
 use crate::hook::BARRED;
-use crate::session::{Session, EXECUTOR_MD};
+use crate::roles::EXECUTOR;
+use crate::session::Session;
 use std::path::Path;
 
-/// Os executáveis: os dois CLIs e o próprio app, que serve de manipulador dos hooks.
+/// Os executáveis: os dois CLIs, o próprio app (que serve de manipulador dos hooks) e o programa de
+/// delegação, que vai junto com o app.
 #[derive(Clone, Debug)]
 pub struct Exes {
     pub claude: String,
     pub codex: String,
     pub app: String,
+    pub delegate: String,
 }
 
 impl Exes {
     pub fn real() -> Exes {
-        let app = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-        Exes { claude: "claude".into(), codex: "codex".into(), app }
+        let me = std::env::current_exe().unwrap_or_default();
+        Exes {
+            claude: "claude".into(),
+            codex: "codex".into(),
+            app: me.to_string_lossy().to_string(),
+            delegate: me.with_file_name(crate::delegate::PROGRAM).to_string_lossy().to_string(),
+        }
     }
 }
 
@@ -25,6 +33,9 @@ pub struct Spawn {
     pub args: Vec<String>,
     pub cwd: String,
     pub env: Vec<(String, String)>,
+    /// Pastas que vão à frente do PATH de base do processo. O orquestrador leva a pasta da sessão, onde
+    /// fica o comando de delegação dele.
+    pub path_first: Vec<String>,
 }
 
 fn strs(items: &[&str]) -> Vec<String> {
@@ -56,7 +67,7 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &s
     } else {
         // Sem sandbox, as ferramentas são a parede: --restricted deixa só as nomeadas, ignora os
         // settings do usuário e confina Read ao projeto e às pastas globais; dontAsk nega todo
-        // comando que não seja o launcher, um programa de skill ou o que o Claude Code toma por
+        // comando que não seja o de delegação, um programa de skill ou o que o Claude Code toma por
         // somente leitura. O modo restrito descarta as skills do usuário, então .agents volta
         // como plugin (medido: as skills carregam como ".agents:nome").
         let mut args = strs(&["--restricted", "--strict-mcp-config", "--tools", "Read,Glob,Grep,PowerShell,Skill", "--settings"]);
@@ -70,12 +81,12 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &s
         (exes.claude.clone(), args)
     };
     args.extend(choice.cli_args());
-    Spawn { program, args, cwd: project.to_string(), env: vec![] }
+    Spawn { program, args, cwd: project.to_string(), env: vec![], path_first: vec![dir] }
 }
 
-/// O prompt inicial de um executor: `executor.md` seguido da tarefa.
+/// O prompt inicial de um executor: o texto de `roles::EXECUTOR` seguido da tarefa.
 pub fn executor_prompt(task: &str) -> String {
-    format!("{}\n{}", EXECUTOR_MD.trim_end(), task.trim())
+    format!("{}\n{}", EXECUTOR.trim_end(), task.trim())
 }
 
 /// O executor: o CLI interativo com permissão total menos o barrado, sem diálogo de início e com
@@ -91,7 +102,7 @@ pub fn executor_prompt(task: &str) -> String {
 /// vale só para o processo e nega o comando; o comando do hook roda no PowerShell.
 pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, prompt: &str) -> (Spawn, Option<String>) {
     let hook_dir = node_dir.join("hook").to_string_lossy().to_string();
-    let mut spawn = Spawn { program: String::new(), args: vec![], cwd: project.to_string(), env: vec![] };
+    let mut spawn = Spawn { program: String::new(), args: vec![], cwd: project.to_string(), env: vec![], path_first: vec![] };
     let settings = if choice.tool == "codex" {
         spawn.program = exes.codex.clone();
         spawn.args = strs(&["--no-daemon", "-C", project, "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"]);
@@ -127,16 +138,21 @@ pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, pr
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::session::tests::{discard, places};
+    use crate::session::tests::{delegate_of, discard, places};
 
     fn exes() -> Exes {
-        Exes { claude: "claude".into(), codex: "codex".into(), app: r"C:\Program Files\Orq\o'rq.exe".into() }
+        Exes {
+            claude: "claude".into(),
+            codex: "codex".into(),
+            app: r"C:\Program Files\Orq\o'rq.exe".into(),
+            delegate: r"C:\Program Files\Orq\orquestrador-delegar.exe".into(),
+        }
     }
 
     fn session(tag: &str, tool: &str) -> (Session, crate::session::Places) {
         let cfg = Config { orchestrator: Choice::new(tool, "", ""), ..Config::default() };
         let p = places(tag);
-        let (s, r) = Session::create(&p, r"C:\proj", &cfg);
+        let (s, r) = Session::create(&p, &delegate_of(&p), r"C:\proj", &cfg);
         r.unwrap();
         (s, p)
     }
@@ -148,6 +164,7 @@ mod tests {
         let got = orchestrator(&exes(), &Choice::new("codex", "gpt-5.5", "high"), &s, r"C:\proj");
         assert_eq!(got.program, "codex");
         assert_eq!(got.cwd, r"C:\proj");
+        assert_eq!(got.path_first, [dir.clone()], "o comando de delegação da sessão é achado primeiro no PATH");
         let trust = format!("projects={{{}={{trust_level=\"trusted\"}}}}", serde_json::to_string(&dir).unwrap());
         assert_eq!(
             got.args,
@@ -163,6 +180,7 @@ mod tests {
         let got = orchestrator(&exes(), &Choice::new("claude", "opus", ""), &s, r"C:\proj");
         let agents = s.global_dirs[0].to_string_lossy().to_string();
         assert_eq!(got.program, "claude");
+        assert_eq!(got.path_first, [s.dir.to_string_lossy().to_string()]);
         assert_eq!(
             got.args,
             [
@@ -189,6 +207,7 @@ mod tests {
             ["--permission-mode", "bypassPermissions", "--settings", r"C:\tmp\s\exec\exec-1\settings.json", "--model", "sonnet", "--effort", "low", "PROMPT\nlinha 2"]
         );
         assert_eq!(got.env, [("CLAUDE_CODE_SANDBOXED".to_string(), "1".to_string())]);
+        assert!(got.path_first.is_empty(), "o executor não recebe o comando de delegação");
         let v: serde_json::Value = serde_json::from_str(&settings.unwrap()).unwrap();
         assert_eq!(v["skipDangerousModePermissionPrompt"], true);
         let deny: Vec<&str> = v["permissions"]["deny"].as_array().unwrap().iter().map(|d| d.as_str().unwrap()).collect();
@@ -224,9 +243,17 @@ mod tests {
     }
 
     #[test]
-    fn prompt_do_executor_e_o_executor_md_seguido_da_tarefa() {
+    fn programa_de_delegacao_fica_ao_lado_do_app() {
+        let real = Exes::real();
+        let me = std::env::current_exe().unwrap();
+        assert_eq!(Path::new(&real.app), me);
+        assert_eq!(Path::new(&real.delegate), me.with_file_name(crate::delegate::PROGRAM));
+    }
+
+    #[test]
+    fn prompt_do_executor_seguido_da_tarefa() {
         let p = executor_prompt("  Faça X.\nPronto quando: Y.\n");
-        assert!(p.starts_with(EXECUTOR_MD.trim_end()));
+        assert!(p.starts_with(EXECUTOR.trim_end()));
         assert!(p.ends_with("\nFaça X.\nPronto quando: Y."));
     }
 }

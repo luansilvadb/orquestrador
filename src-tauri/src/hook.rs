@@ -1,4 +1,4 @@
-//! Os dois modos sem janela do executável, chamados pelos CLIs dos executores.
+//! Os modos `--hook` e `--guard` do executável, sem janela, chamados pelos CLIs dos executores.
 use std::io::Read;
 
 /// `orquestrador.exe --hook <pasta> [json]`: o sinal de fim de rodada. O Claude Code entrega o

@@ -33,21 +33,38 @@ Os blocos podem ser arrastados e redimensionados; a roda do mouse no fundo dá z
 
 ## 5. Como funciona uma delegação
 
-O orquestrador recebe um único comando permitido por sessão: o caminho para `delegate.ps1` dentro da pasta temporária da sessão, seguido de uma ou mais tarefas, cada uma como um argumento entre aspas simples. A linha inteira deve ser esse comando: sem `&` antes, sem pipe, sem `;` e sem outro comando junto. Um apóstrofo dentro de uma tarefa deve ser duplicado, como em `d''água`.
+O orquestrador recebe um único comando permitido por sessão: o nome do adaptador da sessão, `orq-<id>.ps1`, seguido de uma ou mais tarefas, cada uma como um argumento entre aspas simples. O adaptador fica na pasta da sessão, e essa pasta entra na frente do `PATH` do orquestrador: o comando não leva caminho nem aspas em volta. A linha inteira deve ser esse comando: sem `&` antes, sem pipe, sem `;` e sem outro comando junto. Um apóstrofo dentro de uma tarefa deve ser duplicado, como em `d''água`. O resto vai como está: aspas duplas, barras e acentos, inclusive uma barra no fim da tarefa.
 
 ```powershell
-<pasta da sessão>\delegate.ps1 'Tarefa A. Escopo: ... Pronto quando: ...' 'Tarefa B. Escopo: ... Pronto quando: ...'
+orq-<id>.ps1 'Tarefa A. Escopo: ... Pronto quando: ...' 'Tarefa B. Escopo: ... Pronto quando: ...'
 ```
 
-Cada argumento abre um executor novo, sem memória das tarefas anteriores. Todos trabalham na mesma pasta; quem garante que as tarefas de um lote não se cruzam é o orquestrador, pelas instruções de `strategist.md`.
+O programa `orquestrador-delegar.exe` vai junto com o app: no instalador ele é recurso ao lado de `orquestrador.exe`, e em `npm run tauri dev` e no build de release os comandos `dev:tauri` e `build:tauri` (em `package.json`) o compilam antes. No empacotamento, o hook `beforeBundleCommand` (`npm run copy:delegar`) copia o programa de release para `src-tauri\target\delegar`, a pasta que vai para o instalador; se ele não existir, o build para em vez de empacotar uma cópia antiga. Nos outros builds essa pasta sai sem o programa (`build.rs`), porque o `tauri-build` copia o que houver nela para a pasta do perfil, onde o Cargo põe o próprio programa. Ele é de console, de propósito: o PowerShell espera o término de um programa de console e recebe o código de saída dele; um programa de janela, não (medido: `$LASTEXITCODE` fica vazio e a saída chega depois).
 
-Quando o lote termina, o comando imprime:
+O adaptador `orq-<id>.ps1` é escrito pelo app na pasta da sessão (`src-tauri/src/delegate.rs`, função `adapter`) e só transporta: cada texto vai ao programa como base64 do UTF-8, numa linha pela entrada padrão (stdin), e o processo sai com o código que o programa devolve. Quem publica, espera e imprime o lote é o programa em Rust, que lê a entrada até o fim. Nenhum argumento leva o lote: a linha de comando do Windows tem limite de 32767 caracteres, e o base64 cresce um terço (medido: três tarefas de 9000 caracteres falhavam antes de o programa rodar). Entrada vazia, cortada (sem o fim de linha que o PowerShell acrescenta) ou ilegível fecha com `wrapper_error:`, código 4 e `--- FIM ---`, e não publica nada. O Windows PowerShell 5.1 põe um BOM no começo da entrada; o programa o tira. A regra que libera o comando cobre só o adaptador daquela sessão: ele não tem outros modos, e `orquestrador.exe --hook` e `--guard` ficam fora da permissão do orquestrador.
+
+Por que há um adaptador: medido no Windows PowerShell 5.1 com um programa de teste, o PowerShell altera o texto que passa a um programa nativo. A aspa dupla pura some, `\"` vira `"`, `a\\"b` vira `a\b`, e a barra no fim de uma tarefa com espaço vira aspa. O pwsh entrega o texto cru, mas o comando precisa valer nos dois shells, e nenhuma grafia que o orquestrador escreve chega igual nos dois. Argumento de script chega exato nos dois, por isso o adaptador é um `.ps1`.
+
+Por que o código de saída sai por `[Environment]::Exit`: com `-Command`, o `exit` do script não vira o código do processo. Medido nos dois shells, o código 4 do programa saía como 1, e o orquestrador veria uma falha sem o motivo. O adaptador encerra o processo com o código do programa, e o harness de teste não acrescenta `exit` nenhum, para testar o caminho real. A preferência `$PSNativeCommandUseErrorActionPreference` fica desligada no adaptador, para o perfil do pwsh 7.4 em diante não mudar o código.
+
+Cada argumento abre um executor novo, sem memória das tarefas anteriores. Todos trabalham na mesma pasta; quem garante que as tarefas de um lote não se cruzam é o orquestrador, pelas instruções de `src-tauri/src/roles.rs`.
+
+Quando o lote termina, o comando imprime, em UTF-8:
 
 - Para cada tarefa, na ordem: `--- EXECUTOR i/N ---`, o título, a última resposta do executor e `executor_exit` (`0`, ou o motivo seguido de `(FALHOU)`).
 - `--- GIT ---` com a saída de `git status --porcelain --untracked-files=all`: tudo o que está alterado no repositório naquele momento, de todos os executores e também o que já estava pendente antes.
 - `--- FIM ---`: a linha que fecha toda saída completa.
 
-Se a ferramenta do orquestrador desistir de esperar antes do fim, os executores continuam. `delegate.ps1 '--aguardar'` volta a esperar o lote mais recente ainda não entregue, sem lançar nada. Uma falha do próprio wrapper imprime `wrapper_error:`, fecha com `--- FIM ---` e sai com `4`.
+O código de saída é `0` se todas as tarefas concluíram e `1` se alguma falhou.
+
+Se a ferramenta do orquestrador desistir de esperar antes do fim, os executores continuam. `orq-<id>.ps1 '--aguardar'` volta a esperar o lote mais recente ainda não entregue, sem publicar nada. Uma falha do próprio comando imprime `wrapper_error:`, fecha com `--- FIM ---` e sai com `4`; isso vale para tarefa vazia, falta de tarefa e sessão encerrada.
+
+Limites, testados no Windows PowerShell 5.1 e no pwsh 7.6 (`src-tauri\tests\lote.rs`):
+
+- O texto de cada tarefa chega igual ao pedido publicado nos dois shells: aspas duplas puras, barra antes da aspa, JSON com escapes, barra final, acentos, apóstrofos e várias linhas. Tarefa vazia ou só de espaços é recusada e não publica nada.
+- O caminho da pasta da sessão e o do programa podem ter espaço, acento e apóstrofo. Não há exigência de nome curto 8.3 nem de ativar nada no volume.
+- O `.ps1` precisa de uma política de execução que deixe rodar scripts locais no shell do orquestrador. Nesta máquina o PowerShell 5.1 está com `RemoteSigned` na `LocalMachine` e o pwsh também. Com `Restricted`, o PowerShell recusa o adaptador e a delegação falha com a mensagem dele. O app não muda a política do usuário.
+- Não foi medido, sem chamar modelo, como o Claude Code e o Codex casam a linha de comando com a regra. O Codex foi medido só nos argumentos (`codex execpolicy check`): o token do adaptador casa, e a regra da versão anterior também. A confirmação de fato é a primeira delegação real.
 
 O fim da rodada de um executor é detectado pelo hook `Stop` do Claude Code e pelo `notify` do Codex, que chamam o próprio executável do app.
 
@@ -67,19 +84,19 @@ Modelo e esforço vazios deixam o CLI usar seus padrões. Esforços aceitos: Cla
 
 ## 7. Limites de segurança
 
-**Orquestrador Codex.** Sandbox `read-only`, sem aprovações. Um arquivo de regras `prefix_rule` no diretório de regras do Codex libera o launcher daquela sessão e os programas das skills globais, e é removido no encerramento. O sandbox impede escrita, mas ele ainda pode ler o disco inteiro.
+**Orquestrador Codex.** Sandbox `read-only`, sem aprovações. Um arquivo de regras `prefix_rule` no diretório de regras do Codex libera o adaptador de delegação daquela sessão (um nome só, sorteado por sessão) e os programas das skills globais, e é removido no encerramento. O sandbox impede escrita, mas ele ainda pode ler o disco inteiro.
 
-**Orquestrador Claude.** `--restricted`, `--permission-mode dontAsk`, sem servidor MCP. Ferramentas: `Read`, `Glob`, `Grep`, `PowerShell` e `Skill`; o PowerShell só passa o launcher da sessão, os programas das skills globais e o que o Claude Code considera somente leitura.
+**Orquestrador Claude.** `--restricted`, `--permission-mode dontAsk`, sem servidor MCP. Ferramentas: `Read`, `Glob`, `Grep`, `PowerShell` e `Skill`; o PowerShell só passa o comando de delegação da sessão, os programas das skills globais e o que o Claude Code considera somente leitura.
 
 **Skills do orquestrador.** Os programas `.mjs`, `.cjs`, `.js` e `.py` em `%USERPROFILE%\.agents\skills` e `%USERPROFILE%\.claude\skills` são liberados pelo nome no início da sessão. O que esses programas conseguem fazer, o orquestrador consegue fazer por meio deles.
 
-**Executores.** Permissão total, sem perguntar: Claude em `bypassPermissions`, Codex sem sandbox e sem aprovações. Continuam barrados `git push`, `git reset --hard`, `git clean`, `npm publish` e `pnpm publish`: no Claude por lista de negação e por um hook de guarda; no Codex por um hook `PreToolUse` que vale só para aquela sessão. As instruções de `executor.md` pedem ainda para não fazer commit, stage, deploy nem reproduzir segredos.
+**Executores.** Permissão total, sem perguntar: Claude em `bypassPermissions`, Codex sem sandbox e sem aprovações. Continuam barrados `git push`, `git reset --hard`, `git clean`, `npm publish` e `pnpm publish`: no Claude por lista de negação e por um hook de guarda; no Codex por um hook `PreToolUse` que vale só para aquela sessão. As instruções do executor, em `src-tauri/src/roles.rs`, pedem ainda para não fazer commit, stage, deploy nem reproduzir segredos.
 
 Essas barreiras comparam o texto do comando: orientam e pegam as grafias óbvias, não são uma parede. No Codex, se o hook de guarda falhar ao rodar, o comando passa.
 
 Para o executor não parar num diálogo que ninguém pode responder, a confiança na pasta do projeto é dada pela sessão: no Codex por configuração da linha de comando, no Claude pela variável `CLAUDE_CODE_SANDBOXED=1`, que não é documentada e pode mudar entre versões do Claude Code. Escolher a pasta no app equivale a confiar nela.
 
-Na inicialização de uma sessão, regras e pastas de sessões mortas são removidas quando o nome, a primeira linha e o dono encerrado comprovam a origem; o que não puder ser verificado é preservado.
+Na inicialização de uma sessão, regras e pastas de sessões mortas são removidas quando o nome, a primeira linha e o dono encerrado comprovam a origem; o que não puder ser verificado é preservado. A primeira linha pode ser a regra atual ou a da versão anterior, que liberava o launcher `delegate.ps1` pelo caminho; qualquer outra, inclusive uma parecida, não é do app.
 
 ## 8. Atualização automática
 
@@ -87,7 +104,7 @@ Em toda abertura do app instalado, antes de liberar a escolha da pasta ou qualqu
 
 Não há downgrade: só instala versão maior que a instalada, e a versão anunciada precisa ser a versão assinada (`requireSignedVersion`). A atualização troca só os arquivos do programa; `%LOCALAPPDATA%\orquestrador\config.json` e os arquivos dos projetos ficam como estão.
 
-Falha na verificação, no download ou na instalação (inclusive sem internet) mostra o motivo e **mantém o uso bloqueado**, com `Tentar novamente`. Não há opção de continuar na versão antiga. Em `npm run tauri dev` (build de debug) o uso fica liberado direto e nada é consultado. Os modos `--hook` e `--guard` não abrem janela nem passam pelo updater.
+Falha na verificação, no download ou na instalação (inclusive sem internet) mostra o motivo e **mantém o uso bloqueado**, com `Tentar novamente`. Não há opção de continuar na versão antiga. Em `npm run tauri dev` (build de debug) o uso fica liberado direto e nada é consultado. Os modos `--hook` e `--guard` do executável, e o programa `orquestrador-delegar.exe`, não abrem janela nem passam pelo updater.
 
 O repositório é público, então o app baixa a release sem token. Se o repositório virar privado, a atualização automática deixa de funcionar e a distribuição precisa mudar.
 
@@ -127,19 +144,15 @@ Saída: `src-tauri\target\release\bundle\nsis\Orquestrador_<versão>_x64-setup.e
 | Caminho | Papel |
 | --- | --- |
 | `src/` | Frontend: tela de atualização, canvas, blocos, terminais (xterm), seletor. `mock.ts` é um backend simulado, só em `npm run dev` fora do Tauri. |
-| `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores, configuração, `delegate.ps1`. |
+| `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores e configuração. |
+| `src-tauri/src/delegate.rs` | A lógica do programa de delegação: publica o lote na pasta da sessão, espera o resultado e o imprime; e o texto do adaptador `.ps1` da sessão, que só transporta. O ponto de entrada, `orquestrador-delegar.exe`, é `src-tauri/src/bin/orquestrador-delegar.rs`. |
+| `src-tauri/src/roles.rs` | Os textos enviados ao orquestrador (no `AGENTS.md` da sessão) e a cada executor, antes da tarefa. |
 | `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a fonte do plugin oficial e os testes dos cenários. |
 | `.github/workflows/release.yml` | Release por tag: instalador assinado, `latest.json` e conferência, em rascunho. |
-| `strategist.md` | Instruções enviadas ao orquestrador. |
-| `executor.md` | Instruções enviadas a cada executor, antes da tarefa. |
 
 ```powershell
 cd src-tauri
 cargo test
 ```
 
-Os testes usam CLIs simulados e não chamam nenhum modelo. `tests\real.rs` faz o ciclo com os CLIs reais e fica ignorado por padrão: defina `ORQ_REAL_REPO` e `ORQ_REAL=codex,claude` e rode `cargo test --test real -- --ignored --nocapture`.
-
-## 10. Launcher antigo
-
-`strategist.cmd`, `strategist.ps1`, `strategist.config.ps1`, `strategist.onboarding.html` e os `strategist.tests*.ps1` são o launcher de terminal que este app substitui. Ficam no repositório até o app ser validado no uso real. O `strategist.md` já descreve lotes, que o launcher antigo não aceita.
+Os testes usam CLIs simulados e não chamam nenhum modelo. `tests\lote.rs` roda o programa `orquestrador-delegar.exe` de verdade no Windows PowerShell 5.1 e no pwsh. `tests\real.rs` faz o ciclo com os CLIs reais e fica ignorado por padrão: defina `ORQ_REAL_REPO` e `ORQ_REAL=codex,claude` e rode `cargo test --test real -- --ignored --nocapture`.

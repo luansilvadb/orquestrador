@@ -23,7 +23,11 @@ fn lote_real() {
     let pair = std::env::var("ORQ_REAL").unwrap_or("codex,claude".into());
     let (orchestrator, executor) = pair.split_once(',').unwrap();
     let cheap = |tool: &str| if tool == "claude" { Choice::new("claude", "haiku", "") } else { Choice::new("codex", "", "low") };
-    let exes = Exes { app: env!("CARGO_BIN_EXE_orquestrador").to_string(), ..Exes::real() };
+    let exes = Exes {
+        app: env!("CARGO_BIN_EXE_orquestrador").to_string(),
+        delegate: env!("CARGO_BIN_EXE_orquestrador-delegar").to_string(),
+        ..Exes::real()
+    };
     let (tx, events) = channel();
     let emit: Emit = Arc::new(move |event, payload| drop(tx.send((event.to_string(), payload))));
     let core = Core::new(exes, Places::real(), std::env::temp_dir().join("orq-real-config.json"), emit);

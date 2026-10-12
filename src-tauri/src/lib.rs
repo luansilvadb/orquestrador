@@ -2,9 +2,11 @@
 pub mod cli;
 pub mod config;
 pub mod core;
+pub mod delegate;
 pub mod hook;
 pub mod proc;
 pub mod pty;
+pub mod roles;
 pub mod session;
 pub mod update;
 
