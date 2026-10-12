@@ -109,7 +109,7 @@ export function ChoiceForm({ title, hint, options, initial, confirmLabel, onConf
           <SelectTrigger id={ids.model} className="w-full font-mono">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent position="popper" align="start">
             <SelectItem value={DEFAULT}>padrão do CLI</SelectItem>
             {tool.models.map((m) => (
               <SelectItem key={m.name} value={m.name} className="font-mono">{m.name}</SelectItem>

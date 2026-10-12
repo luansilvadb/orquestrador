@@ -26,6 +26,10 @@ Componentes em uso: `alert`, `alert-dialog`, `badge`, `button`, `card`, `input`,
 
 O `src/components/ui/progress.tsx` gerado pelo CLI desestruturava `value` e usava no transform do indicador, mas não o repassava ao `ProgressPrimitive.Root`. Resultado: `data-state` ficava sempre `indeterminate` e `aria-valuenow` sumia no download com total conhecido. Corrigido com `value={value}` no `Root`, antes do `{...props}`; o resto do componente segue o oficial. Ao regenerar o componente pelo CLI, reaplique essa linha.
 
+## Motion
+
+As animações de entrada e saída são as do shadcn oficial (`tw-animate-css` + variantes `data-open`/`data-closed` de `shadcn/tailwind.css`, importados em `src/index.css`). Verificado no navegador: `AlertDialog` anima overlay e conteúdo nos dois sentidos (`enter`/`exit`, 0,1s). O `Select` do formulário de escolha (`src/choice-form.tsx`) usa `position="popper"` com `align="start"`: é a variante animada do `radix-vega`, sem `animate-none`. O menu abre com `enter` e fecha com `exit`, 0,1s, com `fade-in-0`/`zoom-in-95` e `fade-out-0`/`zoom-out-95`, ancorado logo abaixo do gatilho e com a largura dele.
+
 ## Canvas e portais
 
 Pan, zoom, arrasto e redimensionamento são listeners nativos do DOM (`src/canvas.tsx`). Blocos têm `data-block`, e o pan ignora qualquer evento dentro de um bloco. Select e AlertDialog usam portal no `body`, fora do mundo transformado, então funcionam sobre o canvas com zoom.
