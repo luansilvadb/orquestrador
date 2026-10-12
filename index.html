@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orquestrador</title>
+<link rel="icon" href="data:,">
+</head>
+<body>
+<section id="start" class="start">
+  <h1>Orquestrador</h1>
+  <p>Escolha a pasta do projeto (um repositório Git). O orquestrador e os executores trabalham nela.</p>
+  <button id="choose" class="primary">Escolher pasta do projeto</button>
+  <p id="start-error" class="error" role="alert" hidden></p>
+</section>
+
+<div id="app" hidden>
+  <header class="bar">
+    <strong>Orquestrador</strong>
+    <code id="project" title="Pasta do projeto"></code>
+    <span id="counts" class="counts"></span>
+    <span class="spacer"></span>
+    <label class="cap" title="Quantos executores rodam ao mesmo tempo (1 a 16); os demais ficam na fila">
+      simultâneos <input id="max" type="number" min="1" max="16" step="1">
+    </label>
+    <button id="clear" class="ghost" title="Remove do canvas os executores concluídos, interrompidos e com falha">limpar concluídos</button>
+    <div class="zoom">
+      <button id="zoom-out" class="ghost" title="Afastar">−</button>
+      <button id="zoom-reset" class="ghost" title="Voltar a 100%">100%</button>
+      <button id="zoom-in" class="ghost" title="Aproximar">+</button>
+      <button id="fit" class="ghost">enquadrar tudo</button>
+    </div>
+  </header>
+  <main id="viewport">
+    <div id="world"><svg id="links"></svg></div>
+    <div id="empty" class="empty">
+      <p id="notice" class="notice" hidden></p>
+      <button id="open" class="primary">Abrir terminal</button>
+      <p>Abre o orquestrador: o único terminal onde você digita. Os executores aparecem ao lado quando ele delega.</p>
+    </div>
+  </main>
+</div>
+
+<div id="toasts" role="status"></div>
+<dialog id="confirm">
+  <p></p>
+  <form method="dialog"><button value="cancel" class="ghost">Cancelar</button><button value="ok" class="danger"></button></form>
+</dialog>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
