@@ -41,6 +41,7 @@ export class TermView {
       return !((key === 'c' && this.term.hasSelection()) || key === 'v');
     });
     if (writable) this.term.onData((data) => void backend.termWrite(id, data).catch(() => {}));
+    if (writable) this.term.element?.addEventListener('paste', this.onPaste, true);
     this.term.onResize(() => this.sendSize());
     this.observer = new ResizeObserver(() => {
       cancelAnimationFrame(this.frame);
@@ -49,6 +50,25 @@ export class TermView {
     this.observer.observe(host);
     this.fit();
   }
+
+  /**
+   * Só o Codex: ele lê o clipboard do Windows sozinho quando recebe Ctrl+V (`paste_image`). Ligado pelo
+   * orquestrador depois de escolhido o CLI. Nos outros, o paste segue como antes.
+   */
+  imagePaste = false;
+
+  /**
+   * Imagem no clipboard: se o paste traz uma imagem, manda Ctrl+V (`\x16`) ao PTY no lugar dela. Texto segue
+   * pelo paste do xterm, sem mudança.
+   */
+  private onPaste = (e: ClipboardEvent) => {
+    if (!this.imagePaste) return;
+    const items = Array.from(e.clipboardData?.items ?? []);
+    if (!items.some((item) => item.kind === 'file' && item.type.startsWith('image/'))) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    void backend.termWrite(this.id, '\x16').catch(() => {});
+  };
 
   fit() {
     if (this.term.element?.offsetParent) this.fitAddon.fit();
@@ -85,6 +105,7 @@ export class TermView {
   dispose() {
     cancelAnimationFrame(this.frame);
     this.observer.disconnect();
+    this.term.element?.removeEventListener('paste', this.onPaste, true);
     this.term.dispose();
   }
 }

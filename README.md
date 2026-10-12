@@ -31,6 +31,8 @@ npm run tauri build    # gera o instalador assinado em src-tauri\target\release\
 
 Os blocos podem ser arrastados e redimensionados; a roda do mouse no fundo dá zoom, e dentro de um terminal rola o terminal.
 
+No terminal do orquestrador, `Ctrl+V` cola texto normalmente. Com o Codex como orquestrador, se o clipboard tiver uma imagem (uma captura de tela, por exemplo), o app envia o `Ctrl+V` ao Codex, que lê a imagem do clipboard do Windows e a anexa à mensagem em edição, sem enviá-la. Com o Claude Code no Windows, a imagem é colada com `Alt+V`, e o app não muda o paste dele.
+
 ## 5. Como funciona uma delegação
 
 Além do `git` (seção 7), o orquestrador tem um único comando de delegação por sessão: o nome do adaptador da sessão, `orq-<id>.ps1`, seguido de uma ou mais tarefas, cada uma como um argumento entre aspas simples. O adaptador fica na pasta da sessão, e essa pasta entra na frente do `PATH` do orquestrador: o comando não leva caminho nem aspas em volta. A linha inteira deve ser esse comando: sem `&` antes, sem pipe, sem `;` e sem outro comando junto. Um apóstrofo dentro de uma tarefa deve ser duplicado, como em `d''água`. O resto vai como está: aspas duplas, barras e acentos, inclusive uma barra no fim da tarefa.

@@ -104,6 +104,7 @@ async function openOrchestrator() {
       block.head.querySelector('.title')!.textContent = describeChoice(choice);
       self.label.hidden = false;
       setOverlay(self, '');
+      self.view.imagePaste = choice.tool === 'codex';
       self.view.setLive();
       await self.view.attach();
       self.view.term.focus();
