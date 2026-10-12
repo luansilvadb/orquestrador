@@ -4,6 +4,8 @@
 // Na URL: `?update=falha` mostra a atualização bloqueada por falta de internet (a nova tentativa libera) e
 // `?update=download` simula o download (`indeterminado` e `total-zero`: tamanho desconhecido). Sem parâmetro, o uso já vem liberado, como no build de desenvolvimento.
 // No console: `__mock.close()` simula fechar a janela; `__mock.writes` e `__mock.sizes` registram o que chegou.
+// `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto (a lista da tela some com ele sozinha).
+// A árvore (`list_dir`, `git_branch`) não tem `.git`; um executor que termina bem cria `src/tarefa-<lote>-<n>.ts`.
 import type { Transport } from './backend';
 import { ORCHESTRATOR, type Choice, type Events, type ExecutorNode, type NodeState, type Options, type UpdateStatus } from './types';
 
@@ -46,13 +48,52 @@ function out(id: string, text: string) {
   emit('term-data', { id, seq: ++term.seq, data: base64(text) });
 }
 
+// Árvore simulada do projeto, em memória. Pastas são `Folder`; arquivos são `{ dir: false }`.
+type Folder = { dir: true; children: Record<string, Entry> };
+type Entry = Folder | { dir: false };
+const file = (): Entry => ({ dir: false });
+const folder = (children: Record<string, Entry> = {}): Folder => ({ dir: true, children });
+const tree = folder({
+  '.gitignore': file(),
+  'README.md': file(),
+  'package.json': file(),
+  docs: folder({ 'design-system.md': file() }),
+  src: folder({
+    'App.tsx': file(), 'index.css': file(), 'main.tsx': file(),
+    components: folder({ ui: folder({ 'button.tsx': file(), 'card.tsx': file() }) }),
+    lib: folder({ 'utils.ts': file() }),
+  }),
+  tests: folder(),
+});
+const branch = 'main';
+
+/** Pasta pelo caminho relativo com "/" ('' é a raiz); arquivo ou caminho inexistente dá undefined. */
+function folderAt(path: string): Folder | undefined {
+  let node: Entry | undefined = tree;
+  for (const name of path.split('/').filter(Boolean)) node = node?.dir ? node.children[name] : undefined;
+  return node?.dir ? node : undefined;
+}
+// Pastas primeiro, depois arquivos, alfabética: a mesma ordem do backend.
+const listing = (dir: Folder) => Object.entries(dir.children)
+  .map(([name, entry]) => ({ name, dir: entry.dir }))
+  .sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name, 'pt-BR'));
+function addFile(dirPath: string, name: string) {
+  const dir = folderAt(dirPath);
+  if (dir) dir.children[name] = file();
+}
+function removePath(path: string) {
+  const parts = path.split('/'), name = parts.pop()!;
+  const dir = folderAt(parts.join('/'));
+  if (dir) delete dir.children[name];
+}
+
 let alive = false, line = '', batches = 0, executorChoice: Choice | null = null, closeHandler: (() => Promise<boolean>) | null = null;
 const jobs = new Map<string, Job>();
 const debug = { writes: [] as string[], sizes: {} as Record<string, string>, close: async () => {
   const closed = closeHandler ? await closeHandler() : true;
   if (closed) document.body.innerHTML = '<p style="padding:24px">Janela fechada (simulado).</p>';
   return closed;
-} };
+}, remove: (path: string) => removePath(path) };
 (window as unknown as { __mock: typeof debug }).__mock = debug;
 
 const PROMPT = '\x1b[38;5;105morquestrador>\x1b[0m ';
@@ -133,6 +174,8 @@ function run(job: Job) {
 function finish(job: Job, state: NodeState) {
   clearInterval(job.timer);
   setState(job, state);
+  // Um executor que termina bem deixa um arquivo: a árvore muda e a lista do explorador tem de acompanhar.
+  if (state === 'done') addFile('src', `tarefa-${job.batch}-${job.index + 1}.ts`);
   schedule();
 }
 
@@ -215,6 +258,12 @@ const commands: Record<string, (args: any) => unknown> = {
     if (id === ORCHESTRATOR && alive) typed(data);
   },
   clipboard_files: () => [] as string[],
+  list_dir: ({ path }: { path: string }) => {
+    const dir = folderAt(path);
+    if (!dir) throw `Pasta não encontrada: ${path}`;
+    return listing(dir);
+  },
+  git_branch: () => branch,
   term_resize: ({ id, cols, rows }: { id: string; cols: number; rows: number }) => { debug.sizes[id] = `${cols}x${rows}`; },
   term_snapshot: ({ id }: { id: string }) => {
     const term = terms.get(id);

@@ -4,6 +4,7 @@ pub mod clipboard;
 pub mod config;
 pub mod core;
 pub mod delegate;
+pub mod files;
 pub mod hook;
 pub mod proc;
 pub mod pty;
@@ -36,6 +37,20 @@ fn choose_project(app: tauri::AppHandle, core: State<Core>, gate: State<Gate>) -
 fn get_options(core: State<Core>, gate: State<Gate>) -> Result<Options, String> {
     gate.ensure_open()?;
     core.options()
+}
+
+/// Um nível de uma pasta do projeto para o explorador. `path` é relativo ao projeto ("" é a raiz).
+#[tauri::command(async)]
+fn list_dir(core: State<Core>, gate: State<Gate>, path: String) -> Result<Vec<files::Entry>, String> {
+    gate.ensure_open()?;
+    core.list_dir(&path)
+}
+
+/// A branch atual do projeto, ou o hash curto em HEAD destacado.
+#[tauri::command(async)]
+fn git_branch(core: State<Core>, gate: State<Gate>) -> Result<String, String> {
+    gate.ensure_open()?;
+    core.git_branch()
 }
 
 #[tauri::command(async)]
@@ -141,6 +156,8 @@ pub fn run(context: tauri::Context) {
         .invoke_handler(tauri::generate_handler![
             choose_project,
             get_options,
+            list_dir,
+            git_branch,
             start_orchestrator,
             set_executor_choice,
             set_max_parallel,

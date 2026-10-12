@@ -32,6 +32,8 @@ npm run tauri build    # gera o instalador assinado em src-tauri\target\release\
 
 Os blocos podem ser arrastados e redimensionados; a roda do mouse no fundo dá zoom, e dentro de um terminal rola o terminal.
 
+A tela principal tem, à esquerda do canvas, uma coluna com um só ícone, o da lista de arquivos; clicar nele esconde e mostra a lista. A lista é a pasta do projeto como árvore: pastas abrem e fecham com um clique, e clicar em arquivo ainda não faz nada. Ela se atualiza sozinha a cada 1,5 s, com arquivos novos e apagados; a borda direita arrasta para mudar a largura, que volta ao padrão ao reabrir o app. Embaixo, a barra de status mostra a branch atual do projeto.
+
 No terminal do orquestrador, `Ctrl+V` cola texto normalmente. Se o clipboard tiver uma imagem (uma captura de tela, por exemplo), o app envia ao orquestrador o gesto de colar imagem dele (`Ctrl+V` no Codex, `Alt+V` no Claude Code), e o CLI lê a imagem do clipboard do Windows e a anexa à mensagem em edição, sem enviá-la. Se o clipboard tiver arquivos copiados no Explorer, o app cola o caminho completo de cada um (entre aspas quando tem espaço); o CLI anexa o que for imagem e recebe o resto como caminho. Vários arquivos vão do jeito que cada CLI aceita (medido no Claude Code 2.1.296 e no Codex 0.162.1): no Claude, num paste só, um caminho por linha; no Codex, um paste por caminho, com um intervalo curto entre eles.
 
 ## 5. Como funciona uma delegação
@@ -174,6 +176,7 @@ Saída: `src-tauri\target\release\bundle\nsis\Orquestrador_<versão>_x64-setup.e
 | Caminho | Papel |
 | --- | --- |
 | `src/` | Frontend em React: tela de atualização, canvas, blocos, terminais (xterm), formulário de escolha. `mock.ts` é um backend simulado, só em `npm run dev` fora do Tauri. O design system (shadcn/ui) está em `docs/design-system.md`. |
+| `src/explorer.tsx` | A moldura da tela principal: coluna de ícones, lista de arquivos (árvore que se atualiza sozinha) e barra de status com a branch. |
 | `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores e configuração. |
 | `src-tauri/src/delegate.rs` | A lógica do programa de delegação: publica o lote na pasta da sessão, espera o resultado e o imprime; e o texto do adaptador `.ps1` da sessão, que só transporta. O ponto de entrada, `orquestrador-delegar.exe`, é `src-tauri/src/bin/orquestrador-delegar.rs`. |
 | `src-tauri/src/hook.rs` | Os modos do executável chamados pelos CLIs dos executores: `--hook` (fim de rodada), `--guard` (comandos barrados) e `--ask` (pedido de confirmação, espera a resposta do orquestrador). |

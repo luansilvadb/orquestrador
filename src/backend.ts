@@ -2,7 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { Choice, Events, Options, Snapshot, UpdateStatus } from './types';
+import type { Choice, DirEntry, Events, Options, Snapshot, UpdateStatus } from './types';
 
 export interface Transport {
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
@@ -51,6 +51,9 @@ export const backend = {
   clearDone: () => call<string[]>('clear_done'),
   hasRunning: () => call<boolean>('has_running'),
   shutdown: () => call<void>('shutdown'),
+  // Caminho relativo à pasta do projeto, com "/"; '' é a raiz.
+  listDir: (path: string) => call<DirEntry[]>('list_dir', { path }),
+  gitBranch: () => call<string>('git_branch'),
 };
 
 /** Erros do backend já chegam como mensagem em português. */

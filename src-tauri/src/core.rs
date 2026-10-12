@@ -2,6 +2,7 @@
 //! Tauri: os eventos saem por `Emit`, que os testes trocam por um canal.
 use crate::cli::{self, Exes};
 use crate::config::{self, Choice, Options};
+use crate::files::{self, Entry};
 use crate::hook;
 use crate::proc;
 use crate::pty::{Buffer, Shared, Term};
@@ -185,6 +186,20 @@ impl Core {
         }
         inner.project = Some(root.clone());
         Ok(root)
+    }
+
+    /// Um nível da pasta `path` (relativa ao projeto; vazio é a raiz) para o explorador de arquivos.
+    pub fn list_dir(&self, path: &str) -> Result<Vec<Entry>, String> {
+        files::list(Path::new(&self.project()?), path)
+    }
+
+    /// A branch atual do projeto, ou o hash curto em HEAD destacado.
+    pub fn git_branch(&self) -> Result<String, String> {
+        proc::branch(Path::new(&self.project()?))
+    }
+
+    fn project(&self) -> Result<String, String> {
+        self.inner.lock().unwrap().project.clone().ok_or_else(|| "Escolha a pasta do projeto primeiro.".into())
     }
 
     pub fn options(&self) -> Result<Options, String> {

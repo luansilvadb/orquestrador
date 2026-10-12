@@ -26,6 +26,9 @@ export type UpdateStatus =
   | { phase: 'ready' }
   | { phase: 'failed'; message: string };
 
+// Uma entrada de `list_dir`: um nível só. A ordem é a do backend (pastas primeiro, depois arquivos, alfabética).
+export type DirEntry = { name: string; dir: boolean };
+
 export type TermData = { id: string; seq: number; data: string };
 export type Snapshot = { seq: number; data: string };
 export type NodeStateEvent = { id: string; state: NodeState; choice: Choice | null };

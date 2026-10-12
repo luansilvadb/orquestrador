@@ -40,6 +40,16 @@ pub fn git_root(folder: &Path) -> Option<String> {
     (!top.is_empty()).then(|| top.replace('/', "\\"))
 }
 
+/// Nome da branch atual; em HEAD destacado, o hash curto do commit. Erro se nem isso der para ler.
+pub fn branch(dir: &Path) -> Result<String, String> {
+    // `symbolic-ref` também acha a branch de um repositório sem commit; `-q` deixa o HEAD destacado sair com erro.
+    if let Ok(name) = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"]) {
+        return Ok(name.trim().to_string());
+    }
+    let hash = git(dir, &["rev-parse", "--short", "HEAD"]).map_err(|why| format!("Não foi possível ler a branch: {why}"))?;
+    Ok(hash.trim().to_string())
+}
+
 /// Job do Windows: tudo o que o processo criar morre junto, no `kill` ou quando o app fecha o
 /// handle (inclusive ao morrer), então não sobra processo órfão.
 pub struct Job(HANDLE);
@@ -154,5 +164,22 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(300));
         job.kill();
         assert!(!child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn branch_le_o_nome_e_em_head_destacado_o_hash() {
+        let dir = std::env::temp_dir().join(format!("orq-proc-{}-branch", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "-q"]).unwrap();
+        // Sem commit ainda: a branch já tem nome, mesmo sem nascer.
+        git(&dir, &["symbolic-ref", "HEAD", "refs/heads/trabalho"]).unwrap();
+        assert_eq!(branch(&dir).unwrap(), "trabalho");
+        git(&dir, &["-c", "user.name=teste", "-c", "user.email=teste@teste", "commit", "--allow-empty", "-q", "-m", "x"]).unwrap();
+        assert_eq!(branch(&dir).unwrap(), "trabalho");
+        git(&dir, &["checkout", "--detach", "-q"]).unwrap();
+        let hash = git(&dir, &["rev-parse", "--short", "HEAD"]).unwrap();
+        assert_eq!(branch(&dir).unwrap(), hash.trim());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
