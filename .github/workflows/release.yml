@@ -54,6 +54,22 @@ jobs:
           prerelease: false
           uploadUpdaterJson: true
 
+      # Num rascunho, o tauri-action grava no manifesto a URL da API do asset; o app deve baixar pela URL pública da tag.
+      - name: Apontar o latest.json para a URL pública do instalador
+        shell: pwsh
+        run: |
+          $version = $env:TAG.Substring(1)
+          $dir = Join-Path $env:RUNNER_TEMP 'release-manifest'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          gh release download $env:TAG --dir $dir --pattern latest.json --clobber
+          $path = Join-Path $dir 'latest.json'
+          $raw = Get-Content $path -Raw
+          $old = ($raw | ConvertFrom-Json).platforms.'windows-x86_64'.url
+          if (-not $old) { throw 'latest.json sem a URL de windows-x86_64.' }
+          $url = "https://github.com/luansilvadb/orquestrador/releases/download/$($env:TAG)/Orquestrador_${version}_x64-setup.exe"
+          Set-Content -Path $path -Value $raw.Replace($old, $url) -NoNewline
+          gh release upload $env:TAG $path --clobber
+
       # Antes de alguém publicar: o instalador, a assinatura e o manifesto precisam estar consistentes.
       - name: Conferir a release em rascunho
         shell: pwsh
