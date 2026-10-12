@@ -1,48 +1,27 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import { CircleCheck, CircleHelp, CircleX, Clock, Hourglass, LoaderCircle, Maximize, Square, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { LoaderCircle } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Toaster } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { backend, connect, message } from './backend';
-import { Block, Canvas, freeSlot, moved, resized, type CanvasHandle, type Rect } from './canvas';
 import { ChoiceForm } from './choice-form';
-import { Explorer, StatusBar } from './explorer';
-import { DiffView } from './git';
-import { attachExecutor, TermHost, terminals } from './terminals';
+import { FilesScreen, Nav, StatusBar } from './explorer';
+import { GitScreen, useGitStatus } from './git';
+import { useRoute, type Route } from './route';
+import { FINISHED, TerminalsScreen } from './terminal-screen';
+import { terminals } from './terminals';
 import {
   describeChoice, ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus,
 } from './types';
 
-const STATES: Record<NodeState, { label: string; icon: typeof Clock; variant: 'outline' | 'secondary' | 'destructive' | 'default'; className?: string }> = {
-  'awaiting-choice': { label: 'aguardando escolha', icon: CircleHelp, variant: 'outline' },
-  queued: { label: 'na fila', icon: Clock, variant: 'outline' },
-  running: { label: 'executando', icon: LoaderCircle, variant: 'default' },
-  'awaiting-orchestrator': {
-    label: 'aguardando orquestrador', icon: Hourglass, variant: 'outline',
-    className: 'border-[var(--status-prompt)] text-[var(--status-prompt)]',
-  },
-  done: { label: 'concluído', icon: CircleCheck, variant: 'secondary' },
-  stopped: { label: 'interrompido', icon: Square, variant: 'outline' },
-  failed: { label: 'falhou', icon: CircleX, variant: 'destructive' },
-};
-const FINISHED: NodeState[] = ['done', 'stopped', 'failed'];
 const MB = 1024 * 1024;
-const EXECUTOR_BLOCK = { w: 660, h: 380 };
-const ORCHESTRATOR_RECT: Rect = { x: 0, y: 0, w: 800, h: 520 };
-// Abas da área central: o Canvas é a primeira, fixa; cada arquivo aberto pelo painel Git é uma aba de alterações.
-const CANVAS = 'canvas';
-type DiffTab = { key: string; path: string; staged: boolean };
-const tabKey = (path: string, staged: boolean) => `${staged ? 'preparado' : 'alteracoes'}:${path}`;
-const basename = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 
 type Overlay = 'start' | 'executor' | null;
 type State = {
@@ -53,10 +32,7 @@ type State = {
   orchestrator: { title: string; started: boolean; overlay: Overlay } | null;
   executorChoice: Choice | null;
   executors: ExecutorNode[];
-  layout: Record<string, Rect>;
   notice: string;
-  fit: { seq: number; reveal?: string };
-  zoom: number;
 };
 type Action =
   | { type: 'update'; status: UpdateStatus }
@@ -70,33 +46,27 @@ type Action =
   | { type: 'nodeAdded'; node: ExecutorNode }
   | { type: 'nodeState'; id: string; state: NodeState; choice: Choice | null }
   | { type: 'removed'; ids: string[] }
-  | { type: 'reset'; notice: string }
-  | { type: 'move'; id: string; dx: number; dy: number; z: number }
-  | { type: 'resize'; id: string; dx: number; dy: number; z: number }
-  | { type: 'zoom'; zoom: number }
-  | { type: 'fit' };
+  | { type: 'reset'; notice: string };
 
 const initial: State = {
   update: { phase: 'checking' }, project: '', projectBusy: false, options: null, orchestrator: null,
-  executorChoice: null, executors: [], layout: {}, notice: '', fit: { seq: 0 }, zoom: 1,
+  executorChoice: null, executors: [], notice: '',
 };
 
 function reducer(state: State, action: Action): State {
-  const fit = (reveal?: string) => ({ seq: state.fit.seq + 1, reveal });
   switch (action.type) {
     case 'update':
       return { ...state, update: action.status };
     case 'project':
-      return { ...state, project: action.project, options: action.options, projectBusy: false, fit: fit() };
+      return { ...state, project: action.project, options: action.options, projectBusy: false };
     case 'options':
       return { ...state, options: action.options };
     case 'maxParallel':
       return { ...state, options: state.options && { ...state.options, maxParallel: action.value } };
     case 'open':
       return {
-        ...state, options: action.options, notice: '', fit: fit(),
+        ...state, options: action.options, notice: '',
         orchestrator: { title: '', started: false, overlay: 'start' },
-        layout: { ...state.layout, [ORCHESTRATOR]: ORCHESTRATOR_RECT },
       };
     case 'started':
       return { ...state, orchestrator: state.orchestrator && { ...state.orchestrator, title: describeChoice(action.choice), started: true, overlay: null } };
@@ -106,39 +76,17 @@ function reducer(state: State, action: Action): State {
       return { ...state, executorChoice: action.choice };
     case 'nodeAdded': {
       if (!state.orchestrator || state.executors.some((e) => e.id === action.node.id)) return state;
-      const rect = freeSlot(Object.values(state.layout), state.layout[ORCHESTRATOR], EXECUTOR_BLOCK.w, EXECUTOR_BLOCK.h);
-      return {
-        ...state, executors: [...state.executors, action.node], layout: { ...state.layout, [action.node.id]: rect },
-        fit: fit(action.node.id),
-      };
+      return { ...state, executors: [...state.executors, action.node] };
     }
     case 'nodeState':
       return {
         ...state,
         executors: state.executors.map((e) => (e.id === action.id ? { ...e, state: action.state, choice: action.choice } : e)),
       };
-    case 'removed': {
-      const layout = { ...state.layout };
-      for (const id of action.ids) delete layout[id];
-      return { ...state, executors: state.executors.filter((e) => !action.ids.includes(e.id)), layout };
-    }
-    case 'reset': {
-      const layout = { ...state.layout };
-      for (const id of [ORCHESTRATOR, ...state.executors.map((e) => e.id)]) delete layout[id];
-      return { ...state, orchestrator: null, executorChoice: null, executors: [], layout, notice: action.notice, fit: fit() };
-    }
-    case 'move':
-      return state.layout[action.id]
-        ? { ...state, layout: { ...state.layout, [action.id]: moved(state.layout[action.id], action.dx, action.dy, action.z) } }
-        : state;
-    case 'resize':
-      return state.layout[action.id]
-        ? { ...state, layout: { ...state.layout, [action.id]: resized(state.layout[action.id], action.dx, action.dy, action.z) } }
-        : state;
-    case 'zoom':
-      return { ...state, zoom: action.zoom };
-    case 'fit':
-      return { ...state, fit: fit() };
+    case 'removed':
+      return { ...state, executors: state.executors.filter((e) => !action.ids.includes(e.id)) };
+    case 'reset':
+      return { ...state, orchestrator: null, executorChoice: null, executors: [], notice: action.notice };
   }
 }
 
@@ -162,12 +110,6 @@ const updateText = (status: UpdateStatus, fatal: boolean) => {
 };
 
 const report = (e: unknown) => toast.error(message(e), { duration: 7000 });
-/** Overlay de um bloco: cobre o terminal com um formulário ou um aviso, sem sair do bloco. */
-const BlockOverlay = ({ children }: { children: ReactNode }) => (
-  <div className="absolute inset-0 overflow-auto bg-background/95 p-4">
-    <div className="flex min-h-full items-center justify-center">{children}</div>
-  </div>
-);
 
 export function App() {
   const [state, dispatch] = useReducer(reducer, initial);
@@ -175,13 +117,13 @@ export function App() {
   useLayoutEffect(() => {
     stateRef.current = state;
   });
-  const canvas = useRef<CanvasHandle>(null);
+  const route = useRoute();
+  // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
+  const git = useGitStatus(state.update.phase === 'ready' && !!state.project);
   const [fatal, setFatal] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [projectError, setProjectError] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [tabs, setTabs] = useState<DiffTab[]>([]);
-  const [active, setActive] = useState(CANVAS);
   const closeAnswer = useRef<((ok: boolean) => void) | null>(null);
   const updateEvents = useRef(0);
   const [maxText, setMaxText] = useState('');
@@ -191,7 +133,7 @@ export function App() {
 
   // ---------- ações ----------
 
-  const resetCanvas = (notice = '') => {
+  const resetOrchestrator = (notice = '') => {
     for (const e of stateRef.current.executors) terminals.forget(e.id);
     dispatch({ type: 'reset', notice });
   };
@@ -220,10 +162,12 @@ export function App() {
           dispatch({ type: 'nodeState', id, state: next, choice });
           // Os dois estados vivos: o PTY já existe, então setLive só reenvia o tamanho. Não recria nem zera o terminal.
           if (next === 'running' || next === 'awaiting-orchestrator') terminals.get(id)?.setLive();
+          // Executor que terminou fecha a própria aba; a resposta dele já seguiu para o orquestrador.
+          if (FINISHED.includes(next)) void clearDone();
         }),
         backend.listen('executor-choice', (choice) => dispatch({ type: 'executorChoice', choice })),
         backend.listen('orchestrator-exit', ({ code }) =>
-          resetCanvas(`O orquestrador terminou (${code === null ? 'sem código de saída' : `código de saída ${code}`}).`)),
+          resetOrchestrator(`O orquestrador terminou (${code === null ? 'sem código de saída' : `código de saída ${code}`}).`)),
         backend.onCloseRequested(async () => {
           try {
             if (await backend.hasRunning() && !(await askClose())) return false;
@@ -343,25 +287,9 @@ export function App() {
     }
   }
 
-  // Arquivo do painel Git: abre (ou só ativa) a aba de alterações dele, no lado da seção clicada.
-  const openDiff = (path: string, staged: boolean) => {
-    const key = tabKey(path, staged);
-    setTabs((prev) => (prev.some((t) => t.key === key) ? prev : [...prev, { key, path, staged }]));
-    setActive(key);
-  };
-
-  // Fechar a aba ativa volta para a vizinha da esquerda (o Canvas, se for a primeira).
-  const closeTab = (key: string) => {
-    const order = [CANVAS, ...tabs.map((t) => t.key)];
-    const at = order.indexOf(key);
-    if (at < 1) return;
-    setTabs(tabs.filter((t) => t.key !== key));
-    if (active === key) setActive(order[at - 1]);
-  };
-
   // ---------- derivados ----------
 
-  const { update, orchestrator, executors, layout, options } = state;
+  const { update, orchestrator, executors, options } = state;
   const ready = update.phase === 'ready';
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
   const busy = executors.some((e) => !FINISHED.includes(e.state));
@@ -370,11 +298,11 @@ export function App() {
     [count('running'), 'executando', 'executando'], [count('queued'), 'na fila', 'na fila'],
     [count('awaiting-choice'), 'aguardando escolha', 'aguardando escolha'],
     [count('awaiting-orchestrator'), 'aguardando orquestrador', 'aguardando orquestrador'],
-    [count('done'), 'concluído', 'concluídos'],
-    [count('stopped'), 'interrompido', 'interrompidos'], [count('failed'), 'com falha', 'com falha'],
   ] as const;
   const counts = parts.filter(([n]) => n).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`).join(' · ');
-  const links = orchestrator ? executors.map((e) => ({ id: e.id, from: ORCHESTRATOR, state: e.state })) : [];
+  const changed = git.status?.files.length ?? 0;
+  // As duas telas ficam montadas; a rota só escolhe qual aparece. Inativa vai para invisible, nunca para display none.
+  const shown = (to: Route) => cn('absolute inset-0', route !== to && 'invisible');
 
   // ---------- telas ----------
 
@@ -457,158 +385,33 @@ export function App() {
               className="h-8 w-16 font-mono"
             />
           </Label>
-          <Button variant="outline" size="sm" onClick={clearDone} disabled={count(...FINISHED) === 0}
-            title="Remove do canvas os executores concluídos, interrompidos e com falha">
-            limpar concluídos
-          </Button>
-          <div className="flex items-center gap-1">
-            <Button variant="outline" size="icon-sm" aria-label="Afastar" title="Afastar"
-              onClick={() => canvas.current?.zoomAt(canvas.current.zoom() / 1.2)}>
-              <ZoomOut />
-            </Button>
-            <Button variant="ghost" size="sm" className="w-14 font-mono" title="Voltar a 100%"
-              onClick={() => canvas.current?.zoomAt(1)}>
-              {Math.round(state.zoom * 100)}%
-            </Button>
-            <Button variant="outline" size="icon-sm" aria-label="Aproximar" title="Aproximar"
-              onClick={() => canvas.current?.zoomAt(canvas.current.zoom() * 1.2)}>
-              <ZoomIn />
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => canvas.current?.fitAll()}>
-              <Maximize />
-              enquadrar tudo
-            </Button>
-          </div>
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <Explorer busy={busy} onOpenDiff={openDiff} />
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <Tabs value={active} onValueChange={setActive} className="flex min-h-0 flex-1 flex-col gap-0">
-            <TabsList className="h-9 w-full shrink-0 justify-start gap-0 overflow-x-auto rounded-none border-b bg-card p-0">
-              <TabsTrigger value={CANVAS} className="h-full flex-none rounded-none border-0 px-3">Canvas</TabsTrigger>
-              {tabs.map((tab) => (
-                <div key={tab.key} className="flex h-full shrink-0 items-center border-r">
-                  <TabsTrigger
-                    value={tab.key} title={`${tab.path}${tab.staged ? ' (versão preparada)' : ''}`}
-                    className="h-full flex-none rounded-none border-0 px-3"
-                    onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(tab.key); } }}
-                  >
-                    <span className="max-w-[200px] truncate">{basename(tab.path)}</span>
-                    {tab.staged && <Badge variant="outline" className="font-normal">preparado</Badge>}
-                  </TabsTrigger>
-                  <Button
-                    variant="ghost" size="icon-xs" aria-label={`Fechar ${basename(tab.path)}`} title="Fechar aba"
-                    onClick={() => closeTab(tab.key)}
-                  >
-                    <X />
-                  </Button>
-                </div>
-              ))}
-            </TabsList>
-            <div className="relative min-h-0 flex-1">
-              <TabsContent value={CANVAS} forceMount className="absolute inset-0 mt-0 outline-none data-[state=inactive]:invisible">
-                <Canvas
-                  ref={canvas}
-                  rects={layout}
-                  links={links}
-                  fit={state.fit}
-                  onZoom={(zoom) => dispatch({ type: 'zoom', zoom })}
-                >
-                  {orchestrator && (
-                    <Block
-                      rect={layout[ORCHESTRATOR]}
-                      head={
-                        <>
-                          <Badge variant="secondary">orquestrador</Badge>
-                          <span className="min-w-0 truncate font-mono text-muted-foreground">{orchestrator.title}</span>
-                          <span className="flex-1" />
-                          {orchestrator.started && (
-                            <Button
-                              variant="outline" size="xs"
-                              className="font-mono"
-                              title="Escolha dos executores; a troca vale para os próximos"
-                              onClick={toggleExecutorChoice}
-                            >
-                              executores: {state.executorChoice ? describeChoice(state.executorChoice) : 'ainda não escolhido'}
-                            </Button>
-                          )}
-                        </>
-                      }
-                      onMove={(dx, dy) => dispatch({ type: 'move', id: ORCHESTRATOR, dx, dy, z: canvas.current?.zoom() ?? 1 })}
-                      onResize={(dx, dy) => dispatch({ type: 'resize', id: ORCHESTRATOR, dx, dy, z: canvas.current?.zoom() ?? 1 })}
-                    >
-                      <TermHost id={ORCHESTRATOR} writable />
-                    </Block>
-                  )}
-
-                  {orchestrator && executors.map((node) => {
-                    const meta = STATES[node.state];
-                    const Icon = meta.icon;
-                    const cancellable = node.state === 'queued' || node.state === 'running' || node.state === 'awaiting-orchestrator';
-                    return (
-                      <Block
-                        key={node.id}
-                        rect={layout[node.id]}
-                        state={node.state}
-                        head={
-                          <>
-                            <Badge variant={meta.variant} className={cn('gap-1', meta.className)}>
-                              <Icon className={node.state === 'running' ? 'animate-spin' : undefined} />
-                              {meta.label}
-                            </Badge>
-                            <span className="font-mono text-muted-foreground">#{node.index + 1}</span>
-                            <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
-                            {node.choice && <span className="truncate font-mono text-muted-foreground">{describeChoice(node.choice)}</span>}
-                            {cancellable && (
-                              <Button variant="outline" size="xs" title="Interrompe só este executor"
-                                onClick={() => backend.stopExecutor(node.id).catch(report)}>
-                                parar
-                              </Button>
-                            )}
-                          </>
-                        }
-                        onMove={(dx, dy) => dispatch({ type: 'move', id: node.id, dx, dy, z: canvas.current?.zoom() ?? 1 })}
-                        onResize={(dx, dy) => dispatch({ type: 'resize', id: node.id, dx, dy, z: canvas.current?.zoom() ?? 1 })}
-                      >
-                        <TermHost id={node.id} writable={false} onReady={attachExecutor} />
-                        {node.state === 'awaiting-choice' && (
-                          <BlockOverlay>
-                            <p className="max-w-[300px] text-center text-sm text-muted-foreground">Aguardando a escolha dos executores.</p>
-                          </BlockOverlay>
-                        )}
-                        {node.state === 'queued' && (
-                          <BlockOverlay>
-                            <p className="max-w-[300px] text-center text-sm text-muted-foreground">
-                              Na fila: começa quando um executor terminar ou o teto de simultâneos subir.
-                            </p>
-                          </BlockOverlay>
-                        )}
-                      </Block>
-                    );
-                  })}
-                </Canvas>
-
-                {!orchestrator && (
-                  <div className="absolute inset-0 m-auto grid h-fit w-[min(380px,calc(100%-32px))] justify-items-center gap-3 p-4 text-center">
-                    {state.notice && (
-                      <p role="status" className="rounded-md border bg-card px-3 py-1.5 text-sm">{state.notice}</p>
-                    )}
-                    <Button onClick={() => openOrchestrator()}>Abrir terminal</Button>
-                    <p className="text-xs text-muted-foreground">
-                      Abre o orquestrador: o único terminal onde você digita. Os executores aparecem ao lado quando ele delega.
-                    </p>
-                  </div>
-                )}
-              </TabsContent>
-              {tabs.map((tab) => (
-                <TabsContent key={tab.key} value={tab.key} forceMount className="absolute inset-0 mt-0 outline-none data-[state=inactive]:hidden">
-                  <DiffView path={tab.path} staged={tab.staged} active={active === tab.key} />
-                </TabsContent>
-              ))}
+        <Nav route={route} changed={changed} />
+        <main className="relative min-h-0 min-w-0 flex-1">
+          <div className={shown('arquivos')}>
+            <div className="flex h-full">
+              <div className="h-full w-[280px] shrink-0 border-r bg-background">
+                <FilesScreen />
+              </div>
+              <div className="h-full min-w-0 flex-1">
+                <TerminalsScreen
+                  orchestrator={orchestrator}
+                  executors={executors}
+                  executorChoice={state.executorChoice}
+                  notice={state.notice}
+                  onOpen={() => openOrchestrator()}
+                  onExecutorChoice={toggleExecutorChoice}
+                  onStop={(id) => backend.stopExecutor(id).catch(report)}
+                />
+              </div>
             </div>
-          </Tabs>
+          </div>
+          <div className={shown('git')}>
+            <GitScreen git={git} locked={busy} active={route === 'git'} />
+          </div>
         </main>
       </div>
 
@@ -622,7 +425,7 @@ export function App() {
             open={orchestrator?.overlay === 'start'}
             title="Orquestrador" hint="Só lê o projeto e delega. É o único terminal onde você digita."
             options={options} initial={options.last.orchestrator} confirmLabel="Abrir terminal"
-            onCancel={() => resetCanvas()} onConfirm={startOrchestrator} onClosed={focusOrchestrator}
+            onCancel={() => resetOrchestrator()} onConfirm={startOrchestrator} onClosed={focusOrchestrator}
           />
           {/* Com um executor aguardando escolha, só a janela dele fica aberta: nunca duas empilhadas. */}
           <ChoiceForm

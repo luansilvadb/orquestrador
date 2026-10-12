@@ -37,7 +37,7 @@ fn bench(tag: &str) -> Bench {
     bench_in(tag, "temp")
 }
 
-/// Um canvas cujo temp fica em `root\<temp>`: o nome dessa pasta é o que o teste quer provar. O programa de
+/// Uma sessão de teste cujo temp fica em `root\<temp>`: o nome dessa pasta é o que o teste quer provar. O programa de
 /// delegação é uma cópia numa pasta com espaço, acento e apóstrofo, porque o caminho dele não pode importar.
 fn bench_in(tag: &str, temp: &str) -> Bench {
     let root = std::env::temp_dir().join(format!("orq-lote-{}-{tag}", std::process::id()));

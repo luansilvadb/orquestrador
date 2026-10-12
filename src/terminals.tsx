@@ -1,4 +1,4 @@
-// Os terminais xterm: cada um é um TermView criado quando o bloco monta e descartado quando ele sai.
+// Os terminais xterm: cada um é um TermView criado quando o TermHost monta e descartado quando ele sai.
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { TermView } from './term';
 import type { TermData } from './types';

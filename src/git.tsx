@@ -1,7 +1,7 @@
-// O painel Git: branch, commit, arquivos preparados e alterados, e a aba de alterações de um arquivo.
-// Tudo roda na pasta do projeto e só por clique do usuário. O status atualiza sozinho (useGitStatus);
-// cada ação atualiza na hora. Abrir um arquivo pede a aba ao App (onOpenDiff).
-import { useEffect, useRef, useState, Fragment } from 'react';
+// A tela Git: à esquerda o painel (branch, commit, arquivos preparados e alterados); à direita as alterações
+// do arquivo selecionado. Tudo roda na pasta do projeto e só por clique do usuário. O status atualiza sozinho
+// (useGitStatus); cada ação atualiza na hora.
+import { useEffect, useRef, useState, Fragment, type PointerEvent as ReactPointerEvent, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
 import { ArrowDown, ArrowUp, Check, GitBranch, LoaderCircle, Minus, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -31,12 +31,13 @@ const commits = (n: number) => `${n} ${n === 1 ? 'commit' : 'commits'}`;
 // Caminhos de um arquivo para preparar ou tirar: renomeado leva o nome antigo junto.
 const pathsOf = (f: GitFile) => (f.origPath ? [f.path, f.origPath] : [f.path]);
 
-/** Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. */
-export function useGitStatus() {
+/** Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta. */
+export function useGitStatus(enabled: boolean) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [error, setError] = useState('');
   const last = useRef('');
   const refresh = async () => {
+    if (!enabled) return;
     try {
       const next = await backend.gitStatus();
       const text = JSON.stringify(next);
@@ -62,13 +63,19 @@ const REMOTE: Record<Op, { run: () => Promise<string>; done: string }> = {
   push: { run: () => backend.gitPush(), done: 'Enviado' },
 };
 
+/** Arquivo selecionado na tela Git: o caminho e o lado (preparado ou não) da seção clicada. */
+export type Selection = { path: string; staged: boolean };
+const WIDTH = { initial: 240, min: 160, max: 600 };
+const clampWidth = (v: number) => Math.min(WIDTH.max, Math.max(WIDTH.min, v));
+
 /** Painel do Git: de cima para baixo, a linha da branch, o commit e as seções Preparadas e Alterações. */
-export function GitPanel({ status, error, refresh, locked, onOpenDiff }: {
+export function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
   status: GitStatus | null;
   error: string;
   refresh: () => Promise<void>;
   locked: boolean;
-  onOpenDiff: (path: string, staged: boolean) => void;
+  selected: Selection | null;
+  onSelect: (path: string, staged: boolean) => void;
 }) {
   const [op, setOp] = useState<Op | null>(null);
   const [text, setText] = useState('');
@@ -183,8 +190,8 @@ export function GitPanel({ status, error, refresh, locked, onOpenDiff }: {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto py-1 pr-3">
-        <FileSection title="Preparadas" files={staged} staged onStage={(paths) => act(() => backend.gitUnstage(paths))} onOpenDiff={onOpenDiff} />
-        <FileSection title="Alterações" files={unstaged} staged={false} onStage={(paths) => act(() => backend.gitStage(paths))} onOpenDiff={onOpenDiff} />
+        <FileSection title="Preparadas" files={staged} staged onStage={(paths) => act(() => backend.gitUnstage(paths))} selected={selected} onSelect={onSelect} />
+        <FileSection title="Alterações" files={unstaged} staged={false} onStage={(paths) => act(() => backend.gitStage(paths))} selected={selected} onSelect={onSelect} />
         {!staged.length && !unstaged.length && <p className="px-3 py-2 text-xs text-muted-foreground">Nenhuma alteração.</p>}
       </div>
     </div>
@@ -291,12 +298,13 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
 }
 
 /** Uma seção do painel: cabeçalho com a contagem e o botão de tudo, e uma linha por arquivo. Vazia some. */
-function FileSection({ title, files, staged, onStage, onOpenDiff }: {
+function FileSection({ title, files, staged, onStage, selected, onSelect }: {
   title: string;
   files: GitFile[];
   staged: boolean;
   onStage: (paths: string[]) => void;
-  onOpenDiff: (path: string, staged: boolean) => void;
+  selected: Selection | null;
+  onSelect: (path: string, staged: boolean) => void;
 }) {
   if (!files.length) return null;
   return (
@@ -315,10 +323,12 @@ function FileSection({ title, files, staged, onStage, onOpenDiff }: {
           const name = f.path.slice(slash + 1);
           const dir = slash >= 0 ? f.path.slice(0, slash) : '';
           const full = f.origPath ? `${f.path} (renomeado de ${f.origPath})` : f.path;
+          const isSelected = selected?.path === f.path && selected.staged === staged;
           return (
-            <li key={f.path} className="flex items-center gap-1 rounded-sm hover:bg-muted">
+            <li key={f.path} className={cn('flex items-center gap-1 rounded-sm hover:bg-muted', isSelected && 'bg-muted')}>
               <button
-                type="button" onClick={() => onOpenDiff(f.path, staged)} title={`${full}: ${word}. Abrir alterações`}
+                type="button" onClick={() => onSelect(f.path, staged)} aria-current={isSelected ? 'true' : undefined}
+                title={`${full}: ${word}. Ver alterações`}
                 className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 pl-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 <span title={word} className="w-3 shrink-0 text-center font-mono text-xs font-semibold">{letter}</span>
@@ -341,9 +351,66 @@ function FileSection({ title, files, staged, onStage, onOpenDiff }: {
   );
 }
 
+/** Tela Git: o painel à esquerda, com a borda direita arrastável, e à direita as alterações do arquivo selecionado. */
+export function GitScreen({ git, locked, active }: { git: ReturnType<typeof useGitStatus>; locked: boolean; active: boolean }) {
+  const [selected, setSelected] = useState<Selection | null>(null);
+  const [width, setWidth] = useState(WIDTH.initial);
+  const resize = useRef<{ x: number; width: number } | null>(null);
+  const { status, error, refresh } = git;
+
+  // Arquivo que sai da seção (commit, preparo ou desfazer) deixa de estar selecionado.
+  useEffect(() => {
+    if (!selected || !status) return;
+    const listed = status.files.some((f) => f.path === selected.path && (selected.staged ? f.staged : f.unstaged));
+    if (!listed) setSelected(null);
+  }, [status, selected]);
+
+  // A borda captura o ponteiro: o arrasto segue mesmo quando ele sai da faixa.
+  const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    resize.current = { x: e.clientX, width };
+  };
+  const moveResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (resize.current) setWidth(clampWidth(resize.current.width + e.clientX - resize.current.x));
+  };
+  const endResize = () => {
+    resize.current = null;
+  };
+  const keyResize = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    setWidth((w) => clampWidth(w + (e.key === 'ArrowLeft' ? -16 : 16)));
+  };
+
+  return (
+    <div className="flex h-full min-h-0">
+      <aside style={{ width }} className="relative flex min-h-0 shrink-0 flex-col border-r bg-card">
+        <GitPanel
+          status={status} error={error} refresh={refresh} locked={locked}
+          selected={selected} onSelect={(path, staged) => setSelected({ path, staged })}
+        />
+        <div
+          role="separator" aria-orientation="vertical" aria-label="Largura do painel"
+          aria-valuemin={WIDTH.min} aria-valuemax={WIDTH.max} aria-valuenow={width}
+          tabIndex={0} title="Arraste para mudar a largura"
+          onPointerDown={startResize} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize}
+          onKeyDown={keyResize}
+          className="absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize outline-none hover:bg-ring/30 focus-visible:bg-ring/50"
+        />
+      </aside>
+      <div className="h-full min-h-0 min-w-0 flex-1">
+        {selected
+          ? <DiffView key={`${selected.staged}:${selected.path}`} path={selected.path} staged={selected.staged} active={active} />
+          : <p className="p-4 text-sm text-muted-foreground">Clique num arquivo para ver as alterações.</p>}
+      </div>
+    </div>
+  );
+}
+
 /**
- * Conteúdo de uma aba de alterações: uma coluna monoespaçada, com números antes e depois, sinal e rolagem.
- * Atualiza só enquanto a aba está ativa; o que não mudou não é trocado, então a rolagem fica como está.
+ * Alterações de um arquivo: uma coluna monoespaçada, com números antes e depois, sinal e rolagem.
+ * Atualiza só enquanto a tela Git está visível (`active`); o que não mudou não é trocado, então a rolagem fica como está.
  */
 export function DiffView({ path, staged, active }: { path: string; staged: boolean; active: boolean }) {
   const [diff, setDiff] = useState<GitDiff | null>(null);

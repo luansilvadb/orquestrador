@@ -312,7 +312,7 @@ impl Core {
         let mut inner = self.inner.lock().unwrap();
         let project = inner.project.clone().ok_or("Escolha a pasta do projeto primeiro.")?;
         if inner.session.is_some() {
-            return Err("Já há um orquestrador aberto neste canvas.".into());
+            return Err("Já há um orquestrador aberto.".into());
         }
         let mut cfg = config::read(&inner.cfg_path)?;
         cfg.orchestrator = choice.clone();
@@ -563,7 +563,7 @@ impl Core {
                 inner.slots.insert(node_id.clone(), Slot { buffer: Shared::new(Mutex::new(Buffer::default())), term: None, size: EXECUTOR_SIZE, gen: 0 });
                 inner.nodes.push(Node { info, dir: exec.join(&node_id), prompt: cli::executor_prompt(task) });
             }
-            // Cada nó entra no canvas já no estado em que vai ficar: rodando, na fila ou esperando a escolha.
+            // Cada nó entra na sessão já no estado em que vai ficar: rodando, na fila ou esperando a escolha.
             let first = inner.nodes.len() - tasks.len();
             self.schedule_from(inner, first, true);
             if tasks.is_empty() {

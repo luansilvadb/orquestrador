@@ -40,6 +40,7 @@
     --color-foreground: var(--foreground);
     --color-diff-add: var(--diff-add);
     --color-diff-del: var(--diff-del);
+    --color-terminal: var(--terminal);
     --color-background: var(--background);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
@@ -130,7 +131,7 @@
     @apply font-sans;
     }
 }
-/* Tokens próprios do app: cores de estado (linhas do canvas), a grade do canvas e as cores de diff. */
+/* Tokens próprios do app: cores de estado (ícones das abas dos executores) e cores de diff. */
 :root {
     --status-running: oklch(0.72 0.12 250);
     --status-awaiting: oklch(0.8 0.14 85);
@@ -139,7 +140,11 @@
     --status-done: oklch(0.72 0.14 150);
     --status-stopped: oklch(0.72 0.14 55);
     --status-failed: oklch(0.65 0.2 25);
-    --canvas-dot: oklch(0.3 0 0);
+}
+
+/* Fundo dos terminais: o mesmo de theme.background em term.ts (o xterm recebe a cor por lá, não por este token). */
+:root {
+    --terminal: #0b0c0d;
 }
 
 /* Diff: a mesma cor serve de texto do sinal e, com 15% de opacidade, de fundo da linha. Tema escuro por último: vale sobre :root. */
@@ -163,17 +168,6 @@ body {
     overflow: hidden;
     user-select: none;
     -webkit-font-smoothing: antialiased;
-}
-
-/* Grade de pontos do canvas: o tamanho acompanha o zoom (ajustado em canvas.tsx). */
-.canvas-grid {
-    background-image: radial-gradient(circle, var(--canvas-dot) 1px, transparent 1px);
-    background-size: 24px 24px;
-}
-
-body.dragging,
-body.dragging * {
-    cursor: grabbing !important;
 }
 
 .xterm .xterm-viewport {

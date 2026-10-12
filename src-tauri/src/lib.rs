@@ -1,4 +1,4 @@
-//! Backend do app Orquestrador: um canvas de terminais em que um CLI orquestra e outros executam.
+//! Backend do app Orquestrador: terminais em que um CLI orquestra e outros executam.
 pub mod cli;
 pub mod clipboard;
 pub mod config;

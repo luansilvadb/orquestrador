@@ -2,6 +2,7 @@
 name = "orquestrador"
 version = "0.1.4"
 edition = "2021"
+default-run = "orquestrador"
 
 [lib]
 name = "orquestrador_lib"
