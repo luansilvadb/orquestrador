@@ -277,7 +277,8 @@ export function App() {
     const view = terminals.get(ORCHESTRATOR)!;
     await backend.startOrchestrator(choice, view.term.cols, view.term.rows);
     dispatch({ type: 'started', choice });
-    view.imagePaste = choice.tool === 'codex';
+    view.imagePaste = choice.tool === 'codex' ? '\x16' : '\x1bv';
+    view.pastePerFile = choice.tool === 'codex';
     view.setLive();
     await view.attach();
     view.term.focus();

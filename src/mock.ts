@@ -201,6 +201,7 @@ const commands: Record<string, (args: any) => unknown> = {
     debug.writes.push(id);
     if (id === ORCHESTRATOR && alive) typed(data);
   },
+  clipboard_files: () => [] as string[],
   term_resize: ({ id, cols, rows }: { id: string; cols: number; rows: number }) => { debug.sizes[id] = `${cols}x${rows}`; },
   term_snapshot: ({ id }: { id: string }) => {
     const term = terms.get(id);

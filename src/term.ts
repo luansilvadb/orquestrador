@@ -52,23 +52,49 @@ export class TermView {
   }
 
   /**
-   * Só o Codex: ele lê o clipboard do Windows sozinho quando recebe Ctrl+V (`paste_image`). Ligado pelo
-   * orquestrador depois de escolhido o CLI. Nos outros, o paste segue como antes.
+   * O gesto que faz o CLI ler a imagem do clipboard do Windows sozinho: Ctrl+V (`\x16`) no Codex, Alt+V
+   * (`ESC v`) no Claude Code. Ligado pelo orquestrador depois de escolhido o CLI; vazio, o paste segue como antes.
    */
-  imagePaste = false;
+  imagePaste = '';
 
   /**
-   * Imagem no clipboard: se o paste traz uma imagem, manda Ctrl+V (`\x16`) ao PTY no lugar dela. Texto segue
+   * Como o CLI aceita vários arquivos colados. Medido no Claude Code 2.1.296 e no Codex 0.162.1: o Claude anexa
+   * as imagens de um paste só, com um caminho por linha (`\n`; com `\r`, que é o que o paste do xterm manda, ou
+   * com espaço, não anexa); o Codex só anexa quando cada caminho chega no próprio paste, com um intervalo entre eles.
+   */
+  pastePerFile = false;
+
+  /**
+   * Arquivo ou imagem no clipboard. Arquivo copiado no Explorer: cola o caminho dele (o evento não traz o
+   * caminho, o backend lê do clipboard); o CLI anexa o que for imagem e recebe o resto como caminho. Imagem solta (captura de tela): manda o gesto do CLI ao PTY no lugar dela. Texto segue
    * pelo paste do xterm, sem mudança.
    */
   private onPaste = (e: ClipboardEvent) => {
     if (!this.imagePaste) return;
-    const items = Array.from(e.clipboardData?.items ?? []);
-    if (!items.some((item) => item.kind === 'file' && item.type.startsWith('image/'))) return;
+    const files = Array.from(e.clipboardData?.items ?? []).filter((item) => item.kind === 'file');
+    if (!files.length) return;
+    const image = files.some((item) => item.type.startsWith('image/'));
+    const text = e.clipboardData?.getData('text') ?? '';
     e.preventDefault();
     e.stopImmediatePropagation();
-    void backend.termWrite(this.id, '\x16').catch(() => {});
+    void backend.clipboardFiles().then((paths) => {
+      if (paths.length) return this.pasteFiles(paths);
+      else if (image) return backend.termWrite(this.id, this.imagePaste);
+      else if (text) this.term.paste(text);
+    }).catch(() => {});
   };
+
+  /** Os caminhos vão direto ao PTY, sem o paste do xterm, que trocaria `\n` por `\r`. */
+  private async pasteFiles(paths: string[]) {
+    const quoted = paths.map((p) => (p.includes(' ') ? `"${p}"` : p));
+    if (!this.term.modes.bracketedPasteMode) return backend.termWrite(this.id, quoted.join(' '));
+    const bracketed = (text: string) => `\x1b[200~${text}\x1b[201~`;
+    if (!this.pastePerFile) return backend.termWrite(this.id, bracketed(quoted.join('\n')));
+    for (const [i, path] of quoted.entries()) {
+      if (i) await new Promise((done) => setTimeout(done, 200));
+      await backend.termWrite(this.id, bracketed(i ? ` ${path}` : path));
+    }
+  }
 
   fit() {
     if (this.term.element?.offsetParent) this.fitAddon.fit();

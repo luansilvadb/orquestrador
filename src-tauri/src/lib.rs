@@ -1,5 +1,6 @@
 //! Backend do app Orquestrador: um canvas de terminais em que um CLI orquestra e outros executam.
 pub mod cli;
+pub mod clipboard;
 pub mod config;
 pub mod core;
 pub mod delegate;
@@ -75,6 +76,13 @@ fn term_snapshot(core: State<Core>, gate: State<Gate>, id: String) -> Result<Sna
     Ok(core.term_snapshot(&id))
 }
 
+/// Os arquivos copiados no Explorer que estão no clipboard, para o colar do terminal do orquestrador.
+#[tauri::command(async)]
+fn clipboard_files(gate: State<Gate>) -> Result<Vec<String>, String> {
+    gate.ensure_open()?;
+    Ok(clipboard::files())
+}
+
 #[tauri::command(async)]
 fn stop_executor(core: State<Core>, gate: State<Gate>, id: String) -> Result<(), String> {
     gate.ensure_open()?;
@@ -139,6 +147,7 @@ pub fn run(context: tauri::Context) {
             term_write,
             term_resize,
             term_snapshot,
+            clipboard_files,
             stop_executor,
             clear_done,
             has_running,

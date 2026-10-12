@@ -27,6 +27,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Threading", "Win32_System_JobObjects"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_DataExchange", "Win32_UI_Shell"] }
 tauri-plugin-updater = "2"
 semver = "1"
