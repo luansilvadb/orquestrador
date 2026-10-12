@@ -15,13 +15,13 @@ Um app de canvas para Windows (Tauri) que põe CLIs de IA para trabalhar em pap�
 
 ```powershell
 npm install
-npm run tauri dev      # desenvolvimento
-npm run tauri build    # gera o executável e o instalador em src-tauri\target\release
+npm run tauri dev      # desenvolvimento: uso liberado direto, sem consultar atualizações
+npm run tauri build    # gera o instalador assinado em src-tauri\target\release\bundle\nsis (exige a chave, seção 8)
 ```
 
 ## 4. Como se usa
 
-1. Abra o app e escolha a pasta do projeto. Uma pasta fora de um repositório Git é recusada.
+1. Abra o app. Antes da escolha da pasta, ele confere a versão e atualiza sozinho se houver uma nova (seção 8). Depois, escolha a pasta do projeto. Uma pasta fora de um repositório Git é recusada.
 2. No canvas vazio, abra um terminal e escolha ferramenta, modelo e esforço do orquestrador; a última escolha já vem marcada. Há um só orquestrador por canvas, e o bloco dele é o único em que se digita.
 3. Converse com o orquestrador e feche o objetivo.
 4. Na primeira delegação, um bloco de executor aparece e espera a escolha de ferramenta, modelo e esforço. Os executores seguintes abrem sozinhos com essa escolha. A etiqueta `executores: ...` no bloco do orquestrador mostra a escolha e deixa trocá-la; a troca vale para os próximos.
@@ -81,12 +81,55 @@ Para o executor não parar num diálogo que ninguém pode responder, a confianç
 
 Na inicialização de uma sessão, regras e pastas de sessões mortas são removidas quando o nome, a primeira linha e o dono encerrado comprovam a origem; o que não puder ser verificado é preservado.
 
-## 8. Arquivos e testes
+## 8. Atualização automática
+
+Em toda abertura do app instalado, antes de liberar a escolha da pasta ou qualquer terminal, ele consulta a última release **estável** de `luansilvadb/orquestrador` no GitHub (`releases/latest/download/latest.json`). Rascunhos e pré-releases não chegam ao app. Se houver versão superior, o app mostra o andamento, baixa, valida a assinatura, instala em modo silencioso (NSIS por usuário, sem administrador) e reabre sozinho na versão nova. Se já estiver em dia, libera o uso normal.
+
+Não há downgrade: só instala versão maior que a instalada, e a versão anunciada precisa ser a versão assinada (`requireSignedVersion`). A atualização troca só os arquivos do programa; `%LOCALAPPDATA%\orquestrador\config.json` e os arquivos dos projetos ficam como estão.
+
+Falha na verificação, no download ou na instalação (inclusive sem internet) mostra o motivo e **mantém o uso bloqueado**, com `Tentar novamente`. Não há opção de continuar na versão antiga. Em `npm run tauri dev` (build de debug) o uso fica liberado direto e nada é consultado. Os modos `--hook` e `--guard` não abrem janela nem passam pelo updater.
+
+O repositório é público, então o app baixa a release sem token. Se o repositório virar privado, a atualização automática deixa de funcionar e a distribuição precisa mudar.
+
+### Antes da primeira release
+
+Enquanto não houver release publicada, `releases/latest/download/latest.json` responde 404. Um build instalado fica então bloqueado com `nenhuma versão estável publicada foi encontrada` e `Tentar novamente`. Para usar o app antes disso, rode em desenvolvimento (`npm run tauri dev`) ou publique a primeira release.
+
+### Chave de assinatura
+
+- Chave privada: `%USERPROFILE%\.tauri\orquestrador-updater.key`, fora do repositório, com acesso só para o usuário. Não tem senha. A chave pública está em `plugins.updater.pubkey` de `src-tauri/tauri.conf.json`.
+- Guarde um backup da chave privada. Sem ela não há como publicar atualizações que os apps instalados aceitem; trocar a chave exige nova instalação manual de todos.
+- Secret do workflow, uma vez (o conteúdo da chave vai pela entrada padrão e não aparece no terminal):
+
+```powershell
+Get-Content -Raw "$env:USERPROFILE\.tauri\orquestrador-updater.key" | gh secret set TAURI_SIGNING_PRIVATE_KEY -R luansilvadb/orquestrador
+```
+
+- Build local assinado, para testar o instalador:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = "$env:USERPROFILE\.tauri\orquestrador-updater.key"
+npm run tauri build
+```
+
+Saída: `src-tauri\target\release\bundle\nsis\Orquestrador_<versão>_x64-setup.exe` e o `.sig` ao lado.
+
+### Publicar uma versão
+
+1. Suba a versão nos três arquivos iguais: `package.json`, `src-tauri/tauri.conf.json` e `src-tauri/Cargo.toml`. Ela precisa ser maior que a última publicada.
+2. Faça o commit e crie a tag: `git tag vX.Y.Z` e depois `git push origin vX.Y.Z`.
+3. O workflow `.github/workflows/release.yml` confere se a tag bate com as três versões, gera o instalador NSIS assinado e o `latest.json` e cria a release **em rascunho**.
+4. Ao fim do job, uma verificação confere o instalador, o `.sig` e o manifesto (versão, URL e assinatura). Se ela passar, revise a release e publique o rascunho no GitHub. Só a release publicada vira a `latest` que os apps consultam.
+5. Se o job falhar, o rascunho fica sem publicar: apague o rascunho e a tag, corrija e faça o push da tag de novo.
+
+## 9. Arquivos e testes
 
 | Caminho | Papel |
 | --- | --- |
-| `src/` | Frontend: canvas, blocos, terminais (xterm), seletor. `mock.ts` é um backend simulado, só em `npm run dev` fora do Tauri. |
+| `src/` | Frontend: tela de atualização, canvas, blocos, terminais (xterm), seletor. `mock.ts` é um backend simulado, só em `npm run dev` fora do Tauri. |
 | `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores, configuração, `delegate.ps1`. |
+| `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a fonte do plugin oficial e os testes dos cenários. |
+| `.github/workflows/release.yml` | Release por tag: instalador assinado, `latest.json` e conferência, em rascunho. |
 | `strategist.md` | Instruções enviadas ao orquestrador. |
 | `executor.md` | Instruções enviadas a cada executor, antes da tarefa. |
 
@@ -97,6 +140,6 @@ cargo test
 
 Os testes usam CLIs simulados e não chamam nenhum modelo. `tests\real.rs` faz o ciclo com os CLIs reais e fica ignorado por padrão: defina `ORQ_REAL_REPO` e `ORQ_REAL=codex,claude` e rode `cargo test --test real -- --ignored --nocapture`.
 
-## 9. Launcher antigo
+## 10. Launcher antigo
 
 `strategist.cmd`, `strategist.ps1`, `strategist.config.ps1`, `strategist.onboarding.html` e os `strategist.tests*.ps1` são o launcher de terminal que este app substitui. Ficam no repositório até o app ser validado no uso real. O `strategist.md` já descreve lotes, que o launcher antigo não aceita.

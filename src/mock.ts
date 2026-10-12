@@ -1,9 +1,11 @@
 // Backend simulado, só para desenvolvimento no navegador (nunca entra no build de produção).
 // Digite no orquestrador: `lote` (6 tarefas), `sair` (termina com código 0), `sair 3` (código 3).
 // Na URL: `?mock=nogit` faz a escolha da pasta falhar como "fora de um repositório Git".
+// Na URL: `?update=falha` mostra a atualização bloqueada por falta de internet (a nova tentativa libera) e
+// `?update=download` simula o download. Sem parâmetro, o uso já vem liberado, como no build de desenvolvimento.
 // No console: `__mock.close()` simula fechar a janela; `__mock.writes` e `__mock.sizes` registram o que chegou.
 import type { Transport } from './backend';
-import { ORCHESTRATOR, type Choice, type Events, type ExecutorNode, type NodeState, type Options } from './types';
+import { ORCHESTRATOR, type Choice, type Events, type ExecutorNode, type NodeState, type Options, type UpdateStatus } from './types';
 
 type Handler = (payload: never) => void;
 type Job = ExecutorNode & { timer?: number };
@@ -54,6 +56,25 @@ const debug = { writes: [] as string[], sizes: {} as Record<string, string>, clo
 (window as unknown as { __mock: typeof debug }).__mock = debug;
 
 const PROMPT = '\x1b[38;5;105morquestrador>\x1b[0m ';
+
+const MB = 1024 * 1024;
+let update: UpdateStatus = { phase: 'ready' };
+const setUpdate = (next: UpdateStatus) => { update = next; emit('update-status', next); };
+function demoDownload() {
+  const total = 40 * MB;
+  let downloaded = 0;
+  const tick = () => {
+    downloaded = Math.min(total, downloaded + 2 * MB);
+    setUpdate({ phase: 'downloading', version: '0.2.0', downloaded, total });
+    if (downloaded < total) return void setTimeout(tick, 150);
+    setUpdate({ phase: 'installing', version: '0.2.0' });
+    setTimeout(() => setUpdate({ phase: 'ready' }), 1500);
+  };
+  setTimeout(tick, 300);
+}
+const updateMode = new URLSearchParams(location.search).get('update');
+if (updateMode === 'falha') update = { phase: 'failed', message: 'Não foi possível verificar atualizações: sem conexão com o GitHub.' };
+if (updateMode === 'download') demoDownload();
 
 function setState(job: Job, state: NodeState) {
   job.state = state;
@@ -142,6 +163,14 @@ function typed(data: string) {
 }
 
 const commands: Record<string, (args: any) => unknown> = {
+  update_status: () => update,
+  retry_update: () => {
+    if (update.phase === 'failed') {
+      setUpdate({ phase: 'checking' });
+      setTimeout(() => setUpdate({ phase: 'ready' }), 400);
+    }
+    return update;
+  },
   choose_project: () => {
     if (new URLSearchParams(location.search).get('mock') === 'nogit') throw 'A pasta C:\\Users\\Luan\\Documentos não está dentro de um repositório Git. Escolha outra.';
     return 'C:\\projetos\\exemplo';

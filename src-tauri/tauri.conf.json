@@ -13,5 +13,20 @@
     "windows": [{ "label": "main", "title": "Orquestrador", "width": 1400, "height": 900 }],
     "security": { "csp": null }
   },
-  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.ico"] }
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
+    "icon": ["icons/icon.ico"],
+    "windows": { "nsis": { "installMode": "currentUser" } }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/luansilvadb/orquestrador/releases/latest/download/latest.json"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJCQkRCMUY4N0Q1NUIzNTUKUldSVnMxVjkrTEc5SzFhUU1pR004UE8yUVI3VTAwQnBLaHkrNVVVUDYyVGovZGNaT0cvTmVHSkgK",
+      "requireSignedVersion": true,
+      "allowDowngrades": false,
+      "windows": { "installMode": "quiet" }
+    }
+  }
 }

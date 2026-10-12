@@ -18,6 +18,14 @@ export type ExecutorNode = {
   choice: Choice | null;
 };
 
+// Atualização na abertura: o uso só é liberado quando o estado chega a `ready`.
+export type UpdateStatus =
+  | { phase: 'checking' }
+  | { phase: 'downloading'; version: string; downloaded: number; total: number | null }
+  | { phase: 'installing'; version: string }
+  | { phase: 'ready' }
+  | { phase: 'failed'; message: string };
+
 export type TermData = { id: string; seq: number; data: string };
 export type Snapshot = { seq: number; data: string };
 export type NodeStateEvent = { id: string; state: NodeState; choice: Choice | null };
@@ -28,6 +36,7 @@ export type Events = {
   'node-state': NodeStateEvent;
   'executor-choice': Choice;
   'orchestrator-exit': { code: number | null };
+  'update-status': UpdateStatus;
 };
 
 export const ORCHESTRATOR = 'orchestrator';

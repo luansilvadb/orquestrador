@@ -2,7 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { Choice, Events, Options, Snapshot } from './types';
+import type { Choice, Events, Options, Snapshot, UpdateStatus } from './types';
 
 export interface Transport {
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
@@ -33,6 +33,9 @@ const call = <T>(cmd: string, args?: Record<string, unknown>) => transport.invok
 export const backend = {
   listen: <K extends keyof Events>(event: K, handler: (payload: Events[K]) => void) => transport.listen(event, handler),
   onCloseRequested: (mayClose: () => Promise<boolean>) => transport.onCloseRequested(mayClose),
+
+  updateStatus: () => call<UpdateStatus>('update_status'),
+  retryUpdate: () => call<UpdateStatus>('retry_update'),
 
   chooseProject: () => call<string | null>('choose_project'),
   getOptions: () => call<Options>('get_options'),

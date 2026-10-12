@@ -3,7 +3,7 @@ import { backend, connect, message } from './backend';
 import { Canvas, type Block } from './canvas';
 import { createSelector } from './selector';
 import { TermView } from './term';
-import { describeChoice, ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Options } from './types';
+import { describeChoice, ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus } from './types';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -217,6 +217,59 @@ function wireBar() {
   renderBar();
 }
 
+// ---------- atualização na abertura ----------
+
+const MB = 1024 * 1024;
+/** Eventos `update-status` recebidos até agora. Resposta a um pedido feito antes de um evento é mais velha que ele. */
+let updateEvents = 0;
+
+/** Mostra o andamento da atualização e, se ela falhou, o motivo. O uso só abre em `ready`. */
+function renderUpdate(status: UpdateStatus) {
+  const text = $('update-text');
+  const meter = $('update-meter');
+  const fill = $('update-fill');
+  const error = $('update-error');
+  const retry = $<HTMLButtonElement>('update-retry');
+  $('update').hidden = status.phase === 'ready';
+  $('start').hidden = status.phase !== 'ready';
+  meter.hidden = status.phase !== 'downloading';
+  error.hidden = retry.hidden = status.phase !== 'failed';
+  switch (status.phase) {
+    case 'checking':
+      text.textContent = 'Verificando se há uma versão nova…';
+      break;
+    case 'downloading': {
+      const { version, downloaded, total } = status;
+      meter.classList.toggle('indeterminate', total === null);
+      fill.style.width = total ? `${Math.min(100, (downloaded / total) * 100)}%` : '';
+      const size = total ? `${Math.round((downloaded / total) * 100)}%` : `${(downloaded / MB).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} MB`;
+      text.textContent = `Baixando a versão ${version}… ${size}`;
+      break;
+    }
+    case 'installing':
+      text.textContent = `Instalando a versão ${status.version}. O app reabre sozinho.`;
+      break;
+    case 'failed':
+      text.textContent = 'Não foi possível atualizar. O uso fica bloqueado até a atualização dar certo.';
+      error.textContent = status.message;
+      break;
+  }
+}
+
+async function retryUpdate() {
+  const retry = $<HTMLButtonElement>('update-retry');
+  retry.disabled = true;
+  const seen = updateEvents;
+  try {
+    const status = await backend.retryUpdate();
+    if (updateEvents === seen) renderUpdate(status);
+  } catch (e) {
+    if (updateEvents === seen) renderUpdate({ phase: 'failed', message: message(e) });
+  } finally {
+    retry.disabled = false;
+  }
+}
+
 // ---------- início ----------
 
 async function chooseProject() {
@@ -238,9 +291,14 @@ async function chooseProject() {
 }
 
 async function main() {
+  $('update-retry').onclick = retryUpdate;
   await connect();
   const view = (id: string) => (id === ORCHESTRATOR ? orchestrator?.view : executors.get(id)?.view);
   await Promise.all([
+    backend.listen('update-status', (status) => {
+      updateEvents++;
+      renderUpdate(status);
+    }),
     backend.listen('term-data', ({ id, seq, data }) => view(id)?.push(seq, data)),
     backend.listen('node-added', addExecutor),
     backend.listen('node-state', ({ id, state, choice }) => {
@@ -261,10 +319,19 @@ async function main() {
       return true;
     }),
   ]);
+  // Depois de escutar os eventos: o estado atual cobre o que saiu antes do registro. Se um evento chegou
+  // enquanto ele vinha, o evento é mais novo e a resposta não se aplica.
+  const seen = updateEvents;
+  try {
+    const status = await backend.updateStatus();
+    if (updateEvents === seen) renderUpdate(status);
+  } catch (e) {
+    if (updateEvents === seen) throw e;
+  }
   $('choose').onclick = chooseProject;
 }
 
 main().catch((e) => {
-  $('start-error').textContent = message(e);
-  $('start-error').hidden = false;
+  renderUpdate({ phase: 'failed', message: message(e) });
+  $('update-text').textContent = 'Não foi possível iniciar o app.';
 });

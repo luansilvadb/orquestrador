@@ -6,18 +6,23 @@ pub mod hook;
 pub mod proc;
 pub mod pty;
 pub mod session;
+pub mod update;
 
 use crate::config::{Choice, Options};
 use crate::core::{Core, Snapshot};
+use crate::update::Gate;
 use std::sync::Arc;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 // Todos os comandos são `async` para rodar fora da thread da janela: vários esperam processo
 // ou disco, e o diálogo de pasta trava quem o chama.
+// Exceto `update_status` e `retry_update`, todo comando passa por `Gate::ensure_open` antes de tocar
+// no trabalho: com a versão fora de dia, nada do projeto, dos terminais ou da configuração é acessível.
 
 #[tauri::command(async)]
-fn choose_project(app: tauri::AppHandle, core: State<Core>) -> Result<Option<String>, String> {
+fn choose_project(app: tauri::AppHandle, core: State<Core>, gate: State<Gate>) -> Result<Option<String>, String> {
+    gate.ensure_open()?;
     match app.dialog().file().set_title("Pasta do projeto").blocking_pick_folder() {
         None => Ok(None),
         Some(folder) => core.set_project(&folder.into_path().map_err(|e| e.to_string())?).map(Some),
@@ -25,73 +30,102 @@ fn choose_project(app: tauri::AppHandle, core: State<Core>) -> Result<Option<Str
 }
 
 #[tauri::command(async)]
-fn get_options(core: State<Core>) -> Result<Options, String> {
+fn get_options(core: State<Core>, gate: State<Gate>) -> Result<Options, String> {
+    gate.ensure_open()?;
     core.options()
 }
 
 #[tauri::command(async)]
-fn start_orchestrator(core: State<Core>, choice: Choice, cols: u16, rows: u16) -> Result<String, String> {
+fn start_orchestrator(core: State<Core>, gate: State<Gate>, choice: Choice, cols: u16, rows: u16) -> Result<String, String> {
+    gate.ensure_open()?;
     core.start_orchestrator(choice, cols, rows)
 }
 
 #[tauri::command(async)]
-fn set_executor_choice(core: State<Core>, choice: Choice) -> Result<(), String> {
+fn set_executor_choice(core: State<Core>, gate: State<Gate>, choice: Choice) -> Result<(), String> {
+    gate.ensure_open()?;
     core.set_executor_choice(choice)
 }
 
 #[tauri::command(async)]
-fn set_max_parallel(core: State<Core>, value: i64) -> Result<(), String> {
+fn set_max_parallel(core: State<Core>, gate: State<Gate>, value: i64) -> Result<(), String> {
+    gate.ensure_open()?;
     core.set_max_parallel(value)
 }
 
 #[tauri::command(async)]
-fn term_write(core: State<Core>, id: String, data: String) -> Result<(), String> {
+fn term_write(core: State<Core>, gate: State<Gate>, id: String, data: String) -> Result<(), String> {
+    gate.ensure_open()?;
     core.term_write(&id, &data);
     Ok(())
 }
 
 #[tauri::command(async)]
-fn term_resize(core: State<Core>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+fn term_resize(core: State<Core>, gate: State<Gate>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    gate.ensure_open()?;
     core.term_resize(&id, cols, rows);
     Ok(())
 }
 
 #[tauri::command(async)]
-fn term_snapshot(core: State<Core>, id: String) -> Result<Snapshot, String> {
+fn term_snapshot(core: State<Core>, gate: State<Gate>, id: String) -> Result<Snapshot, String> {
+    gate.ensure_open()?;
     Ok(core.term_snapshot(&id))
 }
 
 #[tauri::command(async)]
-fn stop_executor(core: State<Core>, id: String) -> Result<(), String> {
+fn stop_executor(core: State<Core>, gate: State<Gate>, id: String) -> Result<(), String> {
+    gate.ensure_open()?;
     core.stop_executor(&id);
     Ok(())
 }
 
 #[tauri::command(async)]
-fn clear_done(core: State<Core>) -> Result<Vec<String>, String> {
+fn clear_done(core: State<Core>, gate: State<Gate>) -> Result<Vec<String>, String> {
+    gate.ensure_open()?;
     Ok(core.clear_done())
 }
 
 #[tauri::command(async)]
-fn has_running(core: State<Core>) -> Result<bool, String> {
+fn has_running(core: State<Core>, gate: State<Gate>) -> Result<bool, String> {
+    gate.ensure_open()?;
     Ok(core.has_running())
 }
 
 #[tauri::command(async)]
-fn shutdown(core: State<Core>) -> Result<(), String> {
+fn shutdown(core: State<Core>, gate: State<Gate>) -> Result<(), String> {
+    gate.ensure_open()?;
     core.shutdown();
     Ok(())
+}
+
+/// Estado da atualização da abertura: a tela lê isto ao carregar e depois acompanha o evento.
+#[tauri::command(async)]
+fn update_status(gate: State<Gate>) -> Result<update::Status, String> {
+    Ok(gate.status())
+}
+
+/// Nova tentativa depois de uma falha. Enquanto uma verificação roda, não faz nada.
+#[tauri::command(async)]
+fn retry_update(app: tauri::AppHandle, gate: State<Gate>) -> Result<update::Status, String> {
+    update::check(&app, &gate);
+    Ok(gate.status())
 }
 
 pub fn run(context: tauri::Context) {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let handle = app.handle().clone();
             let emit: core::Emit = Arc::new(move |event, payload| drop(handle.emit(event, payload)));
             // Sem LOCALAPPDATA o app abre mesmo assim; o erro aparece em `get_options`.
             let cfg_path = config::config_path().unwrap_or_default();
-            app.manage(Core::new(cli::Exes::real(), session::Places::real(), cfg_path, emit));
+            app.manage(Core::new(cli::Exes::real(), session::Places::real(), cfg_path, emit.clone()));
+            // Build de desenvolvimento libera o uso direto. O instalado confere a versão antes de liberar.
+            let gate = Gate::new(cfg!(debug_assertions), emit);
+            app.manage(gate.clone());
+            update::check(app.handle(), &gate);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -106,7 +140,9 @@ pub fn run(context: tauri::Context) {
             stop_executor,
             clear_done,
             has_running,
-            shutdown
+            shutdown,
+            update_status,
+            retry_update
         ])
         .build(context)
         .expect("o app não pôde ser iniciado")

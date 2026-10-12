@@ -7,7 +7,15 @@
 <link rel="icon" href="data:,">
 </head>
 <body>
-<section id="start" class="start">
+<section id="update" class="start">
+  <h1>Orquestrador</h1>
+  <p id="update-text" role="status">Verificando se há uma versão nova…</p>
+  <div id="update-meter" class="meter" hidden><span id="update-fill"></span></div>
+  <p id="update-error" class="error" role="alert" hidden></p>
+  <button id="update-retry" class="primary" hidden>Tentar novamente</button>
+</section>
+
+<section id="start" class="start" hidden>
   <h1>Orquestrador</h1>
   <p>Escolha a pasta do projeto (um repositório Git). O orquestrador e os executores trabalham nela.</p>
   <button id="choose" class="primary">Escolher pasta do projeto</button>
