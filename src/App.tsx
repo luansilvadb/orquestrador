@@ -299,6 +299,11 @@ export function App() {
     }
   }
 
+  // Foco das janelas de escolha: ao fechar, o Dialog não devolve o foco ao botão que as abriu.
+  function focusOrchestrator() {
+    terminals.get(ORCHESTRATOR)?.term.focus();
+  }
+
   async function commitMax() {
     const current = stateRef.current.options!.maxParallel;
     const value = Math.min(16, Math.max(1, Math.round(Number(maxText)) || current));
@@ -473,26 +478,6 @@ export function App() {
               onResize={(dx, dy) => dispatch({ type: 'resize', id: ORCHESTRATOR, dx, dy, z: canvas.current?.zoom() ?? 1 })}
             >
               <TermHost id={ORCHESTRATOR} writable />
-              {orchestrator.overlay === 'start' && options && (
-                <BlockOverlay>
-                  <ChoiceForm
-                    title="Orquestrador" hint="Só lê o projeto e delega. É o único terminal onde você digita."
-                    options={options} initial={options.last.orchestrator} confirmLabel="Abrir terminal"
-                    onCancel={() => resetCanvas()} onConfirm={startOrchestrator}
-                  />
-                </BlockOverlay>
-              )}
-              {orchestrator.overlay === 'executor' && options && (
-                <BlockOverlay>
-                  <ChoiceForm
-                    title="Executores"
-                    hint="Ferramenta, modelo e esforço dos próximos executores. Os que já estão rodando não mudam."
-                    options={options} initial={state.executorChoice ?? options.last.executor} confirmLabel="Usar nos executores"
-                    onCancel={() => dispatch({ type: 'overlay', overlay: null })}
-                    onConfirm={(choice) => saveExecutorChoice(choice, true)}
-                  />
-                </BlockOverlay>
-              )}
             </Block>
           )}
 
@@ -526,14 +511,9 @@ export function App() {
                 onResize={(dx, dy) => dispatch({ type: 'resize', id: node.id, dx, dy, z: canvas.current?.zoom() ?? 1 })}
               >
                 <TermHost id={node.id} writable={false} onReady={attachExecutor} />
-                {node.state === 'awaiting-choice' && options && (
+                {node.state === 'awaiting-choice' && (
                   <BlockOverlay>
-                    <ChoiceForm
-                      title="Escolha dos executores"
-                      hint="Vale para este e para os próximos executores enquanto o orquestrador estiver aberto."
-                      options={options} initial={state.executorChoice ?? options.last.executor} confirmLabel="Usar nos executores"
-                      onConfirm={(choice) => saveExecutorChoice(choice, false)}
-                    />
+                    <p className="max-w-[300px] text-center text-sm text-muted-foreground">Aguardando a escolha dos executores.</p>
                   </BlockOverlay>
                 )}
                 {node.state === 'queued' && (
@@ -562,6 +542,33 @@ export function App() {
       </main>
 
       <Toaster position="bottom-right" />
+      {/* As três escolhas são janelas: a do orquestrador (início e executores) e uma só para os executores aguardando. */}
+      {options && (
+        <>
+          <ChoiceForm
+            open={orchestrator?.overlay === 'start'}
+            title="Orquestrador" hint="Só lê o projeto e delega. É o único terminal onde você digita."
+            options={options} initial={options.last.orchestrator} confirmLabel="Abrir terminal"
+            onCancel={() => resetCanvas()} onConfirm={startOrchestrator} onClosed={focusOrchestrator}
+          />
+          {/* Com um executor aguardando escolha, só a janela dele fica aberta: nunca duas empilhadas. */}
+          <ChoiceForm
+            open={orchestrator?.overlay === 'executor' && count('awaiting-choice') === 0}
+            title="Executores"
+            hint="Ferramenta, modelo e esforço dos próximos executores. Os que já estão rodando não mudam."
+            options={options} initial={state.executorChoice ?? options.last.executor} confirmLabel="Usar nos executores"
+            onCancel={() => dispatch({ type: 'overlay', overlay: null })}
+            onConfirm={(choice) => saveExecutorChoice(choice, true)} onClosed={focusOrchestrator}
+          />
+          <ChoiceForm
+            open={count('awaiting-choice') > 0}
+            title="Escolha dos executores"
+            hint="Vale para este e para os próximos executores enquanto o orquestrador estiver aberto."
+            options={options} initial={state.executorChoice ?? options.last.executor} confirmLabel="Usar nos executores"
+            onConfirm={(choice) => saveExecutorChoice(choice, true)} onClosed={focusOrchestrator}
+          />
+        </>
+      )}
       <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!open) settleClose(false); }}>
         <AlertDialogContent>
           <AlertDialogHeader>

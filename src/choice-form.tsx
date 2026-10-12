@@ -1,8 +1,9 @@
-// O formulário de ferramenta, modelo e esforço: o mesmo para o orquestrador e para os executores.
+// O formulário de ferramenta, modelo e esforço numa janela (Dialog): o mesmo para o orquestrador e para os executores.
 import { useId, useState, type FormEvent } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -25,16 +26,38 @@ const validEffort = (options: Options, choice: Choice) => {
 };
 
 type Props = {
+  open: boolean;
   title: string;
   hint: string;
   options: Options;
   initial: Choice;
   confirmLabel: string;
   onConfirm: (choice: Choice) => Promise<unknown>;
+  /** Esc, clique fora e o X fazem o mesmo que este. Sem ele a janela só fecha ao confirmar. */
   onCancel?: () => void;
+  /** Chamado depois de fechar. O foco não volta ao botão que abriu a janela: quem chama decide para onde ele vai. */
+  onClosed?: () => void;
 };
 
-export function ChoiceForm({ title, hint, options, initial, confirmLabel, onConfirm, onCancel }: Props) {
+export function ChoiceForm({ open, onCancel, onClosed, ...form }: Props) {
+  const closable = !!onCancel;
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel?.(); }}>
+      <DialogContent
+        className="sm:max-w-[460px]"
+        showCloseButton={closable}
+        onEscapeKeyDown={(e) => { if (!closable) e.preventDefault(); }}
+        onInteractOutside={(e) => { if (!closable) e.preventDefault(); }}
+        onCloseAutoFocus={(e) => { e.preventDefault(); onClosed?.(); }}
+      >
+        {/* Desmontado ao fechar: a abertura seguinte começa do estado inicial, sem sobra da anterior. */}
+        <ChoiceFields {...form} onCancel={onCancel} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ChoiceFields({ title, hint, options, initial, confirmLabel, onConfirm, onCancel }: Omit<Props, 'open'>) {
   const ids = { model: useId(), tool: useId(), effort: useId() };
   const [choice, setChoice] = useState<Choice>(() => {
     const picked = options.tools.some((t) => t.name === initial.tool) ? initial : { tool: options.tools[0].name, model: '', effort: '' };
@@ -87,11 +110,11 @@ export function ChoiceForm({ title, hint, options, initial, confirmLabel, onConf
   }
 
   return (
-    <form onSubmit={submit} className="grid w-full max-w-[460px] gap-5">
-      <div className="grid gap-1">
-        <h2 className="text-base font-semibold">{title}</h2>
-        <p className="text-sm text-muted-foreground">{hint}</p>
-      </div>
+    <form onSubmit={submit} className="grid gap-5">
+      <DialogHeader>
+        <DialogTitle className="text-base font-semibold">{title}</DialogTitle>
+        <DialogDescription>{hint}</DialogDescription>
+      </DialogHeader>
 
       <div className="grid gap-2">
         <Label id={ids.tool}>Ferramenta</Label>
@@ -145,7 +168,7 @@ export function ChoiceForm({ title, hint, options, initial, confirmLabel, onConf
         </Alert>
       )}
 
-      <div className="flex flex-wrap justify-end gap-2">
+      <DialogFooter>
         {onCancel && (
           <Button type="button" variant="outline" onClick={onCancel}>Cancelar</Button>
         )}
@@ -153,7 +176,7 @@ export function ChoiceForm({ title, hint, options, initial, confirmLabel, onConf
           {busy && <LoaderCircle className="animate-spin" />}
           {confirmLabel}
         </Button>
-      </div>
+      </DialogFooter>
     </form>
   );
 }
