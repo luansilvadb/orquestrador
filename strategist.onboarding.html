@@ -6,56 +6,79 @@
 <title>Orquestrador</title>
 <link rel="icon" href="data:,">
 <style>
+  /* Visual inspirado no Linear: superficies quase pretas, bordas finas, tipografia compacta, um unico acento indigo. */
   :root {
-    color-scheme: light dark;
-    --bg: #f6f5f1; --card: #ffffff; --text: #1d1c1a; --muted: #6b6860; --line: #dcd9d0;
-    --accent: #1f5f4a; --on-accent: #ffffff; --error: #a3261c; --error-bg: #fbeceb;
+    color-scheme: dark light;
+    --bg: #08090a; --panel: #0f1011; --field: #141516; --text: #f7f8f8; --muted: #8a8f98;
+    --line: #23252a; --line-strong: #34363c; --accent: #5e6ad2; --accent-hover: #6e79e0; --on-accent: #ffffff;
+    --glow: rgba(94, 106, 210, 0.22); --error: #ff8a80; --error-bg: rgba(235, 87, 87, 0.1); --error-line: rgba(235, 87, 87, 0.3);
   }
-  @media (prefers-color-scheme: dark) {
+  @media (prefers-color-scheme: light) {
     :root {
-      --bg: #161614; --card: #201f1c; --text: #ecebe6; --muted: #a09d94; --line: #37352f;
-      --accent: #6fcfae; --on-accent: #0f1a16; --error: #ff9d92; --error-bg: #3a1c19;
+      --bg: #fbfbfc; --panel: #ffffff; --field: #ffffff; --text: #16171a; --muted: #6b6f76;
+      --line: #e6e6ea; --line-strong: #d0d1d6; --accent: #5e6ad2; --accent-hover: #4f5bc4; --on-accent: #ffffff;
+      --glow: rgba(94, 106, 210, 0.12); --error: #c4302b; --error-bg: #fdf0ef; --error-line: #f3c9c6;
     }
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   body {
-    margin: 0; padding: 48px 16px; background: var(--bg); color: var(--text);
-    font: 15px/1.5 "Segoe UI", system-ui, sans-serif;
+    margin: 0; min-height: 100vh; padding: 72px 16px 48px; color: var(--text);
+    background: radial-gradient(ellipse 80% 420px at 50% -120px, var(--glow), transparent), var(--bg);
+    font: 14px/1.5 Inter, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; font-feature-settings: "cv01", "ss03";
   }
-  main { max-width: 760px; margin: 0 auto; }
-  h1 { margin: 0 0 4px; font-size: 24px; font-weight: 600; letter-spacing: -0.01em; }
-  .project { margin: 0 0 28px; color: var(--muted); }
-  code { font: 13px Consolas, ui-monospace, monospace; color: var(--text); overflow-wrap: anywhere; }
-  .roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  main { max-width: 720px; margin: 0 auto; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px; margin: 0 0 16px; padding: 3px 10px 3px 8px;
+    font-size: 12px; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px;
+  }
+  .eyebrow::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.15; font-weight: 600; letter-spacing: -0.022em; }
+  .project { margin: 0 0 32px; color: var(--muted); }
+  code {
+    padding: 2px 6px; font: 12px "Cascadia Code", Consolas, ui-monospace, monospace; color: var(--text);
+    background: var(--field); border: 1px solid var(--line); border-radius: 5px; overflow-wrap: anywhere;
+  }
+  .roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
   fieldset {
     margin: 0; padding: 20px; min-width: 0; display: grid; gap: 14px; align-content: start;
-    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    transition: border-color 0.15s;
   }
-  legend { padding: 0; float: left; width: 100%; font-size: 16px; font-weight: 600; }
-  .hint { margin: -10px 0 2px; color: var(--muted); font-size: 13px; }
-  label { display: grid; gap: 5px; font-size: 13px; color: var(--muted); }
+  fieldset:focus-within { border-color: var(--line-strong); }
+  legend { padding: 0; float: left; width: 100%; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .hint { margin: -10px 0 4px; color: var(--muted); font-size: 13px; }
+  label { display: grid; gap: 6px; font-size: 12px; font-weight: 500; color: var(--muted); }
   select, input {
-    width: 100%; padding: 8px 10px; font: inherit; color: var(--text);
-    background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    width: 100%; height: 34px; padding: 0 10px; font: inherit; font-size: 13px; color: var(--text);
+    background: var(--field); border: 1px solid var(--line); border-radius: 7px;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
-  select:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  select:hover, input:hover { border-color: var(--line-strong); }
+  select:focus-visible, input:focus-visible { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
   #errors {
-    margin: 16px 0 0; padding: 12px 14px 12px 32px; color: var(--error);
-    background: var(--error-bg); border-radius: 8px;
+    margin: 12px 0 0; padding: 10px 14px 10px 30px; font-size: 13px; color: var(--error);
+    background: var(--error-bg); border: 1px solid var(--error-line); border-radius: 8px;
   }
   .actions { margin-top: 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   button {
-    padding: 10px 20px; font: inherit; font-weight: 600; cursor: pointer;
-    color: var(--on-accent); background: var(--accent); border: 0; border-radius: 6px;
+    height: 34px; padding: 0 16px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+    color: var(--on-accent); background: var(--accent); border: 0; border-radius: 7px;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset, 0 4px 14px var(--glow);
+    transition: background 0.15s;
   }
-  button:disabled { opacity: 0.6; cursor: default; }
-  .note { color: var(--muted); font-size: 13px; }
-  #done { padding: 20px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .note { flex: 1; min-width: 220px; color: var(--muted); font-size: 12px; }
+  #done { padding: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
 <main>
+  <p class="eyebrow">Nova sessão</p>
   <h1>Orquestrador</h1>
   <p class="project">Projeto: <code id="project"></code></p>
   <form id="form">

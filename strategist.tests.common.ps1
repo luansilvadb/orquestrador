@@ -1,4 +1,4 @@
-# Shared by strategist.tests.ps1 and strategist.config.tests.ps1: a throwaway root folder, the
+# Setup of strategist.tests.ps1: a throwaway root folder, the
 # environment pointed at it, a simulated Claude and a simulated Codex first in the PATH, the
 # session helpers (New-Repo, Start-Session, Stop-Session, Delegate) and Check.
 # Keep this file ASCII-only (it runs in Windows PowerShell 5.1).
@@ -10,6 +10,10 @@ $env:TEMP = "$root\tmp"; $env:TMP = "$root\tmp"   # sessions are created here, n
 $env:LOCALAPPDATA = "$root\appdata"               # the user's real configuration is never read
 $env:MOCK_DIR = $root
 $env:CODEX_HOME = "$root\codex-home"       # the session rule never reaches the real Codex folder
+$env:USERPROFILE = "$root\home"            # the global skills are these, not the user's
+$skillProgram = "$root\home\.agents\skills\demo\scripts\tool.mjs"
+New-Item -ItemType Directory -Path (Split-Path $skillProgram) | Out-Null
+Set-Content $skillProgram 'console.log("skill")'
 $env:GIT_CEILING_DIRECTORIES = $root       # Git never climbs out of the test folder
 $env:PATH = "$root\bin;$env:PATH"
 $env:ORQUESTRADOR_SEM_NAVEGADOR = '1'      # the onboarding page is answered by the tests, no browser opens
@@ -35,13 +39,7 @@ $here = (Get-Location).Path
 function Append($file, $text) { [IO.File]::AppendAllText("$here\$file", $text) }
 switch -Regex ($task) {
     '^STEP (\d+)'  { Append 'progress.txt' "step $($Matches[1])`n" }
-    '^TOUCH'       { Append 'noise.txt' "$task`n" }
-    '^BREAKGIT'    { Rename-Item "$here\.git" '.git.off' }
-    '^COMMIT'      { & git commit -q --allow-empty -m vazio }
     '^BADFIX'      { 'ERRO=compilacao falhou em modulo X'; exit 5 }
-    '^DEADTOOL'    { 'ERRO=ferramenta indisponivel'; exit 9 }
-    '^CRASH'       { [Environment]::Exit(137) }
-    '^SLOW'        { Start-Sleep -Seconds 6 }
 }
 'fake claude: feito'
 exit 0
@@ -55,6 +53,7 @@ if ($args[0] -eq 'exec') {
     $ms = New-Object IO.MemoryStream; [Console]::OpenStandardInput().CopyTo($ms)
     Add-Content -LiteralPath "$env:MOCK_DIR\codex-exec-args.txt" -Value ($args -join '|')
     Add-Content -LiteralPath "$env:MOCK_DIR\codex-exec-stdin.txt" -Value ([Text.Encoding]::UTF8.GetString($ms.ToArray()))
+    [IO.File]::AppendAllText("$((Get-Location).Path)\progress.txt", "codex`n")
     'fake codex exec: feito'
     exit 0
 }
