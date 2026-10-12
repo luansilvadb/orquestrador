@@ -1,1 +1,1 @@
-@powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0strategist.ps1"
+@powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0strategist.ps1" %*

@@ -1,9 +1,12 @@
-# Plumbing only. The prompts live beside this file: strategist.md (Codex) and executor.md (Claude).
+# Plumbing only. The prompts live beside this file: strategist.md (the orchestrator, Codex) and executor.md (the executor, Claude).
 # Keep this file ASCII-only: strategist.cmd runs it in Windows PowerShell 5.1,
 # which reads a .ps1 without BOM as ANSI.
-param([string]$Session, [string]$Project)
+param([string]$Session, [string]$Project, [switch]$Configure)
 
 $ErrorActionPreference = "Stop"
+
+# Config and menu helpers (strategist.config.ps1). In delegate mode only the frozen copy is used.
+. "$PSScriptRoot\strategist.config.ps1"
 
 # In delegate mode every failure of this wrapper ends the same way, so whoever reads the output
 # can tell "ended without a report" from "still running": the error, the validation state and a
@@ -40,6 +43,10 @@ if ($Session) {
         }
         catch [IO.IOException] { if (-not (Test-Path -LiteralPath "$Session\delegation-$slot")) { throw } }
     }
+
+    # Frozen copy of the session settings, written by the launcher. A session without it is a
+    # legacy one: no extra arguments. One that has it must be valid; there is no silent fallback.
+    $frozen = Read-OrqConfig "$Session\session-config.json"
 
     Set-Location -LiteralPath $Project
 
@@ -261,18 +268,19 @@ if ($Session) {
     if ($refusal) { throw $refusal }
 
     Write-Output "--- CLAUDE EXECUTOR (delegacao $slot) ---"
+    # The prompt goes by stdin: PowerShell 5.1 mangles double quotes inside native arguments.
+    $OutputEncoding = [Text.UTF8Encoding]::new($false)
     # Explicit mode, so the user's default (which may be bypassPermissions) does not apply:
     # auto lets a classifier refuse risky actions, and nobody answers prompts, so whatever
     # would ask is denied. The deny rules catch only the obvious spellings: a net, not a wall.
     $deny = 'git push*', 'git reset --hard*', 'git clean*', 'npm publish*', 'pnpm publish*' |
         ForEach-Object { "Bash($_)"; "PowerShell($_)" }
-    # The prompt goes by stdin: PowerShell 5.1 mangles double quotes inside native arguments.
-    $OutputEncoding = [Text.UTF8Encoding]::new($false)
     # Set before the call, never after: from here on a failure of this wrapper cannot prove
     # that Claude did nothing.
     $executorStarted = $true
+    $modelArgs = if ($frozen) { @(Get-OrqClaudeArgs $frozen.executor) } else { @() }
     (Get-Content -Raw -Encoding UTF8 "$PSScriptRoot\executor.md"), $task |
-        & claude -p --permission-mode auto --permission-prompts none --disallowedTools $deny
+        & claude -p --permission-mode auto --permission-prompts none @modelArgs --disallowedTools $deny
     $exitCode = $LASTEXITCODE
 
     # A Git failure here must not read as "nothing changed": it becomes the audit state.
@@ -369,12 +377,26 @@ if ($Session) {
     Write-Output "validation_status=$validation [executor, auditoria e whitespace; nao prova o criterio de pronto da tarefa]"
     Write-Output "limite: compara caminho e SHA-256 antes e depois. Nao prova autoria (outro processo pode ter escrito no intervalo); nao ve nao rastreados ignorados; submodulo ou repositorio aninhado conta como uma entrada; link simbolico e comparado pelo destino, sem ser seguido; pasta que e juncao e lida por dentro, como o Git a lista."
     Write-Output "--- FIM ---"
-    # Claude's own code is kept. Only a 0 is replaced: 3 for failed, 2 for incomplete.
+    # The executor's own code is kept. Only a 0 is replaced: 3 for failed, 2 for incomplete.
     if ($exitCode) { exit $exitCode }
     exit @{ failed = 3; incomplete = 2; passed = 0 }[$validation]
 }
 
-$project = & git rev-parse --show-toplevel
+# Settings are read once, here. -Configure opens the menu first; "Iniciar" continues with the
+# SAVED file. Without the flag, a saved file is used and an invalid one stops the start (no
+# fallback); with no file at all the legacy behaviour applies: the Git repository of the cwd.
+$configPath = Get-OrqConfigPath
+if ($Configure) {
+    $cwdRoot = Get-OrqGitRoot (Get-Location).Path
+    if ((Invoke-OrqMenu -ConfigPath $configPath -DefaultProject "$cwdRoot") -ne 'start') { exit 0 }
+}
+$config = Read-OrqConfig $configPath
+if ($config) {
+    $project = Get-OrqGitRoot $config.project
+    Write-Host "Configuracao: $configPath"
+    Get-OrqText $config | ForEach-Object { Write-Host $_ }
+}
+else { $project = & git rev-parse --show-toplevel }
 if (-not $project) { throw "Abra um terminal dentro do repositorio Git e execute strategist.cmd." }
 
 # Checked once per session, before Codex opens: the delegation depends on these options and
@@ -384,6 +406,13 @@ $help = (& claude --help) -join "`n"
 $missing = '--print', '--permission-mode', '"auto"', '--permission-prompts', '--disallowedTools' | Where-Object { $help -notlike "*$_*" }
 if ($missing) {
     throw "Falha de inicializacao: o Claude CLI $(& claude --version) nao oferece $($missing -join ', '). Atualize o Claude Code; nao ha troca automatica por um modo menos restrito."
+}
+$codexArgs = @()
+if ($config) {
+    $claudeExtra = @(Get-OrqClaudeArgs $config.executor)
+    $needed = @($claudeExtra | Where-Object { $_ -like '--*' } | Where-Object { $help -notlike "*$_*" })
+    if ($needed) { throw "Falha de inicializacao: o Claude CLI nao oferece $($needed -join ', '), pedido na configuracao. Nao ha fallback para o padrao." }
+    $codexArgs = @(Get-OrqCodexArgs $config.orchestrator)
 }
 
 $temp = Join-Path ([IO.Path]::GetTempPath()) ("strategist-" + [Guid]::NewGuid().ToString("N"))
@@ -414,7 +443,7 @@ function Remove-Session([string]$dir) {
         catch [Management.Automation.ItemNotFoundException] { return }
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'e uma juncao ou um link, que nao e seguido' }
         Get-ChildItem -LiteralPath $dir -Force -File |
-            Where-Object { $_.Name -match '^(AGENTS\.md|delegate-claude\.(cmd|ps1)|owner|delegation-\d+)$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+            Where-Object { $_.Name -match '^(AGENTS\.md|delegate-claude\.(cmd|ps1)|owner|session-config\.json|delegation-\d+)$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
             Remove-Item -Force -ErrorAction SilentlyContinue
         [IO.Directory]::Delete($dir)
     }
@@ -439,6 +468,12 @@ try {
     [IO.File]::WriteAllText("$temp\delegate-claude.cmd", "@powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Session `"%~dp0.`" -Project `"$project`"`r`n")
     [IO.File]::WriteAllText($launcher, "param([Parameter(Mandatory = `$true, Position = 0)][string]`$Task)`r`n`$OutputEncoding = [Text.UTF8Encoding]::new(`$false)`r`n`$Task | & `"`$PSScriptRoot\delegate-claude.cmd`"`r`n[Environment]::Exit(`$LASTEXITCODE)`r`n")
     [IO.File]::WriteAllText("$temp\owner", "$PID $((Get-Process -Id $PID).StartTime.ToFileTimeUtc()) $(Split-Path $temp -Leaf)")
+    # Frozen copy of this session's settings: every delegation reads it, never the global file.
+    # Written from the object loaded above, so the project is the one this session resolved.
+    if ($config) {
+        $config.project = $project
+        [IO.File]::WriteAllText("$temp\session-config.json", ($config | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding $false))
+    }
     [IO.File]::WriteAllText("$temp\AGENTS.md", [IO.File]::ReadAllText("$PSScriptRoot\strategist.md").Replace('{{DELEGATE}}', $launcher))
 
     # A session that was killed leaves its rule in force for as long as its launcher exists.
@@ -472,7 +507,7 @@ try {
     # Read-only sandbox: Codex cannot write anywhere, this folder and the rules folder included,
     # so it cannot edit the launcher, the rule or the delegation slots. It can still READ the
     # whole disk. Anything else leaves the sandbox only through an approval the user grants.
-    & codex -C $temp --sandbox read-only --ask-for-approval on-request
+    & codex -C $temp --sandbox read-only --ask-for-approval on-request @codexArgs
     $code = $LASTEXITCODE
 }
 finally {

@@ -12,6 +12,8 @@ $tool = $PSScriptRoot
 $root = Join-Path ([IO.Path]::GetTempPath()) ("strategist-tests-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path "$root\bin", "$root\codex-home\rules", "$root\tmp", "$root\outside" | Out-Null
 $env:TEMP = "$root\tmp"; $env:TMP = "$root\tmp"   # sessions are created here, not in the real temporary folder
+$savedLocalAppData = $env:LOCALAPPDATA
+$env:LOCALAPPDATA = "$root\appdata"               # the user's real configuration is never read
 
 # Simulated Claude: acts on the current folder according to keywords in the task.
 Set-Content "$root\bin\fake-claude.ps1" -Encoding ascii @'
@@ -507,9 +509,10 @@ if "%~1"=="check-attr" (
 
     # the instructions file is missing: AGENTS.md cannot be written
     $broken = "$root\tool-sem-md"; New-Item -ItemType Directory -Path $broken | Out-Null
-    Copy-Item "$tool\strategist.cmd", "$tool\strategist.ps1", "$tool\executor.md" $broken
+    Copy-Item "$tool\strategist.cmd", "$tool\strategist.ps1", "$tool\strategist.config.ps1", "$tool\executor.md" $broken
     $opened = Try-Start $broken
-    Check 'S5' 'falha ao escrever o AGENTS.md: erro, nenhuma pasta e nenhuma regra sobram' (-not $opened -and $proc.ExitCode -ne 0 -and -not (Leaked).Count -and -not (Rules).Count) ("abriu=$opened; exit=$($proc.ExitCode); sobras=$((Leaked).Count)")
+    $cause = Launcher-Out; $cause += "$(Get-Content -LiteralPath "$launcherOut.err" -Raw -ErrorAction SilentlyContinue)"   # the failure must be the missing strategist.md, not another file
+    Check 'S5' 'falha ao escrever o AGENTS.md: erro, nenhuma pasta e nenhuma regra sobram' (-not $opened -and $proc.ExitCode -ne 0 -and $cause -match 'strategist\.md' -and -not (Leaked).Count -and -not (Rules).Count) ("abriu=$opened; exit=$($proc.ExitCode); sobras=$((Leaked).Count)")
 
     # the rules folder cannot be created ("rules" is a file)
     $badHome = "$root\home-ruim"; New-Item -ItemType Directory -Path $badHome | Out-Null; Set-Content "$badHome\rules" 'arquivo no lugar da pasta'
@@ -649,6 +652,7 @@ if "%~1"=="check-attr" (
     'T20, T21, T22: dependem do Codex e do Claude reais (aprovacao, sandbox, recusa de operacao proibida); nao fazem parte desta suite.'
 }
 finally {
+    $env:LOCALAPPDATA = $savedLocalAppData
     if ($proc -and -not $proc.HasExited) { Set-Content "$root\stop" 1; $proc.WaitForExit(15000) | Out-Null }
     & cmd.exe /c "icacls `"$root`" /remove:d $env:USERNAME /T /C /Q >nul 2>&1"   # a test stopped halfway may have left a deny in place
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
