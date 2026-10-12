@@ -1,5 +1,6 @@
 //! A pasta temporária de uma sessão do orquestrador (`strategist-<guid>`), o adaptador de delegação que
-//! ela libera (`orq-<guid>.ps1`), a regra do Codex, a limpeza e a recuperação das sobras de sessões mortas.
+//! ela libera (`orq-<guid>.ps1`), o Git que o orquestrador pode rodar, as regras do Codex e as permissões
+//! do Claude, a limpeza e a recuperação das sobras de sessões mortas.
 use crate::config::Config;
 use crate::delegate;
 use crate::proc::{owner_state, start_time, Owner};
@@ -9,6 +10,11 @@ use std::path::{Path, PathBuf};
 
 /// A justificativa que a regra do Codex leva; é o que o Codex mostra ao aprovar a regra.
 const JUSTIFICATION: &str = "Delegacao autorizada ao executor";
+
+/// O Git do orquestrador, com qualquer subcomando. `git.exe` vai junto porque o orquestrador pode digitar
+/// o nome com a extensão, e a regra casa o token exato.
+const GIT_PROGRAMS: [&str; 2] = ["git", "git.exe"];
+const GIT_JUSTIFICATION: &str = "Git do orquestrador, autorizado pelo usuario";
 
 /// Onde a sessão vive e o que ela consulta fora de si. Os testes trocam tudo por pastas próprias.
 #[derive(Clone, Debug)]
@@ -50,7 +56,12 @@ fn toml_str(s: &str) -> String {
 
 /// Uma regra `prefix_rule` do Codex para um único token, que é o programa liberado.
 fn rule(token: &str) -> String {
-    format!("prefix_rule(pattern=[{}], decision=\"allow\", justification=\"{JUSTIFICATION}\")\n", toml_str(token))
+    rule_with(token, JUSTIFICATION)
+}
+
+/// A mesma regra, com a justificativa que quem a pede escolhe (o Git do orquestrador, por exemplo).
+fn rule_with(token: &str, justification: &str) -> String {
+    format!("prefix_rule(pattern=[{}], decision=\"allow\", justification=\"{justification}\")\n", toml_str(token))
 }
 
 /// O comando de delegação de uma sessão: `orq-<id>.ps1`, com o id que dá nome à pasta `strategist-<id>`.
@@ -142,9 +153,14 @@ impl Session {
         Ok(())
     }
 
-    /// A regra do comando de delegação e, depois dela, uma regra por interpretador com os programas das skills.
+    /// A regra do comando de delegação, que tem de ficar na primeira linha (é por ela que `recover_orphans`
+    /// reconhece a sessão). Depois dela, uma regra para cada programa do Git e uma por interpretador com os
+    /// programas das skills.
     fn codex_rules(&self) -> String {
         let mut text = rule(&self.command);
+        for program in GIT_PROGRAMS {
+            text += &rule_with(program, GIT_JUSTIFICATION);
+        }
         for runner in RUNNERS {
             let files: Vec<String> = skill_programs(&self.global_dirs, runner).iter().map(|f| toml_str(f)).collect();
             if !files.is_empty() {
@@ -160,10 +176,17 @@ impl Session {
     fn claude_settings(&self) -> String {
         let mut allow: Vec<String> = ["Read", "Glob", "Grep", "Skill"].iter().map(|s| s.to_string()).collect();
         allow.push(format!("PowerShell({} *)", self.command));
+        allow.extend(GIT_PROGRAMS.iter().map(|g| format!("PowerShell({g} *)")));
         for runner in RUNNERS {
             allow.extend(skill_programs(&self.global_dirs, runner).iter().map(|f| format!("PowerShell({runner} {f} *)")));
         }
-        serde_json::to_string_pretty(&serde_json::json!({ "permissions": { "allow": allow } })).unwrap()
+        // Sem esta variável, o Claude Code 2.1.296 não expõe o PowerShell no Windows com Git Bash. Ela entra só
+        // por este arquivo, passado com --settings: o ambiente do usuário não muda.
+        serde_json::to_string_pretty(&serde_json::json!({
+            "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1" },
+            "permissions": { "allow": allow },
+        }))
+        .unwrap()
     }
 
     /// Tira a regra e a pasta. Nunca falha: o que não saiu fica e é dito no texto devolvido.
@@ -326,8 +349,11 @@ pub mod tests {
         let lines: Vec<&str> = rule.lines().collect();
         assert_eq!(lines[0], format!("prefix_rule(pattern=[\"{}\"], decision=\"allow\", justification=\"Delegacao autorizada ao executor\")", s.command));
         assert!(is_delegate_rule(lines[0], &s.dir));
-        assert!(lines[1].starts_with("prefix_rule(pattern=[\"node\", [") && lines[1].contains("canvas.mjs") && lines[1].contains("grilling/canvas.mjs"));
-        assert!(lines[2].starts_with("prefix_rule(pattern=[\"python\", [") && lines[2].contains("tool.py"));
+        assert_eq!(lines[1], "prefix_rule(pattern=[\"git\"], decision=\"allow\", justification=\"Git do orquestrador, autorizado pelo usuario\")");
+        assert_eq!(lines[2], "prefix_rule(pattern=[\"git.exe\"], decision=\"allow\", justification=\"Git do orquestrador, autorizado pelo usuario\")");
+        assert!(lines[3].starts_with("prefix_rule(pattern=[\"node\", [") && lines[3].contains("canvas.mjs") && lines[3].contains("grilling/canvas.mjs"));
+        assert!(lines[4].starts_with("prefix_rule(pattern=[\"python\", [") && lines[4].contains("tool.py"));
+        assert_eq!(lines.len(), 5, "delegação, git, git.exe, node e python, e nada além");
         assert!(!rule.contains("node_modules") && !rule.contains("SKILL.md") && !rule.contains("orquestrador-delegar"));
         assert!(!s.dir.join("claude-settings.json").exists());
 
@@ -345,8 +371,9 @@ pub mod tests {
         let (s, r) = Session::create(&p, &delegate_of(&p), r"C:\proj", &cfg("claude"));
         r.unwrap();
         let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("claude-settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["env"]["CLAUDE_CODE_USE_POWERSHELL_TOOL"], "1", "sem a variável o Claude não expõe o PowerShell");
         let allow: Vec<&str> = settings["permissions"]["allow"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
-        assert_eq!(&allow[..5], ["Read", "Glob", "Grep", "Skill", &format!("PowerShell({} *)", s.command)]);
+        assert_eq!(&allow[..7], ["Read", "Glob", "Grep", "Skill", &format!("PowerShell({} *)", s.command), "PowerShell(git *)", "PowerShell(git.exe *)"]);
         assert!(allow.iter().any(|a| a.starts_with("PowerShell(node ") && a.ends_with("canvas.mjs *)")));
         assert!(allow.iter().any(|a| a.starts_with("PowerShell(python ") && a.ends_with("tool.py *)")));
         assert!(allow.iter().all(|a| !a.contains("--hook") && !a.contains("--guard")), "os modos dos hooks não são liberados ao orquestrador");
@@ -433,6 +460,20 @@ pub mod tests {
         assert!(two_dead.1.exists() && !two_dead.0.exists(), "regra com dois tokens não é nossa: fica");
         assert!(token_dead.1.exists() && !token_dead.0.exists(), "token com espaço a mais não é nosso: fica");
         assert!(p.codex_rules.join("default.rules").exists());
+        discard(&p);
+    }
+
+    #[test]
+    fn regra_com_git_e_skills_sai_como_orfa_pela_primeira_linha() {
+        // As regras do Git e das skills vêm depois da de delegação: a sessão morta sai inteira, como antes.
+        let p = places("orfa-git");
+        let (s, r) = Session::create(&p, &delegate_of(&p), r"C:\proj", &cfg("codex"));
+        r.unwrap();
+        let me = std::process::id();
+        let name = s.dir.file_name().unwrap().to_string_lossy().to_string();
+        std::fs::write(s.dir.join("owner"), format!("{me} {} {name}", start_time(me).unwrap() + 1)).unwrap();
+        recover_orphans(&p);
+        assert!(!s.rule.exists() && !s.dir.exists());
         discard(&p);
     }
 

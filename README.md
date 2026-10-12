@@ -2,7 +2,7 @@
 
 ## 1. O que é
 
-Um app de canvas para Windows (Tauri) que põe CLIs de IA para trabalhar em papéis separados sobre um repositório Git. Cada CLI é um bloco no canvas, com o terminal dele ao vivo. O orquestrador alinha o objetivo com o usuário, só lê o projeto e delega; os executores recebem as tarefas, cada um no seu bloco, e operam o repositório em paralelo. As ferramentas `claude` e `codex` podem ocupar qualquer um dos dois papéis.
+Um app de canvas para Windows (Tauri) que põe CLIs de IA para trabalhar em papéis separados sobre um repositório Git. Cada CLI é um bloco no canvas, com o terminal dele ao vivo. O orquestrador alinha o objetivo com o usuário, lê o projeto, delega e, quando o usuário pede, faz stage, commit e push; os executores recebem as tarefas, cada um no seu bloco, e operam o repositório em paralelo. As ferramentas `claude` e `codex` podem ocupar qualquer um dos dois papéis.
 
 ## 2. Requisitos
 
@@ -33,7 +33,7 @@ Os blocos podem ser arrastados e redimensionados; a roda do mouse no fundo dá z
 
 ## 5. Como funciona uma delegação
 
-O orquestrador recebe um único comando permitido por sessão: o nome do adaptador da sessão, `orq-<id>.ps1`, seguido de uma ou mais tarefas, cada uma como um argumento entre aspas simples. O adaptador fica na pasta da sessão, e essa pasta entra na frente do `PATH` do orquestrador: o comando não leva caminho nem aspas em volta. A linha inteira deve ser esse comando: sem `&` antes, sem pipe, sem `;` e sem outro comando junto. Um apóstrofo dentro de uma tarefa deve ser duplicado, como em `d''água`. O resto vai como está: aspas duplas, barras e acentos, inclusive uma barra no fim da tarefa.
+Além do `git` (seção 7), o orquestrador tem um único comando de delegação por sessão: o nome do adaptador da sessão, `orq-<id>.ps1`, seguido de uma ou mais tarefas, cada uma como um argumento entre aspas simples. O adaptador fica na pasta da sessão, e essa pasta entra na frente do `PATH` do orquestrador: o comando não leva caminho nem aspas em volta. A linha inteira deve ser esse comando: sem `&` antes, sem pipe, sem `;` e sem outro comando junto. Um apóstrofo dentro de uma tarefa deve ser duplicado, como em `d''água`. O resto vai como está: aspas duplas, barras e acentos, inclusive uma barra no fim da tarefa.
 
 ```powershell
 orq-<id>.ps1 'Tarefa A. Escopo: ... Pronto quando: ...' 'Tarefa B. Escopo: ... Pronto quando: ...'
@@ -84,9 +84,15 @@ Modelo e esforço vazios deixam o CLI usar seus padrões. Esforços aceitos: Cla
 
 ## 7. Limites de segurança
 
-**Orquestrador Codex.** Sandbox `read-only`, sem aprovações. Um arquivo de regras `prefix_rule` no diretório de regras do Codex libera o adaptador de delegação daquela sessão (um nome só, sorteado por sessão) e os programas das skills globais, e é removido no encerramento. O sandbox impede escrita, mas ele ainda pode ler o disco inteiro.
+**Orquestrador Codex.** Sandbox `read-only`, sem aprovações. Um arquivo de regras `prefix_rule` no diretório de regras do Codex libera, naquela sessão, o adaptador de delegação (um nome só, sorteado por sessão), `git` e `git.exe` com qualquer subcomando, e os programas das skills globais; o arquivo é removido no encerramento. O sandbox ainda pode ler o disco inteiro. Medido no Codex 0.162.1: com o sandbox de leitura, `git add` falha no `.git` (`index.lock: Permission denied`); com a regra `allow` do `git` ele passa, porque a regra autoriza rodar o comando fora do sandbox (é o que o próprio Codex 0.162.1 declara nas instruções de execução); um comando sem regra é recusado pela política (`blocked by policy`), inclusive escrita de arquivo por PowerShell.
 
-**Orquestrador Claude.** `--restricted`, `--permission-mode dontAsk`, sem servidor MCP. Ferramentas: `Read`, `Glob`, `Grep`, `PowerShell` e `Skill`; o PowerShell só passa o comando de delegação da sessão, os programas das skills globais e o que o Claude Code considera somente leitura.
+**Alcance das regras do Codex.** O arquivo de regras fica no diretório de configuração do Codex (`CODEX_HOME`), e as regras valem para qualquer processo `codex` que use esse diretório, não só para o orquestrador, enquanto a sessão existir. Medido no 0.162.1: um `codex exec` comum, em outra pasta, rodou `git add` com a regra da sessão presente. Com um orquestrador Codex aberto, o `git` liberado alcança, portanto, os outros Codex dessa mesma configuração. As opções do `codex exec` não trazem um arquivo de regras por processo; `--ignore-rules` só desliga o carregamento.
+
+**Orquestrador Claude.** `--restricted`, `--permission-mode dontAsk`, sem servidor MCP. Ferramentas: `Read`, `Glob`, `Grep`, `PowerShell` e `Skill`; o PowerShell só passa o comando de delegação da sessão, `git` e `git.exe`, os programas das skills globais e o que o Claude Code considera somente leitura. Medido no Claude Code 2.1.296 com o `claude-settings.json` gerado pelo app: `git -C`, `git.exe` e `git commit` passam, e sem as regras `PowerShell(git *)` e `PowerShell(git.exe *)` o mesmo `git status` é negado.
+
+A ativação é local à sessão. Nessa versão, no Windows com Git Bash instalado, o PowerShell só entra na lista de ferramentas com `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (medido com um stub local que mostra a lista enviada ao modelo: sem a variável, o PowerShell não aparece). O app põe essa variável no bloco `env` do `claude-settings.json` da sessão, que o orquestrador recebe por `--settings`; o ambiente do usuário e o dos executores não mudam.
+
+**Git do orquestrador.** `git` e `git.exe` com qualquer subcomando, inclusive `push`, `reset --hard` e `clean`, porque o usuário pediu Git completo. A regra casa só o nome do programa, então os argumentos não são limitados: `-C` pode apontar para qualquer repositório. Os executores continuam barrados como antes. O orquestrador faz stage, commit e push só quando o usuário pede, e não desfaz trabalho sem pedido expresso; isso é orientação ao modelo, não uma trava do app.
 
 **Skills do orquestrador.** Os programas `.mjs`, `.cjs`, `.js` e `.py` em `%USERPROFILE%\.agents\skills` e `%USERPROFILE%\.claude\skills` são liberados pelo nome no início da sessão. O que esses programas conseguem fazer, o orquestrador consegue fazer por meio deles.
 
@@ -96,7 +102,7 @@ Essas barreiras comparam o texto do comando: orientam e pegam as grafias óbvias
 
 Para o executor não parar num diálogo que ninguém pode responder, a confiança na pasta do projeto é dada pela sessão: no Codex por configuração da linha de comando, no Claude pela variável `CLAUDE_CODE_SANDBOXED=1`, que não é documentada e pode mudar entre versões do Claude Code. Escolher a pasta no app equivale a confiar nela.
 
-Na inicialização de uma sessão, regras e pastas de sessões mortas são removidas quando o nome, a primeira linha e o dono encerrado comprovam a origem; o que não puder ser verificado é preservado. A primeira linha pode ser a regra atual ou a da versão anterior, que liberava o launcher `delegate.ps1` pelo caminho; qualquer outra, inclusive uma parecida, não é do app.
+Na inicialização de uma sessão, regras e pastas de sessões mortas são removidas quando o nome, a primeira linha e o dono encerrado comprovam a origem; o que não puder ser verificado é preservado. A primeira linha pode ser a regra atual ou a da versão anterior, que liberava o launcher `delegate.ps1` pelo caminho; qualquer outra, inclusive uma parecida, não é do app. A regra da delegação continua na primeira linha do arquivo; as do Git e as das skills vêm depois, no mesmo arquivo, e saem com ele.
 
 ## 8. Atualização automática
 
@@ -146,6 +152,7 @@ Saída: `src-tauri\target\release\bundle\nsis\Orquestrador_<versão>_x64-setup.e
 | `src/` | Frontend: tela de atualização, canvas, blocos, terminais (xterm), seletor. `mock.ts` é um backend simulado, só em `npm run dev` fora do Tauri. |
 | `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores e configuração. |
 | `src-tauri/src/delegate.rs` | A lógica do programa de delegação: publica o lote na pasta da sessão, espera o resultado e o imprime; e o texto do adaptador `.ps1` da sessão, que só transporta. O ponto de entrada, `orquestrador-delegar.exe`, é `src-tauri/src/bin/orquestrador-delegar.rs`. |
+| `src-tauri/src/session.rs` | A sessão do orquestrador: pasta, adaptador, regras do Codex (delegação, Git e skills), `claude-settings.json` do Claude e a limpeza das sobras. |
 | `src-tauri/src/roles.rs` | Os textos enviados ao orquestrador (no `AGENTS.md` da sessão) e a cada executor, antes da tarefa. |
 | `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a fonte do plugin oficial e os testes dos cenários. |
 | `.github/workflows/release.yml` | Release por tag: instalador assinado, `latest.json` e conferência, em rascunho. |

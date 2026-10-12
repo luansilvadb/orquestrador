@@ -54,12 +54,14 @@ fn codex_trust(dir: &str) -> Vec<String> {
     vec!["-c".into(), format!("projects={{{}={{trust_level=\"trusted\"}}}}", toml(dir))]
 }
 
-/// O orquestrador: só lê o projeto, delega e usa as skills globais.
+/// O orquestrador: lê o projeto, delega, usa as skills globais e o git (stage, commit e push quando o usuário pede).
 pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &str) -> Spawn {
     let dir = session.dir.to_string_lossy().to_string();
     let (program, mut args) = if choice.tool == "codex" {
         // Sandbox só de leitura: o Codex não escreve em lugar nenhum, nem nesta pasta nem na de
-        // regras. Ninguém aprova nada: o que a regra da sessão não libera falha no sandbox.
+        // regras, a não ser pelo que a regra da sessão libera. Ninguém aprova nada: o que a regra não
+        // libera é recusado pela política; o que ela libera (delegação, git, skills) roda fora do sandbox
+        // (medido no Codex 0.162.1).
         // --no-daemon: o agente roda neste processo, então matar o processo mata o agente.
         let mut args = strs(&["--no-daemon", "-C", &dir, "--sandbox", "read-only", "--ask-for-approval", "never"]);
         args.extend(codex_trust(&dir));
@@ -67,8 +69,8 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &s
     } else {
         // Sem sandbox, as ferramentas são a parede: --restricted deixa só as nomeadas, ignora os
         // settings do usuário e confina Read ao projeto e às pastas globais; dontAsk nega todo
-        // comando que não seja o de delegação, um programa de skill ou o que o Claude Code toma por
-        // somente leitura. O modo restrito descarta as skills do usuário, então .agents volta
+        // comando que não seja o de delegação, o git, um programa de skill ou o que o Claude Code toma
+        // por somente leitura. O modo restrito descarta as skills do usuário, então .agents volta
         // como plugin (medido: as skills carregam como ".agents:nome").
         let mut args = strs(&["--restricted", "--strict-mcp-config", "--tools", "Read,Glob,Grep,PowerShell,Skill", "--settings"]);
         args.push(session.dir.join("claude-settings.json").to_string_lossy().to_string());
