@@ -32,13 +32,13 @@ try {
     }
     Check 'T3' '12 delegacoes com progresso, sem parada na oitava' $ok12
     Check 'T4' '25 delegacoes seguidas, contador correto' (($numbers -join ',') -eq ((1..25) -join ',') -and (Calls).Count -eq 25) ("ultima=$($numbers[-1])")
-    $jobs = 1..2 | ForEach-Object { Start-Process powershell.exe -WindowStyle Hidden -PassThru -RedirectStandardOutput "$root\par-$_.txt" -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$sess\delegate-claude.ps1", "TOUCH-paralelo-$_" }
+    $jobs = 1..2 | ForEach-Object { Start-Process powershell.exe -WindowStyle Hidden -PassThru -RedirectStandardOutput "$root\par-$_.txt" -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$sess\delegate.ps1", "TOUCH-paralelo-$_" }
     $jobs | ForEach-Object { Wait-Mock $_ }
     $par = 1..2 | ForEach-Object { if ((Get-Content "$root\par-$_.txt" -Raw) -match '(?m)^delegation=(\d+)') { [int]$Matches[1] } }
     Check 'T15' 'duas delegacoes simultaneas, numeros unicos' (($par | Sort-Object) -join ',' -eq '26,27') ("numeros=$($par -join ',')")
     $rule = @(Get-ChildItem "$root\codex-home\rules" -Filter 'strategist-*.rules')
     $ruleText = if ($rule.Count -eq 1) { Get-Content $rule[0].FullName -Raw } else { '' }
-    Check 'T21s' 'a regra da sessao nomeia so o launcher desta sessao (checagem estatica)' ($rule.Count -eq 1 -and @([regex]::Matches($ruleText, 'prefix_rule')).Count -eq 1 -and $ruleText.Contains("$sess\delegate-claude.ps1".Replace('\', '\\')))
+    Check 'T21s' 'a regra da sessao nomeia so o launcher desta sessao (checagem estatica)' ($rule.Count -eq 1 -and @([regex]::Matches($ruleText, 'prefix_rule')).Count -eq 1 -and $ruleText.Contains("$sess\delegate.ps1".Replace('\', '\\')))
     Check 'T20s' 'o Codex abre em sandbox somente leitura, sem bypass (checagem estatica)' ((Get-Content "$root\args.txt") -match '--sandbox\|read-only' -and (Get-Content "$root\args.txt") -notmatch 'bypass')
     $code = Stop-Session 0
     Check 'T23' 'encerramento normal remove pasta e regra da sessao' ($code -eq 0 -and -not (Test-Path $sess) -and -not @(Get-ChildItem "$root\codex-home\rules" -Filter 'strategist-*.rules').Count)
@@ -74,7 +74,7 @@ try {
     $repo = New-Repo;Start-Session
     $r = Delegate 'STEP 1'
     Check 'E1' 'fim normal: codigo 0 e relatorio completo' ($r.Exit -eq 0 -and $r.Text -match '(?m)^--- FIM ---$')
-    $slow = Start-Process powershell.exe -WindowStyle Hidden -PassThru -RedirectStandardOutput "$root\slow.txt" -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$sess\delegate-claude.ps1", 'SLOW'
+    $slow = Start-Process powershell.exe -WindowStyle Hidden -PassThru -RedirectStandardOutput "$root\slow.txt" -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$sess\delegate.ps1", 'SLOW'
     Start-Sleep -Seconds 3
     $running = -not $slow.HasExited
     $partial = "$(Get-Content "$root\slow.txt" -Raw -ErrorAction SilentlyContinue)"
@@ -152,13 +152,13 @@ try {
     $tmp = "$root\tmp"; $rulesDir = "$root\codex-home\rules"
     function New-Leftover([string]$id, [string]$owner) {
         $d = "$tmp\$id"; New-Item -ItemType Directory -Path $d | Out-Null
-        foreach ($f in 'AGENTS.md', 'delegate-claude.cmd', 'delegate-claude.ps1', 'delegation-1') { Set-Content "$d\$f" 'x' }
+        foreach ($f in 'AGENTS.md', 'delegate.cmd', 'delegate.ps1', 'delegation-1') { Set-Content "$d\$f" 'x' }
         if ($owner) { [IO.File]::WriteAllText("$d\owner", $owner.Replace('{id}', $id)) }
-        [IO.File]::WriteAllText("$rulesDir\$id.rules", "prefix_rule(pattern=[`"$("$d\delegate-claude.ps1".Replace('\', '\\'))`"], decision=`"allow`", justification=`"Delegacao autorizada ao Claude`")`n")
+        [IO.File]::WriteAllText("$rulesDir\$id.rules", "prefix_rule(pattern=[`"$("$d\delegate.ps1".Replace('\', '\\'))`"], decision=`"allow`", justification=`"Delegacao autorizada ao executor`")`n")
         $d
     }
     function New-Id { 'strategist-' + [Guid]::NewGuid().ToString('N') }
-    function Kept($d) { (Test-Path "$d\delegate-claude.ps1") -and (Test-Path "$rulesDir\$(Split-Path $d -Leaf).rules") }
+    function Kept($d) { (Test-Path "$d\delegate.ps1") -and (Test-Path "$rulesDir\$(Split-Path $d -Leaf).rules") }
     function Gone($d) { -not (Test-Path $d) -and -not (Test-Path "$rulesDir\$(Split-Path $d -Leaf).rules") }
     $myStart = (Get-Process -Id $PID).StartTime.ToFileTimeUtc()
     $unrelated = New-Leftover 'strategist-teste' $null; Set-Content "$unrelated\importante.txt" 'dados'
@@ -181,7 +181,7 @@ try {
     Check 'C11' 'processo dono impossivel de identificar: nada e apagado' (Kept $unreadable)
     Check 'C13' 'regra de execpolicy nao relacionada: preservada' (Test-Path "$rulesDir\outra.rules")
     Check 'C14' 'sessao propria e encerrada: removida na abertura seguinte' (Gone $dead)
-    Check 'C15' 'juncao dentro da sessao nao e seguida: o que esta fora fica intacto' ((Test-Path "$root\outside\precioso.txt") -and -not (Test-Path "$rulesDir\$(Split-Path $linked -Leaf).rules") -and -not (Test-Path "$linked\delegate-claude.ps1"))
+    Check 'C15' 'juncao dentro da sessao nao e seguida: o que esta fora fica intacto' ((Test-Path "$root\outside\precioso.txt") -and -not (Test-Path "$rulesDir\$(Split-Path $linked -Leaf).rules") -and -not (Test-Path "$linked\delegate.ps1"))
     $procA = $proc; $sessA = $sess
     Start-Session
     Check 'C12' 'duas sessoes ao mesmo tempo: uma nao remove a outra' ((Kept $sessA) -and (Kept $sess) -and $sessA -ne $sess)
@@ -212,7 +212,7 @@ try {
 
     # the instructions file is missing: AGENTS.md cannot be written
     $broken = "$root\tool-sem-md"; New-Item -ItemType Directory -Path $broken | Out-Null
-    Copy-Item "$tool\strategist.cmd", "$tool\strategist.ps1", "$tool\strategist.config.ps1", "$tool\executor.md" $broken
+    Copy-Item "$tool\strategist.cmd", "$tool\strategist.ps1", "$tool\strategist.config.ps1", "$tool\strategist.onboarding.html", "$tool\executor.md" $broken
     $opened = Try-Start $broken
     $cause = Launcher-Out; $cause += "$(Get-Content -LiteralPath "$launcherOut.err" -Raw -ErrorAction SilentlyContinue)"   # the failure must be the missing strategist.md, not another file
     Check 'S5' 'falha ao escrever o AGENTS.md: erro, nenhuma pasta e nenhuma regra sobram' (-not $opened -and $proc.ExitCode -ne 0 -and $cause -match 'strategist\.md' -and -not (Leaked).Count -and -not (Rules).Count) ("abriu=$opened; exit=$($proc.ExitCode); sobras=$((Leaked).Count)")
@@ -260,16 +260,16 @@ try {
     & icacls.exe $noDelete /deny "${env:USERNAME}:(OI)(CI)(DE,DC)" | Out-Null
     $env:TEMP = $noDelete; $env:TMP = $noDelete
     $env:PATH = "$root\bin-sem-codex;$(Split-Path $git);$env:SystemRoot\System32;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
-    Push-Location $repo
     $good = 0; $sample = ''
     foreach ($run in 1..10) {
         $had = @(Get-ChildItem $noDelete -Directory | ForEach-Object Name)
-        $out = (& cmd.exe /c "`"$tool\strategist.cmd`" 2>&1" | ForEach-Object { "$_" }) -join "`n"; $code = $LASTEXITCODE
+        $opened = Try-Start; $code = $proc.ExitCode
+        # The original error is the one on stderr: the warning that the model list could not be asked from Codex goes to stdout.
+        $out = Launcher-Out; $failure = "$(Get-Content -LiteralPath "$launcherOut.err" -Raw -ErrorAction SilentlyContinue)"
         $new = @(Get-ChildItem $noDelete -Directory | Where-Object { $had -notcontains $_.Name })
-        if ($code -ne 0 -and $out -match "'codex'" -and $out -match 'Aviso: a pasta de sessao' -and $new.Count -eq 1 -and -not (Rules).Count) { $good++ }
-        else { $sample = "exit=$code; original=$($out -match "'codex'"); aviso=$($out -match 'Aviso: a pasta de sessao'); pastas novas=$($new.Count)" }
+        if (-not $opened -and $code -ne 0 -and $failure -match "'codex'" -and $out -match 'Aviso: a pasta de sessao' -and $new.Count -eq 1 -and -not (Rules).Count) { $good++ }
+        else { $sample = "abriu=$opened; exit=$code; original=$($failure -match "'codex'"); aviso=$($out -match 'Aviso: a pasta de sessao'); pastas novas=$($new.Count)" }
     }
-    Pop-Location
     $env:PATH = $savedPath; $env:TEMP = "$root\tmp"; $env:TMP = "$root\tmp"
     & icacls.exe $noDelete /remove:d $env:USERNAME | Out-Null
     Check 'S10' 'erro na abertura e limpeza impossivel, 10 vezes: o erro original aparece, a limpeza so avisa, a pasta fica' ($good -eq 10) ("$good de 10 $sample")
@@ -284,16 +284,16 @@ try {
     & icacls.exe $denied /deny "${env:USERNAME}:(RD)" | Out-Null
     $code = Stop-Session 7
     & icacls.exe $denied /remove:d $env:USERNAME | Out-Null; & icacls.exe $sess /remove:d $env:USERNAME | Out-Null
-    Check 'S14' 'pasta da sessao existe mas esta inacessivel: limpeza incompleta avisada, codigo preservado, nada apagado' ($code -eq 7 -and (Launcher-Out) -match 'Aviso: a pasta de sessao' -and (Test-Path "$sess\delegate-claude.ps1")) ("exit=$code; aviso=$((Launcher-Out) -match 'Aviso: a pasta de sessao')")
+    Check 'S14' 'pasta da sessao existe mas esta inacessivel: limpeza incompleta avisada, codigo preservado, nada apagado' ($code -eq 7 -and (Launcher-Out) -match 'Aviso: a pasta de sessao' -and (Test-Path "$sess\delegate.ps1")) ("exit=$code; aviso=$((Launcher-Out) -match 'Aviso: a pasta de sessao')")
     Remove-Item -LiteralPath $denied -Recurse -Force
 
     # a leftover "session folder" that is really a junction to somewhere else
     $target = "$root\destino-da-juncao"; New-Item -ItemType Directory -Path $target | Out-Null
     $jid = New-Id
-    foreach ($f in 'AGENTS.md', 'delegate-claude.cmd', 'delegate-claude.ps1') { Set-Content "$target\$f" 'fora da sessao' }
+    foreach ($f in 'AGENTS.md', 'delegate.cmd', 'delegate.ps1') { Set-Content "$target\$f" 'fora da sessao' }
     [IO.File]::WriteAllText("$target\owner", "999996 123 $jid")
     & cmd.exe /c mklink /J "$tmp\$jid" $target | Out-Null
-    [IO.File]::WriteAllText("$rulesDir\$jid.rules", "prefix_rule(pattern=[`"$("$tmp\$jid\delegate-claude.ps1".Replace('\', '\\'))`"], decision=`"allow`", justification=`"Delegacao autorizada ao Claude`")`n")
+    [IO.File]::WriteAllText("$rulesDir\$jid.rules", "prefix_rule(pattern=[`"$("$tmp\$jid\delegate.ps1".Replace('\', '\\'))`"], decision=`"allow`", justification=`"Delegacao autorizada ao executor`")`n")
     $repo = New-Repo;Start-Session
     Check 'S15' 'pasta de sessao que e uma juncao: nao e seguida, o destino fica intacto e a limpeza incompleta e avisada' (@(Get-ChildItem $target -File).Count -eq 4 -and (Launcher-Out) -match 'juncao') ("arquivos no destino=$(@(Get-ChildItem $target -File).Count); aviso=$((Launcher-Out) -match 'juncao')")
     Stop-Session 0 | Out-Null

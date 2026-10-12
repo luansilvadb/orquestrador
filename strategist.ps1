@@ -1,4 +1,4 @@
-# Plumbing only. The prompts live beside this file: strategist.md (the orchestrator, Codex) and executor.md (the executor, Claude or Codex).
+# Plumbing only. The prompts live beside this file: strategist.md (the orchestrator, Codex or Claude) and executor.md (the executor, Claude or Codex).
 # Keep this file ASCII-only: strategist.cmd runs it in Windows PowerShell 5.1,
 # which reads a .ps1 without BOM as ANSI.
 param([string]$Session, [string]$Project)
@@ -23,18 +23,18 @@ trap {
     exit 4
 }
 
-# Called internally by the temporary delegate-claude.cmd, with the task on stdin.
+# Called internally by the temporary delegate.cmd, with the task on stdin.
 if ($Session) {
     # Read as UTF-8 bytes: [Console]::In would decode with the console code page and break accents.
     $task = if ([Console]::IsInputRedirected) { (New-Object IO.StreamReader ([Console]::OpenStandardInput()), ([Text.Encoding]::UTF8)).ReadToEnd() }
     if ([string]::IsNullOrWhiteSpace($task)) {
-        throw "Task vazia. Passe a tarefa ao launcher (delegate-claude.ps1 'tarefa') ou por stdin ao delegate-claude.cmd."
+        throw "Task vazia. Passe a tarefa ao launcher (delegate.ps1 'tarefa') ou por stdin ao delegate.cmd."
     }
 
     # Delegation number: it only grows within a session and is there to be read, not to cap
-    # anything. CreateNew is atomic, so concurrent calls cannot take the same number. The
-    # sandboxed Codex cannot write in the session folder: it cannot erase the numbers, and a
-    # call that did not leave the sandbox stops here.
+    # anything. CreateNew is atomic, so concurrent calls cannot take the same number. A
+    # sandboxed Codex orchestrator cannot write in the session folder: it cannot erase the
+    # numbers, and a call that did not leave the sandbox stops here.
     if (-not (Test-Path -LiteralPath $Session -PathType Container)) { throw "Falha de inicializacao: a pasta da sessao nao existe: $Session" }
     for ($slot = 1; ; $slot++) {
         try { [IO.File]::Open("$Session\delegation-$slot", 'CreateNew').Close(); break }
@@ -45,7 +45,7 @@ if ($Session) {
     }
 
     # Frozen copy of the session settings, written by the launcher from a validated object, in
-    # a folder the sandboxed Codex cannot write. A session without it stops here.
+    # the session folder. A session without it stops here.
     $frozen = [IO.File]::ReadAllText("$Session\session-config.json") | ConvertFrom-Json
 
     Set-Location -LiteralPath $Project
@@ -132,6 +132,7 @@ if ($Session) {
     # would ask is denied. The deny rules catch only the obvious spellings: a net, not a wall.
     $deny = 'git push*', 'git reset --hard*', 'git clean*', 'npm publish*', 'pnpm publish*' |
         ForEach-Object { "Bash($_)"; "PowerShell($_)" }
+    $modelArgs = @(Get-OrqArgs $frozen.executor)
     # Set before the call, never after: from here on a failure of this wrapper cannot prove
     # that the executor did nothing.
     $executorStarted = $true
@@ -140,12 +141,9 @@ if ($Session) {
         # Explicit sandbox, never the user's default (which may be danger-full-access).
         # --ignore-rules: an allow rule, this session's launcher rule included, would run its
         # command outside the sandbox. No prompt argument: codex exec reads it from stdin.
-        $prompt | & codex exec --sandbox workspace-write --ignore-rules @(Get-OrqCodexArgs $frozen.executor)
+        $prompt | & codex exec --sandbox workspace-write --ignore-rules @modelArgs
     }
-    else {
-        $modelArgs = @(Get-OrqClaudeArgs $frozen.executor)
-        $prompt | & claude -p --permission-mode auto --permission-prompts none @modelArgs --disallowedTools $deny
-    }
+    else { $prompt | & claude -p --permission-mode auto --permission-prompts none @modelArgs --disallowedTools $deny }
     $exitCode = $LASTEXITCODE
 
     # A Git failure here must not read as "nothing changed": it becomes the audit state.
@@ -192,30 +190,40 @@ if ($Session) {
     exit $(if ($exitCode) { $exitCode } elseif ($auditError) { 2 } else { 0 })
 }
 
-# Settings are read once, here. A saved file must be valid (no fallback); with no file the
-# defaults apply, over the Git repository of the cwd.
 $configPath = Get-OrqConfigPath
-$config = Read-OrqConfig $configPath
-$project = Get-OrqGitRoot $(if ($config) { $config.project } else { (Get-Location).Path })
-if (-not $project) { throw "Abra um terminal dentro do repositorio Git e execute strategist.cmd, ou defina a pasta do projeto em $configPath." }
-if (-not $config) { $config = New-OrqConfig $project }
-Write-Host "Configuracao: $configPath$(if (-not (Test-Path -LiteralPath $configPath)) { ' (ausente: padroes)' })"
+# The project is always the Git repository of the folder this is started from; it is never saved.
+$project = Get-OrqGitRoot (Get-Location).Path
+if (-not $project) { throw "Abra um terminal dentro do repositorio Git do projeto e execute strategist.cmd." }
+
+# Settings are read once, here: the answers of the last start, which must be valid (no
+# fallback). They open already chosen in the onboarding page, which asks tool, model and effort
+# for each role on every start. What the page sends is saved as the default of the next start,
+# and only then does the session begin, in this terminal.
+$config = Invoke-OrqOnboarding (Read-OrqConfig $configPath) $project
+Save-OrqConfig $configPath $config
+Write-Host "Projeto     : $project"
 Get-OrqText $config | ForEach-Object { Write-Host $_ }
+$orchestrator = $config.orchestrator.tool
 
 $temp = Join-Path ([IO.Path]::GetTempPath()) ("strategist-" + [Guid]::NewGuid().ToString("N"))
 
-# The one command Codex may run outside the sandbox without asking. Measured on Codex 0.162:
-# an allow rule frees a command only when it is the whole command and is written bare, with
-# no "&", pipe or ";", so the task cannot come through a pipe. This launcher takes it as its
-# single argument and hands it to the .cmd by stdin. It ends with [Environment]::Exit because
-# "pwsh -Command script" turns any failing exit code into 1.
-$launcher = "$temp\delegate-claude.ps1"
-# The rule names this session's launcher by its full path. Codex only reads rules from its own
-# rules folder (a rule inside this temporary folder is ignored, also measured), so the file
-# goes there under this session's name and is removed at the end.
+# The one command the orchestrator may run; whatever else it tries is denied, without asking.
+# Measured on Codex 0.162: an allow rule frees a command only when it is the whole command and
+# is written bare, with no "&", pipe or ";", so the task cannot come through a pipe; with
+# --ask-for-approval never (measured through codex exec) the rule still takes the launcher out
+# of the sandbox and anything else fails inside it. Measured on Claude Code 2.1.296: in dontAsk
+# mode the allow rule below passes the launcher with a multi-line quoted task and denies it
+# when another command follows a ";". This launcher takes the task as its single argument and
+# hands it to the .cmd by stdin. It ends with [Environment]::Exit because "pwsh -Command
+# script" turns any failing exit code into 1.
+$launcher = "$temp\delegate.ps1"
+# Codex: the rule names this session's launcher by its full path. Codex only reads rules from
+# its own rules folder (a rule inside this temporary folder is ignored, also measured), so the
+# file goes there under this session's name and is removed at the end. Claude takes its allow
+# rule from a settings file of this session, named on the command line: nothing is left outside.
 $rules = Join-Path $(if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$HOME\.codex" }) 'rules'
 $rule = Join-Path $rules ((Split-Path $temp -Leaf) + '.rules')
-function Get-RuleText([string]$path) { "prefix_rule(pattern=[`"$($path.Replace('\', '\\'))`"], decision=`"allow`", justification=`"Delegacao autorizada ao Claude`")`n" }
+function Get-RuleText([string]$path) { "prefix_rule(pattern=[`"$($path.Replace('\', '\\'))`"], decision=`"allow`", justification=`"Delegacao autorizada ao executor`")`n" }
 
 # Removes one session folder without recursion: only the files this script creates, then the
 # folder if it is empty. Anything else in it, a junction included, is left where it is.
@@ -230,7 +238,7 @@ function Remove-Session([string]$dir) {
         catch [Management.Automation.ItemNotFoundException] { return }
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'e uma juncao ou um link, que nao e seguido' }
         Get-ChildItem -LiteralPath $dir -Force -File |
-            Where-Object { $_.Name -match '^(AGENTS\.md|delegate-claude\.(cmd|ps1)|owner|session-config\.json|delegation-\d+)$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+            Where-Object { $_.Name -match '^(AGENTS\.md|delegate\.(cmd|ps1)|owner|session-config\.json|claude-settings\.json|delegation-\d+)$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
             Remove-Item -Force -ErrorAction SilentlyContinue
         [IO.Directory]::Delete($dir)
     }
@@ -247,19 +255,19 @@ function Get-OwnerState([string]$id, [string]$started) {
 }
 
 # Everything this session creates is created inside the try, so the finally undoes it whatever
-# fails on the way: a write, the old rules, the rule of this session or Codex itself. It does
+# fails on the way: a write, the old rules, the rule of this session or the orchestrator. It does
 # not cover a killed process; that is what the recovery of leftovers, in the middle, is for.
 try {
     New-Item -ItemType Directory -Path $temp | Out-Null
     # WriteAllText writes UTF-8 without BOM, which a .cmd needs. "%~dp0." is the session folder.
-    [IO.File]::WriteAllText("$temp\delegate-claude.cmd", "@powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Session `"%~dp0.`" -Project `"$project`"`r`n")
-    [IO.File]::WriteAllText($launcher, "param([Parameter(Mandatory = `$true, Position = 0)][string]`$Task)`r`n`$OutputEncoding = [Text.UTF8Encoding]::new(`$false)`r`n`$Task | & `"`$PSScriptRoot\delegate-claude.cmd`"`r`n[Environment]::Exit(`$LASTEXITCODE)`r`n")
+    [IO.File]::WriteAllText("$temp\delegate.cmd", "@powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Session `"%~dp0.`" -Project `"$project`"`r`n")
+    [IO.File]::WriteAllText($launcher, "param([Parameter(Mandatory = `$true, Position = 0)][string]`$Task)`r`n`$OutputEncoding = [Text.UTF8Encoding]::new(`$false)`r`n`$Task | & `"`$PSScriptRoot\delegate.cmd`"`r`n[Environment]::Exit(`$LASTEXITCODE)`r`n")
     [IO.File]::WriteAllText("$temp\owner", "$PID $((Get-Process -Id $PID).StartTime.ToFileTimeUtc()) $(Split-Path $temp -Leaf)")
     # Frozen copy of this session's settings: every delegation reads it, never the global file.
     [IO.File]::WriteAllText("$temp\session-config.json", ($config | ConvertTo-Json -Depth 4))
-    [IO.File]::WriteAllText("$temp\AGENTS.md", [IO.File]::ReadAllText("$PSScriptRoot\strategist.md").Replace('{{DELEGATE}}', $launcher))
+    [IO.File]::WriteAllText("$temp\AGENTS.md", [IO.File]::ReadAllText("$PSScriptRoot\strategist.md").Replace('{{DELEGATE}}', $launcher).Replace('{{PROJECT}}', $project))
 
-    # A session that was killed leaves its rule in force for as long as its launcher exists.
+    # A Codex session that was killed leaves its rule in force for as long as its launcher exists.
     # Both are removed here, but only on proof: the rule file has the exact name and text this
     # script writes for that folder, the folder names itself as that session ("pid start
     # session" in owner), and the owner is provably gone. Anything short of that is left
@@ -270,7 +278,7 @@ try {
             $file = $_
             try {
                 $old = [IO.Path]::GetTempPath().TrimEnd('\') + '\' + $file.BaseName
-                if ([IO.File]::ReadAllText($file.FullName) -ne (Get-RuleText "$old\delegate-claude.ps1")) { return }
+                if ([IO.File]::ReadAllText($file.FullName) -ne (Get-RuleText "$old\delegate.ps1")) { return }
                 if (-not (Test-Path -LiteralPath $old)) { Remove-Item -LiteralPath $file.FullName -ErrorAction SilentlyContinue; return }
                 $owner = "$(Get-Content -LiteralPath "$old\owner" -ErrorAction SilentlyContinue)" -split ' '
                 if ($owner.Count -ne 3 -or $owner[0] -notmatch '^\d{1,9}$' -or $owner[1] -notmatch '^\d+$' -or $owner[2] -ne $file.BaseName) { return }
@@ -281,16 +289,28 @@ try {
             catch { Write-Host "Aviso: a regra antiga $($file.Name) nao pode ser verificada e foi preservada: $($_.Exception.Message)" }
         }
 
-    Write-Host "Codex strategist: o executor ($($config.executor.tool)) opera $project. Codex em sandbox somente leitura; so o launcher de delegacao desta sessao sai dele sem pedir aprovacao."
-    Write-Host "Limites: o sandbox nao impede leitura; a regra libera o launcher, nao limita o que o executor faz depois; filtros de comando e prompts orientam, nao sao barreira de seguranca."
-    if ($temp -match '\s') { Write-Host "Aviso: a pasta temporaria tem espaco no caminho; a regra nao casa e cada delegacao vai pedir aprovacao." }
+    Write-Host "Strategist ($orchestrator): le o projeto e delega; o executor ($($config.executor.tool)) opera $project. Do orquestrador so passa o launcher de delegacao desta sessao; o resto e negado, sem pedir aprovacao."
+    Write-Host "Limites: a regra libera o launcher, nao limita o que o executor faz depois; filtros de comando e prompts orientam, nao sao barreira de seguranca."
+    if ($temp -match '\s') { Write-Host "Aviso: a pasta temporaria tem espaco no caminho; a regra pode nao casar, e ai toda delegacao e negada." }
 
-    New-Item -ItemType Directory -Force -Path $rules | Out-Null
-    [IO.File]::WriteAllText($rule, (Get-RuleText $launcher))
-    # Read-only sandbox: Codex cannot write anywhere, this folder and the rules folder included,
-    # so it cannot edit the launcher, the rule or the delegation slots. It can still READ the
-    # whole disk. Anything else leaves the sandbox only through an approval the user grants.
-    & codex -C $temp --sandbox read-only --ask-for-approval on-request @(Get-OrqCodexArgs $config.orchestrator)
+    if ($orchestrator -eq 'codex') {
+        New-Item -ItemType Directory -Force -Path $rules | Out-Null
+        [IO.File]::WriteAllText($rule, (Get-RuleText $launcher))
+        # Read-only sandbox: Codex cannot write anywhere, this folder and the rules folder included,
+        # so it cannot edit the launcher, the rule or the delegation slots. It can still READ the
+        # whole disk. Nobody approves anything: what the rule does not free fails in the sandbox.
+        & codex -C $temp --sandbox read-only --ask-for-approval never @(Get-OrqArgs $config.orchestrator)
+    }
+    else {
+        # No sandbox here, so the tools are the wall: --restricted leaves only the ones named
+        # (no edit tool exists), ignores the user's settings and confines Read to the project;
+        # dontAsk denies every PowerShell command but the launcher; no MCP server is loaded.
+        # ponytail: a killed Claude session leaves its temporary folder behind (no rule points
+        # at it, so the recovery above never sees it); sweep by owner if they pile up.
+        [IO.File]::WriteAllText("$temp\claude-settings.json", (@{ permissions = @{ allow = @('Read', 'Glob', 'Grep', "PowerShell($launcher *)") } } | ConvertTo-Json -Depth 4))
+        Set-Location -LiteralPath $project
+        & claude --restricted --strict-mcp-config --tools 'Read,Glob,Grep,PowerShell' --settings "$temp\claude-settings.json" --permission-mode dontAsk --append-system-prompt-file "$temp\AGENTS.md" @(Get-OrqArgs $config.orchestrator)
+    }
     $code = $LASTEXITCODE
 }
 finally {
