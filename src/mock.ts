@@ -84,8 +84,11 @@ function setState(job: Job, state: NodeState) {
   emit('node-state', { id: job.id, state, choice: job.choice });
 }
 
+// Estado vivo que ocupa vaga de simultâneos, como o `running`.
+const live = (state: NodeState) => state === 'running' || state === 'awaiting-orchestrator';
+
 function schedule() {
-  const count = () => [...jobs.values()].filter((j) => j.state === 'running').length;
+  const count = () => [...jobs.values()].filter((j) => live(j.state)).length;
   for (const job of jobs.values()) if (job.state === 'queued' && executorChoice && count() < options.maxParallel) run(job);
   for (const batch of new Set([...jobs.values()].map((j) => j.batch))) {
     const all = [...jobs.values()].filter((j) => j.batch === batch);
@@ -102,9 +105,19 @@ function run(job: Job) {
   job.choice = executorChoice;
   setState(job, 'running');
   const steps = 18 + job.index * 9, fails = job.index === 4;
+  // Uma tarefa (índice 2) pede confirmação ao orquestrador no passo 5 e fica 3 s em `awaiting-orchestrator`.
+  let pauseAt = job.index === 2 ? 5 : -1;
   let step = 0;
   out(job.id, `\x1b[1m${job.choice!.tool}\x1b[0m \x1b[2m${job.choice!.model || 'modelo padrão'} · ${job.choice!.effort || 'esforço padrão'}\x1b[0m\r\n\x1b[36m>\x1b[0m ${job.title}\r\n\r\n`);
   job.timer = window.setInterval(() => {
+    if (job.state === 'awaiting-orchestrator') return;
+    if (step === pauseAt) {
+      pauseAt = -1;
+      setState(job, 'awaiting-orchestrator');
+      out(job.id, '\x1b[33mPedido de confirmação: aguardando o orquestrador.\x1b[0m\r\n');
+      setTimeout(() => { if (job.state === 'awaiting-orchestrator') setState(job, 'running'); }, 3000);
+      return;
+    }
     step++;
     out(job.id, `\x1b[2m${String(step).padStart(3)}\x1b[0m  \x1b[32m●\x1b[0m ${['Read', 'Grep', 'Edit', 'Bash'][step % 4]}(src/modulo-${step}.ts)  \x1b[2m${(step * 37) % 900} linhas\x1b[0m\r\n`);
     if (fails && step === 12) {
@@ -209,14 +222,14 @@ const commands: Record<string, (args: any) => unknown> = {
   },
   stop_executor: ({ id }: { id: string }) => {
     const job = jobs.get(id);
-    if (job && (job.state === 'queued' || job.state === 'running')) finish(job, 'stopped');
+    if (job && (job.state === 'queued' || live(job.state))) finish(job, 'stopped');
   },
   clear_done: () => {
     const ids = [...jobs.values()].filter((j) => ['done', 'stopped', 'failed'].includes(j.state)).map((j) => j.id);
     ids.forEach((id) => { jobs.delete(id); terms.delete(id); });
     return ids;
   },
-  has_running: () => alive || [...jobs.values()].some((j) => j.state === 'running'),
+  has_running: () => alive || [...jobs.values()].some((j) => live(j.state)),
   shutdown: () => killAll(),
 };
 

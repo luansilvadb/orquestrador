@@ -85,6 +85,21 @@ impl Bench {
         self.wait(&format!("{id} -> {state}"), |e, p| e == "node-state" && p["id"] == id && p["state"] == state)
     }
 
+    /// Espera todos os pares (nó, estado) acontecerem, em qualquer ordem: dois executores podem mudar de estado
+    /// na ordem que o relógio der.
+    fn states(&self, wants: &[(&str, &str)]) {
+        let mut left: Vec<(&str, &str)> = wants.to_vec();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !left.is_empty() {
+            let Ok((event, payload)) = self.events.recv_timeout(deadline.saturating_duration_since(Instant::now())) else {
+                panic!("os estados esperados não chegaram: {left:?}");
+            };
+            if event == "node-state" {
+                left.retain(|(id, state)| !(payload["id"] == *id && payload["state"] == *state));
+            }
+        }
+    }
+
     fn added(&self, n: usize) -> Vec<Value> {
         (0..n).map(|_| self.wait("node-added", |e, _| e == "node-added")).collect()
     }
@@ -487,4 +502,139 @@ fn entrada_do_adaptador_vazia_cortada_ou_ilegivel_fecha_com_wrapper_error() {
     let child = Command::new(exe).arg("x").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let (code, out) = finish(child);
     assert!(code == 4 && out.contains("não recebe argumentos") && out.ends_with("\n--- FIM ---\n"), "{code} {out}");
+}
+
+/// Um executor para num pedido de confirmação: a delegação devolve a pergunta com código 3 sem esperar o lote, o
+/// outro executor do lote termina enquanto isso, `--aguardar` devolve a pergunta de novo, e `--responder aceitar`
+/// faz o executor seguir até o fim do lote, que sai com a resposta dele.
+#[test]
+fn pergunta_do_executor_passa_pelo_orquestrador_e_aceita_sem_parar_o_outro() {
+    let b = bench("pergunta");
+    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
+    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+
+    let run = b.delegate("powershell", &["PERGUNTA: remover o log", "Tarefa B: coração"]);
+    let nodes = b.added(2);
+    let (p, q) = (id(&nodes[0]), id(&nodes[1]));
+    b.states(&[(p.as_str(), "awaiting-orchestrator"), (q.as_str(), "done")]);
+    let (code, out) = finish(run);
+    assert_eq!(code, 3, "{out}");
+    let asked = format!("--- PERGUNTA {p} (1/2) ---\nPERGUNTA: remover o log\nO executor parou num pedido de confirmação e espera a sua resposta.\nBash: rm /d/arquivo.log\n");
+    assert!(out.starts_with(&asked) && out.ends_with("--- AGUARDANDO RESPOSTA ---\n"), "{out}");
+    assert!(!out.contains("--- FIM ---") && !out.contains("Tarefa B"), "{out}");
+
+    // `--aguardar` devolve a mesma pergunta, e não publica lote nenhum.
+    let requests = b.requests();
+    let (code, again) = finish(b.delegate("powershell", &["--aguardar"]));
+    assert!(code == 3 && again.starts_with(&asked), "{code} {again}");
+    assert_eq!(b.requests(), requests);
+
+    // Aceitar: o nó volta a rodar, termina a rodada, e o lote sai com a resposta dele.
+    let run = b.delegate("powershell", &["--responder", p.as_str(), "aceitar"]);
+    b.states(&[(p.as_str(), "running"), (p.as_str(), "done")]);
+    let (code, out) = finish(run);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.starts_with("--- EXECUTOR 1/2 ---\nPERGUNTA: remover o log\naceito\nexecutor_exit: 0\n--- EXECUTOR 2/2 ---\nTarefa B: coração\nfeito: Tarefa B: coração\nexecutor_exit: 0\n--- GIT ---\n"),
+        "{out}"
+    );
+    assert_eq!(b.requests(), requests, "--responder não publica lote novo");
+    b.core.shutdown();
+    let _ = std::fs::remove_dir_all(&b.root);
+}
+
+/// Recusa com motivo: o motivo chega ao executor como a mensagem de erro, e ele segue. Os erros de `--responder`
+/// (sem motivo, resposta desconhecida, executor sem pergunta) fecham com `wrapper_error` e código 4, sem gravar nada.
+#[test]
+fn recusa_leva_o_motivo_ao_executor_e_erros_do_responder_nao_gravam_nada() {
+    let b = bench("recusa");
+    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
+    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+
+    let run = b.delegate("powershell", &["PERGUNTA: apagar o banco"]);
+    let p = id(&b.added(1)[0]);
+    let (code, out) = finish(run);
+    assert!(code == 3 && out.starts_with(&format!("--- PERGUNTA {p} (1/1) ---\n")), "{code} {out}");
+    b.states(&[(p.as_str(), "awaiting-orchestrator")]);
+
+    let requests = b.requests();
+    for (args, why) in [
+        (vec!["--responder", p.as_str(), "recusar"], "recusar pede um motivo"),
+        (vec!["--responder", p.as_str(), "talvez"], "resposta desconhecida"),
+        (vec!["--responder", "exec-999", "aceitar"], "não tem pergunta pendente"),
+    ] {
+        let (code, out) = finish(b.delegate("powershell", &args));
+        assert!(code == 4 && out.starts_with("wrapper_error: ") && out.contains(why) && out.ends_with("\n--- FIM ---\n"), "{why}: {code} {out}");
+    }
+    assert_eq!(b.requests(), requests);
+
+    let run = b.delegate("powershell", &["--responder", p.as_str(), "recusar", "não apague o banco: use o arquivo de teste que você criou"]);
+    b.states(&[(p.as_str(), "running"), (p.as_str(), "done")]);
+    let (code, out) = finish(run);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.starts_with("--- EXECUTOR 1/1 ---\nPERGUNTA: apagar o banco\nrecusado: não apague o banco: use o arquivo de teste que você criou\nexecutor_exit: 0\n--- GIT ---\n"),
+        "{out}"
+    );
+    b.core.shutdown();
+    let _ = std::fs::remove_dir_all(&b.root);
+}
+
+/// `parar` num executor que espera resposta: ele termina como interrompido, a pergunta não volta, e o lote fecha
+/// sem ela. Responder depois disso é erro.
+#[test]
+fn parar_num_executor_que_espera_resposta_fecha_o_lote_sem_a_pergunta() {
+    let b = bench("parar");
+    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
+    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+
+    let run = b.delegate("powershell", &["PERGUNTA: parar aqui"]);
+    let p = id(&b.added(1)[0]);
+    let (code, out) = finish(run);
+    assert_eq!(code, 3, "{out}");
+    b.states(&[(p.as_str(), "awaiting-orchestrator")]);
+
+    b.core.stop_executor(&p);
+    b.state(&p, "stopped");
+    let (code, out) = finish(b.delegate("powershell", &["--aguardar"]));
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.starts_with("--- EXECUTOR 1/1 ---\nPERGUNTA: parar aqui\ninterrompido pelo usuário\nexecutor_exit: interrompido (FALHOU)\n--- GIT ---\n")
+            && out.ends_with("--- FIM ---\n")
+            && !out.contains("AGUARDANDO"),
+        "{out}"
+    );
+    let (code, out) = finish(b.delegate("powershell", &["--responder", p.as_str(), "aceitar"]));
+    assert!(code == 4 && out.contains("não tem pergunta pendente"), "{code} {out}");
+    b.core.shutdown();
+    let _ = std::fs::remove_dir_all(&b.root);
+}
+
+/// O pedido que sai da pasta `ask` devolve o nó de `awaiting-orchestrator` a `running`, e a rodada segue até o fim.
+/// O `--ask` retira o próprio pedido ao expirar; o prazo de 100 s não é esperado aqui: a retirada é simulada na pasta.
+#[test]
+fn pedido_que_sai_da_pasta_devolve_o_no_a_rodando() {
+    let b = bench("expira");
+    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
+    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+
+    let run = b.delegate("powershell", &["PERGUNTA: remover o log"]);
+    let p = id(&b.added(1)[0]);
+    let (code, out) = finish(run);
+    assert_eq!(code, 3, "{out}");
+    b.states(&[(p.as_str(), "awaiting-orchestrator")]);
+
+    let ask = b.core.session_dir().unwrap().join("exec").join(&p).join("ask");
+    for entry in std::fs::read_dir(&ask).unwrap().flatten() {
+        std::fs::remove_file(entry.path()).unwrap();
+    }
+    b.state(&p, "running");
+    // Sem pedido na pasta, o `--ask` do CLI simulado nega com o motivo de encerramento e a rodada termina.
+    b.state(&p, "done");
+    b.core.shutdown();
+    let _ = std::fs::remove_dir_all(&b.root);
 }

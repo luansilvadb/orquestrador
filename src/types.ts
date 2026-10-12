@@ -8,7 +8,7 @@ export type Options = {
   last: { orchestrator: Choice; executor: Choice };
   maxParallel: number;
 };
-export type NodeState = 'awaiting-choice' | 'queued' | 'running' | 'done' | 'stopped' | 'failed';
+export type NodeState = 'awaiting-choice' | 'queued' | 'running' | 'awaiting-orchestrator' | 'done' | 'stopped' | 'failed';
 export type ExecutorNode = {
   id: string;
   batch: string;

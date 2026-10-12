@@ -2,6 +2,8 @@
 //! chama é o adaptador `.ps1` da sessão (`adapter`), pelo nome que o orquestrador digita:
 //!   orq-<id>.ps1 'tarefa A' 'tarefa B'
 //!   orq-<id>.ps1 '--aguardar'
+//!   orq-<id>.ps1 '--responder' 'exec-7' 'aceitar'
+//!   orq-<id>.ps1 '--responder' 'exec-7' 'recusar' 'motivo'
 //! O adaptador só transporta: manda ao programa, pela entrada padrão, uma linha com a pasta da sessão e cada
 //! texto em base64 (`decode`), separados por `;`. Nenhum argumento leva o lote, porque a linha de comando do
 //! Windows tem limite de 32767 caracteres e o base64 cresce um terço. O lote vai para a pasta da sessão de
@@ -9,8 +11,14 @@
 //! O app grava o resultado em `results\<lote>.txt`; este programa espera esse arquivo e imprime o texto em
 //! UTF-8. `--aguardar` volta a esperar o lote mais recente que ainda não foi entregue, sem publicar nada. Toda
 //! falha do próprio programa imprime `wrapper_error:`, fecha com `--- FIM ---` e sai com 4.
-use crate::session::owner_alive;
+//! Quando um executor do lote para num pedido de confirmação, a espera volta na hora com código 3 e as perguntas
+//! (`--- AGUARDANDO RESPOSTA ---` fecha a saída, sem `--- FIM ---`). `--responder` grava a decisão e volta a
+//! esperar o lote; a pergunta respondida não volta.
+use crate::core::title;
+use crate::hook;
+use crate::session::{command_for, owner_alive};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use serde_json::{json, Value};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -22,6 +30,11 @@ use windows_sys::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
 pub const PROGRAM: &str = "orquestrador-delegar.exe";
 /// Volta a esperar o lote mais recente ainda não entregue.
 const RESUME: &str = "--aguardar";
+/// Responde à pergunta mais antiga de um executor e volta a esperar o lote.
+const RESPOND: &str = "--responder";
+const RESPOND_USAGE: &str = "Uso: '--responder' '<executor>' 'aceitar', ou '--responder' '<executor>' 'recusar' 'motivo'.";
+/// Código de saída quando a espera para por causa de uma pergunta, e não por causa do fim do lote.
+const ASKING: i32 = 3;
 const USAGE: &str = "Uso: o comando de delegação da sessão, com uma tarefa entre aspas simples por argumento.";
 /// Código de saída quando o próprio comando falha, antes ou depois do lote.
 const WRAPPER_ERROR: i32 = 4;
@@ -39,7 +52,7 @@ pub fn run(args: &[OsString]) -> i32 {
         return WRAPPER_ERROR;
     }
     let (code, text, marker) = match execute(args, std::io::stdin().lock()) {
-        Ok(done) => (done.code, done.text, Some(done.marker)),
+        Ok(done) => (done.code, done.text, done.marker),
         Err(why) => (WRAPPER_ERROR, format!("wrapper_error: {why}\n--- FIM ---\n"), None),
     };
     let mut out = std::io::stdout().lock();
@@ -53,12 +66,13 @@ pub fn run(args: &[OsString]) -> i32 {
     code
 }
 
-/// O que sai de um lote: o código de saída, o texto para o orquestrador e a marca de entregue.
+/// O que sai de um lote: o código de saída, o texto para o orquestrador e a marca de entregue. A marca só
+/// existe quando o texto é o resultado do lote; uma pergunta não entrega nada.
 #[derive(Debug)]
 struct Done {
     code: i32,
     text: String,
-    marker: PathBuf,
+    marker: Option<PathBuf>,
 }
 
 fn execute(args: &[OsString], input: impl Read) -> Result<Done, String> {
@@ -75,10 +89,16 @@ fn execute(args: &[OsString], input: impl Read) -> Result<Done, String> {
     }
     let id = match rest {
         [only] if only.as_str() == RESUME => resume(&session)?,
+        [cmd, answer @ ..] if cmd.as_str() == RESPOND => {
+            respond(&session, answer)?;
+            resume(&session)?
+        }
         _ => publish(&session, rest)?,
     };
-    let (code, text) = wait(&session, &id)?;
-    Ok(Done { code, text, marker: session.join("results").join(format!("{id}.delivered")) })
+    match wait(&session, &id)? {
+        Waited::Done(code, text) => Ok(Done { code, text, marker: Some(session.join("results").join(format!("{id}.delivered"))) }),
+        Waited::Asking(text) => Ok(Done { code: ASKING, text, marker: None }),
+    }
 }
 
 /// A linha que o adaptador manda: a pasta da sessão e as tarefas, cada texto em base64 do UTF-8, separados por
@@ -154,20 +174,131 @@ fn resume(session: &Path) -> Result<String, String> {
     pending.pop().ok_or_else(|| "Nenhum lote aguardando entrega.".to_string())
 }
 
+/// O que a espera de um lote dá: o resultado, ou as perguntas que um executor do lote deixou sem resposta.
+#[derive(Debug)]
+enum Waited {
+    Done(i32, String),
+    Asking(String),
+}
+
 /// Espera o resultado do lote e separa o código de saída, que é a primeira linha. Se a sessão
-/// morrer antes, falha em vez de esperar para sempre.
-fn wait(session: &Path, id: &str) -> Result<(i32, String), String> {
+/// morrer antes, falha em vez de esperar para sempre. Uma pergunta pendente de um executor do lote
+/// interrompe a espera na hora: o resultado só sai quando nenhum executor espera o orquestrador.
+fn wait(session: &Path, id: &str) -> Result<Waited, String> {
     let result = session.join("results").join(format!("{id}.txt"));
-    while !result.is_file() {
+    loop {
+        if result.is_file() {
+            let text = std::fs::read_to_string(&result).map_err(|e| format!("Não foi possível ler {}: {e}", result.display()))?;
+            let (code, body) = text.split_once('\n').ok_or("o resultado do lote não traz o código de saída.")?;
+            let code: i32 = code.trim().parse().map_err(|_| format!("código de saída ilegível no resultado do lote: {code:?}"))?;
+            return Ok(Waited::Done(code, body.to_string()));
+        }
         if !owner_alive(session) {
             return Err(DEAD.into());
         }
+        let asks: Vec<Ask> = pending_asks(session).into_iter().filter(|a| a.batch == id).collect();
+        if !asks.is_empty() {
+            return Ok(Waited::Asking(questions(session, &asks)));
+        }
         std::thread::sleep(POLL);
     }
-    let text = std::fs::read_to_string(&result).map_err(|e| format!("Não foi possível ler {}: {e}", result.display()))?;
-    let (code, body) = text.split_once('\n').ok_or("o resultado do lote não traz o código de saída.")?;
-    let code: i32 = code.trim().parse().map_err(|_| format!("código de saída ilegível no resultado do lote: {code:?}"))?;
-    Ok((code, body.to_string()))
+}
+
+/// Um pedido de confirmação que um executor deixou sem resposta: de que lote e de que tarefa é, e o pedido como
+/// o CLI o mandou ao `--ask`.
+#[derive(Debug)]
+struct Ask {
+    node: String,
+    batch: String,
+    index: usize,
+    size: usize,
+    id: String,
+    dir: PathBuf,
+    payload: String,
+}
+
+/// Os pedidos sem resposta de todos os executores da sessão, por lote, por tarefa e por chegada. Um executor
+/// sem `batch.json` não é de lote nenhum e fica de fora.
+fn pending_asks(session: &Path) -> Vec<Ask> {
+    let mut asks = Vec::new();
+    for node in std::fs::read_dir(session.join("exec")).into_iter().flatten().flatten() {
+        let dir = node.path();
+        let Some(meta) = std::fs::read_to_string(dir.join("batch.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { continue };
+        let (Some(batch), Some(index), Some(size)) = (meta["batch"].as_str(), meta["index"].as_u64(), meta["size"].as_u64()) else { continue };
+        let ask_dir = dir.join("ask");
+        for id in hook::pending_asks(&ask_dir) {
+            // Um pedido que já foi respondido e limpado entre a listagem e a leitura não existe mais.
+            let Ok(payload) = std::fs::read_to_string(ask_dir.join(format!("{id}.json"))) else { continue };
+            asks.push(Ask {
+                node: node.file_name().to_string_lossy().into_owned(),
+                batch: batch.to_string(),
+                index: index as usize,
+                size: size as usize,
+                id,
+                dir: ask_dir.clone(),
+                payload,
+            });
+        }
+    }
+    asks.sort_by(|a, b| (&a.batch, a.index, &a.id).cmp(&(&b.batch, b.index, &b.id)));
+    asks
+}
+
+/// A saída de espera com perguntas: uma seção por pergunta, a linha que ensina a responder com o nome real do
+/// comando da sessão, e `--- AGUARDANDO RESPOSTA ---` como última linha.
+fn questions(session: &Path, asks: &[Ask]) -> String {
+    let mut out = String::new();
+    for ask in asks {
+        let task = std::fs::read_to_string(session.join("requests").join(&ask.batch).join(format!("{}.txt", ask.index + 1))).unwrap_or_default();
+        let (tool, input) = describe(&ask.payload);
+        out += &format!(
+            "--- PERGUNTA {} ({}/{}) ---\n{}\nO executor parou num pedido de confirmação e espera a sua resposta.\n{tool}: {input}\n",
+            ask.node,
+            ask.index + 1,
+            ask.size,
+            title(&task)
+        );
+    }
+    let command = command_for(&session.file_name().unwrap_or_default().to_string_lossy());
+    out += &format!(
+        "Para responder: {command} '--responder' '<executor>' 'aceitar', ou {command} '--responder' '<executor>' 'recusar' 'motivo'. <executor> é o de cada pergunta acima.\n"
+    );
+    out += "--- AGUARDANDO RESPOSTA ---\n";
+    out
+}
+
+/// A ferramenta e a entrada que o pedido traz: o comando inteiro quando a ferramenta é um shell, senão o JSON da
+/// entrada. Um pedido que não é JSON sai como veio.
+fn describe(payload: &str) -> (String, String) {
+    let Ok(call) = serde_json::from_str::<Value>(payload) else {
+        return ("ferramenta desconhecida".into(), payload.to_string());
+    };
+    let tool = call["tool_name"].as_str().unwrap_or("ferramenta desconhecida").to_string();
+    let input = match &call["tool_input"]["command"] {
+        Value::String(command) => command.clone(),
+        _ => call["tool_input"].to_string(),
+    };
+    (tool, input)
+}
+
+/// `--responder <executor> aceitar` ou `--responder <executor> recusar <motivo>`: grava a decisão da pergunta
+/// mais antiga desse executor. O app entrega a decisão ao `--ask` que espera, e o executor segue. Erro sem nada
+/// gravado se a resposta não existe, se falta o motivo ou se o executor não tem pergunta pendente.
+fn respond(session: &Path, args: &[String]) -> Result<(), String> {
+    let [node, choice, reason @ ..] = args else { return Err(RESPOND_USAGE.into()) };
+    let decision = match (choice.as_str(), reason) {
+        ("aceitar", []) => json!({ "behavior": "allow" }),
+        ("recusar", [why]) if !why.trim().is_empty() => json!({ "behavior": "deny", "message": why }),
+        ("recusar", _) => return Err("recusar pede um motivo, não vazio: ele vai ao executor como a mensagem de erro.".into()),
+        ("aceitar", _) => return Err("aceitar não recebe motivo.".into()),
+        _ => return Err(format!("resposta desconhecida {choice:?}: use aceitar ou recusar.")),
+    };
+    let ask = pending_asks(session)
+        .into_iter()
+        .find(|a| a.node == *node)
+        .ok_or_else(|| format!("O executor {node} não tem pergunta pendente."))?;
+    hook::put(&ask.dir, &format!("{}.answer.json", ask.id), decision.to_string().as_bytes())
+        .map_err(|e| format!("Não foi possível gravar a resposta em {}: {e}", ask.dir.display()))
 }
 
 /// Se há um stdout para devolver o resultado. Processo de janela pode não ter um.
@@ -285,7 +416,122 @@ mod tests {
     fn espera_separa_o_codigo_de_saida_do_texto() {
         let dir = session("espera", true);
         std::fs::write(dir.join("results").join("x.txt"), "1\n--- EXECUTOR 1/1 ---\nok\n").unwrap();
-        assert_eq!(wait(&dir, "x").unwrap(), (1, "--- EXECUTOR 1/1 ---\nok\n".to_string()));
+        let Waited::Done(code, text) = wait(&dir, "x").unwrap() else { panic!("o resultado do lote não chegou") };
+        assert_eq!((code, text.as_str()), (1, "--- EXECUTOR 1/1 ---\nok\n"));
+    }
+
+    /// Um lote de `size` tarefas, com o executor `node` na tarefa `index` e um pedido sem resposta com `payload`.
+    /// Devolve o id do pedido.
+    fn batch_with_ask(dir: &Path, batch: &str, node: &str, index: usize, size: usize, payload: &str) -> String {
+        let req = dir.join("requests").join(batch);
+        std::fs::create_dir_all(&req).unwrap();
+        for n in 1..=size {
+            std::fs::write(req.join(format!("{n}.txt")), format!("Tarefa {n}\nescopo")).unwrap();
+        }
+        let node_dir = dir.join("exec").join(node);
+        std::fs::create_dir_all(node_dir.join("ask")).unwrap();
+        std::fs::write(node_dir.join("batch.json"), json!({ "batch": batch, "index": index, "size": size }).to_string()).unwrap();
+        let id = "00000000000000000001-aaaaaaaa";
+        std::fs::write(node_dir.join("ask").join(format!("{id}.json")), payload).unwrap();
+        id.to_string()
+    }
+
+    const BASH: &str = r#"{"tool_name":"Bash","tool_input":{"command":"rm /d/a.log\nlinha 2","description":"x"}}"#;
+
+    /// A pergunta de um executor do lote interrompe a espera com código 3: a seção com o título, o ponto da
+    /// tarefa e o comando inteiro, a linha que ensina a responder, e `--- AGUARDANDO RESPOSTA ---` como última
+    /// linha. Pergunta de outro lote fica de fora.
+    #[test]
+    fn pergunta_interrompe_a_espera_com_a_secao_e_a_linha_final() {
+        let dir = session("pergunta", true);
+        batch_with_ask(&dir, "B1", "exec-1", 0, 2, BASH);
+        batch_with_ask(&dir, "B2", "exec-2", 0, 1, BASH);
+        let Waited::Asking(text) = wait(&dir, "B1").unwrap() else { panic!("a pergunta devia interromper a espera") };
+        assert!(text.starts_with(
+            "--- PERGUNTA exec-1 (1/2) ---\nTarefa 1\nO executor parou num pedido de confirmação e espera a sua resposta.\nBash: rm /d/a.log\nlinha 2\nPara responder: "
+        ));
+        assert!(text.contains("'--responder' '<executor>' 'aceitar'") && text.contains("'--responder' '<executor>' 'recusar' 'motivo'"));
+        assert!(text.ends_with("\n--- AGUARDANDO RESPOSTA ---\n") && text.matches("--- AGUARDANDO RESPOSTA ---").count() == 1);
+        assert!(!text.contains("--- FIM ---") && !text.contains("exec-2"));
+    }
+
+    /// A linha de resposta leva o nome real do comando da sessão, que é o da pasta `strategist-<id>`.
+    #[test]
+    fn linha_de_resposta_usa_o_nome_do_comando_da_sessao() {
+        let dir = std::env::temp_dir().join(format!("orq-delegar-{}-nome", std::process::id())).join("strategist-0123456789abcdef0123456789abcdef");
+        std::fs::create_dir_all(dir.join("exec").join("exec-1").join("ask")).unwrap();
+        let id = "00000000000000000001-aaaaaaaa";
+        std::fs::write(dir.join("exec").join("exec-1").join("batch.json"), json!({ "batch": "B", "index": 0, "size": 1 }).to_string()).unwrap();
+        std::fs::write(dir.join("exec").join("exec-1").join("ask").join(format!("{id}.json")), BASH).unwrap();
+        let asks = pending_asks(&dir);
+        let text = questions(&dir, &asks);
+        assert!(text.contains("Para responder: orq-0123456789abcdef0123456789abcdef.ps1 '--responder' '<executor>' 'aceitar'"), "{text}");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// Pedido respondido, ou nó que não é de lote, não é pergunta pendente.
+    #[test]
+    fn respondida_ou_sem_lote_nao_e_pergunta() {
+        let dir = session("respondida", true);
+        let id = batch_with_ask(&dir, "B1", "exec-1", 0, 1, BASH);
+        let ask_dir = dir.join("exec").join("exec-1").join("ask");
+        // Um executor sem batch.json (não é de lote nenhum) com um pedido sem resposta.
+        std::fs::create_dir_all(dir.join("exec").join("exec-9").join("ask")).unwrap();
+        std::fs::write(dir.join("exec").join("exec-9").join("ask").join(format!("{id}.json")), BASH).unwrap();
+        std::fs::write(ask_dir.join(format!("{id}.reply")), r#"{"behavior":"allow"}"#).unwrap();
+        assert!(pending_asks(&dir).is_empty(), "com resposta gravada, e sem batch.json, nada está pendente");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--responder` grava a decisão como `<id>.answer.json` do executor, e a pergunta deixa de estar pendente.
+    /// Sem pergunta, com resposta inválida ou com `recusar` sem motivo, nada é gravado.
+    #[test]
+    fn responder_grava_a_decisao_ou_recusa_sem_gravar_nada() {
+        let dir = session("responder", true);
+        let id = batch_with_ask(&dir, "B1", "exec-1", 0, 1, BASH);
+        let answer = dir.join("exec").join("exec-1").join("ask").join(format!("{id}.answer.json"));
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        assert!(respond(&dir, &s(&["exec-7", "aceitar"])).unwrap_err().contains("não tem pergunta pendente"));
+        assert!(respond(&dir, &s(&["exec-1", "talvez"])).unwrap_err().contains("resposta desconhecida"));
+        assert!(respond(&dir, &s(&["exec-1", "recusar"])).unwrap_err().contains("recusar pede um motivo"));
+        assert!(respond(&dir, &s(&["exec-1", "recusar", "   "])).unwrap_err().contains("recusar pede um motivo"));
+        assert!(respond(&dir, &s(&["exec-1", "aceitar", "por quê"])).unwrap_err().contains("aceitar não recebe motivo"));
+        assert!(respond(&dir, &s(&["exec-1"])).is_err());
+        assert!(!answer.exists(), "erro não grava nada");
+        respond(&dir, &s(&["exec-1", "recusar", "use só o arquivo que você criou"])).unwrap();
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&answer).unwrap()).unwrap();
+        assert_eq!(written, json!({ "behavior": "deny", "message": "use só o arquivo que você criou" }));
+        assert!(pending_asks(&dir).is_empty(), "respondida não volta como pendente");
+        assert!(respond(&dir, &s(&["exec-1", "aceitar"])).unwrap_err().contains("não tem pergunta pendente"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--aguardar` com pergunta sem resposta devolve a pergunta com código 3 e sem marca de entregue; `--responder`
+    /// responde e volta a esperar o lote, que aqui já tem resultado.
+    #[test]
+    fn execute_devolve_a_pergunta_com_codigo_3_e_responder_volta_a_esperar_o_lote() {
+        let dir = session("execute", true);
+        batch_with_ask(&dir, "B1", "exec-1", 0, 1, BASH);
+        let asked = execute(&[], encode(&[dir.to_str().unwrap(), "--aguardar"]).as_bytes()).unwrap();
+        assert_eq!((asked.code, asked.marker.is_none()), (ASKING, true));
+        assert!(asked.text.contains("--- PERGUNTA exec-1 (1/1) ---") && asked.text.ends_with("--- AGUARDANDO RESPOSTA ---\n"));
+        // O lote termina enquanto o executor espera a resposta; `--responder` a grava e recebe o resultado.
+        std::fs::write(dir.join("results").join("B1.txt"), "0\n--- EXECUTOR 1/1 ---\naceito\n").unwrap();
+        let done = execute(&[], encode(&[dir.to_str().unwrap(), "--responder", "exec-1", "aceitar"]).as_bytes()).unwrap();
+        assert_eq!((done.code, done.text.as_str()), (0, "--- EXECUTOR 1/1 ---\naceito\n"));
+        assert!(done.marker.is_some());
+        let answer = dir.join("exec").join("exec-1").join("ask").join("00000000000000000001-aaaaaaaa.answer.json");
+        assert_eq!(std::fs::read_to_string(answer).unwrap(), r#"{"behavior":"allow"}"#);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--responder` com argumentos errados fecha com `wrapper_error` e código 4, como os outros erros do comando.
+    #[test]
+    fn responder_com_erro_fecha_com_wrapper_error() {
+        let dir = session("responder-erro", true);
+        let err = execute(&[], encode(&[dir.to_str().unwrap(), "--responder", "exec-1", "aceitar"]).as_bytes()).unwrap_err();
+        assert!(err.contains("não tem pergunta pendente"), "{err}");
+        assert!(execute(&[], encode(&[dir.to_str().unwrap(), "--responder"]).as_bytes()).unwrap_err().contains("Uso:"));
     }
 
     #[test]

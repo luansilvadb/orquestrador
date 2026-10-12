@@ -104,6 +104,7 @@ pub fn executor_prompt(task: &str) -> String {
 /// vale só para o processo e nega o comando; o comando do hook roda no PowerShell.
 pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, prompt: &str) -> (Spawn, Option<String>) {
     let hook_dir = node_dir.join("hook").to_string_lossy().to_string();
+    let ask_dir = node_dir.join("ask").to_string_lossy().to_string();
     let mut spawn = Spawn { program: String::new(), args: vec![], cwd: project.to_string(), env: vec![], path_first: vec![] };
     let settings = if choice.tool == "codex" {
         spawn.program = exes.codex.clone();
@@ -113,6 +114,8 @@ pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, pr
         let guard = toml(&format!("& '{}' --guard", exes.app.replace('\'', "''")));
         spawn.args.extend(["-c".to_string(), format!("notify=[{notify}]")]);
         spawn.args.extend(["-c".to_string(), format!("hooks.PreToolUse=[{{hooks=[{{type=\"command\",command={guard}}}]}}]")]);
+        // Sem hook de confirmação: medido no 0.162.1, com o bypass nenhuma confirmação chega ao CLI e o evento
+        // `PermissionRequest` não dispara.
         None
     } else {
         spawn.program = exes.claude.clone();
@@ -122,11 +125,16 @@ pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, pr
         let run = |args: &[&str]| serde_json::json!({ "hooks": [{ "type": "command", "command": exes.app, "args": args }] });
         let mut guard = run(&["--guard"]);
         guard["matcher"] = "Bash|PowerShell".into();
+        // O pedido de confirmação espera a resposta do orquestrador. Quem limita essa espera é o `--ask`, que
+        // desiste antes de o Claude Code negar sozinho (`ASK_DEADLINE`, em hook.rs); o prazo do hook só vai a
+        // um dia para não cortar antes disso.
+        let mut ask = run(&["--ask", &ask_dir]);
+        ask["hooks"][0]["timeout"] = 86400.into();
         Some(
             serde_json::to_string_pretty(&serde_json::json!({
                 "skipDangerousModePermissionPrompt": true,
                 "permissions": { "deny": deny },
-                "hooks": { "Stop": [run(&["--hook", &hook_dir])], "PreToolUse": [guard] },
+                "hooks": { "Stop": [run(&["--hook", &hook_dir])], "PreToolUse": [guard], "PermissionRequest": [ask] },
             }))
             .unwrap(),
         )
@@ -222,6 +230,11 @@ mod tests {
         assert_eq!(stop["args"], serde_json::json!(["--hook", r"C:\tmp\s\exec\exec-1\hook"]));
         assert_eq!(v["hooks"]["PreToolUse"][0]["matcher"], "Bash|PowerShell");
         assert_eq!(v["hooks"]["PreToolUse"][0]["hooks"][0]["args"], serde_json::json!(["--guard"]));
+        let ask = &v["hooks"]["PermissionRequest"][0]["hooks"][0];
+        assert_eq!(ask["command"], r"C:\Program Files\Orq\o'rq.exe");
+        assert_eq!(ask["args"], serde_json::json!(["--ask", r"C:\tmp\s\exec\exec-1\ask"]));
+        assert_eq!(ask["timeout"], 86400);
+        assert!(v["hooks"]["PermissionRequest"][0].get("matcher").is_none(), "o pedido de qualquer ferramenta passa pelo --ask");
     }
 
     #[test]
@@ -242,6 +255,7 @@ mod tests {
                 "PROMPT",
             ]
         );
+        assert!(!got.args.iter().any(|a| a.contains("PermissionRequest")), "o Codex não recebe o hook de confirmação");
     }
 
     #[test]

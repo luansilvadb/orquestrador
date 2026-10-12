@@ -27,7 +27,8 @@ npm run tauri build    # gera o instalador assinado em src-tauri\target\release\
 4. Na primeira delegação, um bloco de executor aparece e espera a escolha de ferramenta, modelo e esforço. Os executores seguintes abrem sozinhos com essa escolha. A etiqueta `executores: ...` no bloco do orquestrador mostra a escolha e deixa trocá-la; a troca vale para os próximos.
 5. O orquestrador delega um lote e fica ocupado até todos voltarem. Cada executor é um bloco com a tela completa do CLI, somente leitura, ligado ao orquestrador. Acima do teto de simultâneos (ajustável na barra superior, padrão 4), os excedentes ficam na fila.
 6. Quando um executor termina a rodada, a resposta dele volta sozinha ao orquestrador e o bloco fica marcado como concluído até `limpar concluídos`. O botão `parar` interrompe só aquele executor; o orquestrador recebe `interrompido pelo usuário` no lugar da resposta.
-7. Fechar o app com terminais vivos pede confirmação e encerra todos. Nada é restaurado na próxima abertura; o que já mudou nos arquivos fica no projeto.
+7. Se o CLI de um executor parar num pedido de confirmação, o bloco passa a `aguardando orquestrador` e continua ocupando o seu lugar no teto de simultâneos. Quem responde é o orquestrador, não você: ele recebe a pergunta com a ferramenta e o comando e aceita, ou recusa com um motivo que vai ao executor (seção 5). Você não precisa agir no bloco. O botão `parar` continua valendo ali e encerra o executor como interrompido.
+8. Fechar o app com terminais vivos pede confirmação e encerra todos. Nada é restaurado na próxima abertura; o que já mudou nos arquivos fica no projeto.
 
 Os blocos podem ser arrastados e redimensionados; a roda do mouse no fundo dá zoom, e dentro de um terminal rola o terminal.
 
@@ -41,9 +42,11 @@ Além do `git` (seção 7), o orquestrador tem um único comando de delegação 
 orq-<id>.ps1 'Tarefa A. Escopo: ... Pronto quando: ...' 'Tarefa B. Escopo: ... Pronto quando: ...'
 ```
 
+O mesmo comando aceita `'--aguardar'` (volta a esperar o lote) e `'--responder' '<executor>' 'aceitar'` ou `'--responder' '<executor>' 'recusar' 'motivo'` (responde a uma pergunta de executor, abaixo).
+
 O programa `orquestrador-delegar.exe` vai junto com o app: no instalador ele é recurso ao lado de `orquestrador.exe`, e em `npm run tauri dev` e no build de release os comandos `dev:tauri` e `build:tauri` (em `package.json`) o compilam antes. No empacotamento, o hook `beforeBundleCommand` (`npm run copy:delegar`) copia o programa de release para `src-tauri\target\delegar`, a pasta que vai para o instalador; se ele não existir, o build para em vez de empacotar uma cópia antiga. Nos outros builds essa pasta sai sem o programa (`build.rs`), porque o `tauri-build` copia o que houver nela para a pasta do perfil, onde o Cargo põe o próprio programa. Ele é de console, de propósito: o PowerShell espera o término de um programa de console e recebe o código de saída dele; um programa de janela, não (medido: `$LASTEXITCODE` fica vazio e a saída chega depois).
 
-O adaptador `orq-<id>.ps1` é escrito pelo app na pasta da sessão (`src-tauri/src/delegate.rs`, função `adapter`) e só transporta: cada texto vai ao programa como base64 do UTF-8, numa linha pela entrada padrão (stdin), e o processo sai com o código que o programa devolve. Quem publica, espera e imprime o lote é o programa em Rust, que lê a entrada até o fim. Nenhum argumento leva o lote: a linha de comando do Windows tem limite de 32767 caracteres, e o base64 cresce um terço (medido: três tarefas de 9000 caracteres falhavam antes de o programa rodar). Entrada vazia, cortada (sem o fim de linha que o PowerShell acrescenta) ou ilegível fecha com `wrapper_error:`, código 4 e `--- FIM ---`, e não publica nada. O Windows PowerShell 5.1 põe um BOM no começo da entrada; o programa o tira. A regra que libera o comando cobre só o adaptador daquela sessão: ele não tem outros modos, e `orquestrador.exe --hook` e `--guard` ficam fora da permissão do orquestrador.
+O adaptador `orq-<id>.ps1` é escrito pelo app na pasta da sessão (`src-tauri/src/delegate.rs`, função `adapter`) e só transporta: cada texto vai ao programa como base64 do UTF-8, numa linha pela entrada padrão (stdin), e o processo sai com o código que o programa devolve. Quem publica, espera e imprime o lote é o programa em Rust, que lê a entrada até o fim. Nenhum argumento leva o lote: a linha de comando do Windows tem limite de 32767 caracteres, e o base64 cresce um terço (medido: três tarefas de 9000 caracteres falhavam antes de o programa rodar). Entrada vazia, cortada (sem o fim de linha que o PowerShell acrescenta) ou ilegível fecha com `wrapper_error:`, código 4 e `--- FIM ---`, e não publica nada. O Windows PowerShell 5.1 põe um BOM no começo da entrada; o programa o tira. A regra que libera o comando cobre só o adaptador daquela sessão: ele não tem outros modos, e `orquestrador.exe --hook`, `--guard` e `--ask` ficam fora da permissão do orquestrador.
 
 Por que há um adaptador: medido no Windows PowerShell 5.1 com um programa de teste, o PowerShell altera o texto que passa a um programa nativo. A aspa dupla pura some, `\"` vira `"`, `a\\"b` vira `a\b`, e a barra no fim de uma tarefa com espaço vira aspa. O pwsh entrega o texto cru, mas o comando precisa valer nos dois shells, e nenhuma grafia que o orquestrador escreve chega igual nos dois. Argumento de script chega exato nos dois, por isso o adaptador é um `.ps1`.
 
@@ -57,9 +60,22 @@ Quando o lote termina, o comando imprime, em UTF-8:
 - `--- GIT ---` com a saída de `git status --porcelain --untracked-files=all`: tudo o que está alterado no repositório naquele momento, de todos os executores e também o que já estava pendente antes.
 - `--- FIM ---`: a linha que fecha toda saída completa.
 
-O código de saída é `0` se todas as tarefas concluíram e `1` se alguma falhou.
+O código de saída é `0` se todas as tarefas concluíram, `1` se alguma falhou, e `3` quando a espera para por causa de uma pergunta de executor (abaixo).
 
-Se a ferramenta do orquestrador desistir de esperar antes do fim, os executores continuam. `orq-<id>.ps1 '--aguardar'` volta a esperar o lote mais recente ainda não entregue, sem publicar nada. Uma falha do próprio comando imprime `wrapper_error:`, fecha com `--- FIM ---` e sai com `4`; isso vale para tarefa vazia, falta de tarefa e sessão encerrada.
+Se a ferramenta do orquestrador desistir de esperar antes do fim, os executores continuam. `orq-<id>.ps1 '--aguardar'` volta a esperar o lote mais recente ainda não entregue, sem publicar nada. Uma falha do próprio comando imprime `wrapper_error:`, fecha com `--- FIM ---` e sai com `4`; isso vale para tarefa vazia, falta de tarefa, sessão encerrada e uma resposta inválida a `--responder`.
+
+Perguntas de executor. Quando um executor do lote para num pedido de confirmação, a espera volta na hora, com código `3`, sem esperar o resto do lote. A saída tem uma seção por pergunta sem resposta, na ordem das tarefas, e depois a linha de resposta:
+
+```
+--- PERGUNTA exec-2 (1/3) ---
+<título da tarefa>
+O executor parou num pedido de confirmação e espera a sua resposta.
+Bash: <o comando que o executor quer rodar>
+Para responder: orq-<id>.ps1 '--responder' '<executor>' 'aceitar', ou orq-<id>.ps1 '--responder' '<executor>' 'recusar' 'motivo'. <executor> é o de cada pergunta acima.
+--- AGUARDANDO RESPOSTA ---
+```
+
+`--- AGUARDANDO RESPOSTA ---` é a última linha. A saída não traz `--- FIM ---`, porque o lote não acabou. O número `(i/n)` é a posição da tarefa no lote. `--responder` grava a decisão da pergunta mais antiga desse executor e volta a esperar o lote; a pergunta respondida não volta. Uma pergunta que fica sem resposta por cerca de 100 s (seção 7) sai da espera: o executor recebe a negativa, repete o comando, e a pergunta volta como pergunta nova. Sem pergunta pendente desse executor, com resposta desconhecida ou com `recusar` sem motivo, nada é gravado e o comando sai com `4`. `--aguardar` devolve de novo a pergunta enquanto ela não tiver resposta nem tiver expirado. Os outros executores do lote seguem trabalhando nesse meio-tempo.
 
 Limites, testados no Windows PowerShell 5.1 e no pwsh 7.6 (`src-tauri\tests\lote.rs`):
 
@@ -98,7 +114,13 @@ A ativação é local à sessão. Nessa versão, no Windows com Git Bash instala
 
 **Skills do orquestrador.** Os programas `.mjs`, `.cjs`, `.js` e `.py` em `%USERPROFILE%\.agents\skills` e `%USERPROFILE%\.claude\skills` são liberados pelo nome no início da sessão. O que esses programas conseguem fazer, o orquestrador consegue fazer por meio deles.
 
-**Executores.** Permissão total, sem perguntar: Claude em `bypassPermissions`, Codex sem sandbox e sem aprovações. Continuam barrados `git push`, `git reset --hard`, `git clean`, `npm publish` e `pnpm publish`: no Claude por lista de negação e por um hook de guarda; no Codex por um hook `PreToolUse` que vale só para aquela sessão. As instruções do executor, em `src-tauri/src/roles.rs`, pedem ainda para não fazer commit, stage, deploy nem reproduzir segredos.
+**Executores.** Permissão total: Claude em `bypassPermissions`, Codex sem sandbox e sem aprovações. Continuam barrados `git push`, `git reset --hard`, `git clean`, `npm publish` e `pnpm publish`: no Claude por lista de negação e por um hook de guarda; no Codex por um hook `PreToolUse` que vale só para aquela sessão. As instruções do executor, em `src-tauri/src/roles.rs`, pedem ainda para não fazer commit, stage, deploy nem reproduzir segredos.
+
+Quando o CLI do Claude ainda abre um pedido de confirmação, o hook `PermissionRequest` roda `orquestrador.exe --ask <pasta do nó>\ask`. O `--ask` publica o pedido na pasta do nó e espera a decisão por até 100 s (`ASK_DEADLINE`, em `src-tauri/src/hook.rs`); na definição do hook, o `timeout` é de 86400 s, para não ser ele a cortar. O bloco vai a `aguardando orquestrador` até a resposta. Se o prazo passa sem resposta, o `--ask` tira o pedido da pasta e nega com `O orquestrador ainda não respondeu a este pedido de confirmação...`, mensagem que manda repetir exatamente o mesmo comando. O bloco volta a `executando`; quando o executor repete o comando, o CLI abre um pedido novo, que volta ao orquestrador como pergunta. Uma resposta que chega depois do prazo não tem efeito: o app não grava resposta para um pedido que já saiu da pasta. A decisão é do orquestrador, por orientação ao modelo em `src-tauri/src/roles.rs`; o app só confere a forma da resposta (aceitar, ou recusar com motivo), não o mérito. `allow` roda o comando e `deny` devolve a mensagem ao modelo como erro. Se o executor for parado ou encerrado antes da resposta, o pedido some e o `--ask` nega com `O executor foi encerrado antes de o orquestrador responder.`
+
+Medido no Claude Code 2.1.296: um `rm` de arquivo na raiz do disco, fora do projeto, abre "Dangerous rm operation on critical path" mesmo em `bypassPermissions`, e nesse momento dispara o hook `PermissionRequest`. `allow` do hook roda o comando, e `deny` devolve a mensagem ao modelo como erro. Com o hook esperando 240 s, o diálogo apareceu aos ~4 s com "will automatically deny this request in 1:59"; aos ~124 s o próprio Claude Code negou ("Permission for this command was denied by a built-in Claude Code safety check, not by the user"), com o hook ainda rodando; o hook terminou aos ~244 s com `allow`, e a decisão não teve efeito: o comando não rodou. Ou seja: o hook só decide se responder em menos de 2 minutos contados do diálogo. Depois disso, o relógio embutido decide e a resposta tardia é ignorada. Por isso o prazo do `--ask` (100 s) fica abaixo desse limite. O `allow` do hook `PreToolUse` não evita essa confirmação.
+
+Codex 0.162.1, medido com `--dangerously-bypass-approvals-and-sandbox` e `--dangerously-bypass-hook-trust` (o executor Codex): um `Remove-Item D:\arquivo.log`, fora do projeto, rodou sem nenhuma confirmação na tela; o hook `PreToolUse` disparou (`tool_name` "Bash", `permission_mode` "bypassPermissions") e o hook `PermissionRequest` não disparou. Por isso o executor Codex não recebe o hook `PermissionRequest`: com o bypass não há pedido para o orquestrador responder. Aceitar a chave na partida não basta, porque o evento não dispara. O `PreToolUse` de guarda continua valendo.
 
 Essas barreiras comparam o texto do comando: orientam e pegam as grafias óbvias, não são uma parede. No Codex, se o hook de guarda falhar ao rodar, o comando passa.
 
@@ -112,7 +134,7 @@ Em toda abertura do app instalado, antes de liberar a escolha da pasta ou qualqu
 
 Não há downgrade: só instala versão maior que a instalada, e a versão anunciada precisa ser a versão assinada (`requireSignedVersion`). A atualização troca só os arquivos do programa; `%LOCALAPPDATA%\orquestrador\config.json` e os arquivos dos projetos ficam como estão.
 
-Falha na verificação, no download ou na instalação (inclusive sem internet) mostra o motivo e **mantém o uso bloqueado**, com `Tentar novamente`. Não há opção de continuar na versão antiga. Em `npm run tauri dev` (build de debug) o uso fica liberado direto e nada é consultado. Os modos `--hook` e `--guard` do executável, e o programa `orquestrador-delegar.exe`, não abrem janela nem passam pelo updater.
+Falha na verificação, no download ou na instalação (inclusive sem internet) mostra o motivo e **mantém o uso bloqueado**, com `Tentar novamente`. Não há opção de continuar na versão antiga. Em `npm run tauri dev` (build de debug) o uso fica liberado direto e nada é consultado. Os modos `--hook`, `--guard` e `--ask` do executável, e o programa `orquestrador-delegar.exe`, não abrem janela nem passam pelo updater.
 
 O repositório é público, então o app baixa a release sem token. Se o repositório virar privado, a atualização automática deixa de funcionar e a distribuição precisa mudar.
 
@@ -154,6 +176,7 @@ Saída: `src-tauri\target\release\bundle\nsis\Orquestrador_<versão>_x64-setup.e
 | `src/` | Frontend em React: tela de atualização, canvas, blocos, terminais (xterm), formulário de escolha. `mock.ts` é um backend simulado, só em `npm run dev` fora do Tauri. O design system (shadcn/ui) está em `docs/design-system.md`. |
 | `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores e configuração. |
 | `src-tauri/src/delegate.rs` | A lógica do programa de delegação: publica o lote na pasta da sessão, espera o resultado e o imprime; e o texto do adaptador `.ps1` da sessão, que só transporta. O ponto de entrada, `orquestrador-delegar.exe`, é `src-tauri/src/bin/orquestrador-delegar.rs`. |
+| `src-tauri/src/hook.rs` | Os modos do executável chamados pelos CLIs dos executores: `--hook` (fim de rodada), `--guard` (comandos barrados) e `--ask` (pedido de confirmação, espera a resposta do orquestrador). |
 | `src-tauri/src/session.rs` | A sessão do orquestrador: pasta, adaptador, regras do Codex (delegação, Git e skills), `claude-settings.json` do Claude e a limpeza das sobras. |
 | `src-tauri/src/roles.rs` | Os textos enviados ao orquestrador (no `AGENTS.md` da sessão) e a cada executor, antes da tarefa. |
 | `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a fonte do plugin oficial e os testes dos cenários. |

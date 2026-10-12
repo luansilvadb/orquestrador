@@ -65,7 +65,7 @@ fn rule_with(token: &str, justification: &str) -> String {
 }
 
 /// O comando de delegação de uma sessão: `orq-<id>.ps1`, com o id que dá nome à pasta `strategist-<id>`.
-fn command_for(name: &str) -> String {
+pub fn command_for(name: &str) -> String {
     format!("orq-{}.ps1", name.strip_prefix("strategist-").unwrap_or(name))
 }
 

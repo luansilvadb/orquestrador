@@ -43,6 +43,7 @@ const LINK_STYLE: Record<string, { stroke: string; opacity: number; dash?: strin
   running: { stroke: 'var(--status-running)', opacity: 1 },
   'awaiting-choice': { stroke: 'var(--status-awaiting)', opacity: 0.75, dash: '5 4' },
   queued: { stroke: 'var(--status-queued)', opacity: 0.75, dash: '2 5' },
+  'awaiting-orchestrator': { stroke: 'var(--status-prompt)', opacity: 0.9, dash: '6 3' },
   done: { stroke: 'var(--status-done)', opacity: 0.45 },
   stopped: { stroke: 'var(--status-stopped)', opacity: 0.45 },
   failed: { stroke: 'var(--status-failed)', opacity: 0.7 },

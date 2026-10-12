@@ -132,6 +132,7 @@
 :root {
     --status-running: oklch(0.72 0.12 250);
     --status-awaiting: oklch(0.8 0.14 85);
+    --status-prompt: oklch(0.7 0.17 320);
     --status-queued: oklch(0.62 0 0);
     --status-done: oklch(0.72 0.14 150);
     --status-stopped: oklch(0.72 0.14 55);

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import { CircleCheck, CircleHelp, CircleX, Clock, LoaderCircle, Maximize, Square, ZoomIn, ZoomOut } from 'lucide-react';
+import { CircleCheck, CircleHelp, CircleX, Clock, Hourglass, LoaderCircle, Maximize, Square, ZoomIn, ZoomOut } from 'lucide-react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { Toaster } from '@/components/ui/sonner';
+import { cn } from '@/lib/utils';
 import { backend, connect, message } from './backend';
 import { Block, Canvas, freeSlot, moved, resized, type CanvasHandle, type Rect } from './canvas';
 import { ChoiceForm } from './choice-form';
@@ -18,10 +19,14 @@ import {
   describeChoice, ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus,
 } from './types';
 
-const STATES: Record<NodeState, { label: string; icon: typeof Clock; variant: 'outline' | 'secondary' | 'destructive' | 'default' }> = {
+const STATES: Record<NodeState, { label: string; icon: typeof Clock; variant: 'outline' | 'secondary' | 'destructive' | 'default'; className?: string }> = {
   'awaiting-choice': { label: 'aguardando escolha', icon: CircleHelp, variant: 'outline' },
   queued: { label: 'na fila', icon: Clock, variant: 'outline' },
   running: { label: 'executando', icon: LoaderCircle, variant: 'default' },
+  'awaiting-orchestrator': {
+    label: 'aguardando orquestrador', icon: Hourglass, variant: 'outline',
+    className: 'border-[var(--status-prompt)] text-[var(--status-prompt)]',
+  },
   done: { label: 'concluído', icon: CircleCheck, variant: 'secondary' },
   stopped: { label: 'interrompido', icon: Square, variant: 'outline' },
   failed: { label: 'falhou', icon: CircleX, variant: 'destructive' },
@@ -203,7 +208,8 @@ export function App() {
         backend.listen('node-added', (node) => dispatch({ type: 'nodeAdded', node })),
         backend.listen('node-state', ({ id, state: next, choice }) => {
           dispatch({ type: 'nodeState', id, state: next, choice });
-          if (next === 'running') terminals.get(id)?.setLive();
+          // Os dois estados vivos: o PTY já existe, então setLive só reenvia o tamanho. Não recria nem zera o terminal.
+          if (next === 'running' || next === 'awaiting-orchestrator') terminals.get(id)?.setLive();
         }),
         backend.listen('executor-choice', (choice) => dispatch({ type: 'executorChoice', choice })),
         backend.listen('orchestrator-exit', ({ code }) =>
@@ -334,7 +340,9 @@ export function App() {
   const count = (...states: NodeState[]) => executors.filter((e) => states.includes(e.state)).length;
   const parts = [
     [count('running'), 'executando', 'executando'], [count('queued'), 'na fila', 'na fila'],
-    [count('awaiting-choice'), 'aguardando escolha', 'aguardando escolha'], [count('done'), 'concluído', 'concluídos'],
+    [count('awaiting-choice'), 'aguardando escolha', 'aguardando escolha'],
+    [count('awaiting-orchestrator'), 'aguardando orquestrador', 'aguardando orquestrador'],
+    [count('done'), 'concluído', 'concluídos'],
     [count('stopped'), 'interrompido', 'interrompidos'], [count('failed'), 'com falha', 'com falha'],
   ] as const;
   const counts = parts.filter(([n]) => n).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`).join(' · ');
@@ -484,7 +492,7 @@ export function App() {
           {orchestrator && executors.map((node) => {
             const meta = STATES[node.state];
             const Icon = meta.icon;
-            const cancellable = node.state === 'queued' || node.state === 'running';
+            const cancellable = node.state === 'queued' || node.state === 'running' || node.state === 'awaiting-orchestrator';
             return (
               <Block
                 key={node.id}
@@ -492,7 +500,7 @@ export function App() {
                 state={node.state}
                 head={
                   <>
-                    <Badge variant={meta.variant} className="gap-1">
+                    <Badge variant={meta.variant} className={cn('gap-1', meta.className)}>
                       <Icon className={node.state === 'running' ? 'animate-spin' : undefined} />
                       {meta.label}
                     </Badge>
