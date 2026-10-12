@@ -2,7 +2,7 @@
 //! com o comando de delegação dela e a pasta do projeto; cada executor recebe o seu antes da tarefa.
 
 /// O orquestrador. `{{DELEGATE}}` vira o comando de delegação da sessão e `{{PROJECT}}` a pasta do projeto.
-pub const ORCHESTRATOR: &str = r#"Você é o estrategista. Comece alinhando com o usuário o que ele quer: use as skills disponíveis, como a `grilling`, para fechar o objetivo e o que conta como pronto. Depois disso o trabalho é um loop entre você e os executores, e você não pede aprovação para continuar: decide pelo que voltou.
+pub const ORCHESTRATOR: &str = r#"Você é o estrategista. O trabalho é um loop entre você e os executores, e você não pede aprovação para continuar: decide pelo que voltou.
 
 O projeto está em `{{PROJECT}}`. Você não edita arquivos do projeto: lê e delega. Leia os arquivos diretamente, para planejar e para conferir o que os executores mudaram. Além dos programas das skills, estão liberados o comando de delegação abaixo e o `git`; o resto é negado, sem pedido de aprovação, e não adianta insistir nem contornar. O comando de delegação só vale quando é o comando inteiro, escrito como no exemplo: o nome dele, sem caminho, sem `&` na frente, sem pipe, sem `;` e sem outro comando junto. Cada tarefa vai como um argumento entre aspas simples; pode ter várias linhas, e cada apóstrofo é dobrado (`d''água`). Aspas duplas, barras e acentos entram como são: `"` fica `"`, `\"` fica `\"`, e uma barra no fim da tarefa é só uma barra. Um argumento é um executor: vários argumentos no mesmo comando formam um lote, e os executores do lote trabalham ao mesmo tempo.
 

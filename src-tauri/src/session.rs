@@ -307,13 +307,13 @@ pub mod tests {
         let root = std::env::temp_dir().join(format!("orq-ses-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let skills = root.join("home").join(".agents").join("skills");
-        std::fs::create_dir_all(skills.join("grilling").join("node_modules").join("dep")).unwrap();
+        std::fs::create_dir_all(skills.join("exemplo").join("node_modules").join("dep")).unwrap();
         std::fs::create_dir_all(root.join("temp")).unwrap();
         std::fs::write(root.join("orquestrador-delegar.exe"), "").unwrap();
-        std::fs::write(skills.join("grilling").join("canvas.mjs"), "").unwrap();
-        std::fs::write(skills.join("grilling").join("tool.py"), "").unwrap();
-        std::fs::write(skills.join("grilling").join("SKILL.md"), "").unwrap();
-        std::fs::write(skills.join("grilling").join("node_modules").join("dep").join("index.js"), "").unwrap();
+        std::fs::write(skills.join("exemplo").join("canvas.mjs"), "").unwrap();
+        std::fs::write(skills.join("exemplo").join("tool.py"), "").unwrap();
+        std::fs::write(skills.join("exemplo").join("SKILL.md"), "").unwrap();
+        std::fs::write(skills.join("exemplo").join("node_modules").join("dep").join("index.js"), "").unwrap();
         Places { temp: root.join("temp"), codex_rules: root.join("codex").join("rules"), global_dirs: vec![root.join("home").join(".agents")] }
     }
 
@@ -356,7 +356,7 @@ pub mod tests {
         assert!(is_delegate_rule(lines[0], &s.dir));
         assert_eq!(lines[1], "prefix_rule(pattern=[\"git\"], decision=\"allow\", justification=\"Git do orquestrador, autorizado pelo usuario\")");
         assert_eq!(lines[2], "prefix_rule(pattern=[\"git.exe\"], decision=\"allow\", justification=\"Git do orquestrador, autorizado pelo usuario\")");
-        assert!(lines[3].starts_with("prefix_rule(pattern=[\"node\", [") && lines[3].contains("canvas.mjs") && lines[3].contains("grilling/canvas.mjs"));
+        assert!(lines[3].starts_with("prefix_rule(pattern=[\"node\", [") && lines[3].contains("canvas.mjs") && lines[3].contains("exemplo/canvas.mjs"));
         assert!(lines[4].starts_with("prefix_rule(pattern=[\"python\", [") && lines[4].contains("tool.py"));
         assert_eq!(lines.len(), 5, "delegação, git, git.exe, node e python, e nada além");
         assert!(!rule.contains("node_modules") && !rule.contains("SKILL.md") && !rule.contains("orquestrador-delegar"));
