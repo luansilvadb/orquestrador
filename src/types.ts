@@ -33,9 +33,8 @@ export type DirEntry = { name: string; dir: boolean };
 export type GitKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted';
 export type GitFile = { path: string; origPath: string | null; staged: GitKind | null; unstaged: GitKind | null };
 export type GitStatus = { branch: string; ahead: number; behind: number; files: GitFile[] };
-export type DiffLine = { kind: 'context' | 'add' | 'del'; old: number | null; new: number | null; text: string };
-export type DiffHunk = { header: string; lines: DiffLine[] };
-export type GitDiff = { binary: boolean; tooLarge: boolean; hunks: DiffHunk[] };
+// `patch` é o diff unificado do arquivo (cabeçalho e `@@`); vazio quando não há alteração.
+export type GitDiff = { binary: boolean; tooLarge: boolean; patch: string };
 export type GitBranches = { current: string; local: string[] };
 
 export type TermData = { id: string; seq: number; data: string };

@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from 'react';
-import { Block } from '@lobehub/ui';
-import { Alert, Button, InputNumber, Modal, Progress, toast } from '@lobehub/ui/base-ui';
-import { cn } from 'cn';
+import { Block, Center, Flexbox } from '@lobehub/ui';
+import { Alert, Button, InputNumber, Modal, Progress, Text, toast } from '@lobehub/ui/base-ui';
 import { backend, connect, message } from './backend';
 import { ChoiceForm } from './choice-form';
 import { FilesScreen, Nav, StatusBar } from './explorer';
@@ -291,7 +290,7 @@ export function App() {
     .join(' · ');
   const changed = git.data?.files.length ?? 0;
   // As duas telas ficam montadas; a rota só escolhe qual aparece. Inativa vai para invisible, nunca para display none.
-  const shown = (to: Route) => cn('absolute inset-0', route !== to && 'invisible');
+  const shown = (to: Route) => `absolute inset-0${route !== to ? ' invisible' : ''}`;
 
   // ---------- telas ----------
 
@@ -300,13 +299,13 @@ export function App() {
     return (
       <Screen connected={connected}>
         <Block variant="outlined" direction="vertical" gap={16} padding={24} className="w-full max-w-md">
-          <div className="grid gap-1.5">
-            <h1 className="text-base font-semibold leading-none">Orquestrador</h1>
-            <p role="status" aria-live="polite" className="text-sm text-muted-foreground">{updateText(update, fatal)}</p>
-          </div>
-          <div className="grid gap-4">
+          <Flexbox gap={6}>
+            <Text as="h1" fontSize={16} weight={600} lineHeight={1}>Orquestrador</Text>
+            <Text as="p" type="secondary" fontSize={14} role="status" aria-live="polite">{updateText(update, fatal)}</Text>
+          </Flexbox>
+          <Flexbox gap={16}>
             {update.phase === 'downloading' && (
-              // Total desconhecido (ou zero): sem percentual, a barra cheia pulsa. O Progress do Lobe UI não tem modo indeterminado.
+              // Total desconhecido (ou zero): sem percentual, a barra cheia com o brilho do status active. O Progress não tem modo indeterminado de fato.
               update.total ? (
                 <Progress
                   aria-label="Progresso do download da atualização"
@@ -314,20 +313,18 @@ export function App() {
                   showInfo={false}
                 />
               ) : (
-                <div role="progressbar" aria-label="Progresso do download da atualização" className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                  <div className="h-full w-full animate-pulse rounded-full bg-primary" />
-                </div>
+                <Progress aria-label="Progresso do download da atualização" percent={100} status="active" showInfo={false} />
               )
             )}
             {update.phase === 'failed' && (
               <Alert type="error" role="alert" description={update.message} className="select-text" />
             )}
             {retry && (
-              <Button type="primary" onClick={retryUpdate} disabled={retrying} loading={retrying} className="justify-self-start">
+              <Button type="primary" onClick={retryUpdate} disabled={retrying} loading={retrying} className="self-start">
                 Tentar novamente
               </Button>
             )}
-          </div>
+          </Flexbox>
         </Block>
       </Screen>
     );
@@ -337,33 +334,36 @@ export function App() {
     return (
       <Screen connected={connected}>
         <Block variant="outlined" direction="vertical" gap={16} padding={24} className="w-full max-w-md">
-          <div className="grid gap-1.5">
-            <h1 className="text-base font-semibold leading-none">Orquestrador</h1>
-            <p className="text-sm text-muted-foreground">
+          <Flexbox gap={6}>
+            <Text as="h1" fontSize={16} weight={600} lineHeight={1}>Orquestrador</Text>
+            <Text as="p" type="secondary" fontSize={14}>
               Escolha a pasta do projeto (um repositório Git). O orquestrador e os executores trabalham nela.
-            </p>
-          </div>
-          <div className="grid gap-4">
+            </Text>
+          </Flexbox>
+          <Flexbox gap={16}>
             {projectError && (
               <Alert type="error" role="alert" description={projectError} className="select-text" />
             )}
-            <Button type="primary" onClick={chooseProject} className="justify-self-start">Escolher pasta do projeto</Button>
-          </div>
+            <Button type="primary" onClick={chooseProject} className="self-start">Escolher pasta do projeto</Button>
+          </Flexbox>
         </Block>
       </Screen>
     );
   }
 
   return (
-    <div className="flex h-dvh flex-col">
+    <Flexbox height="100dvh">
       <TitleBar connected={connected}>
-        <code title="Pasta do projeto" className="min-w-0 truncate rounded-md border bg-muted px-2 py-0.5 text-xs select-text">
+        <Text as="code" code fontSize={12} ellipsis title="Pasta do projeto" className="min-w-0 rounded-md border bg-muted px-2 py-0.5 select-text">
           {state.project}
-        </code>
-        <span data-tauri-drag-region className="whitespace-nowrap text-xs text-muted-foreground">{counts}</span>
-        <div className="ml-auto flex items-center">
-          <label className="flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground" title="Quantos executores rodam ao mesmo tempo (1 a 16); os demais ficam na fila">
-            simultâneos
+        </Text>
+        <Text as="span" type="secondary" fontSize={12} noWrap data-tauri-drag-region>{counts}</Text>
+        <Flexbox horizontal align="center" className="ml-auto">
+          <Flexbox
+            as="label" horizontal align="center" gap={8}
+            title="Quantos executores rodam ao mesmo tempo (1 a 16); os demais ficam na fila"
+          >
+            <Text as="span" type="secondary" fontSize={12} noWrap>simultâneos</Text>
             {/* O blur do wrapper confirma (o foco sai do campo); o Enter tira o foco. Valor vazio vira null. */}
             <InputNumber
               size="small" min={1} max={16} step={1}
@@ -374,19 +374,19 @@ export function App() {
               controls={false}
               className="w-16! font-mono!"
             />
-          </label>
-        </div>
+          </Flexbox>
+        </Flexbox>
       </TitleBar>
 
-      <div className="flex min-h-0 flex-1">
+      <Flexbox horizontal flex={1} className="min-h-0">
         <Nav route={route} changed={changed} />
         <main className="relative min-h-0 min-w-0 flex-1">
           <div className={shown('arquivos')}>
-            <div className="flex h-full">
+            <Flexbox horizontal height="100%">
               <div className="h-full w-[280px] shrink-0 border-r bg-background">
                 <FilesScreen />
               </div>
-              <div className="h-full min-w-0 flex-1">
+              <Flexbox height="100%" flex={1} allowShrink>
                 <TerminalsScreen
                   orchestrator={orchestrator}
                   executors={executors}
@@ -396,14 +396,14 @@ export function App() {
                   onExecutorChoice={toggleExecutorChoice}
                   onStop={(id) => backend.stopExecutor(id).catch(report)}
                 />
-              </div>
-            </div>
+              </Flexbox>
+            </Flexbox>
           </div>
           <div className={shown('git')}>
             <GitScreen git={git} locked={busy} active={route === 'git'} />
           </div>
         </main>
-      </div>
+      </Flexbox>
 
       <StatusBar branch={git.data?.branch} />
 
@@ -443,24 +443,24 @@ export function App() {
         maskClosable
         onCancel={() => settleClose(false)}
         footer={(
-          <div className="flex justify-end gap-2">
+          <Flexbox horizontal justify="flex-end" gap={8}>
             <Button onClick={() => settleClose(false)}>Cancelar</Button>
             <Button type="primary" danger onClick={() => settleClose(true)}>Fechar e encerrar todos</Button>
-          </div>
+          </Flexbox>
         )}
       >
-        <p className="text-sm text-muted-foreground">Há terminais trabalhando; fechar encerra todos.</p>
+        <Text as="p" type="secondary" fontSize={14}>Há terminais trabalhando; fechar encerra todos.</Text>
       </Modal>
-    </div>
+    </Flexbox>
   );
 }
 
 /** Atualização e escolha de projeto: barra no topo e o cartão centralizado no espaço que sobra. */
 function Screen({ connected, children }: { connected: boolean; children: ReactNode }) {
   return (
-    <div className="flex h-dvh flex-col">
+    <Flexbox height="100dvh">
       <TitleBar connected={connected} />
-      <div className="grid min-h-0 flex-1 place-items-center p-6">{children}</div>
-    </div>
+      <Center flex={1} padding={24} className="min-h-0">{children}</Center>
+    </Flexbox>
   );
 }

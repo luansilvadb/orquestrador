@@ -1,73 +1,44 @@
+/* O Flexbox do Lobe UI define estilo em @layer lobe-base, injetado em runtime. Declarar a ordem aqui, antes do Tailwind,
+   põe essa camada entre base e utilities: acima do preflight do Tailwind (cujo `* { padding: 0 }` zeraria o padding do
+   Flexbox) e abaixo das utilitárias, que vencem mesmo quando definem a mesma propriedade. */
+@layer theme, base, lobe-base, components, utilities;
+
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
 
 @theme inline {
     --font-sans: 'Inter Variable', sans-serif;
-    --color-ring: var(--ring);
-    --color-border: var(--border);
-    --color-destructive: var(--destructive);
-    --color-muted-foreground: var(--muted-foreground);
-    --color-muted: var(--muted);
-    --color-primary: var(--primary);
-    --color-card: var(--card);
-    --color-foreground: var(--foreground);
-    --color-diff-add: var(--diff-add);
-    --color-diff-del: var(--diff-del);
+    /* Tokens semânticos mapeados para as CSS variables do antd (--ant-*) do tema escuro do Lobe UI. O ThemeProvider
+       põe a classe css-var do antd no div.ant-app, que envolve todo o conteúdo do app, e é nela que essas variáveis
+       existem. Por isso os tokens resolvem dentro do app, mas não em html e body (o GlobalStyle do Lobe UI pinta o body). */
+    --color-ring: var(--ant-color-text-tertiary);
+    --color-border: var(--ant-color-border);
+    --color-destructive: var(--ant-color-error);
+    --color-muted-foreground: var(--ant-color-text-secondary);
+    --color-muted: var(--ant-color-fill-tertiary);
+    --color-primary: var(--ant-color-primary);
+    --color-card: var(--ant-color-bg-container);
+    --color-foreground: var(--ant-color-text);
     --color-terminal: var(--terminal);
-    --color-background: var(--background);
-    --radius-sm: calc(var(--radius) * 0.6);
-    --radius-md: calc(var(--radius) * 0.8);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) * 1.4);
-}
-
-/* Tokens semânticos ligados ao tema escuro do Lobe UI (valores de colorBgLayout, colorBgContainer, etc.
-   do algoritmo escuro do @lobehub/ui). O antd não emite CSS variables em runtime (cssVar não está ativo),
-   por isso os valores são copiados em hex. */
-:root {
-    --background: #000000;                      /* colorBgLayout */
-    --foreground: #ffffff;                      /* colorText */
-    --card: #0d0d0d;                            /* colorBgContainer */
-    --primary: #eeeeee;                         /* colorPrimary */
-    --muted: rgba(255, 255, 255, 0.06);         /* colorFillTertiary */
-    --muted-foreground: #aaaaaa;                /* colorTextSecondary */
-    --destructive: #f4416c;                     /* colorError */
-    --border: #202020;                          /* colorBorder */
-    --ring: #6f6f6f;                            /* colorTextTertiary */
-    --radius: 0.5rem;                           /* borderRadius (8px) */
+    --color-background: var(--ant-color-bg-layout);
+    --radius-sm: calc(var(--ant-border-radius) * 0.6);
+    --radius-md: calc(var(--ant-border-radius) * 0.8);
+    --radius-lg: var(--ant-border-radius);
+    --radius-xl: calc(var(--ant-border-radius) * 1.4);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
     }
-  body {
-    @apply bg-background text-foreground;
-    }
   html {
     @apply font-sans;
     }
-}
-/* Tokens próprios do app: cores de estado (ícones das abas dos executores) e cores de diff. */
-:root {
-    --status-running: oklch(0.72 0.12 250);
-    --status-awaiting: oklch(0.8 0.14 85);
-    --status-prompt: oklch(0.7 0.17 320);
-    --status-queued: oklch(0.62 0 0);
-    --status-done: oklch(0.72 0.14 150);
-    --status-stopped: oklch(0.72 0.14 55);
-    --status-failed: oklch(0.65 0.2 25);
 }
 
 /* Fundo dos terminais: o mesmo de theme.background em term.ts (o xterm recebe a cor por lá, não por este token). */
 :root {
     --terminal: #0b0c0d;
-}
-
-/* Diff: a mesma cor serve de texto do sinal e, com 15% de opacidade, de fundo da linha. */
-:root {
-    --diff-add: oklch(0.8 0.16 150);
-    --diff-del: oklch(0.74 0.17 25);
 }
 
 html,

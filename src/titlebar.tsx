@@ -2,7 +2,8 @@
 // atributo data-tauri-drag-region, que vale só para o elemento que o tem; por isso botões e campos não o levam.
 import { useEffect, useState, type ReactNode } from 'react';
 import { Copy, Minus, Square, X, type LucideIcon } from 'lucide-react';
-import { cn } from 'cn';
+import { Flexbox } from '@lobehub/ui';
+import { Text } from '@lobehub/ui/base-ui';
 import { backend } from './backend';
 
 function WindowButton({ label, icon: Icon, danger, disabled, onClick }: {
@@ -11,10 +12,9 @@ function WindowButton({ label, icon: Icon, danger, disabled, onClick }: {
   return (
     <button
       type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick}
-      className={cn(
-        'flex h-full w-[46px] shrink-0 items-center justify-center text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:opacity-40',
-        danger ? 'hover:bg-destructive hover:text-white' : 'hover:bg-muted hover:text-foreground',
-      )}
+      className={`flex h-full w-[46px] shrink-0 items-center justify-center text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:opacity-40 ${
+        danger ? 'hover:bg-destructive hover:text-white' : 'hover:bg-muted hover:text-foreground'
+      }`}
     >
       <Icon className="size-4" />
     </button>
@@ -45,17 +45,18 @@ export function TitleBar({ connected, children }: { connected: boolean; children
   }, [connected]);
 
   return (
-    <header data-tauri-drag-region className="flex h-9 shrink-0 items-center whitespace-nowrap border-b bg-card">
-      <span data-tauri-drag-region className="px-3 text-sm font-semibold">Orquestrador</span>
-      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-3 pr-3">{children}</div>
-      <div className="flex h-full shrink-0">
+    // data-tauri-drag-region: o arrasto e o duplo clique valem só para estes três elementos, não para os filhos.
+    <Flexbox as="header" data-tauri-drag-region horizontal align="center" height={36} flex="none" className="whitespace-nowrap border-b bg-card">
+      <Text as="span" data-tauri-drag-region className="px-3" fontSize={14} weight={600}>Orquestrador</Text>
+      <Flexbox data-tauri-drag-region horizontal align="center" gap={12} flex={1} allowShrink style={{ paddingRight: 12 }}>{children}</Flexbox>
+      <Flexbox horizontal height="100%" flex="none">
         <WindowButton label="Minimizar" icon={Minus} disabled={!connected} onClick={() => backend.minimize()} />
         <WindowButton
           label={maximized ? 'Restaurar' : 'Maximizar'} icon={maximized ? Copy : Square}
           disabled={!connected} onClick={() => backend.toggleMaximize()}
         />
         <WindowButton label="Fechar" icon={X} danger disabled={!connected} onClick={() => backend.close()} />
-      </div>
-    </header>
+      </Flexbox>
+    </Flexbox>
   );
 }

@@ -45,37 +45,13 @@ pub struct Status {
     pub files: Vec<GitFile>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LineKind {
-    Context,
-    Add,
-    Del,
-}
-
-/// Uma linha do diff. `old` e `new` são os números de linha de cada lado; `None` no lado que não tem a linha.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Line {
-    pub kind: LineKind,
-    pub old: Option<u32>,
-    pub new: Option<u32>,
-    /// Sem o sinal inicial e sem o fim de linha.
-    pub text: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Hunk {
-    /// A linha `@@ ... @@` inteira.
-    pub header: String,
-    pub lines: Vec<Line>,
-}
-
+/// O diff de um arquivo. `patch` é o diff unificado bruto (cabeçalho `diff --git`, `---`, `+++` e os `@@`); vazio quando não há alteração.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Diff {
     pub binary: bool,
     pub too_large: bool,
-    pub hunks: Vec<Hunk>,
+    pub patch: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -152,7 +128,7 @@ fn kind(letter: char) -> Option<Kind> {
 pub fn diff(dir: &Path, rel: &str, staged: bool) -> Result<Diff, String> {
     let rel = spec(rel)?;
     if !staged && proc::git_saida(dir, &["ls-files", "--", rel])?.is_empty() {
-        return untracked(&dir.join(rel));
+        return untracked(&dir.join(rel), rel);
     }
     let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "-U3"];
     if staged {
@@ -162,67 +138,20 @@ pub fn diff(dir: &Path, rel: &str, staged: bool) -> Result<Diff, String> {
     Ok(read_diff(&proc::git_saida(dir, &args)?))
 }
 
-/// A saída do `git diff`: binário e diff grande viram aviso; o resto vira hunks.
+/// A saída do `git diff`: binário e diff grande viram aviso; o resto segue como patch, sem mexer no texto.
 fn read_diff(text: &str) -> Diff {
     if text.lines().any(|l| l.starts_with("Binary files ")) {
-        return Diff { binary: true, too_large: false, hunks: Vec::new() };
+        return Diff { binary: true, too_large: false, patch: String::new() };
     }
     if text.len() > MAX_DIFF {
-        return Diff { binary: false, too_large: true, hunks: Vec::new() };
+        return Diff { binary: false, too_large: true, patch: String::new() };
     }
-    Diff { binary: false, too_large: false, hunks: parse_hunks(text) }
+    Diff { binary: false, too_large: false, patch: text.to_string() }
 }
 
-/// Os hunks de uma saída de diff de um arquivo. O cabeçalho antes do primeiro `@@` fica de fora.
-fn parse_hunks(text: &str) -> Vec<Hunk> {
-    let mut hunks: Vec<Hunk> = Vec::new();
-    let (mut old, mut new): (u32, u32) = (0, 0);
-    for line in text.lines() {
-        if line.starts_with("@@ ") {
-            (old, new) = starts(line);
-            hunks.push(Hunk { header: line.to_string(), lines: Vec::new() });
-            continue;
-        }
-        let Some(hunk) = hunks.last_mut() else { continue };
-        // Linha que não é de conteúdo (como "\ No newline at end of file") não vira Line.
-        let (kind, body) = match line.chars().next() {
-            Some('+') => (LineKind::Add, &line[1..]),
-            Some('-') => (LineKind::Del, &line[1..]),
-            Some(' ') => (LineKind::Context, &line[1..]),
-            _ => continue,
-        };
-        let (old_no, new_no) = match kind {
-            LineKind::Context => {
-                let at = (Some(old), Some(new));
-                (old, new) = (old + 1, new + 1);
-                at
-            }
-            LineKind::Add => {
-                new += 1;
-                (None, Some(new - 1))
-            }
-            LineKind::Del => {
-                old += 1;
-                (Some(old - 1), None)
-            }
-        };
-        hunk.lines.push(Line { kind, old: old_no, new: new_no, text: body.to_string() });
-    }
-    hunks
-}
-
-/// Os números de linha de início de cada lado em `@@ -a,b +c,d @@`.
-fn starts(header: &str) -> (u32, u32) {
-    let side = |token: Option<&str>| {
-        token.and_then(|t| t.get(1..)).and_then(|t| t.split(',').next()).and_then(|n| n.parse::<u32>().ok()).unwrap_or(0)
-    };
-    let mut parts = header.split_whitespace().skip(1);
-    (side(parts.next()), side(parts.next()))
-}
-
-/// Um arquivo que o Git não conhece: todas as linhas como acrescentadas. Sem o arquivo no disco, não há diff.
-fn untracked(file: &Path) -> Result<Diff, String> {
-    let empty = Diff { binary: false, too_large: false, hunks: Vec::new() };
+/// Um arquivo que o Git não conhece: um patch de arquivo novo, com todas as linhas acrescentadas. Sem o arquivo no disco, não há diff.
+fn untracked(file: &Path, rel: &str) -> Result<Diff, String> {
+    let empty = Diff { binary: false, too_large: false, patch: String::new() };
     if !file.is_file() {
         return Ok(empty);
     }
@@ -234,16 +163,16 @@ fn untracked(file: &Path) -> Result<Diff, String> {
     if bytes[..bytes.len().min(BINARY_SNIFF)].contains(&0) {
         return Ok(Diff { binary: true, ..empty });
     }
-    let lines: Vec<Line> = String::from_utf8_lossy(&bytes)
-        .lines()
-        .enumerate()
-        .map(|(i, text)| Line { kind: LineKind::Add, old: None, new: Some(i as u32 + 1), text: text.to_string() })
-        .collect();
-    let hunks = match lines.len() {
-        0 => Vec::new(),
-        n => vec![Hunk { header: format!("@@ -0,0 +1,{n} @@"), lines }],
-    };
-    Ok(Diff { hunks, ..empty })
+    let lines: Vec<String> = String::from_utf8_lossy(&bytes).lines().map(str::to_string).collect();
+    if lines.is_empty() {
+        return Ok(empty);
+    }
+    let body: String = lines.iter().map(|l| format!("+{l}\n")).collect();
+    let patch = format!(
+        "diff --git a/{rel} b/{rel}\nnew file mode 100644\n--- /dev/null\n+++ b/{rel}\n@@ -0,0 +1,{} @@\n{body}",
+        lines.len()
+    );
+    Ok(Diff { patch, ..empty })
 }
 
 /// Prepara os caminhos. Lista vazia prepara tudo, inclusive o não rastreado e o apagado.
@@ -444,10 +373,6 @@ mod tests {
         st.files.iter().find(|f| f.path == path).unwrap_or_else(|| panic!("{path} não está no status: {st:?}"))
     }
 
-    fn ln(kind: LineKind, old: Option<u32>, new: Option<u32>, text: &str) -> Line {
-        Line { kind, old, new, text: text.into() }
-    }
-
     fn git_status_of(dir: &Path) -> Status {
         status(dir).unwrap()
     }
@@ -546,19 +471,9 @@ mod tests {
         write(&dir, "f.txt", "a\nB\nc\nd\ne\n");
         let d = diff(&dir, "f.txt", false).unwrap();
         assert!(!d.binary && !d.too_large);
-        assert_eq!(d.hunks.len(), 1);
-        assert!(d.hunks[0].header.starts_with("@@ -1,4 +1,5 @@"), "cabeçalho: {}", d.hunks[0].header);
-        assert_eq!(
-            d.hunks[0].lines,
-            vec![
-                ln(LineKind::Context, Some(1), Some(1), "a"),
-                ln(LineKind::Del, Some(2), None, "b"),
-                ln(LineKind::Add, None, Some(2), "B"),
-                ln(LineKind::Context, Some(3), Some(3), "c"),
-                ln(LineKind::Context, Some(4), Some(4), "d"),
-                ln(LineKind::Add, None, Some(5), "e"),
-            ]
-        );
+        // O hash do `index` muda a cada commit: o teste olha o cabeçalho e o corpo do hunk, que são fixos.
+        assert!(d.patch.starts_with("diff --git a/f.txt b/f.txt\n"), "cabeçalho: {}", d.patch);
+        assert!(d.patch.ends_with("--- a/f.txt\n+++ b/f.txt\n@@ -1,4 +1,5 @@\n a\n-b\n+B\n c\n d\n+e\n"), "patch: {}", d.patch);
     }
 
     #[test]
@@ -571,16 +486,17 @@ mod tests {
 
         write(&dir, "novo ação.txt", "um\ndois\n");
         let d = diff(&dir, "novo ação.txt", false).unwrap();
-        assert_eq!(d.hunks.len(), 1);
-        assert_eq!(d.hunks[0].header, "@@ -0,0 +1,2 @@");
-        assert_eq!(d.hunks[0].lines, vec![ln(LineKind::Add, None, Some(1), "um"), ln(LineKind::Add, None, Some(2), "dois")]);
+        assert_eq!(
+            d.patch,
+            "diff --git a/novo ação.txt b/novo ação.txt\nnew file mode 100644\n--- /dev/null\n+++ b/novo ação.txt\n@@ -0,0 +1,2 @@\n+um\n+dois\n"
+        );
 
         fs::remove_file(dir.join("apagar.txt")).unwrap();
         let d = diff(&dir, "apagar.txt", false).unwrap();
-        assert_eq!(d.hunks[0].lines, vec![ln(LineKind::Del, Some(1), None, "x"), ln(LineKind::Del, Some(2), None, "y")]);
+        assert!(d.patch.ends_with("@@ -1,2 +0,0 @@\n-x\n-y\n"), "patch: {}", d.patch);
 
-        assert_eq!(diff(&dir, "igual.txt", false).unwrap(), Diff { binary: false, too_large: false, hunks: vec![] });
-        assert_eq!(diff(&dir, "sumiu.txt", false).unwrap().hunks.len(), 0);
+        assert_eq!(diff(&dir, "igual.txt", false).unwrap(), Diff { binary: false, too_large: false, patch: String::new() });
+        assert_eq!(diff(&dir, "sumiu.txt", false).unwrap().patch, "");
     }
 
     #[test]
@@ -594,9 +510,9 @@ mod tests {
         write(&dir, "f.txt", "tres\n");
 
         let staged = diff(&dir, "f.txt", true).unwrap();
-        assert_eq!(staged.hunks[0].lines, vec![ln(LineKind::Del, Some(1), None, "um"), ln(LineKind::Add, None, Some(1), "dois")]);
+        assert!(staged.patch.ends_with("@@ -1 +1 @@\n-um\n+dois\n"), "patch: {}", staged.patch);
         let unstaged = diff(&dir, "f.txt", false).unwrap();
-        assert_eq!(unstaged.hunks[0].lines, vec![ln(LineKind::Del, Some(1), None, "dois"), ln(LineKind::Add, None, Some(1), "tres")]);
+        assert!(unstaged.patch.ends_with("@@ -1 +1 @@\n-dois\n+tres\n"), "patch: {}", unstaged.patch);
     }
 
     #[test]
@@ -609,8 +525,8 @@ mod tests {
 
         write(&dir, "dado.bin", [9u8, 0, 8]);
         write(&dir, "grande.txt", "b\n".repeat(600_000));
-        assert_eq!(diff(&dir, "dado.bin", false).unwrap(), Diff { binary: true, too_large: false, hunks: vec![] });
-        assert_eq!(diff(&dir, "grande.txt", false).unwrap(), Diff { binary: false, too_large: true, hunks: vec![] });
+        assert_eq!(diff(&dir, "dado.bin", false).unwrap(), Diff { binary: true, too_large: false, patch: String::new() });
+        assert_eq!(diff(&dir, "grande.txt", false).unwrap(), Diff { binary: false, too_large: true, patch: String::new() });
 
         write(&dir, "novo.bin", [0u8, 0, 0]);
         assert!(diff(&dir, "novo.bin", false).unwrap().binary);

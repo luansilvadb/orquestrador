@@ -12,7 +12,7 @@
 // Com executor não finalizado, pull, troca e criação de branch são recusados, como no backend.
 import type { Transport } from './backend';
 import {
-  ORCHESTRATOR, type Choice, type DiffHunk, type DiffLine, type Events, type ExecutorNode, type GitDiff, type GitFile,
+  ORCHESTRATOR, type Choice, type Events, type ExecutorNode, type GitDiff, type GitFile,
   type GitKind, type NodeState, type Options, type UpdateStatus,
 } from './types';
 
@@ -86,22 +86,28 @@ let files: GitFile[] = [
   entry('dados/exportacao.json', null, 'modified'),
   entry('assets/logo.png', null, 'modified'),
 ];
-// Diffs escritos à mão, por lado e caminho: `staged:` é o preparado contra o HEAD; `unstaged:`, as alterações contra o preparado.
-const ctx = (old: number, nw: number, text: string): DiffLine => ({ kind: 'context', old, new: nw, text });
-const add = (nw: number, text: string): DiffLine => ({ kind: 'add', old: null, new: nw, text });
-const del = (old: number, text: string): DiffLine => ({ kind: 'del', old, new: null, text });
-const HUNKS: Record<string, DiffHunk[]> = {
-  'unstaged:README.md': [{ header: '@@ -1 +1,3 @@', lines: [ctx(1, 1, '# Orquestrador'), add(2, ''), add(3, 'Painel Git em andamento.')] }],
-  'staged:docs/design-system.md': [{ header: '@@ -1 +1,3 @@', lines: [ctx(1, 1, '# Design system'), add(2, ''), add(3, 'Tokens semânticos.')] }],
-  'unstaged:docs/rascunho-painel.md': [{ header: '@@ -0,0 +1,3 @@', lines: [add(1, '# Rascunho'), add(2, ''), add(3, 'Ideias para o painel Git.')] }],
-  'staged:src/App.tsx': [{
-    header: '@@ -1,3 +1,3 @@',
-    lines: [ctx(1, 1, 'export function App() {'), del(2, '  return null;'), add(2, '  return <main />;'), ctx(3, 3, '}')],
-  }],
-  'unstaged:src/App.tsx': [{
-    header: '@@ -1,3 +1,5 @@',
-    lines: [ctx(1, 1, 'export function App() {'), ctx(2, 2, '  return <main />;'), ctx(3, 3, '}'), add(4, ''), add(5, '// TODO: abas')],
-  }],
+// Patches escritos à mão, por lado e caminho: `staged:` é o preparado contra o HEAD; `unstaged:`, as alterações contra o preparado.
+const PATCHES: Record<string, string> = {
+  'unstaged:README.md': [
+    'diff --git a/README.md b/README.md', '--- a/README.md', '+++ b/README.md',
+    '@@ -1 +1,3 @@', ' # Orquestrador', '+', '+Painel Git em andamento.', '',
+  ].join('\n'),
+  'staged:docs/design-system.md': [
+    'diff --git a/docs/design-system.md b/docs/design-system.md', '--- a/docs/design-system.md', '+++ b/docs/design-system.md',
+    '@@ -1 +1,3 @@', ' # Design system', '+', '+Tokens semânticos.', '',
+  ].join('\n'),
+  'unstaged:docs/rascunho-painel.md': [
+    'diff --git a/docs/rascunho-painel.md b/docs/rascunho-painel.md', 'new file mode 100644', '--- /dev/null', '+++ b/docs/rascunho-painel.md',
+    '@@ -0,0 +1,3 @@', '+# Rascunho', '+', '+Ideias para o painel Git.', '',
+  ].join('\n'),
+  'staged:src/App.tsx': [
+    'diff --git a/src/App.tsx b/src/App.tsx', '--- a/src/App.tsx', '+++ b/src/App.tsx',
+    '@@ -1,3 +1,3 @@', ' export function App() {', '-  return null;', '+  return <main />;', ' }', '',
+  ].join('\n'),
+  'unstaged:src/App.tsx': [
+    'diff --git a/src/App.tsx b/src/App.tsx', '--- a/src/App.tsx', '+++ b/src/App.tsx',
+    '@@ -1,3 +1,5 @@', ' export function App() {', '   return <main />;', ' }', '+', '+// TODO: abas', '',
+  ].join('\n'),
 };
 const branches = ['main', 'feat/painel-git'];
 let branch = 'main', ahead = 1, behind = 0;
@@ -331,12 +337,12 @@ const pushRemote = () => {
   return `Enviando ${n} commit(s) para origin/${branch}\n   1a2b3c4..5d6e7f8  ${branch} -> ${branch}\n`;
 };
 
-// Diff: o que não tem hunk escrito aqui sai sem trechos ("Sem alterações neste arquivo").
+// Diff: o que não tem patch escrito aqui sai vazio ("Sem alterações neste arquivo").
 function diffOf(path: string, staged: boolean): GitDiff {
   known(path);
-  if (path.endsWith('.png')) return { binary: true, tooLarge: false, hunks: [] };
-  if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, hunks: [] };
-  return { binary: false, tooLarge: false, hunks: HUNKS[`${staged ? 'staged' : 'unstaged'}:${path}`] ?? [] };
+  if (path.endsWith('.png')) return { binary: true, tooLarge: false, patch: '' };
+  if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, patch: '' };
+  return { binary: false, tooLarge: false, patch: PATCHES[`${staged ? 'staged' : 'unstaged'}:${path}`] ?? '' };
 }
 
 const commands: Record<string, (args: any) => unknown> = {

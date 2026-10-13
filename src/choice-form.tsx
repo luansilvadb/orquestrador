@@ -1,6 +1,7 @@
 // O formulário de ferramenta, modelo e esforço numa janela (Modal): o mesmo para o orquestrador e para os executores.
 import { useId, useState, type FormEvent } from 'react';
-import { Alert, Button, Input, Modal, Segmented, Select } from '@lobehub/ui/base-ui';
+import { Flexbox } from '@lobehub/ui';
+import { Alert, Button, Input, Modal, Segmented, Select, Text } from '@lobehub/ui/base-ui';
 import { message } from './backend';
 import type { Choice, Options, Tool, ToolOption } from './types';
 
@@ -108,22 +109,24 @@ function ChoiceFields({ hint, options, initial, confirmLabel, onConfirm, onCance
   }
 
   return (
-    <form onSubmit={submit} className="grid gap-5">
-      <p className="text-sm text-muted-foreground">{hint}</p>
+    <Flexbox as="form" onSubmit={submit} gap={20}>
+      <Text as="p" type="secondary" fontSize={14}>{hint}</Text>
 
-      <div className="grid gap-2">
-        <label id={ids.tool} className="text-sm font-medium">Ferramenta</label>
-        <div role="group" aria-labelledby={ids.tool}>
+      <Flexbox gap={8}>
+        <Text as="label" id={ids.tool} fontSize={14} weight={500}>Ferramenta</Text>
+        {/* align="flex-start": o Segmented mantém a largura do próprio conteúdo, como num div de bloco. */}
+        <Flexbox role="group" aria-labelledby={ids.tool} align="flex-start">
           <Segmented
             value={choice.tool}
             onChange={(v) => pickTool(v as Tool)}
             options={options.tools.map((t) => ({ value: t.name, label: t.name, className: 'font-mono' }))}
           />
-        </div>
-      </div>
+        </Flexbox>
+      </Flexbox>
 
-      <div className="grid gap-2">
-        <label htmlFor={ids.model} className="text-sm font-medium">Modelo</label>
+      <Flexbox gap={8}>
+        {/* O tipo do Text não declara htmlFor, mas o componente repassa as props extras ao <label>. */}
+        <Text as="label" {...{ htmlFor: ids.model }} fontSize={14} weight={500}>Modelo</Text>
         <Select
           id={ids.model}
           className="w-full font-mono"
@@ -144,30 +147,30 @@ function ChoiceFields({ hint, options, initial, confirmLabel, onConfirm, onCance
           spellCheck={false}
           className="font-mono"
         />
-      </div>
+      </Flexbox>
 
-      <div className="grid gap-2">
-        <label id={ids.effort} className="text-sm font-medium">Esforço</label>
-        <div role="group" aria-labelledby={ids.effort} className="flex flex-wrap">
+      <Flexbox gap={8}>
+        <Text as="label" id={ids.effort} fontSize={14} weight={500}>Esforço</Text>
+        <Flexbox role="group" aria-labelledby={ids.effort} horizontal wrap="wrap">
           <Segmented
             size="small"
             value={choice.effort || DEFAULT}
             onChange={(v) => setChoice((c) => ({ ...c, effort: v === DEFAULT ? '' : v }))}
             options={[DEFAULT, ...efforts].map((e) => ({ value: e, label: e === DEFAULT ? 'padrão' : e, className: 'font-mono' }))}
           />
-        </div>
-      </div>
+        </Flexbox>
+      </Flexbox>
 
       {error && <Alert type="error" description={error} />}
 
-      <div className="flex justify-end gap-2">
+      <Flexbox horizontal justify="flex-end" gap={8}>
         {onCancel && (
           <Button htmlType="button" onClick={onCancel}>Cancelar</Button>
         )}
         <Button type="primary" htmlType="submit" loading={busy} disabled={busy}>
           {confirmLabel}
         </Button>
-      </div>
-    </form>
+      </Flexbox>
+    </Flexbox>
   );
 }

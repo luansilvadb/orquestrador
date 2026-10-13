@@ -1,10 +1,10 @@
 // A tela Git: à esquerda o painel (branch, commit, arquivos preparados e alterados); à direita as alterações
 // do arquivo selecionado. Tudo roda na pasta do projeto e só por clique do usuário. O status atualiza sozinho
 // (usePolled, no App); cada ação atualiza na hora.
-import { useEffect, useRef, useState, Fragment, type PointerEvent as ReactPointerEvent, type KeyboardEvent } from 'react';
-import { ActionIcon, Button, Input, Popover, TextArea, toast } from '@lobehub/ui/base-ui';
+import { useEffect, useRef, useState } from 'react';
+import { ActionIcon, Button, DraggablePanel, Input, Popover, Text, TextArea, toast } from '@lobehub/ui/base-ui';
+import { Flexbox, PatchDiff } from '@lobehub/ui';
 import { ArrowDown, ArrowUp, Check, GitBranch, Minus, Plus, RefreshCw } from 'lucide-react';
-import { cn } from 'cn';
 import { backend, message } from './backend';
 import { usePolling } from './polling';
 import type { GitBranches, GitDiff, GitFile, GitKind, GitStatus } from './types';
@@ -18,7 +18,6 @@ const KIND: Record<GitKind, { letter: string; title: string }> = {
   untracked: { letter: 'U', title: 'não rastreado' },
   conflicted: { letter: 'C', title: 'em conflito' },
 };
-const SIGN = { add: '+', del: '-', context: ' ' };
 
 // Erro de ação: a mensagem do backend em toast, selecionável (o body tem user-select: none).
 const fail = (e: unknown) => toast.error({ title: <span className="select-text">{message(e)}</span>, duration: 7000 });
@@ -66,8 +65,6 @@ const REMOTE: Record<Op, { run: () => Promise<string>; done: string }> = {
 
 /** Arquivo selecionado na tela Git: o caminho e o lado (preparado ou não) da seção clicada. */
 type Selection = { path: string; staged: boolean };
-const WIDTH = { initial: 240, min: 160, max: 600 };
-const clampWidth = (v: number) => Math.min(WIDTH.max, Math.max(WIDTH.min, v));
 
 /** Painel do Git: de cima para baixo, a linha da branch, o commit e as seções Preparadas e Alterações. */
 function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
@@ -84,11 +81,11 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
 
   if (!status) {
     return (
-      <div className="grid min-h-0 flex-1 content-start p-3">
-        <p role="status" className={cn('text-xs', error ? 'text-destructive' : 'text-muted-foreground')}>
+      <Flexbox className="min-h-0" flex={1} padding={12}>
+        <Text as="p" role="status" fontSize={12} type={error ? 'danger' : 'secondary'}>
           {error || 'Lendo o Git…'}
-        </p>
-      </div>
+        </Text>
+      </Flexbox>
     );
   }
 
@@ -138,9 +135,9 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
   const commitHint = !staged.length ? 'Prepare arquivos para commitar' : !text.trim() ? 'Escreva a mensagem do commit' : 'Commita o que está preparado';
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="grid gap-1 px-3 py-2">
-        <div className="flex items-center gap-1">
+    <Flexbox className="min-h-0" flex={1}>
+      <Flexbox gap={4} paddingInline={12} paddingBlock={8}>
+        <Flexbox horizontal align="center" gap={4}>
           <BranchPicker branch={status.branch} locked={locked} refresh={refresh} />
           <ActionIcon
             variant="outlined" size="small" icon={RefreshCw} spin={op === 'fetch'} aria-label="Buscar" disabled={busy}
@@ -163,11 +160,11 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
           >
             {status.ahead > 0 && status.ahead}
           </Button>
-        </div>
-        {locked && <p className="text-xs text-muted-foreground">{LOCKED_TITLE}</p>}
-      </div>
+        </Flexbox>
+        {locked && <Text as="p" fontSize={12} type="secondary">{LOCKED_TITLE}</Text>}
+      </Flexbox>
 
-      <div className="grid gap-2 border-y px-3 py-2">
+      <Flexbox className="border-y" gap={8} paddingInline={12} paddingBlock={8}>
         <TextArea
           rows={3} resize value={text} aria-label="Mensagem do commit"
           placeholder="Mensagem do commit (Ctrl+Enter commita)"
@@ -180,17 +177,20 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
           }}
           classNames={{ input: 'text-sm select-text' }}
         />
-        <Button type="primary" size="small" className="justify-self-start" disabled={!canCommit} loading={committing} title={canCommit ? 'Commita o que está preparado' : commitHint} onClick={commit}>
+        <Button
+          type="primary" size="small" style={{ alignSelf: 'flex-start' }} disabled={!canCommit} loading={committing}
+          title={canCommit ? 'Commita o que está preparado' : commitHint} onClick={commit}
+        >
           Commit
         </Button>
-      </div>
+      </Flexbox>
 
-      <div className="min-h-0 flex-1 overflow-y-auto py-1 pr-3">
+      <Flexbox className="min-h-0 overflow-y-auto" flex={1} paddingBlock={4} style={{ paddingRight: 12 }}>
         <FileSection title="Preparadas" files={staged} staged onStage={(paths) => act(() => backend.gitUnstage(paths))} selected={selected} onSelect={onSelect} />
         <FileSection title="Alterações" files={unstaged} staged={false} onStage={(paths) => act(() => backend.gitStage(paths))} selected={selected} onSelect={onSelect} />
-        {!staged.length && !unstaged.length && <p className="px-3 py-2 text-xs text-muted-foreground">Nenhuma alteração.</p>}
-      </div>
-    </div>
+        {!staged.length && !unstaged.length && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 12, paddingBlock: 8 }}>Nenhuma alteração.</Text>}
+      </Flexbox>
+    </Flexbox>
   );
 }
 
@@ -250,31 +250,31 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
   return (
     <Popover
       open={open} onOpenChange={changeOpen} trigger="click" placement="bottomLeft"
-      className="w-64" classNames={{ content: 'grid gap-2 p-2' }}
+      className="w-64"
       content={
-        <>
-          {locked && <p className="px-1 text-xs text-muted-foreground">{LOCKED_TITLE}</p>}
-          {branchError && <p role="status" className="px-1 text-xs text-destructive">{branchError}</p>}
-          {!branches && !branchError && <p className="px-1 text-xs text-muted-foreground">Lendo as branches…</p>}
+        <Flexbox gap={8} padding={8}>
+          {locked && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 4 }}>{LOCKED_TITLE}</Text>}
+          {branchError && <Text as="p" role="status" fontSize={12} type="danger" style={{ paddingInline: 4 }}>{branchError}</Text>}
+          {!branches && !branchError && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 4 }}>Lendo as branches…</Text>}
           {branches && (
-            <div className="grid max-h-60 gap-0.5 overflow-y-auto">
+            <Flexbox gap={2} className="max-h-60 overflow-y-auto">
               {branches.local.map((item) => {
                 const current = item === branches.current;
                 return (
                   <Button
                     key={item} type="text" size="small" className="w-full justify-start! gap-2 font-mono"
-                    icon={<Check className={cn('shrink-0', !current && 'invisible')} />}
+                    icon={<Check className={`shrink-0${current ? '' : ' invisible'}`} />}
                     disabled={locked} aria-current={current ? 'true' : undefined}
                     title={locked ? LOCKED_TITLE : current ? 'Branch atual' : `Trocar para ${item}`}
                     onClick={() => choose(item)}
                   >
-                    <span className="min-w-0 truncate">{item}</span>
+                    <Text as="span" ellipsis className="min-w-0">{item}</Text>
                   </Button>
                 );
               })}
-            </div>
+            </Flexbox>
           )}
-          <form className="flex gap-1" onSubmit={(e) => { e.preventDefault(); void create(); }}>
+          <Flexbox as="form" horizontal gap={4} onSubmit={(e) => { e.preventDefault(); void create(); }}>
             <Input
               size="small" value={name} onChange={(e) => setName(e.target.value)} disabled={locked}
               placeholder="Nova branch" aria-label="Nome da nova branch"
@@ -283,12 +283,12 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
             <Button type="primary" htmlType="submit" size="small" disabled={locked || !name.trim()} title={locked ? LOCKED_TITLE : 'Cria a branch e troca para ela'}>
               Criar
             </Button>
-          </form>
-        </>
+          </Flexbox>
+        </Flexbox>
       }
     >
       <Button type="text" size="small" icon={GitBranch} className="min-w-0! flex-1! justify-start! px-2! font-mono!" title={`Branch atual: ${branch}. Trocar ou criar uma branch`}>
-        <span className="min-w-0 truncate">{branch}</span>
+        <Text as="span" ellipsis className="min-w-0">{branch}</Text>
       </Button>
     </Popover>
   );
@@ -305,13 +305,13 @@ function FileSection({ title, files, staged, onStage, selected, onSelect }: {
 }) {
   if (!files.length) return null;
   return (
-    <section className="grid gap-0.5 px-1 pb-1">
-      <div className="flex items-center gap-2 px-2 py-1">
-        <h3 className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">{title} ({files.length})</h3>
+    <Flexbox as="section" gap={2} paddingInline={4} paddingBlock="0 4px">
+      <Flexbox horizontal align="center" gap={8} paddingInline={8} paddingBlock={4}>
+        <Text as="h3" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">{title} ({files.length})</Text>
         <Button type="text" size="small" onClick={() => onStage([])}>
           {staged ? 'tirar tudo' : 'preparar tudo'}
         </Button>
-      </div>
+      </Flexbox>
       {/* A coluna não pode crescer com o nome: sem o minmax(0,1fr), o texto nowrap empurra a lista para fora da seção. */}
       <ul className="grid grid-cols-[minmax(0,1fr)]">
         {files.map((f) => {
@@ -323,15 +323,15 @@ function FileSection({ title, files, staged, onStage, selected, onSelect }: {
           const full = f.origPath ? `${f.path} (renomeado de ${f.origPath})` : f.path;
           const isSelected = selected?.path === f.path && selected.staged === staged;
           return (
-            <li key={f.path} className={cn('flex items-center gap-1 rounded-sm hover:bg-muted', isSelected && 'bg-muted')}>
+            <li key={f.path} className={`flex items-center gap-1 rounded-sm hover:bg-muted${isSelected ? ' bg-muted' : ''}`}>
               <button
                 type="button" onClick={() => onSelect(f.path, staged)} aria-current={isSelected ? 'true' : undefined}
                 title={`${full}: ${word}. Ver alterações`}
-                className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 pl-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
-                <span title={word} className="w-3 shrink-0 text-center font-mono text-xs font-semibold">{letter}</span>
-                <span className="min-w-0 shrink truncate">{name}</span>
-                {dir && <span className="min-w-0 shrink-2 truncate text-xs text-muted-foreground">{dir}</span>}
+                <Text as="span" code strong fontSize={12} title={word} className="w-3 shrink-0 text-center">{letter}</Text>
+                <Text as="span" fontSize={14} ellipsis className="min-w-0 shrink">{name}</Text>
+                {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 shrink-2">{dir}</Text>}
               </button>
               <ActionIcon
                 variant="borderless" size="small" icon={staged ? Minus : Plus}
@@ -343,15 +343,13 @@ function FileSection({ title, files, staged, onStage, selected, onSelect }: {
           );
         })}
       </ul>
-    </section>
+    </Flexbox>
   );
 }
 
 /** Tela Git: o painel à esquerda, com a borda direita arrastável, e à direita as alterações do arquivo selecionado. */
 export function GitScreen({ git, locked, active }: { git: ReturnType<typeof usePolled<GitStatus>>; locked: boolean; active: boolean }) {
   const [selected, setSelected] = useState<Selection | null>(null);
-  const [width, setWidth] = useState(WIDTH.initial);
-  const resize = useRef<{ x: number; width: number } | null>(null);
   const { data, error, refresh } = git;
 
   // Arquivo que sai da seção (commit, preparo ou desfazer) deixa de estar selecionado.
@@ -361,110 +359,62 @@ export function GitScreen({ git, locked, active }: { git: ReturnType<typeof useP
     if (!listed) setSelected(null);
   }, [data, selected]);
 
-  // A borda captura o ponteiro: o arrasto segue mesmo quando ele sai da faixa.
-  const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    resize.current = { x: e.clientX, width };
-  };
-  const moveResize = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (resize.current) setWidth(clampWidth(resize.current.width + e.clientX - resize.current.x));
-  };
-  const endResize = () => {
-    resize.current = null;
-  };
-  const keyResize = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    e.preventDefault();
-    setWidth((w) => clampWidth(w + (e.key === 'ArrowLeft' ? -16 : 16)));
-  };
-
   return (
-    <div className="flex h-full min-h-0">
-      <aside style={{ width }} className="relative flex min-h-0 shrink-0 flex-col border-r bg-card">
-        <GitPanel
-          status={data} error={error} refresh={refresh} locked={locked}
-          selected={selected} onSelect={(path, staged) => setSelected({ path, staged })}
-        />
-        <div
-          role="separator" aria-orientation="vertical" aria-label="Largura do painel"
-          aria-valuemin={WIDTH.min} aria-valuemax={WIDTH.max} aria-valuenow={width}
-          tabIndex={0} title="Arraste para mudar a largura"
-          onPointerDown={startResize} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize}
-          onKeyDown={keyResize}
-          className="absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize outline-none hover:bg-ring/30 focus-visible:bg-ring/50"
-        />
-      </aside>
-      <div className="h-full min-h-0 min-w-0 flex-1">
+    <Flexbox horizontal height="100%" className="min-h-0">
+      <DraggablePanel
+        placement="left" minWidth={160} maxWidth={600} defaultSize={{ width: 240 }} expandable={false}
+        backgroundColor="var(--ant-color-bg-container)"
+      >
+        <Flexbox height="100%">
+          <GitPanel
+            status={data} error={error} refresh={refresh} locked={locked}
+            selected={selected} onSelect={(path, staged) => setSelected({ path, staged })}
+          />
+        </Flexbox>
+      </DraggablePanel>
+      <Flexbox flex={1} height="100%" className="min-h-0 min-w-0">
         {selected
           ? <DiffView key={`${selected.staged}:${selected.path}`} path={selected.path} staged={selected.staged} active={active} />
-          : <p className="p-4 text-sm text-muted-foreground">Clique num arquivo para ver as alterações.</p>}
-      </div>
-    </div>
+          : <Text as="p" fontSize={14} type="secondary" style={{ padding: 16 }}>Clique num arquivo para ver as alterações.</Text>}
+      </Flexbox>
+    </Flexbox>
   );
 }
 
 /**
- * Alterações de um arquivo: uma coluna monoespaçada, com números antes e depois, sinal e rolagem.
+ * Alterações de um arquivo: o patch unificado, mostrado pelo PatchDiff do Lobe UI, com rolagem.
  * Atualiza só enquanto a tela Git está visível (`active`); o que não mudou não é trocado, então a rolagem fica como está.
  */
 function DiffView({ path, staged, active }: { path: string; staged: boolean; active: boolean }) {
   const { data: diff, error } = usePolled<GitDiff>(() => backend.gitDiff(path, staged), active, false);
 
-  const note = (text: string, tone = 'text-muted-foreground') => (
-    <p role="status" className={cn('p-4 text-sm', tone)}>{text}</p>
+  const note = (text: string, type: 'danger' | 'secondary' | undefined = 'secondary') => (
+    <Flexbox padding={16}>
+      <Text as="p" role="status" fontSize={14} type={type}>{text}</Text>
+    </Flexbox>
   );
   let body;
-  if (!diff) body = note(error || 'Lendo as alterações…', error ? 'text-destructive' : undefined);
+  if (!diff) body = note(error || 'Lendo as alterações…', error ? 'danger' : undefined);
   else if (diff.binary) body = note('Arquivo binário: não há linhas para mostrar.');
   else if (diff.tooLarge) body = note('Alteração grande demais para mostrar aqui.');
-  else if (!diff.hunks.length) body = note('Sem alterações neste arquivo.');
+  else if (!diff.patch) body = note('Sem alterações neste arquivo.');
   else {
     body = (
-      <div className="h-full overflow-auto font-mono text-xs leading-5 select-text">
-        <div className="w-max min-w-full py-1">
-          {diff.hunks.map((hunk, i) => (
-            <Fragment key={i}>
-              <div className="min-w-full bg-muted/50 px-3 whitespace-pre text-muted-foreground">{hunk.header}</div>
-              {hunk.lines.map((line, j) => (
-                <div
-                  key={j}
-                  className={cn(
-                    'grid min-w-full grid-cols-[4rem_4rem_1.5rem_1fr]',
-                    line.kind === 'add' && 'bg-diff-add/15',
-                    line.kind === 'del' && 'bg-diff-del/15',
-                  )}
-                >
-                  <span className="px-2 text-right text-muted-foreground select-none">{line.old ?? ''}</span>
-                  <span className="px-2 text-right text-muted-foreground select-none">{line.new ?? ''}</span>
-                  <span
-                    className={cn(
-                      'text-center select-none',
-                      line.kind === 'add' && 'text-diff-add',
-                      line.kind === 'del' && 'text-diff-del',
-                    )}
-                  >
-                    {SIGN[line.kind]}
-                  </span>
-                  <span className="pr-4 whitespace-pre">{line.text}</span>
-                </div>
-              ))}
-            </Fragment>
-          ))}
-        </div>
-      </div>
+      <Flexbox height="100%" className="overflow-auto select-text">
+        <PatchDiff patch={diff.patch} viewMode="unified" showHeader={false} variant="borderless" />
+      </Flexbox>
     );
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b bg-card px-3 py-1 text-xs">
-        <code title={path} className="min-w-0 truncate text-muted-foreground">
+    <Flexbox height="100%" className="min-h-0">
+      <Flexbox horizontal align="center" gap={8} paddingInline={12} paddingBlock={4} className="border-b bg-card">
+        <Text as="code" code type="secondary" fontSize={12} ellipsis title={path} className="min-w-0">
           {path}{staged ? ' (preparado)' : ''}
-        </code>
-        {error && diff && <span role="status" className="shrink-0 text-destructive">{error}</span>}
-      </div>
-      <div className="min-h-0 flex-1">{body}</div>
-    </div>
+        </Text>
+        {error && diff && <Text as="span" role="status" type="danger" fontSize={12} className="shrink-0">{error}</Text>}
+      </Flexbox>
+      <Flexbox flex={1} className="min-h-0">{body}</Flexbox>
+    </Flexbox>
   );
 }

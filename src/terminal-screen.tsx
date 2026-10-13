@@ -1,29 +1,23 @@
 // Os terminais, ao lado da árvore de pastas na tela principal: o orquestrador e um executor por aba. Todos ficam montados; só o da aba ativa aparece.
-import { useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
+import { useState, type ComponentType, type ReactNode } from 'react';
 import { Bot, CircleCheck, CircleHelp, CircleX, Clock, Hourglass, LoaderCircle, SlidersHorizontal, Square } from 'lucide-react';
-import { Button, Tag, TabsIndicator, TabsList, TabsRoot, TabsTab } from '@lobehub/ui/base-ui';
+import { Button, colorsPreset, Tag, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
+import { Center, Flexbox, type PresetColorKey } from '@lobehub/ui';
 import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
-import { cn } from 'cn';
 import { attachExecutor, TermHost, terminals } from './terminals';
 import { ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Tool } from './types';
 
-// Cada estado: rótulo e ícone com texto (regra do design system); a cor vem dos tokens --status-* de index.css.
-export const STATES: Record<NodeState, { label: string; icon: typeof Clock; color: string; tone: string }> = {
-  'awaiting-choice': { label: 'aguardando escolha', icon: CircleHelp, color: 'var(--status-awaiting)', tone: 'text-[var(--status-awaiting)]' },
-  queued: { label: 'na fila', icon: Clock, color: 'var(--status-queued)', tone: 'text-[var(--status-queued)]' },
-  running: { label: 'executando', icon: LoaderCircle, color: 'var(--status-running)', tone: 'text-[var(--status-running)]' },
-  'awaiting-orchestrator': { label: 'aguardando orquestrador', icon: Hourglass, color: 'var(--status-prompt)', tone: 'text-[var(--status-prompt)]' },
-  done: { label: 'concluído', icon: CircleCheck, color: 'var(--status-done)', tone: 'text-[var(--status-done)]' },
-  stopped: { label: 'interrompido', icon: Square, color: 'var(--status-stopped)', tone: 'text-[var(--status-stopped)]' },
-  failed: { label: 'falhou', icon: CircleX, color: 'var(--status-failed)', tone: 'text-[var(--status-failed)]' },
+// Cada estado: rótulo e ícone com texto (regra do design system); a cor é um nome predefinido do Lobe UI, o mesmo para o Tag e para o ícone da aba.
+export const STATES: Record<NodeState, { label: string; icon: typeof Clock; color: PresetColorKey }> = {
+  'awaiting-choice': { label: 'aguardando escolha', icon: CircleHelp, color: 'gold' },
+  queued: { label: 'na fila', icon: Clock, color: 'gray' },
+  running: { label: 'executando', icon: LoaderCircle, color: 'blue' },
+  'awaiting-orchestrator': { label: 'aguardando orquestrador', icon: Hourglass, color: 'purple' },
+  done: { label: 'concluído', icon: CircleCheck, color: 'green' },
+  stopped: { label: 'interrompido', icon: Square, color: 'orange' },
+  failed: { label: 'falhou', icon: CircleX, color: 'red' },
 };
-// O Tag do Lobe UI só pinta cor hex ou predefinida; o token entra pelo style (fundo e borda são a mesma cor, mais fraca).
-const tagStyle = (color: string): CSSProperties => ({
-  color,
-  background: `color-mix(in oklab, ${color} 14%, transparent)`,
-  borderColor: `color-mix(in oklab, ${color} 45%, transparent)`,
-});
 export const FINISHED: NodeState[] = ['done', 'stopped', 'failed'];
 const CANCELLABLE: NodeState[] = ['queued', 'running', 'awaiting-orchestrator'];
 // Texto da camada que cobre o terminal do executor, por estado; os outros estados mostram o terminal direto.
@@ -39,31 +33,31 @@ const TOOL_ICON: Record<Tool, ComponentType<{ size?: number; className?: string 
 };
 
 /** Escolha em partes separadas por "·": ferramenta em destaque, modelo e esforço apagados; parte vazia some. */
-const ChoiceText = ({ choice, className }: { choice: Choice; className?: string }) => {
+const ChoiceText = ({ choice, flex }: { choice: Choice; flex?: 'none' }) => {
   const parts = [choice.model, choice.effort].filter(Boolean);
   if (parts.length === 0) parts.push('padrão do CLI');
   const ToolIcon = TOOL_ICON[choice.tool];
   return (
-    <span className={cn('flex min-w-0 items-center gap-1.5 font-mono', className)} title={[choice.tool, ...parts].join(' · ')}>
+    <Flexbox horizontal align="center" gap={6} allowShrink flex={flex} title={[choice.tool, ...parts].join(' · ')}>
       <ToolIcon size={14} className="shrink-0 text-foreground" />
-      <span className="min-w-0 truncate">
-        <span className="text-foreground">{choice.tool}</span>
+      <Text ellipsis code className="min-w-0">
+        <span>{choice.tool}</span>
         {parts.map((part, i) => (
           <span key={i}>
-            <span className="px-1.5 text-muted-foreground">·</span>
-            <span className="text-muted-foreground">{part}</span>
+            <Text as="span" type="secondary" className="px-1.5">·</Text>
+            <Text as="span" type="secondary">{part}</Text>
           </span>
         ))}
-      </span>
-    </span>
+      </Text>
+    </Flexbox>
   );
 };
 
 /** Camada que cobre o terminal do executor com um aviso, sem sair da aba. */
 const Cover = ({ children }: { children: ReactNode }) => (
-  <div className="absolute inset-0 overflow-auto bg-background/95 p-4">
-    <div className="flex min-h-full items-center justify-center">{children}</div>
-  </div>
+  <Flexbox className="absolute inset-0 overflow-auto bg-background/95" padding={16}>
+    <Center className="min-h-full">{children}</Center>
+  </Flexbox>
 );
 
 type TerminalsProps = {
@@ -91,7 +85,7 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
   };
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col gap-2 p-4">
+    <Flexbox className="min-h-0" width="100%" height="100%" gap={8} padding={16}>
       {/* Só a faixa de abas: os terminais são renderizados logo abaixo, por este arquivo. */}
       <TabsRoot value={active} onValueChange={(key: string) => choose(key)} className="min-w-0 gap-0">
         <TabsList className="h-9 w-full flex-nowrap justify-start overflow-x-auto overflow-y-hidden rounded-full [scrollbar-width:none]">
@@ -103,25 +97,25 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
             const label = `Executor #${e.index + 1}, ${info.label}: ${e.title}`;
             return (
               <TabsTab key={e.id} value={e.id} title={label} aria-label={label} className="flex-none gap-1.5 px-3">
-                <Icon className={cn(info.tone, e.state === 'running' && 'animate-spin')} />
-                <span className="font-mono">#{e.index + 1}</span>
+                <Icon className={e.state === 'running' ? 'animate-spin' : undefined} style={{ color: colorsPreset(info.color) }} />
+                <Text as="span" code>#{e.index + 1}</Text>
               </TabsTab>
             );
           })}
         </TabsList>
       </TabsRoot>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
+      <Flexbox className="min-h-0 overflow-hidden rounded-xl border bg-card" flex={1}>
         {orchestrator && (
-          <div className="flex h-9 shrink-0 items-center gap-2 whitespace-nowrap border-b px-3 text-xs">
+          <Flexbox horizontal align="center" gap={8} height={36} flex="none" paddingInline={12} className="whitespace-nowrap border-b">
             {node && meta ? (
               <>
-                <Tag className="shrink-0" icon={<meta.icon className={node.state === 'running' ? 'animate-spin' : undefined} />} style={tagStyle(meta.color)}>
+                <Tag className="shrink-0" color={meta.color} icon={<meta.icon className={node.state === 'running' ? 'animate-spin' : undefined} />}>
                   {meta.label}
                 </Tag>
-                <span className="shrink-0 font-mono text-muted-foreground">#{node.index + 1}</span>
-                <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
-                {node.choice && <ChoiceText choice={node.choice} className="shrink-0" />}
+                <Text as="span" code type="secondary" className="shrink-0">#{node.index + 1}</Text>
+                <Text ellipsis className="min-w-0 flex-1" title={node.title}>{node.title}</Text>
+                {node.choice && <ChoiceText choice={node.choice} flex="none" />}
                 {CANCELLABLE.includes(node.state) && (
                   <Button type="default" size="small" className="shrink-0" title="Interrompe só este executor" icon={<Square className="size-3" />} onClick={() => onStop(node.id)}>
                     Parar
@@ -130,14 +124,14 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
               </>
             ) : (
               <>
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="flex shrink-0 items-center gap-1.5 font-medium text-foreground">
+                <Flexbox horizontal align="center" gap={8} allowShrink>
+                  <Flexbox horizontal align="center" gap={6} flex="none">
                     <Bot className="size-3.5 text-muted-foreground" />
-                    Orquestrador
-                  </span>
+                    <Text as="span" weight={500}>Orquestrador</Text>
+                  </Flexbox>
                   {orchestrator.choice && <ChoiceText choice={orchestrator.choice} />}
-                </div>
-                <span className="flex-1" />
+                </Flexbox>
+                <Flexbox flex={1} />
                 {orchestrator.started && (
                   <Button
                     type="default" ghost size="small" className="shrink-0"
@@ -146,55 +140,51 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
                     onClick={onExecutorChoice}
                   >
                     {/* Classes no Button perdem para o CSS sem camada do Lobe UI; por isso o peso e o leading ficam neste span */}
-                    <span className="flex items-center gap-1.5 font-normal leading-normal">
-                      <span className="text-muted-foreground">Executores</span>
+                    <Flexbox horizontal as="span" align="center" gap={6} className="font-normal leading-normal">
+                      <Text as="span" type="secondary">Executores</Text>
                       {executorChoice
                         ? <ChoiceText choice={executorChoice} />
-                        : <span className="text-muted-foreground">ainda não escolhido</span>}
+                        : <Text as="span" type="secondary">ainda não escolhido</Text>}
                       <SlidersHorizontal className="size-3 text-muted-foreground" />
-                    </span>
+                    </Flexbox>
                   </Button>
                 )}
               </>
             )}
-          </div>
+          </Flexbox>
         )}
 
-        <div className={cn('relative mx-1.5 mb-1.5 min-h-0 flex-1 overflow-hidden rounded-lg bg-terminal', !orchestrator && 'mt-1.5')}>
+        <div className={`relative mx-1.5 mb-1.5 min-h-0 flex-1 overflow-hidden rounded-lg bg-terminal${orchestrator ? '' : ' mt-1.5'}`}>
           {orchestrator && (
-            <div className={cn('absolute inset-0', active !== ORCHESTRATOR && 'invisible')}>
+            <div className={`absolute inset-0${active !== ORCHESTRATOR ? ' invisible' : ''}`}>
               <TermHost id={ORCHESTRATOR} writable />
             </div>
           )}
           {orchestrator && executors.map((e) => (
             <div
               key={e.id}
-              className={cn(
-                'absolute inset-0',
-                active !== e.id && 'invisible',
-                FINISHED.includes(e.state) && '[&_.term]:opacity-60',
-              )}
+              className={`absolute inset-0${active !== e.id ? ' invisible' : ''}${FINISHED.includes(e.state) ? ' [&_.term]:opacity-60' : ''}`}
             >
               <TermHost id={e.id} writable={false} onReady={attachExecutor} />
               {COVER_TEXT[e.state] && (
                 <Cover>
-                  <p className="max-w-[300px] text-center text-sm text-muted-foreground">{COVER_TEXT[e.state]}</p>
+                  <Text as="p" type="secondary" fontSize={14} align="center" className="max-w-[300px]">{COVER_TEXT[e.state]}</Text>
                 </Cover>
               )}
             </div>
           ))}
 
           {!orchestrator && (
-            <div className="absolute inset-0 m-auto grid h-fit w-[min(380px,calc(100%-32px))] justify-items-center gap-3 p-4 text-center">
-              {notice && <p role="status" className="rounded-md border bg-card px-3 py-1.5 text-sm">{notice}</p>}
+            <Flexbox align="center" gap={12} padding={16} width="min(380px, calc(100% - 32px))" height="fit-content" className="absolute inset-0 m-auto">
+              {notice && <Text as="p" role="status" fontSize={14} className="rounded-md border bg-card px-3 py-1.5">{notice}</Text>}
               <Button type="primary" onClick={onOpen}>Abrir terminal</Button>
-              <p className="text-xs text-muted-foreground">
+              <Text as="p" type="secondary" fontSize={12} align="center">
                 Abre o orquestrador: o único terminal onde você digita. Os executores aparecem em abas quando ele delega.
-              </p>
-            </div>
+              </Text>
+            </Flexbox>
           )}
         </div>
-      </div>
-    </div>
+      </Flexbox>
+    </Flexbox>
   );
 }

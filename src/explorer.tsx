@@ -1,28 +1,29 @@
 // A navegação da coluna de ícones, a árvore de pastas (na tela principal) e a barra de status com a branch.
 // A árvore se atualiza sozinha (usePolling). O status do Git vem do App, que o usa no contador da navegação e na barra de status.
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, File, Files, Folder, FolderOpen, GitBranch, type LucideIcon } from 'lucide-react';
-import { ActionIcon, Badge, ScrollArea } from '@lobehub/ui/base-ui';
+import { useLayoutEffect, useRef, useState } from 'react';
+import { File, Files, Folder, FolderOpen, GitBranch, type LucideIcon } from 'lucide-react';
+import { ActionIcon, Badge, ScrollArea, Text, Tree, type TreeDataNode } from '@lobehub/ui/base-ui';
+import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
 import { go, type Route } from './route';
 import { usePolling } from './polling';
 import type { DirEntry } from './types';
 
-// Recuo por nível: a seta (ou o espaço dela, nos arquivos) fica sempre na mesma coluna de cada nível.
-const indent = (depth: number) => 8 + depth * 16;
-
 // Caminho relativo com "/" (como o backend); a raiz é ''.
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 const inside = (dir: string, path: string) => path.startsWith(`${dir}/`);
 
-type Tree = { children: Record<string, DirEntry[]>; expanded: string[] };
+type ExplorerTree = { children: Record<string, DirEntry[]>; expanded: string[] };
 /** Tira uma pasta e tudo o que está dentro dela, aberto ou com lista guardada. */
-const drop = (tree: Tree, path: string): Tree => ({
+const drop = (tree: ExplorerTree, path: string): ExplorerTree => ({
   expanded: tree.expanded.filter((p) => p !== path && !inside(path, p)),
   children: Object.fromEntries(Object.entries(tree.children).filter(([p]) => p !== path && !inside(path, p))),
 });
 const sameList = (a: DirEntry[] | undefined, b: DirEntry[]) =>
   !!a && a.length === b.length && a.every((e, i) => e.name === b[i].name && e.dir === b[i].dir);
+
+// Seleção fica sempre vazia: clicar na linha abre ou fecha a pasta, sem marcar nada.
+const NO_SELECTION: string[] = [];
 
 /** Coluna de ícones: uma tela por botão, na ordem Arquivos, Git. O botão da tela aberta tem aria-current. */
 export function Nav({ route, changed }: { route: Route; changed: number }) {
@@ -35,7 +36,7 @@ export function Nav({ route, changed }: { route: Route; changed: number }) {
   );
   const gitLabel = changed ? `Git (${changed} ${changed === 1 ? 'arquivo alterado' : 'arquivos alterados'})` : 'Git';
   return (
-    <nav aria-label="Telas" className="flex w-11 shrink-0 flex-col items-center gap-1 border-r bg-card py-2">
+    <Flexbox as="nav" aria-label="Telas" flex="none" width={44} align="center" gap={4} paddingBlock={8} className="border-r bg-card">
       {button('arquivos', 'Arquivos', Files)}
       <div className="relative">
         {button('git', gitLabel, GitBranch, 'Git')}
@@ -43,13 +44,13 @@ export function Nav({ route, changed }: { route: Route; changed: number }) {
           <Badge aria-hidden="true" count={changed} className="pointer-events-none absolute -top-1 -right-1" />
         )}
       </div>
-    </nav>
+    </Flexbox>
   );
 }
 
 /** Árvore de pastas do projeto, à esquerda dos terminais na tela principal. Pasta abre e fecha; clicar em arquivo não faz nada. */
 export function FilesScreen() {
-  const [tree, setTree] = useState<Tree>({ children: {}, expanded: [] });
+  const [tree, setTree] = useState<ExplorerTree>({ children: {}, expanded: [] });
   const [error, setError] = useState('');
   const expanded = useRef<string[]>([]);
   useLayoutEffect(() => {
@@ -92,43 +93,49 @@ export function FilesScreen() {
     }
   }
 
-  const rows = (dir: string, depth: number): ReactNode[] =>
-    (tree.children[dir] ?? []).flatMap((entry) => {
+  // O Tree só mostra seta e abre uma pasta que tem filhos. Por isso toda pasta recebe ao menos um filho:
+  // se a lista ainda não chegou, esse filho é um aviso (não selecionável), e a pasta não parece folha.
+  const nodes = (dir: string): TreeDataNode[] =>
+    (tree.children[dir] ?? []).map((entry): TreeDataNode => {
       const path = join(dir, entry.name);
-      const style = { paddingLeft: indent(depth) };
+      const title = <Text as="span" ellipsis title={entry.name}>{entry.name}</Text>;
       if (!entry.dir) {
-        return [
-          <div key={path} title={entry.name} style={style} className="flex h-6 items-center gap-1 pr-2 text-sm">
-            <span className="size-3.5 shrink-0" />
-            <File className="size-4 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 truncate">{entry.name}</span>
-          </div>,
-        ];
+        return { key: path, title, isLeaf: true, icon: <File className="size-4 text-muted-foreground" /> };
       }
-      const isOpen = tree.expanded.includes(path);
-      return [
-        <button
-          key={path} type="button" aria-expanded={isOpen} title={entry.name} style={style}
-          onClick={() => toggle(path, isOpen)}
-          className="flex h-6 w-full items-center gap-1 rounded-sm pr-2 text-left text-sm outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          {isOpen
-            ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-            : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
-          {isOpen ? <FolderOpen className="size-4 shrink-0" /> : <Folder className="size-4 shrink-0" />}
-          <span className="min-w-0 truncate">{entry.name}</span>
-        </button>,
-        ...(isOpen ? rows(path, depth + 1) : []),
-      ];
+      const list = tree.children[path];
+      return {
+        key: path,
+        title,
+        icon: tree.expanded.includes(path) ? <FolderOpen className="size-4" /> : <Folder className="size-4" />,
+        children: list ? nodes(path) : [{
+          key: `${path}/`,
+          title: <Text as="span" type="secondary" fontSize={12}>Lendo a pasta…</Text>,
+          isLeaf: true,
+          selectable: false,
+        }],
+      };
     });
 
   return (
     <ScrollArea className="h-full" disableContentFit>
-      <div className="py-2">
-        {error && <p role="status" className="px-3 py-1 text-xs text-muted-foreground">{error}</p>}
-        {!tree.children[''] && !error && <p className="px-3 py-1 text-xs text-muted-foreground">Lendo a pasta…</p>}
-        {rows('', 0)}
-      </div>
+      <Flexbox paddingBlock={8}>
+        {error && <Text as="p" role="status" type="secondary" fontSize={12} className="px-3 py-1">{error}</Text>}
+        {!tree.children[''] && !error && (
+          <Text as="p" type="secondary" fontSize={12} className="px-3 py-1">Lendo a pasta…</Text>
+        )}
+        <Tree
+          treeData={nodes('')} expandedKeys={tree.expanded} selectedKeys={NO_SELECTION}
+          indent={16} size="small" showIcon style={{ paddingInline: 8 }}
+          onExpand={(keys) => {
+            // Abre o que entrou na lista e fecha o que saiu (a tecla * abre vários de uma vez).
+            keys.filter((k) => !tree.expanded.includes(k)).forEach((k) => toggle(k, false));
+            tree.expanded.filter((k) => !keys.includes(k)).forEach((k) => toggle(k, true));
+          }}
+          onSelect={(_, { node }) => {
+            if (!node.isLeaf) toggle(node.key, tree.expanded.includes(node.key));
+          }}
+        />
+      </Flexbox>
     </ScrollArea>
   );
 }
@@ -136,13 +143,13 @@ export function FilesScreen() {
 /** Barra de status fina embaixo da tela principal: só a branch atual do projeto. */
 export function StatusBar({ branch }: { branch: string | undefined }) {
   return (
-    <footer className="flex h-6 shrink-0 items-center gap-1.5 border-t bg-card px-3 text-xs text-muted-foreground">
+    <Flexbox as="footer" horizontal align="center" gap={6} height={24} flex="none" paddingInline={12} className="border-t bg-card">
       {branch && (
         <>
-          <GitBranch className="size-3.5 shrink-0" />
-          <span title={branch} className="min-w-0 truncate font-mono text-foreground">{branch}</span>
+          <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+          <Text as="span" code fontSize={12} ellipsis title={branch}>{branch}</Text>
         </>
       )}
-    </footer>
+    </Flexbox>
   );
 }
