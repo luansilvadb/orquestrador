@@ -11,7 +11,7 @@
     "beforeBundleCommand": "npm run copy:delegar"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "Orquestrador", "width": 1400, "height": 900 }],
+    "windows": [{ "label": "main", "title": "Orquestrador", "width": 1400, "height": 900, "center": true, "decorations": false }],
     "security": { "csp": null }
   },
   "bundle": {

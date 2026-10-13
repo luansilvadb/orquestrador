@@ -52,6 +52,3 @@ export type Events = {
 };
 
 export const ORCHESTRATOR = 'orchestrator';
-
-export const describeChoice = (c: Choice) =>
-  [c.tool, c.model, c.effort].filter(Boolean).join(' ') + (c.model || c.effort ? '' : ' (padrão do CLI)');

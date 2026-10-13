@@ -9,6 +9,13 @@ export interface Transport {
   listen<K extends keyof Events>(event: K, handler: (payload: Events[K]) => void): Promise<void>;
   /** `mayClose` responde se a janela pode fechar; o encerramento do backend é feito dentro dela. */
   onCloseRequested(mayClose: () => Promise<boolean>): Promise<void>;
+  minimize(): Promise<void>;
+  toggleMaximize(): Promise<void>;
+  /** Passa pelo `onCloseRequested`: a confirmação de fechamento vale também para o botão da barra. */
+  close(): Promise<void>;
+  isMaximized(): Promise<boolean>;
+  /** Chama `handler` a cada mudança de tamanho (maximizar e restaurar entram aqui); responde o cancelamento da escuta. */
+  onResized(handler: () => void): Promise<() => void>;
 }
 
 const tauri: Transport = {
@@ -18,6 +25,11 @@ const tauri: Transport = {
     void (await getCurrentWindow().onCloseRequested(async (event) => {
       if (!(await mayClose())) event.preventDefault();
     })),
+  minimize: () => getCurrentWindow().minimize(),
+  toggleMaximize: () => getCurrentWindow().toggleMaximize(),
+  close: () => getCurrentWindow().close(),
+  isMaximized: () => getCurrentWindow().isMaximized(),
+  onResized: (handler) => getCurrentWindow().onResized(() => handler()),
 };
 
 let transport: Transport;
@@ -33,6 +45,11 @@ const call = <T>(cmd: string, args?: Record<string, unknown>) => transport.invok
 export const backend = {
   listen: <K extends keyof Events>(event: K, handler: (payload: Events[K]) => void) => transport.listen(event, handler),
   onCloseRequested: (mayClose: () => Promise<boolean>) => transport.onCloseRequested(mayClose),
+  minimize: () => transport.minimize(),
+  toggleMaximize: () => transport.toggleMaximize(),
+  close: () => transport.close(),
+  isMaximized: () => transport.isMaximized(),
+  onResized: (handler: () => void) => transport.onResized(handler),
 
   updateStatus: () => call<UpdateStatus>('update_status'),
   retryUpdate: () => call<UpdateStatus>('retry_update'),

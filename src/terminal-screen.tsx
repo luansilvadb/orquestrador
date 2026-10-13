@@ -1,10 +1,12 @@
 // Os terminais, ao lado da árvore de pastas na tela principal: o orquestrador e um executor por aba. Todos ficam montados; só o da aba ativa aparece.
-import { useState, type CSSProperties, type ReactNode } from 'react';
-import { CircleCheck, CircleHelp, CircleX, Clock, Hourglass, LoaderCircle, Square } from 'lucide-react';
+import { useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
+import { Bot, CircleCheck, CircleHelp, CircleX, Clock, Hourglass, LoaderCircle, SlidersHorizontal, Square } from 'lucide-react';
 import { Button, Tag, TabsIndicator, TabsList, TabsRoot, TabsTab } from '@lobehub/ui/base-ui';
+import ClaudeIcon from '@lobehub/icons/es/Claude';
+import CodexIcon from '@lobehub/icons/es/Codex';
 import { cn } from 'cn';
 import { attachExecutor, TermHost, terminals } from './terminals';
-import { describeChoice, ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState } from './types';
+import { ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Tool } from './types';
 
 // Cada estado: rótulo e ícone com texto (regra do design system); a cor vem dos tokens --status-* de index.css.
 export const STATES: Record<NodeState, { label: string; icon: typeof Clock; color: string; tone: string }> = {
@@ -30,6 +32,33 @@ const COVER_TEXT: Partial<Record<NodeState, string>> = {
   queued: 'Na fila: começa quando um executor terminar ou o teto de simultâneos subir.',
 };
 
+// Ícones monocromáticos (herdam currentColor); o import direto por arquivo não puxa o pacote inteiro.
+const TOOL_ICON: Record<Tool, ComponentType<{ size?: number; className?: string }>> = {
+  claude: ClaudeIcon,
+  codex: CodexIcon,
+};
+
+/** Escolha em partes separadas por "·": ferramenta em destaque, modelo e esforço apagados; parte vazia some. */
+const ChoiceText = ({ choice, className }: { choice: Choice; className?: string }) => {
+  const parts = [choice.model, choice.effort].filter(Boolean);
+  if (parts.length === 0) parts.push('padrão do CLI');
+  const ToolIcon = TOOL_ICON[choice.tool];
+  return (
+    <span className={cn('flex min-w-0 items-center gap-1.5 font-mono', className)} title={[choice.tool, ...parts].join(' · ')}>
+      <ToolIcon size={14} className="shrink-0 text-foreground" />
+      <span className="min-w-0 truncate">
+        <span className="text-foreground">{choice.tool}</span>
+        {parts.map((part, i) => (
+          <span key={i}>
+            <span className="px-1.5 text-muted-foreground">·</span>
+            <span className="text-muted-foreground">{part}</span>
+          </span>
+        ))}
+      </span>
+    </span>
+  );
+};
+
 /** Camada que cobre o terminal do executor com um aviso, sem sair da aba. */
 const Cover = ({ children }: { children: ReactNode }) => (
   <div className="absolute inset-0 overflow-auto bg-background/95 p-4">
@@ -38,7 +67,7 @@ const Cover = ({ children }: { children: ReactNode }) => (
 );
 
 type TerminalsProps = {
-  orchestrator: { title: string; started: boolean } | null;
+  orchestrator: { choice: Choice | null; started: boolean } | null;
   executors: ExecutorNode[];
   executorChoice: Choice | null;
   notice: string;
@@ -84,33 +113,46 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
         {orchestrator && (
-          <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 text-xs">
+          <div className="flex h-9 shrink-0 items-center gap-2 whitespace-nowrap border-b px-3 text-xs">
             {node && meta ? (
               <>
-                <Tag icon={<meta.icon className={node.state === 'running' ? 'animate-spin' : undefined} />} style={tagStyle(meta.color)}>
+                <Tag className="shrink-0" icon={<meta.icon className={node.state === 'running' ? 'animate-spin' : undefined} />} style={tagStyle(meta.color)}>
                   {meta.label}
                 </Tag>
-                <span className="font-mono text-muted-foreground">#{node.index + 1}</span>
+                <span className="shrink-0 font-mono text-muted-foreground">#{node.index + 1}</span>
                 <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
-                {node.choice && <span className="truncate font-mono text-muted-foreground">{describeChoice(node.choice)}</span>}
+                {node.choice && <ChoiceText choice={node.choice} className="shrink-0" />}
                 {CANCELLABLE.includes(node.state) && (
-                  <Button type="default" size="small" title="Interrompe só este executor" onClick={() => onStop(node.id)}>
-                    parar
+                  <Button type="default" size="small" className="shrink-0" title="Interrompe só este executor" icon={<Square className="size-3" />} onClick={() => onStop(node.id)}>
+                    Parar
                   </Button>
                 )}
               </>
             ) : (
               <>
-                <Tag>orquestrador</Tag>
-                <span className="min-w-0 truncate font-mono text-muted-foreground">{orchestrator.title}</span>
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="flex shrink-0 items-center gap-1.5 font-medium text-foreground">
+                    <Bot className="size-3.5 text-muted-foreground" />
+                    Orquestrador
+                  </span>
+                  {orchestrator.choice && <ChoiceText choice={orchestrator.choice} />}
+                </div>
                 <span className="flex-1" />
                 {orchestrator.started && (
                   <Button
-                    type="default" size="small" className="font-mono"
+                    type="default" ghost size="small" className="shrink-0"
                     title="Escolha dos executores; a troca vale para os próximos"
+                    aria-haspopup="dialog"
                     onClick={onExecutorChoice}
                   >
-                    executores: {executorChoice ? describeChoice(executorChoice) : 'ainda não escolhido'}
+                    {/* Classes no Button perdem para o CSS sem camada do Lobe UI; por isso o peso e o leading ficam neste span */}
+                    <span className="flex items-center gap-1.5 font-normal leading-normal">
+                      <span className="text-muted-foreground">Executores</span>
+                      {executorChoice
+                        ? <ChoiceText choice={executorChoice} />
+                        : <span className="text-muted-foreground">ainda não escolhido</span>}
+                      <SlidersHorizontal className="size-3 text-muted-foreground" />
+                    </span>
                   </Button>
                 )}
               </>

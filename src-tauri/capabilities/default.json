@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Janela principal: invoke, eventos e o pedido de fechamento.",
+  "description": "Janela principal: invoke, eventos, barra de título própria (arrastar, minimizar, maximizar) e o pedido de fechamento.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-close", "core:window:allow-destroy"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize"
+  ]
 }

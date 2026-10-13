@@ -434,4 +434,10 @@ export const mock: Transport = {
   }, cmd === 'term_snapshot' ? 100 : 15)),
   listen: async (event, handler) => void handlers.set(event, [...(handlers.get(event) ?? []), handler as Handler]),
   onCloseRequested: async (mayClose) => { closeHandler = mayClose; },
+  // Janela simulada: minimizar e maximizar não fazem nada; fechar segue o mesmo caminho de `__mock.close()`.
+  minimize: async () => {},
+  toggleMaximize: async () => {},
+  close: async () => void (await debug.close()),
+  isMaximized: async () => false,
+  onResized: async () => () => {},
 };

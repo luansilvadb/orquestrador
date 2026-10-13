@@ -9,8 +9,9 @@ import { GitScreen, usePolled } from './git';
 import { useRoute, type Route } from './route';
 import { FINISHED, STATES, TerminalsScreen } from './terminal-screen';
 import { terminals } from './terminals';
+import { TitleBar } from './titlebar';
 import {
-  describeChoice, ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus,
+  ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus,
 } from './types';
 
 const MB = 1024 * 1024;
@@ -21,7 +22,7 @@ type State = {
   project: string;
   projectBusy: boolean;
   options: Options | null;
-  orchestrator: { title: string; started: boolean; overlay: Overlay } | null;
+  orchestrator: { choice: Choice | null; started: boolean; overlay: Overlay } | null;
   executorChoice: Choice | null;
   executors: ExecutorNode[];
   notice: string;
@@ -58,10 +59,10 @@ function reducer(state: State, action: Action): State {
     case 'open':
       return {
         ...state, options: action.options, notice: '',
-        orchestrator: { title: '', started: false, overlay: 'start' },
+        orchestrator: { choice: null, started: false, overlay: 'start' },
       };
     case 'started':
-      return { ...state, orchestrator: state.orchestrator && { ...state.orchestrator, title: describeChoice(action.choice), started: true, overlay: null } };
+      return { ...state, orchestrator: state.orchestrator && { ...state.orchestrator, choice: action.choice, started: true, overlay: null } };
     case 'overlay':
       return { ...state, orchestrator: state.orchestrator && { ...state.orchestrator, overlay: action.overlay } };
     case 'executorChoice':
@@ -113,6 +114,7 @@ export function App() {
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
   // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
   const git = usePolled(() => backend.gitStatus(), state.update.phase === 'ready' && !!state.project, true);
+  const [connected, setConnected] = useState(false);
   const [fatal, setFatal] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [projectError, setProjectError] = useState('');
@@ -143,6 +145,7 @@ export function App() {
   async function boot() {
     try {
       await connect();
+      setConnected(true);
       await Promise.all([
         backend.listen('update-status', (status) => {
           updateEvents.current++;
@@ -295,7 +298,7 @@ export function App() {
   if (!ready) {
     const retry = update.phase === 'failed';
     return (
-      <Screen>
+      <Screen connected={connected}>
         <Block variant="outlined" direction="vertical" gap={16} padding={24} className="w-full max-w-md">
           <div className="grid gap-1.5">
             <h1 className="text-base font-semibold leading-none">Orquestrador</h1>
@@ -332,7 +335,7 @@ export function App() {
 
   if (!state.project) {
     return (
-      <Screen>
+      <Screen connected={connected}>
         <Block variant="outlined" direction="vertical" gap={16} padding={24} className="w-full max-w-md">
           <div className="grid gap-1.5">
             <h1 className="text-base font-semibold leading-none">Orquestrador</h1>
@@ -353,13 +356,12 @@ export function App() {
 
   return (
     <div className="flex h-dvh flex-col">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b bg-card px-3 py-2">
-        <span className="text-sm font-semibold">Orquestrador</span>
-        <code title="Pasta do projeto" className="max-w-[360px] truncate rounded-md border bg-muted px-2 py-0.5 text-xs select-text">
+      <TitleBar connected={connected}>
+        <code title="Pasta do projeto" className="min-w-0 truncate rounded-md border bg-muted px-2 py-0.5 text-xs select-text">
           {state.project}
         </code>
-        <span className="text-xs text-muted-foreground">{counts}</span>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <span data-tauri-drag-region className="whitespace-nowrap text-xs text-muted-foreground">{counts}</span>
+        <div className="ml-auto flex items-center">
           <label className="flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground" title="Quantos executores rodam ao mesmo tempo (1 a 16); os demais ficam na fila">
             simultâneos
             {/* O blur do wrapper confirma (o foco sai do campo); o Enter tira o foco. Valor vazio vira null. */}
@@ -374,7 +376,7 @@ export function App() {
             />
           </label>
         </div>
-      </header>
+      </TitleBar>
 
       <div className="flex min-h-0 flex-1">
         <Nav route={route} changed={changed} />
@@ -453,7 +455,12 @@ export function App() {
   );
 }
 
-/** Tela cheia centralizada para atualização e início. */
-function Screen({ children }: { children: ReactNode }) {
-  return <div className="grid h-dvh place-items-center p-6">{children}</div>;
+/** Atualização e escolha de projeto: barra no topo e o cartão centralizado no espaço que sobra. */
+function Screen({ connected, children }: { connected: boolean; children: ReactNode }) {
+  return (
+    <div className="flex h-dvh flex-col">
+      <TitleBar connected={connected} />
+      <div className="grid min-h-0 flex-1 place-items-center p-6">{children}</div>
+    </div>
+  );
 }
