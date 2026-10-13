@@ -1,7 +1,7 @@
 // A navegação da coluna de ícones, a árvore de pastas (na tela principal) e a barra de status com a branch.
 // A árvore se atualiza sozinha (usePolling). O status do Git vem do App, que o usa no contador da navegação e na barra de status.
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, File, Files, Folder, FolderOpen, GitBranch, GitCommitHorizontal, type LucideIcon } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Files, Folder, FolderOpen, GitBranch, type LucideIcon } from 'lucide-react';
 import { ActionIcon, Badge, ScrollArea } from '@lobehub/ui/base-ui';
 import { backend, message } from './backend';
 import { go, type Route } from './route';
@@ -38,7 +38,7 @@ export function Nav({ route, changed }: { route: Route; changed: number }) {
     <nav aria-label="Telas" className="flex w-11 shrink-0 flex-col items-center gap-1 border-r bg-card py-2">
       {button('arquivos', 'Arquivos', Files)}
       <div className="relative">
-        {button('git', gitLabel, GitCommitHorizontal, 'Git')}
+        {button('git', gitLabel, GitBranch, 'Git')}
         {changed > 0 && (
           <Badge aria-hidden="true" count={changed} className="pointer-events-none absolute -top-1 -right-1" />
         )}
