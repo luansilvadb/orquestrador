@@ -53,10 +53,8 @@ export type Events = {
   'node-state': NodeStateEvent;
   'executor-choice': Choice;
   'orchestrator-exit': { code: number | null };
-  'shell-exit': { code: number | null };
+  'shell-exit': { id: string; code: number | null };
   'update-status': UpdateStatus;
 };
 
 export const ORCHESTRATOR = 'orchestrator';
-// Id fixo do terminal do shell do usuário (o painel Terminal).
-export const SHELL = 'shell';

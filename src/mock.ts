@@ -1,6 +1,7 @@
 // Backend simulado, só para desenvolvimento no navegador (nunca entra no build de produção).
 // Digite no orquestrador: `lote` (6 tarefas), `sair` (termina com código 0), `sair 3` (código 3).
-// No painel Terminal (Ctrl+`), o shell simulado ecoa o que se digita; `exit` encerra o shell (código 0) e o painel fecha.
+// No painel Terminal (Ctrl+`), cada aba é um shell simulado: ecoa o que se digita, com a própria linha em edição. `exit` encerra só aquela aba (código 0);
+// o `+` abre outra, e o X fecha a aba sem evento. O programa simulado é sempre `pwsh.exe`.
 // Na URL: `?mock=nogit` faz a escolha da pasta falhar como "fora de um repositório Git"; `?mock=noshell` faz o shell não abrir.
 // Na URL: `?update=falha` mostra a atualização bloqueada por falta de internet (a nova tentativa libera) e
 // `?update=download` simula o download. Sem parâmetro, o uso já vem liberado, como no build de desenvolvimento.
@@ -11,7 +12,7 @@
 // Na pesquisa (Ctrl+Shift+F), `search` filtra de verdade, mas só os arquivos de `TEXTS` têm linhas; os demais não casam nada.
 import type { Transport } from './backend';
 import {
-  ORCHESTRATOR, SHELL, type Choice, type Events, type ExecutorNode, type GitDiff, type GitFile,
+  ORCHESTRATOR, type Choice, type Events, type ExecutorNode, type GitDiff, type GitFile,
   type GitKind, type NodeState, type Options, type SearchFile, type SearchMatch, type SearchOptions, type SearchResults, type UpdateStatus,
 } from './types';
 
@@ -123,8 +124,9 @@ function removePath(path: string) {
 }
 
 let alive = false, line = '', batches = 0, executorChoice: Choice | null = null, closeHandler: (() => Promise<boolean>) | null = null;
-// Shell do painel Terminal: vive à parte do orquestrador (sobrevive a `sair`), e só `exit` o encerra.
-let shellAlive = false, shellLine = '';
+// Shells do painel Terminal: vivem à parte do orquestrador (sobrevivem a `sair`), e só `exit` ou `close_shell` os encerram.
+// Cada um guarda a própria linha em edição.
+const shells = new Map<string, { line: string }>();
 const jobs = new Map<string, Job>();
 const debug = { writes: [] as string[], sizes: {} as Record<string, string>, close: async () => {
   const closed = closeHandler ? await closeHandler() : true;
@@ -231,8 +233,8 @@ function startBatch() {
 function killAll() {
   for (const job of jobs.values()) clearInterval(job.timer);
   jobs.clear();
-  // O shell não depende do orquestrador: o terminal dele fica.
-  for (const id of [...terms.keys()]) if (id !== SHELL) terms.delete(id);
+  // Os shells não dependem do orquestrador: os terminais deles ficam.
+  for (const id of [...terms.keys()]) if (!shells.has(id)) terms.delete(id);
   reported.clear();
   alive = false;
   executorChoice = null;
@@ -258,25 +260,26 @@ function typed(data: string) {
 }
 
 const SHELL_PROMPT = 'PS C:\\projetos\\exemplo> ';
-function shellTyped(data: string) {
+function shellTyped(id: string, data: string) {
+  const shell = shells.get(id)!;
   for (const char of data) {
     if (char === '\r') {
-      const command = shellLine.trim();
-      shellLine = '';
-      out(SHELL, '\r\n');
+      const command = shell.line.trim();
+      shell.line = '';
+      out(id, '\r\n');
       if (command === 'exit') {
-        shellAlive = false;
-        terms.delete(SHELL);
-        emit('shell-exit', { code: 0 });
+        shells.delete(id);
+        terms.delete(id);
+        emit('shell-exit', { id, code: 0 });
         return;
       }
-      if (command) out(SHELL, `eco: ${command}\r\n`);
-      out(SHELL, SHELL_PROMPT);
+      if (command) out(id, `eco: ${command}\r\n`);
+      out(id, SHELL_PROMPT);
     } else if (char === '\x7f') {
-      if (shellLine) { shellLine = shellLine.slice(0, -1); out(SHELL, '\b \b'); }
+      if (shell.line) { shell.line = shell.line.slice(0, -1); out(id, '\b \b'); }
     } else if (char >= ' ') {
-      shellLine += char;
-      out(SHELL, char);
+      shell.line += char;
+      out(id, char);
     }
   }
 }
@@ -348,18 +351,23 @@ const commands: Record<string, (args: any) => unknown> = {
     schedule();
   },
   set_max_parallel: ({ value }: { value: number }) => { options.maxParallel = value; schedule(); },
-  start_shell: () => {
+  start_shell: ({ id }: { id: string }) => {
     if (new URLSearchParams(location.search).get('mock') === 'noshell') throw 'Não foi possível abrir o PowerShell: o programa não foi encontrado.';
     // Começa do zero: o terminal antigo (se houver) some, como no backend.
-    terms.delete(SHELL);
-    shellAlive = true;
-    shellLine = '';
-    out(SHELL, SHELL_PROMPT);
+    terms.delete(id);
+    shells.set(id, { line: '' });
+    out(id, SHELL_PROMPT);
+    return 'pwsh.exe';
+  },
+  // Mata o shell sem evento de saída: o terminal some e nenhum `shell-exit` chega.
+  close_shell: ({ id }: { id: string }) => {
+    shells.delete(id);
+    terms.delete(id);
   },
   term_write: ({ id, data }: { id: string; data: string }) => {
     debug.writes.push(id);
     if (id === ORCHESTRATOR && alive) typed(data);
-    if (id === SHELL && shellAlive) shellTyped(data);
+    if (shells.has(id)) shellTyped(id, data);
   },
   clipboard_files: () => [] as string[],
   list_dir: ({ path }: { path: string }) => {

@@ -11,12 +11,14 @@ import type { TermView } from './term';
 import { terminals } from './terminals';
 import { TitleBar } from './titlebar';
 import {
-  ORCHESTRATOR, SHELL, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus,
+  ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus,
 } from './types';
 
 const MB = 1024 * 1024;
 
 type Overlay = 'start' | 'executor' | null;
+// Um shell do painel Terminal: `program` fica '' até o backend responder com o nome do programa.
+type ShellItem = { id: string; program: string };
 type State = {
   update: UpdateStatus;
   project: string;
@@ -26,6 +28,9 @@ type State = {
   executorChoice: Choice | null;
   executors: ExecutorNode[];
   notice: string;
+  shells: ShellItem[];
+  shellActive: string;
+  shellOpen: boolean;
 };
 type Action =
   | { type: 'update'; status: UpdateStatus }
@@ -39,11 +44,16 @@ type Action =
   | { type: 'nodeAdded'; node: ExecutorNode }
   | { type: 'nodeState'; id: string; state: NodeState; choice: Choice | null }
   | { type: 'removed'; ids: string[] }
-  | { type: 'reset'; notice: string };
+  | { type: 'reset'; notice: string }
+  | { type: 'shellAdd'; id: string }
+  | { type: 'shellProgram'; id: string; program: string }
+  | { type: 'shellRemove'; id: string }
+  | { type: 'shellSelect'; id: string }
+  | { type: 'shellOpen'; open: boolean };
 
 const initial: State = {
   update: { phase: 'checking' }, project: '', projectBusy: false, options: null, orchestrator: null,
-  executorChoice: null, executors: [], notice: '',
+  executorChoice: null, executors: [], notice: '', shells: [], shellActive: '', shellOpen: false,
 };
 
 function reducer(state: State, action: Action): State {
@@ -80,6 +90,24 @@ function reducer(state: State, action: Action): State {
       return { ...state, executors: state.executors.filter((e) => !action.ids.includes(e.id)) };
     case 'reset':
       return { ...state, orchestrator: null, executorChoice: null, executors: [], notice: action.notice };
+    case 'shellAdd':
+      return { ...state, shells: [...state.shells, { id: action.id, program: '' }], shellActive: action.id, shellOpen: true };
+    case 'shellProgram':
+      return { ...state, shells: state.shells.map((s) => (s.id === action.id ? { ...s, program: action.program } : s)) };
+    case 'shellRemove': {
+      const index = state.shells.findIndex((s) => s.id === action.id);
+      if (index < 0) return state;
+      const shells = state.shells.filter((s) => s.id !== action.id);
+      // Sem aba nenhuma o painel fecha; a próxima abertura cria um shell novo.
+      if (shells.length === 0) return { ...state, shells, shellActive: '', shellOpen: false };
+      // A aba ativa que sai passa para a vizinha: a da direita, ou a da esquerda se era a última.
+      const shellActive = state.shellActive === action.id ? shells[index]?.id ?? shells[index - 1].id : state.shellActive;
+      return { ...state, shells, shellActive };
+    }
+    case 'shellSelect':
+      return { ...state, shellActive: action.id };
+    case 'shellOpen':
+      return { ...state, shellOpen: action.open };
   }
 }
 
@@ -126,9 +154,8 @@ export function App() {
   const [maxValue, setMaxValue] = useState<number | null>(null);
   const maxParallel = state.options?.maxParallel;
   useEffect(() => setMaxValue(maxParallel ?? null), [maxParallel]);
-  // Painel Terminal: o TermHost monta na primeira abertura e, depois, só se esconde (não desmonta, para o fluxo não se acumular).
-  const [shellOpen, setShellOpen] = useState(false);
-  const [shellMounted, setShellMounted] = useState(false);
+  // Contador dos shells do painel Terminal: só cresce, então um id nunca se repete enquanto o app está aberto.
+  const shellSeq = useRef(0);
 
   // ---------- ações ----------
 
@@ -168,8 +195,8 @@ export function App() {
         host().listen('executor-choice', (choice) => dispatch({ type: 'executorChoice', choice })),
         host().listen('orchestrator-exit', ({ code }) =>
           resetOrchestrator(`O orquestrador terminou (${code === null ? 'sem código de saída' : `código de saída ${code}`}).`)),
-        // `exit` no shell: o backend descarta o terminal, então o painel fecha e o TermHost sai.
-        host().listen('shell-exit', () => closeShell()),
+        // `exit` num shell: o backend já o encerrou, então só a aba dele sai (a última fecha o painel).
+        host().listen('shell-exit', ({ id }) => dropShell(id)),
         host().onCloseRequested(async () => {
           try {
             if (await backend.hasRunning() && !(await askClose())) return false;
@@ -284,43 +311,66 @@ export function App() {
     }
   }
 
-  // Fechar o painel só esconde; o shell segue vivo no backend.
-  function closeShell() {
-    terminals.forget(SHELL);
-    setShellOpen(false);
-    setShellMounted(false);
+  // Tira a aba do estado e descarta o terminal dela. Não fala com o backend: quem chama decide se o shell morre.
+  function dropShell(id: string) {
+    terminals.forget(id);
+    dispatch({ type: 'shellRemove', id });
   }
 
-  function toggleShell() {
-    if (shellOpen) return setShellOpen(false);
-    setShellOpen(true);
-    if (!shellMounted) {
-      // Sobra de um shell antigo não pode aparecer no primeiro terminal novo.
-      terminals.forget(SHELL);
-      return setShellMounted(true);
-    }
-    // Escondido, o xterm não recalcula o tamanho: reajusta e recebe o foco quando o painel volta a aparecer.
-    requestAnimationFrame(() => {
-      terminals.get(SHELL)?.fit();
-      terminals.get(SHELL)?.term.focus();
-    });
+  // Nova aba: id novo e ativo. O TermHost dela monta e chama startShell.
+  function addShell() {
+    shellSeq.current += 1;
+    dispatch({ type: 'shellAdd', id: `shell-${shellSeq.current}` });
   }
 
-  // Primeiro terminal montado do painel: inicia o shell com as colunas e linhas do xterm. Se falhar, mostra o erro e fecha o painel.
-  async function startShell(view: TermView) {
-    terminals.forget(SHELL);
+  // X da aba: mata o shell no backend e só depois tira a aba. Se o backend recusar, a aba fica para tentar de novo.
+  async function closeShell(id: string) {
     try {
-      await backend.startShell(view.term.cols, view.term.rows);
-      view.setLive();
-      await view.attach();
-      view.term.focus();
+      await backend.closeShell(id);
     } catch (e) {
       report(e);
-      closeShell();
+      return;
+    }
+    dropShell(id);
+  }
+
+  // Ctrl+` e o botão da barra de status: esconde; com o painel escondido, mostra (ou cria o primeiro shell se não há nenhum).
+  function toggleShell() {
+    const { shellOpen, shells } = stateRef.current;
+    if (shellOpen) return dispatch({ type: 'shellOpen', open: false });
+    if (shells.length === 0) return addShell();
+    dispatch({ type: 'shellOpen', open: true });
+  }
+
+  // Primeiro terminal de cada aba: inicia o shell com as colunas e linhas do xterm. Se falhar, mostra o erro e a aba sai.
+  async function startShell(id: string, view: TermView) {
+    try {
+      const program = await backend.startShell(id, view.term.cols, view.term.rows);
+      // A aba foi fechada enquanto o shell abria: o terminal já saiu, e o shell que acabou de nascer no backend fica sem aba. Mata de novo.
+      if (!stateRef.current.shells.some((s) => s.id === id)) {
+        await backend.closeShell(id).catch(() => {});
+        return;
+      }
+      dispatch({ type: 'shellProgram', id, program });
+      view.setLive();
+      await view.attach();
+      if (stateRef.current.shellActive === id) view.term.focus();
+    } catch (e) {
+      report(e);
+      dropShell(id);
     }
   }
 
+  // Aba ativa ou painel aberto mudou (clique, X, exit, Ctrl+`, "+"): o terminal da aba ativa reajusta e recebe o foco.
+  // Num só lugar, pelo efeito. Escondido, não rouba o foco; e o xterm só recalcula o tamanho com o painel visível.
+  useEffect(() => {
+    if (!state.shellOpen || !state.shellActive) return;
+    terminals.get(state.shellActive)?.fit();
+    terminals.get(state.shellActive)?.term.focus();
+  }, [state.shellOpen, state.shellActive]);
+
   // Ctrl+` abre e fecha o painel de qualquer lugar. A captura no window vem antes do xterm, que não recebe a tecla.
+  // Sem dependências: lê o estado pelo stateRef, então o listener nunca usa uma lista de abas antiga.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.altKey || e.metaKey || e.code !== 'Backquote') return;
@@ -330,7 +380,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [shellOpen, shellMounted]);
+  }, []);
 
   // Ctrl+Shift+F abre a pesquisa e foca o campo, de qualquer lugar (com projeto aberto). Mesma captura no window do Ctrl+`.
   useEffect(() => {
@@ -350,6 +400,9 @@ export function App() {
 
   const { update, orchestrator, executors, options } = state;
   const ready = update.phase === 'ready';
+  // Título da aba: nome da pasta do projeto (último segmento do caminho) e, depois que o backend responde, o programa.
+  const folder = state.project.split(/[\\/]/).filter(Boolean).pop() ?? '';
+  const shellTabs = state.shells.map((s) => ({ id: s.id, title: s.program ? `${folder} — ${s.program}` : folder }));
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
   const busy = executors.some((e) => !FINISHED.includes(e.state));
   const count = (state: NodeState) => executors.filter((e) => e.state === state).length;
@@ -453,12 +506,16 @@ export function App() {
                   executors={executors}
                   executorChoice={state.executorChoice}
                   notice={state.notice}
-                  shellOpen={shellOpen}
-                  shellMounted={shellMounted}
+                  shellOpen={state.shellOpen}
+                  shellTabs={shellTabs}
+                  shellActive={state.shellActive}
                   onOpen={openOrchestrator}
                   onExecutorChoice={toggleExecutorChoice}
                   onStop={(id) => backend.stopExecutor(id).catch(report)}
-                  onShellClose={() => setShellOpen(false)}
+                  onShellSelect={(id) => dispatch({ type: 'shellSelect', id })}
+                  onShellAdd={addShell}
+                  onShellHide={() => dispatch({ type: 'shellOpen', open: false })}
+                  onShellClose={closeShell}
                   onShellReady={startShell}
                 />
               </Flexbox>
@@ -470,7 +527,7 @@ export function App() {
         </main>
       </Flexbox>
 
-      <StatusBar branch={git.data?.branch} terminalOpen={shellOpen} onToggleTerminal={toggleShell} />
+      <StatusBar branch={git.data?.branch} terminalOpen={state.shellOpen} onToggleTerminal={toggleShell} />
 
       {/* As duas escolhas são janelas: a do orquestrador (início) e uma só para os executores. Com um executor aguardando escolha, a janela dele é a única e não fecha sem confirmar: nunca duas empilhadas. */}
       {options && (

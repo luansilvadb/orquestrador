@@ -53,8 +53,10 @@ export const backend = {
   getOptions: () => call<Options>('get_options'),
   startOrchestrator: (choice: Choice, cols: number, rows: number) =>
     call<void>('start_orchestrator', { choice, cols, rows }),
-  // Shell do usuário na pasta do projeto, no terminal de id "shell". Erro vem como mensagem em português.
-  startShell: (cols: number, rows: number) => call<void>('start_shell', { cols, rows }),
+  // Shell do usuário na pasta do projeto, no terminal de `id` (gerado pelo frontend, "shell-<n>"). Devolve o nome do programa. Erro vem como mensagem em português.
+  startShell: (id: string, cols: number, rows: number) => call<string>('start_shell', { id, cols, rows }),
+  // Mata o shell de `id` sem gerar evento de saída.
+  closeShell: (id: string) => call<void>('close_shell', { id }),
   setExecutorChoice: (choice: Choice) => call<void>('set_executor_choice', { choice }),
   setMaxParallel: (value: number) => call<void>('set_max_parallel', { value }),
   termWrite: (id: string, data: string) => call<void>('term_write', { id, data }),

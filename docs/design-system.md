@@ -19,7 +19,7 @@ Componentes em uso. Os de `@lobehub/ui` são `Block`, `Center`, `Flexbox` e `Pat
 | `Button` | `src/App.tsx`, `src/choice-form.tsx`, `src/explorer.tsx`, `src/git.tsx`, `src/terminal-screen.tsx`. |
 | `Center` | `src/App.tsx`, `src/terminal-screen.tsx` (centralização de conteúdo). |
 | `Flexbox` | `src/titlebar.tsx`, `src/explorer.tsx`, `src/choice-form.tsx`, `src/terminal-screen.tsx`, `src/git.tsx`, `src/App.tsx`, `src/shell-panel.tsx`, `src/search.tsx` (layout em coluna e em linha). |
-| `ActionIcon` | `src/explorer.tsx`, `src/git.tsx`, `src/shell-panel.tsx`, `src/search.tsx` (opções, atualizar, limpar e recolher). |
+| `ActionIcon` | `src/explorer.tsx`, `src/git.tsx`, `src/shell-panel.tsx`, `src/search.tsx` (opções, atualizar, limpar e recolher; no painel Terminal, fechar a aba, novo terminal e esconder o painel). |
 | `Badge` | `src/explorer.tsx` (contador de alterações no ícone do Git). |
 | `DraggablePanel` | `src/git.tsx` (painel lateral da tela do Git, redimensionável), `src/shell-panel.tsx` (painel Terminal, redimensionável pela borda de cima). |
 | `Input` | `src/choice-form.tsx`, `src/git.tsx` (nome de branch), `src/search.tsx` (campo da pesquisa, com as opções no `suffix`). |
@@ -32,7 +32,7 @@ Componentes em uso. Os de `@lobehub/ui` são `Block`, `Center`, `Flexbox` e `Pat
 | `ScrollArea` | `src/explorer.tsx` (árvore de pastas), `src/search.tsx` (lista de resultados). |
 | `Segmented`, `Select` | `src/choice-form.tsx`. |
 | `Tag` | `src/terminal-screen.tsx` (estado de cada executor). |
-| `TabsRoot`, `TabsList`, `TabsTab`, `TabsIndicator` | `src/terminal-screen.tsx` (faixa de abas dos terminais). |
+| `TabsRoot`, `TabsList`, `TabsTab`, `TabsIndicator` | `src/terminal-screen.tsx` (faixa de abas dos terminais), `src/shell-panel.tsx` (faixa de abas dos shells). |
 | `Text` | `src/titlebar.tsx`, `src/explorer.tsx`, `src/choice-form.tsx`, `src/terminal-screen.tsx`, `src/git.tsx`, `src/App.tsx`, `src/shell-panel.tsx`, `src/search.tsx`. |
 | `Tree` | `src/explorer.tsx` (árvore de pastas). |
 | `toast` | `src/App.tsx`, `src/git.tsx`. |
@@ -60,4 +60,4 @@ Para trocar ou adicionar um componente, importe-o de `@lobehub/ui/base-ui` (ou d
 
 ## Telas e terminais montados
 
-São três telas, com a rota em `src/App.tsx` (um estado, com o tipo `Route` em `src/explorer.tsx`): Arquivos, o padrão, com a árvore de pastas à esquerda (faixa fixa de 280px) e os terminais à direita; Pesquisar, que ocupa a mesma faixa de 280px no lugar da árvore e deixa os terminais no lugar; e Git, que troca a área central inteira. Todas ficam montadas o tempo todo, em `src/App.tsx`. Dentro da faixa de 280px, a árvore e a pesquisa ficam sobrepostas (`absolute inset-0`) e a inativa vai para `invisible`. A rota só escolhe qual aparece; nada é desmontado e nada usa `display: none`. Na tela principal vale o mesmo para os terminais: todos ficam montados e só o da aba ativa aparece. O motivo: o xterm recalcula colunas e linhas quando sai do layout ou volta, e manda o tamanho errado ao PTY se isso acontecer. Por isso a troca entre Arquivos e Pesquisar não pode desmontar a coluna dos terminais nem mudar o tamanho dela.
+São três telas, com a rota em `src/App.tsx` (um estado, com o tipo `Route` em `src/explorer.tsx`): Arquivos, o padrão, com a árvore de pastas à esquerda (faixa fixa de 280px) e os terminais à direita; Pesquisar, que ocupa a mesma faixa de 280px no lugar da árvore e deixa os terminais no lugar; e Git, que troca a área central inteira. Todas ficam montadas o tempo todo, em `src/App.tsx`. Dentro da faixa de 280px, a árvore e a pesquisa ficam sobrepostas (`absolute inset-0`) e a inativa vai para `invisible`. A rota só escolhe qual aparece; nada é desmontado e nada usa `display: none`. Na tela principal vale o mesmo para os terminais: todos ficam montados e só o da aba ativa aparece. O motivo: o xterm recalcula colunas e linhas quando sai do layout ou volta, e manda o tamanho errado ao PTY se isso acontecer. Por isso a troca entre Arquivos e Pesquisar não pode desmontar a coluna dos terminais nem mudar o tamanho dela. O painel Terminal (`src/shell-panel.tsx`) segue a mesma regra para os shells: as abas trocam com `invisible` e todos os `TermHost` ficam montados. A exceção é o próprio painel: escondido, ele sai do layout com `hidden` (display none), para o cartão de cima crescer.

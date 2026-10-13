@@ -137,11 +137,20 @@ fn start_orchestrator(core: State<Core>, gate: State<Gate>, choice: Choice, cols
     core.start_orchestrator(choice, cols, rows)
 }
 
-/// Abre o shell do usuário na pasta do projeto. Recusado se já houver um aberto.
+/// Abre um shell do usuário, no slot `id` (`shell-<n>`), na pasta do projeto. Recusado se esse id já tiver um aberto.
+/// Devolve o programa que abriu.
 #[tauri::command(async)]
-fn start_shell(core: State<Core>, gate: State<Gate>, cols: u16, rows: u16) -> Result<(), String> {
+fn start_shell(core: State<Core>, gate: State<Gate>, id: String, cols: u16, rows: u16) -> Result<String, String> {
     gate.ensure_open()?;
-    core.start_shell(cols, rows)
+    core.start_shell(&id, cols, rows)
+}
+
+/// Fecha o shell `id` e mata o processo dele.
+#[tauri::command(async)]
+fn close_shell(core: State<Core>, gate: State<Gate>, id: String) -> Result<(), String> {
+    gate.ensure_open()?;
+    core.close_shell(&id);
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -256,6 +265,7 @@ pub fn run(context: tauri::Context) {
             git_create_branch,
             start_orchestrator,
             start_shell,
+            close_shell,
             set_executor_choice,
             set_max_parallel,
             term_write,

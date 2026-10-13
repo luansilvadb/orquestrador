@@ -7,7 +7,7 @@ import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
 import type { TermView } from './term';
 import { attachExecutor, TermHost, terminals } from './terminals';
-import { ShellPanel } from './shell-panel';
+import { ShellPanel, type ShellTab } from './shell-panel';
 import { ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Tool } from './types';
 
 // Cada estado: rótulo e ícone com texto (regra do design system); a cor é um nome predefinido do Lobe UI, o mesmo para o Tag e para o ícone da aba.
@@ -72,17 +72,22 @@ type TerminalsProps = {
   executorChoice: Choice | null;
   notice: string;
   shellOpen: boolean;
-  shellMounted: boolean;
+  shellTabs: ShellTab[];
+  shellActive: string;
   onOpen: () => void;
   onExecutorChoice: () => void;
   onStop: (id: string) => void;
-  onShellClose: () => void;
-  onShellReady: (view: TermView) => void;
+  onShellSelect: (id: string) => void;
+  onShellAdd: () => void;
+  onShellHide: () => void;
+  onShellClose: (id: string) => void;
+  onShellReady: (id: string, view: TermView) => void;
 };
 
 /** Abas em cima (orquestrador fixo, um executor por aba) e, embaixo, o terminal da aba ativa. O painel Terminal fica por último. */
 export function TerminalsScreen({
-  orchestrator, executors, executorChoice, notice, shellOpen, shellMounted, onOpen, onExecutorChoice, onStop, onShellClose, onShellReady,
+  orchestrator, executors, executorChoice, notice, shellOpen, shellTabs, shellActive, onOpen, onExecutorChoice, onStop,
+  onShellSelect, onShellAdd, onShellHide, onShellClose, onShellReady,
 }: TerminalsProps) {
   const [picked, setPicked] = useState<string>(ORCHESTRATOR);
   // Aba de executor que sumiu (executor que terminou, reset do orquestrador) volta para a do orquestrador.
@@ -209,8 +214,9 @@ export function TerminalsScreen({
       </Flexbox>
 
       <ShellPanel
-        open={shellOpen} mounted={shellMounted} maxHeight={columnHeight - RESERVED_HEIGHT}
-        onClose={onShellClose} onReady={onShellReady}
+        open={shellOpen} maxHeight={columnHeight - RESERVED_HEIGHT}
+        tabs={shellTabs} active={shellActive}
+        onSelect={onShellSelect} onAdd={onShellAdd} onHide={onShellHide} onClose={onShellClose} onReady={onShellReady}
       />
     </Flexbox>
   );
