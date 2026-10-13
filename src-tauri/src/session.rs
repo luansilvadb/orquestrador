@@ -1,6 +1,7 @@
 //! A pasta temporária de uma sessão do orquestrador (`strategist-<guid>`), o adaptador de delegação que
 //! ela libera (`orq-<guid>.ps1`), o Git que o orquestrador pode rodar, as regras do Codex e as permissões
 //! do Claude, a limpeza e a recuperação das sobras de sessões mortas.
+use crate::cli::toml;
 use crate::config::Config;
 use crate::delegate;
 use crate::proc::{owner_state, start_time, Owner};
@@ -50,10 +51,6 @@ fn clean(path: &Path) -> String {
     path.to_string_lossy().trim_end_matches('\\').to_string()
 }
 
-fn toml_str(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
 /// Uma regra `prefix_rule` do Codex para um único token, que é o programa liberado.
 fn rule(token: &str) -> String {
     rule_with(token, JUSTIFICATION)
@@ -61,7 +58,7 @@ fn rule(token: &str) -> String {
 
 /// A mesma regra, com a justificativa que quem a pede escolhe (o Git do orquestrador, por exemplo).
 fn rule_with(token: &str, justification: &str) -> String {
-    format!("prefix_rule(pattern=[{}], decision=\"allow\", justification=\"{justification}\")\n", toml_str(token))
+    format!("prefix_rule(pattern=[{}], decision=\"allow\", justification=\"{justification}\")\n", toml(token))
 }
 
 /// O comando de delegação de uma sessão: `orq-<id>.ps1`, com o id que dá nome à pasta `strategist-<id>`.
@@ -140,8 +137,6 @@ impl Session {
         std::fs::write(d.join("owner"), format!("{pid} {} {name}", start_time(pid).unwrap_or(0)))?;
         // Com BOM: o Windows PowerShell 5.1 lê um .ps1 sem BOM como ANSI, e o caminho dele sairia errado.
         std::fs::write(d.join(&self.command), format!("\u{feff}{script}"))?;
-        // Cópia congelada da configuração desta sessão.
-        std::fs::write(d.join("session-config.json"), serde_json::to_string_pretty(cfg).unwrap())?;
         let agents = roles::ORCHESTRATOR.replace("{{DELEGATE}}", &self.command).replace("{{PROJECT}}", project);
         std::fs::write(d.join("AGENTS.md"), agents)?;
         if cfg.orchestrator.tool == "codex" {
@@ -162,7 +157,7 @@ impl Session {
             text += &rule_with(program, GIT_JUSTIFICATION);
         }
         for runner in RUNNERS {
-            let files: Vec<String> = skill_programs(&self.global_dirs, runner).iter().map(|f| toml_str(f)).collect();
+            let files: Vec<String> = skill_programs(&self.global_dirs, runner).iter().map(|f| toml(f)).collect();
             if !files.is_empty() {
                 text += &format!(
                     "prefix_rule(pattern=[\"{runner}\", [{}]], decision=\"allow\", justification=\"Programa de skill global do usuario\")\n",
@@ -344,8 +339,6 @@ pub mod tests {
         assert!(!agents.contains("{{"));
         let owner = std::fs::read_to_string(s.dir.join("owner")).unwrap();
         assert_eq!(owner, format!("{} {} {name}", std::process::id(), start_time(std::process::id()).unwrap()));
-        let frozen: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("session-config.json")).unwrap()).unwrap();
-        assert_eq!(frozen["orchestrator"]["tool"], "codex");
 
         let rule = std::fs::read_to_string(&s.rule).unwrap();
         let lines: Vec<&str> = rule.lines().collect();
@@ -436,7 +429,7 @@ pub mod tests {
         let current = |dir: &Path| rule(&command_for(&dir.file_name().unwrap().to_string_lossy()));
         let foreign = |_: &Path| "prefix_rule(pattern=[\"outra\"])\n".to_string();
         // Quase iguais à nossa: um token a mais, e um token com espaço no fim.
-        let two_tokens = |dir: &Path| format!("prefix_rule(pattern=[{}, \"x\"], decision=\"allow\", justification=\"{JUSTIFICATION}\")\n", toml_str(&command_for(&dir.file_name().unwrap().to_string_lossy())));
+        let two_tokens = |dir: &Path| format!("prefix_rule(pattern=[{}, \"x\"], decision=\"allow\", justification=\"{JUSTIFICATION}\")\n", toml(&command_for(&dir.file_name().unwrap().to_string_lossy())));
         let wrong_token = |dir: &Path| rule(&format!("{} ", command_for(&dir.file_name().unwrap().to_string_lossy())));
         // Ids só com hexadecimal, como o nome de sessão exige.
         let alive = make('a', Some(format!("{me} {} {{name}}", start_time(me).unwrap())), &current);

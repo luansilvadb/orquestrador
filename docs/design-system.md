@@ -35,5 +35,3 @@ As animações de entrada e saída são as do shadcn oficial (`tw-animate-css` +
 ## Telas e terminais montados
 
 São duas telas, com a rota em `src/route.ts`: a principal (`#/arquivos`, o padrão), com a árvore de pastas à esquerda (faixa fixa de 280px) e os terminais à direita; e a do Git (`#/git`). Ambas ficam montadas o tempo todo, em `src/App.tsx`. A rota só escolhe qual aparece; a inativa vai para `invisible`, nunca é desmontada. Na tela principal vale o mesmo para os terminais: todos ficam montados e só o da aba ativa aparece. O motivo: o xterm recalcula colunas e linhas quando sai do layout ou volta, e manda o tamanho errado ao PTY se isso acontecer.
-
-Tela cheia só troca classes no conjunto que já existe; nada é remontado.

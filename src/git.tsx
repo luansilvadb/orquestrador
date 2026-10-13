@@ -1,6 +1,6 @@
 // A tela Git: à esquerda o painel (branch, commit, arquivos preparados e alterados); à direita as alterações
 // do arquivo selecionado. Tudo roda na pasta do projeto e só por clique do usuário. O status atualiza sozinho
-// (useGitStatus); cada ação atualiza na hora.
+// (usePolled, no App); cada ação atualiza na hora.
 import { useEffect, useRef, useState, Fragment, type PointerEvent as ReactPointerEvent, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
 import { ArrowDown, ArrowUp, Check, GitBranch, LoaderCircle, Minus, Plus, RefreshCw } from 'lucide-react';
@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Textarea } from '@/components/ui/textarea';
-import { cn } from '@/lib/utils';
+import { cn } from 'cn';
 import { backend, message } from './backend';
 import { usePolling } from './polling';
 import type { GitBranches, GitDiff, GitFile, GitKind, GitStatus } from './types';
@@ -35,7 +35,7 @@ const pathsOf = (f: GitFile) => (f.origPath ? [f.path, f.origPath] : [f.path]);
  * Consulta repetida (usePolling) e a mesma consulta sob demanda (`refresh`). O estado só muda quando a resposta é outra, para não piscar.
  * `enabled` falso não consulta; `clearOnError` zera o dado quando a consulta falha, em vez de manter o anterior.
  */
-function usePolled<T>(read: () => Promise<T>, enabled: boolean, clearOnError: boolean) {
+export function usePolled<T>(read: () => Promise<T>, enabled: boolean, clearOnError: boolean) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState('');
   const last = useRef('');
@@ -59,12 +59,6 @@ function usePolled<T>(read: () => Promise<T>, enabled: boolean, clearOnError: bo
   };
   usePolling(refresh);
   return { data, error, refresh };
-}
-
-/** Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta. */
-export function useGitStatus(enabled: boolean) {
-  const { data, error, refresh } = usePolled(() => backend.gitStatus(), enabled, true);
-  return { status: data, error, refresh };
 }
 
 type Op = 'fetch' | 'pull' | 'push';
@@ -361,18 +355,18 @@ function FileSection({ title, files, staged, onStage, selected, onSelect }: {
 }
 
 /** Tela Git: o painel à esquerda, com a borda direita arrastável, e à direita as alterações do arquivo selecionado. */
-export function GitScreen({ git, locked, active }: { git: ReturnType<typeof useGitStatus>; locked: boolean; active: boolean }) {
+export function GitScreen({ git, locked, active }: { git: ReturnType<typeof usePolled<GitStatus>>; locked: boolean; active: boolean }) {
   const [selected, setSelected] = useState<Selection | null>(null);
   const [width, setWidth] = useState(WIDTH.initial);
   const resize = useRef<{ x: number; width: number } | null>(null);
-  const { status, error, refresh } = git;
+  const { data, error, refresh } = git;
 
   // Arquivo que sai da seção (commit, preparo ou desfazer) deixa de estar selecionado.
   useEffect(() => {
-    if (!selected || !status) return;
-    const listed = status.files.some((f) => f.path === selected.path && (selected.staged ? f.staged : f.unstaged));
+    if (!selected || !data) return;
+    const listed = data.files.some((f) => f.path === selected.path && (selected.staged ? f.staged : f.unstaged));
     if (!listed) setSelected(null);
-  }, [status, selected]);
+  }, [data, selected]);
 
   // A borda captura o ponteiro: o arrasto segue mesmo quando ele sai da faixa.
   const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -396,7 +390,7 @@ export function GitScreen({ git, locked, active }: { git: ReturnType<typeof useG
     <div className="flex h-full min-h-0">
       <aside style={{ width }} className="relative flex min-h-0 shrink-0 flex-col border-r bg-card">
         <GitPanel
-          status={status} error={error} refresh={refresh} locked={locked}
+          status={data} error={error} refresh={refresh} locked={locked}
           selected={selected} onSelect={(path, staged) => setSelected({ path, staged })}
         />
         <div

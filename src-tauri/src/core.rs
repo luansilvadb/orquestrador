@@ -2,7 +2,6 @@
 //! Tauri: os eventos saem por `Emit`, que os testes trocam por um canal.
 use crate::cli::{self, Exes};
 use crate::config::{self, Choice, Options};
-use crate::git;
 use crate::hook;
 use crate::proc;
 use crate::pty::{Buffer, Shared, Term};
@@ -221,25 +220,13 @@ impl Core {
         self.project().map(PathBuf::from)
     }
 
-    /// Puxa commits só sem executor pendente. Roda fora do lock do Core, com `git_exclusive` marcado: o app
-    /// segue respondendo e nenhum executor começa até o pull terminar (ver `git_idle`).
-    pub fn git_pull(&self) -> Result<String, String> {
-        self.git_idle(git::pull)
-    }
-
-    pub fn git_switch(&self, name: &str) -> Result<(), String> {
-        self.git_idle(|dir| git::switch(dir, name))
-    }
-
-    pub fn git_create_branch(&self, name: &str) -> Result<(), String> {
-        self.git_idle(|dir| git::create_branch(dir, name))
-    }
-
     /// Roda `run` com a pasta do projeto, mas só se nenhum executor estiver pendente e nenhuma outra operação
-    /// do Git estiver em curso. Sob o lock, marca `git_exclusive` e solta o lock antes de rodar `run`: o
-    /// comando pode demorar (rede, janela de credencial) sem travar o app. Enquanto a marca estiver ligada,
-    /// `accept_batches` não aceita lote novo, então nenhum executor começa no meio do comando.
-    fn git_idle<T>(&self, run: impl FnOnce(&Path) -> Result<T, String>) -> Result<T, String> {
+    /// do Git estiver em curso. Vale para o pull, a troca e a criação de branch: puxar commits só sem executor
+    /// pendente. Sob o lock, marca `git_exclusive` e solta o lock antes de rodar `run`: o comando pode demorar
+    /// (rede, janela de credencial) sem travar o app, e nenhum executor começa até ele terminar. Enquanto a
+    /// marca estiver ligada, `accept_batches` não aceita lote novo, então nenhum executor começa no meio do
+    /// comando.
+    pub fn git_idle<T>(&self, run: impl FnOnce(&Path) -> Result<T, String>) -> Result<T, String> {
         let project = {
             let mut inner = self.inner.lock().unwrap();
             inner.ensure_executors_done()?;
@@ -264,7 +251,7 @@ impl Core {
         Ok(config::options(&cfg, &codex))
     }
 
-    pub fn start_orchestrator(&self, choice: Choice, cols: u16, rows: u16) -> Result<String, String> {
+    pub fn start_orchestrator(&self, choice: Choice, cols: u16, rows: u16) -> Result<(), String> {
         config::check_choice("orchestrator", &choice)?;
         let mut inner = self.inner.lock().unwrap();
         let project = inner.project.clone().ok_or("Escolha a pasta do projeto primeiro.")?;
@@ -292,7 +279,7 @@ impl Core {
         inner.epoch += 1;
         let (core, epoch) = (self.clone(), inner.epoch);
         std::thread::spawn(move || core.pump(epoch));
-        Ok(ORCHESTRATOR.into())
+        Ok(())
     }
 
     pub fn set_executor_choice(&self, choice: Choice) -> Result<(), String> {
@@ -655,6 +642,7 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git;
 
     fn ok(text: &str) -> Outcome {
         Outcome { text: text.into(), exit: "0".into(), ok: true }
@@ -754,9 +742,9 @@ mod tests {
         let (core, root) = git_core("trava");
         for state in [NodeState::AwaitingChoice, NodeState::Queued, NodeState::Running, NodeState::AwaitingOrchestrator] {
             set_executor_state(&core, state);
-            assert_eq!(core.git_pull().unwrap_err(), TRAVA, "{state:?}");
-            assert_eq!(core.git_switch("outra").unwrap_err(), TRAVA, "{state:?}");
-            assert_eq!(core.git_create_branch("nova").unwrap_err(), TRAVA, "{state:?}");
+            assert_eq!(core.git_idle(git::pull).unwrap_err(), TRAVA, "{state:?}");
+            assert_eq!(core.git_idle(|dir| git::switch(dir, "outra")).unwrap_err(), TRAVA, "{state:?}");
+            assert_eq!(core.git_idle(|dir| git::create_branch(dir, "nova")).unwrap_err(), TRAVA, "{state:?}");
             assert!(git::status(&core.repo().unwrap()).is_ok(), "o status nunca é travado ({state:?})");
             assert!(git::branches(&core.repo().unwrap()).is_ok(), "a lista de branches nunca é travada ({state:?})");
         }
@@ -766,12 +754,12 @@ mod tests {
 
         for state in [NodeState::Done, NodeState::Stopped, NodeState::Failed] {
             set_executor_state(&core, state);
-            assert_eq!(core.git_switch("outra"), Ok(()), "{state:?} já terminou");
-            assert_eq!(core.git_switch("main"), Ok(()));
+            assert_eq!(core.git_idle(|dir| git::switch(dir, "outra")), Ok(()), "{state:?} já terminou");
+            assert_eq!(core.git_idle(|dir| git::switch(dir, "main")), Ok(()));
             // Sem remoto o pull falha pelo remoto, não pela trava.
-            assert_ne!(core.git_pull().unwrap_err(), TRAVA, "{state:?}");
+            assert_ne!(core.git_idle(git::pull).unwrap_err(), TRAVA, "{state:?}");
         }
-        assert_eq!(core.git_create_branch("nova"), Ok(()));
+        assert_eq!(core.git_idle(|dir| git::create_branch(dir, "nova")), Ok(()));
         assert_eq!(git::branches(&core.repo().unwrap()).unwrap().current, "nova");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -785,9 +773,9 @@ mod tests {
         const EM_CURSO: &str = "Outra operação do Git está em andamento.";
         let (core, root) = git_core("em-curso");
         core.inner.lock().unwrap().git_exclusive = true;
-        assert_eq!(core.git_switch("outra").unwrap_err(), EM_CURSO);
-        assert_eq!(core.git_create_branch("nova").unwrap_err(), EM_CURSO);
-        assert_eq!(core.git_pull().unwrap_err(), EM_CURSO);
+        assert_eq!(core.git_idle(|dir| git::switch(dir, "outra")).unwrap_err(), EM_CURSO);
+        assert_eq!(core.git_idle(|dir| git::create_branch(dir, "nova")).unwrap_err(), EM_CURSO);
+        assert_eq!(core.git_idle(git::pull).unwrap_err(), EM_CURSO);
         assert!(git::status(&core.repo().unwrap()).is_ok());
         assert!(git::branches(&core.repo().unwrap()).is_ok());
         // A recusa não solta a marca de quem está rodando.
@@ -799,11 +787,11 @@ mod tests {
     #[test]
     fn a_marca_some_depois_de_sucesso_e_de_falha() {
         let (core, root) = git_core("marca");
-        assert_eq!(core.git_switch("outra"), Ok(()));
+        assert_eq!(core.git_idle(|dir| git::switch(dir, "outra")), Ok(()));
         assert!(!git_exclusivo(&core), "depois de sucesso");
-        assert!(core.git_switch("inexistente").is_err());
+        assert!(core.git_idle(|dir| git::switch(dir, "inexistente")).is_err());
         assert!(!git_exclusivo(&core), "depois de falha");
-        assert_eq!(core.git_switch("main"), Ok(()), "a operação seguinte passa");
+        assert_eq!(core.git_idle(|dir| git::switch(dir, "main")), Ok(()), "a operação seguinte passa");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -813,7 +801,7 @@ mod tests {
         let saiu = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| core.git_idle::<()>(|_| panic!("comando git travou"))));
         assert!(saiu.is_err());
         assert!(!git_exclusivo(&core));
-        assert_eq!(core.git_switch("outra"), Ok(()));
+        assert_eq!(core.git_idle(|dir| git::switch(dir, "outra")), Ok(()));
         let _ = std::fs::remove_dir_all(&root);
     }
 

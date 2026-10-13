@@ -47,7 +47,7 @@ fn list_dir(core: State<Core>, gate: State<Gate>, path: String) -> Result<Vec<fi
     files::list(&core.repo()?, &path)
 }
 
-/// O estado do Git do projeto para o painel: branch, upstream, ahead/behind e os arquivos alterados.
+/// O estado do Git do projeto para o painel: branch, ahead/behind e os arquivos alterados.
 #[tauri::command(async)]
 fn git_status(core: State<Core>, gate: State<Gate>) -> Result<git::Status, String> {
     gate.ensure_open()?;
@@ -92,7 +92,7 @@ fn git_fetch(core: State<Core>, gate: State<Gate>) -> Result<String, String> {
 #[tauri::command(async)]
 fn git_pull(core: State<Core>, gate: State<Gate>) -> Result<String, String> {
     gate.ensure_open()?;
-    core.git_pull()
+    core.git_idle(git::pull)
 }
 
 /// A saída do `git push`, para a tela mostrar. Sem upstream, publica em origin.
@@ -112,18 +112,18 @@ fn git_branches(core: State<Core>, gate: State<Gate>) -> Result<git::Branches, S
 #[tauri::command(async)]
 fn git_switch(core: State<Core>, gate: State<Gate>, name: String) -> Result<(), String> {
     gate.ensure_open()?;
-    core.git_switch(&name)
+    core.git_idle(|dir| git::switch(dir, &name))
 }
 
 /// Cria a branch a partir do HEAD e troca para ela. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
 fn git_create_branch(core: State<Core>, gate: State<Gate>, name: String) -> Result<(), String> {
     gate.ensure_open()?;
-    core.git_create_branch(&name)
+    core.git_idle(|dir| git::create_branch(dir, &name))
 }
 
 #[tauri::command(async)]
-fn start_orchestrator(core: State<Core>, gate: State<Gate>, choice: Choice, cols: u16, rows: u16) -> Result<String, String> {
+fn start_orchestrator(core: State<Core>, gate: State<Gate>, choice: Choice, cols: u16, rows: u16) -> Result<(), String> {
     gate.ensure_open()?;
     core.start_orchestrator(choice, cols, rows)
 }

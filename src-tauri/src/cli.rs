@@ -43,7 +43,7 @@ fn strs(items: &[&str]) -> Vec<String> {
 }
 
 // Texto como valor TOML de `-c`: string básica, com as mesmas fugas do JSON.
-fn toml(s: &str) -> String {
+pub(crate) fn toml(s: &str) -> String {
     serde_json::to_string(s).unwrap()
 }
 

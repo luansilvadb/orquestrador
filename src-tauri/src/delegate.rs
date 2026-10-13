@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
 
@@ -139,7 +139,7 @@ fn publish(session: &Path, tasks: &[String]) -> Result<String, String> {
     if tasks.iter().any(|task| task.trim().is_empty()) {
         return Err("Tarefa vazia.".into());
     }
-    let id = batch_id();
+    let id = hook::unique();
     let requests = session.join("requests");
     let tmp = requests.join(format!("{id}.tmp"));
     let io = |e: std::io::Error| format!("Não foi possível publicar o lote em {}: {e}", requests.display());
@@ -149,14 +149,6 @@ fn publish(session: &Path, tasks: &[String]) -> Result<String, String> {
     }
     std::fs::rename(&tmp, requests.join(&id)).map_err(io)?;
     Ok(id)
-}
-
-/// Nome do lote. Os nanossegundos com zeros à esquerda fazem a ordem alfabética ser a cronológica,
-/// que `--aguardar` usa para achar o mais recente; o sufixo separa dois lotes no mesmo instante.
-fn batch_id() -> String {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    let suffix = uuid::Uuid::new_v4().simple().to_string();
-    format!("{nanos:020}-{}", &suffix[..8])
 }
 
 /// O lote mais recente que ainda não foi entregue.
@@ -599,11 +591,11 @@ mod tests {
 
     #[test]
     fn nome_do_lote_ordena_pelo_tempo() {
-        let first = batch_id();
+        let first = hook::unique();
         std::thread::sleep(Duration::from_millis(2));
-        let second = batch_id();
+        let second = hook::unique();
         assert!(first < second, "{first} < {second}");
-        assert_eq!(first.as_bytes()[20], b'-');
+        assert_eq!(first.as_bytes()[32], b'-');
     }
 
     #[test]

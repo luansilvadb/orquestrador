@@ -9,11 +9,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { Toaster } from '@/components/ui/sonner';
-import { cn } from '@/lib/utils';
+import { cn } from 'cn';
 import { backend, connect, message } from './backend';
 import { ChoiceForm } from './choice-form';
 import { FilesScreen, Nav, StatusBar } from './explorer';
-import { GitScreen, useGitStatus } from './git';
+import { GitScreen, usePolled } from './git';
 import { useRoute, type Route } from './route';
 import { FINISHED, STATES, TerminalsScreen } from './terminal-screen';
 import { terminals } from './terminals';
@@ -119,7 +119,8 @@ export function App() {
   });
   const route = useRoute();
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
-  const git = useGitStatus(state.update.phase === 'ready' && !!state.project);
+  // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
+  const git = usePolled(() => backend.gitStatus(), state.update.phase === 'ready' && !!state.project, true);
   const [fatal, setFatal] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [projectError, setProjectError] = useState('');
@@ -293,7 +294,7 @@ export function App() {
     .filter(([n]) => n)
     .map(([n, label]) => `${n} ${label}`)
     .join(' · ');
-  const changed = git.status?.files.length ?? 0;
+  const changed = git.data?.files.length ?? 0;
   // As duas telas ficam montadas; a rota só escolhe qual aparece. Inativa vai para invisible, nunca para display none.
   const shown = (to: Route) => cn('absolute inset-0', route !== to && 'invisible');
 
@@ -408,7 +409,7 @@ export function App() {
         </main>
       </div>
 
-      <StatusBar branch={git.status?.branch} />
+      <StatusBar branch={git.data?.branch} />
 
       <Toaster position="bottom-right" />
       {/* As três escolhas são janelas: a do orquestrador (início e executores) e uma só para os executores aguardando. */}

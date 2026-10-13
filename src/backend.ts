@@ -40,7 +40,7 @@ export const backend = {
   chooseProject: () => call<string | null>('choose_project'),
   getOptions: () => call<Options>('get_options'),
   startOrchestrator: (choice: Choice, cols: number, rows: number) =>
-    call<string>('start_orchestrator', { choice, cols, rows }),
+    call<void>('start_orchestrator', { choice, cols, rows }),
   setExecutorChoice: (choice: Choice) => call<void>('set_executor_choice', { choice }),
   setMaxParallel: (value: number) => call<void>('set_max_parallel', { value }),
   termWrite: (id: string, data: string) => call<void>('term_write', { id, data }),

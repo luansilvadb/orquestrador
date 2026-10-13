@@ -1,10 +1,10 @@
 // Os terminais, ao lado da árvore de pastas na tela principal: o orquestrador e um executor por aba. Todos ficam montados; só o da aba ativa aparece.
 import { useState, type ReactNode } from 'react';
-import { CircleCheck, CircleHelp, CircleX, Clock, Hourglass, LoaderCircle, Maximize2, Minimize2, Square } from 'lucide-react';
+import { CircleCheck, CircleHelp, CircleX, Clock, Hourglass, LoaderCircle, Square } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { cn } from '@/lib/utils';
+import { cn } from 'cn';
 import { attachExecutor, TermHost, terminals } from './terminals';
 import { describeChoice, ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState } from './types';
 
@@ -49,7 +49,6 @@ type TerminalsProps = {
 /** Abas em cima (orquestrador fixo, um executor por aba) e, embaixo, o terminal da aba ativa. */
 export function TerminalsScreen({ orchestrator, executors, executorChoice, notice, onOpen, onExecutorChoice, onStop }: TerminalsProps) {
   const [picked, setPicked] = useState<string>(ORCHESTRATOR);
-  const [full, setFull] = useState(false);
   // Aba de executor que sumiu (executor que terminou, reset do orquestrador) volta para a do orquestrador.
   const active = executors.some((e) => e.id === picked) ? picked : ORCHESTRATOR;
   const node = executors.find((e) => e.id === active);
@@ -61,19 +60,8 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
     if (id === ORCHESTRATOR) requestAnimationFrame(() => terminals.get(ORCHESTRATOR)?.term.focus());
   };
 
-  // Tela cheia só troca classes: o conjunto não sai do DOM, então nenhum terminal remonta.
-  const fullButton = (
-    <Button
-      variant="ghost" size="icon-xs" className="shrink-0"
-      aria-label={full ? 'Sair da tela cheia' : 'Tela cheia'} title={full ? 'Sair da tela cheia' : 'Tela cheia'}
-      onClick={() => setFull((v) => !v)}
-    >
-      {full ? <Minimize2 /> : <Maximize2 />}
-    </Button>
-  );
-
   return (
-    <div className={cn('flex h-full min-h-0 w-full flex-col gap-2', full ? 'p-0' : 'p-4')}>
+    <div className="flex h-full min-h-0 w-full flex-col gap-2 p-4">
       <Tabs value={active} onValueChange={choose} className="min-w-0 gap-0">
         <TabsList className="h-9 w-full justify-start overflow-x-auto overflow-y-hidden rounded-full [scrollbar-width:none]">
           <TabsTrigger value={ORCHESTRATOR} className="flex-none rounded-full px-3">Orquestrador</TabsTrigger>
@@ -125,7 +113,6 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
                 )}
               </>
             )}
-            {fullButton}
           </div>
         )}
 

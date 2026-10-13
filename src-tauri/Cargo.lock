@@ -2276,7 +2276,6 @@ version = "0.1.4"
 dependencies = [
  "base64 0.22.1",
  "portable-pty",
- "semver",
  "serde",
  "serde_json",
  "tauri",

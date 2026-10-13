@@ -34,12 +34,11 @@ pub struct GitFile {
     pub unstaged: Option<Kind>,
 }
 
-/// O estado do repositório: a branch (ou o hash em HEAD destacado), o upstream e o que está alterado.
+/// O estado do repositório: a branch (ou o hash em HEAD destacado), o quanto está à frente e atrás do remoto e o que está alterado.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
     pub branch: String,
-    pub upstream: Option<String>,
     pub ahead: u32,
     pub behind: u32,
     /// Em ordem alfabética por caminho.
@@ -97,12 +96,10 @@ pub fn status(dir: &Path) -> Result<Status, String> {
 /// Lê a saída de `status --porcelain=v2 --branch -z`. Cada registro acaba em NUL; o renomeado traz o caminho
 /// de origem no registro seguinte.
 fn parse_status(branch: String, out: &str) -> Status {
-    let mut st = Status { branch, upstream: None, ahead: 0, behind: 0, files: Vec::new() };
+    let mut st = Status { branch, ahead: 0, behind: 0, files: Vec::new() };
     let mut records = out.split('\0');
     while let Some(rec) = records.next() {
-        if let Some(up) = rec.strip_prefix("# branch.upstream ") {
-            st.upstream = Some(up.to_string());
-        } else if let Some(ab) = rec.strip_prefix("# branch.ab ") {
+        if let Some(ab) = rec.strip_prefix("# branch.ab ") {
             let mut counts = ab.split_whitespace();
             st.ahead = counts.next().and_then(|n| n.trim_start_matches('+').parse().ok()).unwrap_or(0);
             st.behind = counts.next().and_then(|n| n.trim_start_matches('-').parse().ok()).unwrap_or(0);
@@ -477,7 +474,7 @@ mod tests {
 
         let st = git_status_of(&dir);
         assert_eq!(st.branch, "main");
-        assert_eq!((st.upstream.clone(), st.ahead, st.behind), (None, 0, 0));
+        assert_eq!((upstream(&dir), st.ahead, st.behind), (None, 0, 0));
         assert_eq!(find(&st, "modificado.txt"), &GitFile { path: "modificado.txt".into(), orig_path: None, staged: None, unstaged: Some(Kind::Modified) });
         assert_eq!(find(&st, "apagado.txt").unstaged, Some(Kind::Deleted));
         let renamed = find(&st, "novo x.txt");
@@ -526,26 +523,15 @@ mod tests {
     #[test]
     fn status_conta_ahead_e_behind_contra_o_remoto_local() {
         let tmp = Tmp::new("ahead");
-        let bare = tmp.at("remoto.git");
-        git(&tmp.0, &["init", "-q", "--bare", "-b", "main", "remoto.git"]);
-        let dir = repo(&tmp, "r");
-        write(&dir, "a.txt", "a");
-        commit_all(&dir, "a");
-        git(&dir, &["remote", "add", "origin", bare.to_str().unwrap()]);
-        git(&dir, &["push", "-q", "-u", "origin", "main"]);
+        let (bare, dir) = with_remote(&tmp);
         let st = git_status_of(&dir);
-        assert_eq!((st.upstream.as_deref(), st.ahead, st.behind), (Some("origin/main"), 0, 0));
+        assert_eq!((upstream(&dir).as_deref(), st.ahead, st.behind), (Some("origin/main"), 0, 0));
 
         write(&dir, "b.txt", "b");
         commit_all(&dir, "b");
         assert_eq!(git_status_of(&dir).ahead, 1);
 
-        let outro = tmp.at("outro");
-        git(&tmp.0, &["clone", "-q", bare.to_str().unwrap(), outro.to_str().unwrap()]);
-        identity(&outro);
-        write(&outro, "c.txt", "c");
-        commit_all(&outro, "c");
-        git(&outro, &["push", "-q", "origin", "main"]);
+        other_pushes(&tmp, &bare, "c.txt");
         git(&dir, &["fetch", "-q"]);
         let st = git_status_of(&dir);
         assert_eq!((st.ahead, st.behind), (1, 1));
@@ -820,10 +806,10 @@ mod tests {
         git(&dir, &["switch", "-q", "-c", "feature"]);
         write(&dir, "f.txt", "f");
         commit_all(&dir, "f");
-        assert_eq!(git_status_of(&dir).upstream, None);
+        assert_eq!(upstream(&dir), None);
         push(&dir).unwrap();
         assert!(git(&bare, &["branch", "--list", "feature"]).contains("feature"));
-        assert_eq!(git_status_of(&dir).upstream.as_deref(), Some("origin/feature"));
+        assert_eq!(upstream(&dir).as_deref(), Some("origin/feature"));
     }
 
     #[test]

@@ -361,7 +361,6 @@ const commands: Record<string, (args: any) => unknown> = {
     line = '';
     out(ORCHESTRATOR, `\x1b[1mOrquestrador simulado\x1b[0m \x1b[2m(${choice.tool} ${choice.model || 'modelo padrão'} ${choice.effort || 'esforço padrão'})\x1b[0m\r\n` +
       `Digite \x1b[33mlote\x1b[0m + Enter para delegar 6 tarefas, \x1b[33msair\x1b[0m para terminar. O resto é ecoado.\r\n\r\n${PROMPT}`);
-    return ORCHESTRATOR;
   },
   set_executor_choice: ({ choice }: { choice: Choice }) => {
     if (choice.model.includes(' ')) throw `executor: modelo '${choice.model}' inválido (sem espaço, aspas nem iniciar com '-')`;
@@ -381,7 +380,7 @@ const commands: Record<string, (args: any) => unknown> = {
     if (!dir) throw `Pasta não encontrada: ${path}`;
     return listing(dir);
   },
-  git_status: () => ({ branch, upstream: `origin/${branch}`, ahead, behind, files: [...files].sort(byPath) }),
+  git_status: () => ({ branch, ahead, behind, files: [...files].sort(byPath) }),
   git_diff: ({ path, staged }: { path: string; staged: boolean }) => diffOf(path, staged),
   git_stage: ({ paths }: { paths: string[] }) => { stage(paths); return null; },
   git_unstage: ({ paths }: { paths: string[] }) => { unstage(paths); return null; },

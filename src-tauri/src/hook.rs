@@ -32,7 +32,7 @@ pub fn run(args: &[String]) -> i32 {
 
 /// Nome de um arquivo novo da pasta: os nanossegundos com zeros à esquerda (a ordem alfabética é a
 /// cronológica) e o pid, para duas chamadas no mesmo instante não se confundirem.
-fn unique() -> String {
+pub fn unique() -> String {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     format!("{nanos:032}-{}", std::process::id())
 }
@@ -52,7 +52,7 @@ pub fn ask(args: &[String]) -> i32 {
         Some(dir) => {
             let mut payload = String::new();
             let _ = std::io::stdin().read_to_string(&mut payload);
-            ask_in(Path::new(dir), &payload)
+            ask_within(Path::new(dir), &payload, ASK_DEADLINE)
         }
         None => deny("O pedido de confirmação veio sem a pasta de respostas."),
     };
@@ -60,14 +60,10 @@ pub fn ask(args: &[String]) -> i32 {
     0
 }
 
-/// Publica o pedido `payload` em `dir` e espera a decisão dele por até `ASK_DEADLINE`. Se o pedido some antes da
-/// resposta (o app encerrou o executor e limpou a pasta), nega com o motivo. Se o prazo passa, nega pedindo que o
-/// comando seja repetido: o pedido sai da pasta, e uma resposta que chegar depois não tem efeito.
-pub fn ask_in(dir: &Path, payload: &str) -> Value {
-    ask_within(dir, payload, ASK_DEADLINE)
-}
-
-/// `ask_in` com o prazo como parâmetro: os testes passam um prazo curto.
+/// Publica o pedido `payload` em `dir` e espera a decisão dele por até `deadline`, que o `ask` passa como
+/// `ASK_DEADLINE` (os testes passam um prazo curto). Se o pedido some antes da resposta (o app encerrou o
+/// executor e limpou a pasta), nega com o motivo. Se o prazo passa, nega pedindo que o comando seja repetido: o
+/// pedido sai da pasta, e uma resposta que chegar depois não tem efeito.
 fn ask_within(dir: &Path, payload: &str, deadline: Duration) -> Value {
     let id = unique();
     if let Err(e) = put(dir, &format!("{id}.json"), payload.as_bytes()) {
@@ -245,7 +241,7 @@ mod tests {
             assert_eq!(std::fs::read_to_string(answer_dir.join(format!("{id}.json"))).unwrap(), payload);
             put(&answer_dir, &format!("{id}.reply"), br#"{"behavior":"allow"}"#).unwrap();
         });
-        assert_eq!(ask_in(&dir, payload), json!({ "behavior": "allow" }));
+        assert_eq!(ask_within(&dir, payload, ASK_DEADLINE), json!({ "behavior": "allow" }));
         app.join().unwrap();
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&dir);
@@ -265,7 +261,7 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(10));
             }
         });
-        let decision = ask_in(&dir, r#"{"tool_name":"Bash"}"#);
+        let decision = ask_within(&dir, r#"{"tool_name":"Bash"}"#, ASK_DEADLINE);
         app.join().unwrap();
         assert_eq!(decision, json!({ "behavior": "deny", "message": "use o caminho do projeto" }));
         let _ = std::fs::remove_dir_all(&dir);
@@ -281,7 +277,7 @@ mod tests {
             first_request(&app_dir);
             clear_asks(&app_dir);
         });
-        assert_eq!(ask_in(&dir, "{}"), deny(CANCELLED));
+        assert_eq!(ask_within(&dir, "{}", ASK_DEADLINE), deny(CANCELLED));
         app.join().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }

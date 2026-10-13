@@ -130,17 +130,13 @@ pub trait Remote: Send + Sync + 'static {
 }
 
 /// Uma rodada completa: consulta, baixa e instala se houver versão superior. Devolve o estado final.
-async fn attempt<R: Remote>(gate: &Gate, remote: &R, current: &str) -> Status {
+async fn attempt<R: Remote>(gate: &Gate, remote: &R) -> Status {
     let pending = match remote.check().await {
         Ok(Some(pending)) => pending,
         Ok(None) => return Status::Ready,
         Err(why) => return Status::Failed { message: format!("Não foi possível verificar atualizações: {why}.") },
     };
     let version = remote.version(&pending);
-    // Só instala versão mais nova. O endpoint não é assinado, então a comparação fica aqui também.
-    if !is_newer(&version, current) {
-        return Status::Ready;
-    }
     gate.set(Status::Downloading { version: version.clone(), downloaded: 0, total: None });
     let (mut downloaded, mut shown) = (0u64, 0u64);
     let bytes = remote
@@ -166,27 +162,19 @@ async fn attempt<R: Remote>(gate: &Gate, remote: &R, current: &str) -> Status {
     }
 }
 
-/// `candidate` é mais nova que `current`, comparando como semver (0.10.0 > 0.9.0). Versão ilegível não conta.
-pub fn is_newer(candidate: &str, current: &str) -> bool {
-    match (semver::Version::parse(candidate), semver::Version::parse(current)) {
-        (Ok(candidate), Ok(current)) => candidate > current,
-        _ => false,
-    }
-}
-
 /// Começa a rodada se não houver outra em curso e o uso ainda não foi liberado. Devolve se começou.
-pub fn start<R: Remote>(gate: &Gate, remote: R, current: String) -> bool {
+pub fn start<R: Remote>(gate: &Gate, remote: R) -> bool {
     if !gate.reserve() {
         return false;
     }
     let gate = gate.clone();
-    tauri::async_runtime::spawn(async move { settle(&gate, &remote, &current).await });
+    tauri::async_runtime::spawn(async move { settle(&gate, &remote).await });
     true
 }
 
 /// Roda a rodada e registra o fim dela. Se algo estourar um pânico, a tela recebe a falha: o uso
 /// fica bloqueado com `Tentar novamente`, e não preso em "verificando".
-async fn settle<R: Remote>(gate: &Gate, remote: &R, current: &str) {
+async fn settle<R: Remote>(gate: &Gate, remote: &R) {
     struct Abort<'a>(Option<&'a Gate>);
     impl Drop for Abort<'_> {
         fn drop(&mut self) {
@@ -196,15 +184,14 @@ async fn settle<R: Remote>(gate: &Gate, remote: &R, current: &str) {
         }
     }
     let mut abort = Abort(Some(gate));
-    let status = attempt(gate, remote, current).await;
+    let status = attempt(gate, remote).await;
     abort.0 = None;
     gate.finish(status);
 }
 
 /// Verificação da abertura e do "Tentar novamente", pelo plugin oficial do Tauri.
 pub fn check(app: &AppHandle, gate: &Gate) {
-    let current = app.package_info().version.to_string();
-    start(gate, Plugin { app: app.clone() }, current);
+    start(gate, Plugin { app: app.clone() });
 }
 
 /// O plugin oficial, com a fonte de `plugins.updater` em `tauri.conf.json`.
@@ -344,9 +331,9 @@ mod tests {
     }
 
     /// Uma rodada completa, como `start` faria, e o estado final.
-    fn run(gate: &Gate, fake: &Fake, current: &str) -> Status {
+    fn run(gate: &Gate, fake: &Fake) -> Status {
         assert!(gate.reserve(), "a rodada deveria começar");
-        tauri::async_runtime::block_on(settle(gate, fake, current));
+        tauri::async_runtime::block_on(settle(gate, fake));
         gate.status()
     }
 
@@ -383,7 +370,7 @@ mod tests {
     fn versao_em_dia_libera_o_uso_sem_baixar_nada() {
         let (gate, log) = new_gate(false);
         let fake = fake(vec![Ok(None)]);
-        assert_eq!(run(&gate, &fake, "0.1.0"), Status::Ready);
+        assert_eq!(run(&gate, &fake), Status::Ready);
         assert!(gate.ensure_open().is_ok());
         assert_eq!(calls(&fake), ["check"]);
         assert_eq!(phases(&log), ["ready"]);
@@ -393,7 +380,7 @@ mod tests {
     fn versao_superior_baixa_valida_instala_e_reabre() {
         let (gate, log) = new_gate(false);
         let fake = Fake { download: Ok(b"instalador".to_vec()), ..fake(vec![Ok(Some("0.2.0"))]) };
-        assert_eq!(run(&gate, &fake, "0.1.0"), Status::Installing { version: "0.2.0".into() });
+        assert_eq!(run(&gate, &fake), Status::Installing { version: "0.2.0".into() });
         assert_eq!(calls(&fake), ["check", "download", "install", "relaunch"]);
         assert!(gate.ensure_open().is_err(), "enquanto instala, o uso continua fechado");
         let log = log.lock().unwrap();
@@ -411,11 +398,11 @@ mod tests {
         let (gate, log) = new_gate(false);
         let fake = fake(vec![Err("sem conexão com o GitHub"), Ok(None)]);
         assert_eq!(
-            run(&gate, &fake, "0.1.0"),
+            run(&gate, &fake),
             Status::Failed { message: "Não foi possível verificar atualizações: sem conexão com o GitHub.".into() }
         );
         assert!(gate.ensure_open().is_err(), "a falha mantém o uso bloqueado");
-        assert_eq!(run(&gate, &fake, "0.1.0"), Status::Ready, "a nova tentativa liberou o uso");
+        assert_eq!(run(&gate, &fake), Status::Ready, "a nova tentativa liberou o uso");
         assert_eq!(phases(&log), ["failed", "checking", "ready"]);
     }
 
@@ -424,7 +411,7 @@ mod tests {
         let (gate, log) = new_gate(false);
         assert!(gate.reserve());
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tauri::async_runtime::block_on(settle(&gate, &Exploding, "0.1.0"));
+            tauri::async_runtime::block_on(settle(&gate, &Exploding));
         }));
         assert!(outcome.is_err(), "o pânico continua sendo um pânico");
         assert_eq!(gate.status(), Status::Failed { message: "A verificação parou inesperadamente.".into() });
@@ -438,7 +425,7 @@ mod tests {
         let (gate, _) = new_gate(false);
         let fake = Fake { download: Err("conexão caiu".into()), ..fake(vec![Ok(Some("0.2.0"))]) };
         assert_eq!(
-            run(&gate, &fake, "0.1.0"),
+            run(&gate, &fake),
             Status::Failed { message: "Não foi possível baixar a atualização 0.2.0: conexão caiu.".into() }
         );
         assert!(gate.ensure_open().is_err());
@@ -450,29 +437,11 @@ mod tests {
         let (gate, _) = new_gate(false);
         let fake = Fake { install: Err("instalador bloqueado".into()), ..fake(vec![Ok(Some("0.2.0"))]) };
         assert_eq!(
-            run(&gate, &fake, "0.1.0"),
+            run(&gate, &fake),
             Status::Failed { message: "Não foi possível instalar a atualização 0.2.0: instalador bloqueado.".into() }
         );
         assert!(gate.ensure_open().is_err());
         assert_eq!(calls(&fake), ["check", "download", "install"]);
-    }
-
-    #[test]
-    fn nunca_instala_versao_igual_ou_anterior() {
-        for announced in ["0.1.0", "0.0.9"] {
-            let (gate, _) = new_gate(false);
-            let fake = fake(vec![Ok(Some(announced))]);
-            assert_eq!(run(&gate, &fake, "0.1.0"), Status::Ready, "anunciada {announced}");
-            assert_eq!(calls(&fake), ["check"], "anunciada {announced}: nada baixado");
-        }
-    }
-
-    #[test]
-    fn compara_versoes_como_semver() {
-        assert!(is_newer("0.10.0", "0.9.0"), "0.10.0 é mais nova que 0.9.0");
-        assert!(!is_newer("0.1.0", "0.1.0"));
-        assert!(!is_newer("0.0.9", "0.1.0"));
-        assert!(!is_newer("nao-e-versao", "0.1.0"), "versão ilegível não é tratada como nova");
     }
 
     #[test]
