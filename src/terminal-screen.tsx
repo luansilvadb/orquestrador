@@ -1,26 +1,27 @@
 // Os terminais, ao lado da árvore de pastas na tela principal: o orquestrador e um executor por aba. Todos ficam montados; só o da aba ativa aparece.
-import { useState, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { CircleCheck, CircleHelp, CircleX, Clock, Hourglass, LoaderCircle, Square } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Button, Tag, TabsIndicator, TabsList, TabsRoot, TabsTab } from '@lobehub/ui/base-ui';
 import { cn } from 'cn';
 import { attachExecutor, TermHost, terminals } from './terminals';
 import { describeChoice, ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState } from './types';
 
 // Cada estado: rótulo e ícone com texto (regra do design system); a cor vem dos tokens --status-* de index.css.
-export const STATES: Record<NodeState, { label: string; icon: typeof Clock; variant: 'outline' | 'secondary' | 'destructive' | 'default'; className?: string; tone: string }> = {
-  'awaiting-choice': { label: 'aguardando escolha', icon: CircleHelp, variant: 'outline', tone: 'text-[var(--status-awaiting)]' },
-  queued: { label: 'na fila', icon: Clock, variant: 'outline', tone: 'text-[var(--status-queued)]' },
-  running: { label: 'executando', icon: LoaderCircle, variant: 'default', tone: 'text-[var(--status-running)]' },
-  'awaiting-orchestrator': {
-    label: 'aguardando orquestrador', icon: Hourglass, variant: 'outline',
-    className: 'border-[var(--status-prompt)] text-[var(--status-prompt)]', tone: 'text-[var(--status-prompt)]',
-  },
-  done: { label: 'concluído', icon: CircleCheck, variant: 'secondary', tone: 'text-[var(--status-done)]' },
-  stopped: { label: 'interrompido', icon: Square, variant: 'outline', tone: 'text-[var(--status-stopped)]' },
-  failed: { label: 'falhou', icon: CircleX, variant: 'destructive', tone: 'text-[var(--status-failed)]' },
+export const STATES: Record<NodeState, { label: string; icon: typeof Clock; color: string; tone: string }> = {
+  'awaiting-choice': { label: 'aguardando escolha', icon: CircleHelp, color: 'var(--status-awaiting)', tone: 'text-[var(--status-awaiting)]' },
+  queued: { label: 'na fila', icon: Clock, color: 'var(--status-queued)', tone: 'text-[var(--status-queued)]' },
+  running: { label: 'executando', icon: LoaderCircle, color: 'var(--status-running)', tone: 'text-[var(--status-running)]' },
+  'awaiting-orchestrator': { label: 'aguardando orquestrador', icon: Hourglass, color: 'var(--status-prompt)', tone: 'text-[var(--status-prompt)]' },
+  done: { label: 'concluído', icon: CircleCheck, color: 'var(--status-done)', tone: 'text-[var(--status-done)]' },
+  stopped: { label: 'interrompido', icon: Square, color: 'var(--status-stopped)', tone: 'text-[var(--status-stopped)]' },
+  failed: { label: 'falhou', icon: CircleX, color: 'var(--status-failed)', tone: 'text-[var(--status-failed)]' },
 };
+// O Tag do Lobe UI só pinta cor hex ou predefinida; o token entra pelo style (fundo e borda são a mesma cor, mais fraca).
+const tagStyle = (color: string): CSSProperties => ({
+  color,
+  background: `color-mix(in oklab, ${color} 14%, transparent)`,
+  borderColor: `color-mix(in oklab, ${color} 45%, transparent)`,
+});
 export const FINISHED: NodeState[] = ['done', 'stopped', 'failed'];
 const CANCELLABLE: NodeState[] = ['queued', 'running', 'awaiting-orchestrator'];
 // Texto da camada que cobre o terminal do executor, por estado; os outros estados mostram o terminal direto.
@@ -62,49 +63,50 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col gap-2 p-4">
-      <Tabs value={active} onValueChange={choose} className="min-w-0 gap-0">
-        <TabsList className="h-9 w-full justify-start overflow-x-auto overflow-y-hidden rounded-full [scrollbar-width:none]">
-          <TabsTrigger value={ORCHESTRATOR} className="flex-none rounded-full px-3">Orquestrador</TabsTrigger>
+      {/* Só a faixa de abas: os terminais são renderizados logo abaixo, por este arquivo. */}
+      <TabsRoot value={active} onValueChange={(key: string) => choose(key)} className="min-w-0 gap-0">
+        <TabsList className="h-9 w-full flex-nowrap justify-start overflow-x-auto overflow-y-hidden rounded-full [scrollbar-width:none]">
+          <TabsIndicator />
+          <TabsTab value={ORCHESTRATOR} className="flex-none px-3">Orquestrador</TabsTab>
           {orchestrator && executors.map((e) => {
             const info = STATES[e.state];
             const Icon = info.icon;
             const label = `Executor #${e.index + 1}, ${info.label}: ${e.title}`;
             return (
-              <TabsTrigger key={e.id} value={e.id} title={label} aria-label={label} className="flex-none rounded-full px-3">
+              <TabsTab key={e.id} value={e.id} title={label} aria-label={label} className="flex-none gap-1.5 px-3">
                 <Icon className={cn(info.tone, e.state === 'running' && 'animate-spin')} />
                 <span className="font-mono">#{e.index + 1}</span>
-              </TabsTrigger>
+              </TabsTab>
             );
           })}
         </TabsList>
-      </Tabs>
+      </TabsRoot>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
         {orchestrator && (
           <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 text-xs">
             {node && meta ? (
               <>
-                <Badge variant={meta.variant} className={cn('gap-1', meta.className)}>
-                  <meta.icon className={node.state === 'running' ? 'animate-spin' : undefined} />
+                <Tag icon={<meta.icon className={node.state === 'running' ? 'animate-spin' : undefined} />} style={tagStyle(meta.color)}>
                   {meta.label}
-                </Badge>
+                </Tag>
                 <span className="font-mono text-muted-foreground">#{node.index + 1}</span>
                 <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
                 {node.choice && <span className="truncate font-mono text-muted-foreground">{describeChoice(node.choice)}</span>}
                 {CANCELLABLE.includes(node.state) && (
-                  <Button variant="outline" size="xs" title="Interrompe só este executor" onClick={() => onStop(node.id)}>
+                  <Button type="default" size="small" title="Interrompe só este executor" onClick={() => onStop(node.id)}>
                     parar
                   </Button>
                 )}
               </>
             ) : (
               <>
-                <Badge variant="secondary">orquestrador</Badge>
+                <Tag>orquestrador</Tag>
                 <span className="min-w-0 truncate font-mono text-muted-foreground">{orchestrator.title}</span>
                 <span className="flex-1" />
                 {orchestrator.started && (
                   <Button
-                    variant="outline" size="xs" className="font-mono"
+                    type="default" size="small" className="font-mono"
                     title="Escolha dos executores; a troca vale para os próximos"
                     onClick={onExecutorChoice}
                   >
@@ -143,7 +145,7 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
           {!orchestrator && (
             <div className="absolute inset-0 m-auto grid h-fit w-[min(380px,calc(100%-32px))] justify-items-center gap-3 p-4 text-center">
               {notice && <p role="status" className="rounded-md border bg-card px-3 py-1.5 text-sm">{notice}</p>}
-              <Button onClick={onOpen}>Abrir terminal</Button>
+              <Button type="primary" onClick={onOpen}>Abrir terminal</Button>
               <p className="text-xs text-muted-foreground">
                 Abre o orquestrador: o único terminal onde você digita. Os executores aparecem em abas quando ele delega.
               </p>

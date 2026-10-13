@@ -2,12 +2,8 @@
 // do arquivo selecionado. Tudo roda na pasta do projeto e só por clique do usuário. O status atualiza sozinho
 // (usePolled, no App); cada ação atualiza na hora.
 import { useEffect, useRef, useState, Fragment, type PointerEvent as ReactPointerEvent, type KeyboardEvent } from 'react';
-import { toast } from 'sonner';
-import { ArrowDown, ArrowUp, Check, GitBranch, LoaderCircle, Minus, Plus, RefreshCw } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Textarea } from '@/components/ui/textarea';
+import { ActionIcon, Button, Input, Popover, TextArea, toast } from '@lobehub/ui/base-ui';
+import { ArrowDown, ArrowUp, Check, GitBranch, Minus, Plus, RefreshCw } from 'lucide-react';
 import { cn } from 'cn';
 import { backend, message } from './backend';
 import { usePolling } from './polling';
@@ -25,7 +21,7 @@ const KIND: Record<GitKind, { letter: string; title: string }> = {
 const SIGN = { add: '+', del: '-', context: ' ' };
 
 // Erro de ação: a mensagem do backend em toast, selecionável (o body tem user-select: none).
-const fail = (e: unknown) => toast.error(<span className="select-text">{message(e)}</span>, { duration: 7000 });
+const fail = (e: unknown) => toast.error({ title: <span className="select-text">{message(e)}</span>, duration: 7000 });
 const lastLine = (text: string) => text.trim().split('\n').pop() ?? '';
 const commits = (n: number) => `${n} ${n === 1 ? 'commit' : 'commits'}`;
 // Caminhos de um arquivo para preparar ou tirar: renomeado leva o nome antigo junto.
@@ -115,7 +111,7 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
     setOp(kind);
     try {
       const out = await REMOTE[kind].run();
-      toast.success(REMOTE[kind].done, { description: lastLine(out), duration: 3000 });
+      toast.success({ title: REMOTE[kind].done, description: lastLine(out), duration: 3000 });
     } catch (e) {
       fail(e);
     } finally {
@@ -146,29 +142,25 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
       <div className="grid gap-1 px-3 py-2">
         <div className="flex items-center gap-1">
           <BranchPicker branch={status.branch} locked={locked} refresh={refresh} />
-          <Button
-            variant="outline" size="icon-sm" aria-label="Buscar" disabled={busy}
+          <ActionIcon
+            variant="outlined" size="small" icon={RefreshCw} spin={op === 'fetch'} aria-label="Buscar" disabled={busy}
             title="Buscar (fetch): traz as informações do remoto, sem mexer nos arquivos"
             onClick={() => remote('fetch')}
-          >
-            {op === 'fetch' ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
-          </Button>
+          />
           <Button
-            variant="outline" size="sm" className="px-2 font-mono" disabled={busy || locked}
+            size="small" className="px-2 font-mono" icon={ArrowDown} loading={op === 'pull'} disabled={busy || locked}
             aria-label={status.behind > 0 ? `Receber, ${commits(status.behind)}` : 'Receber'}
             title={locked ? LOCKED_TITLE : `Receber (pull): traz os commits do remoto${status.behind > 0 ? ` (${commits(status.behind)} a receber)` : ''}`}
             onClick={() => remote('pull')}
           >
-            {op === 'pull' ? <LoaderCircle className="animate-spin" /> : <ArrowDown />}
             {status.behind > 0 && status.behind}
           </Button>
           <Button
-            variant="outline" size="sm" className="px-2 font-mono" disabled={busy}
+            size="small" className="px-2 font-mono" icon={ArrowUp} loading={op === 'push'} disabled={busy}
             aria-label={status.ahead > 0 ? `Enviar, ${commits(status.ahead)}` : 'Enviar'}
             title={`Enviar (push): envia os commits locais${status.ahead > 0 ? ` (${commits(status.ahead)} a enviar)` : ''}`}
             onClick={() => remote('push')}
           >
-            {op === 'push' ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}
             {status.ahead > 0 && status.ahead}
           </Button>
         </div>
@@ -176,8 +168,8 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
       </div>
 
       <div className="grid gap-2 border-y px-3 py-2">
-        <Textarea
-          rows={3} value={text} aria-label="Mensagem do commit"
+        <TextArea
+          rows={3} resize value={text} aria-label="Mensagem do commit"
           placeholder="Mensagem do commit (Ctrl+Enter commita)"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -186,10 +178,9 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
               void commit();
             }
           }}
-          className="min-h-16 resize-y text-sm select-text"
+          classNames={{ input: 'text-sm select-text' }}
         />
-        <Button size="sm" className="justify-self-start" disabled={!canCommit} title={canCommit ? 'Commita o que está preparado' : commitHint} onClick={commit}>
-          {committing && <LoaderCircle className="animate-spin" />}
+        <Button type="primary" size="small" className="justify-self-start" disabled={!canCommit} loading={committing} title={canCommit ? 'Commita o que está preparado' : commitHint} onClick={commit}>
           Commit
         </Button>
       </div>
@@ -255,47 +246,50 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
     await change(() => backend.gitCreateBranch(target));
   }
 
+  // trigger="click": o padrão do Popover do Lobe UI é abrir com o mouse em cima.
   return (
-    <Popover open={open} onOpenChange={changeOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" className="min-w-0 flex-1 justify-start px-2 font-mono" title={`Branch atual: ${branch}. Trocar ou criar uma branch`}>
-          <GitBranch />
-          <span className="min-w-0 truncate">{branch}</span>
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="grid w-64 gap-2 p-2">
-        {locked && <p className="px-1 text-xs text-muted-foreground">{LOCKED_TITLE}</p>}
-        {branchError && <p role="status" className="px-1 text-xs text-destructive">{branchError}</p>}
-        {!branches && !branchError && <p className="px-1 text-xs text-muted-foreground">Lendo as branches…</p>}
-        {branches && (
-          <div className="grid max-h-60 gap-0.5 overflow-y-auto">
-            {branches.local.map((item) => {
-              const current = item === branches.current;
-              return (
-                <Button
-                  key={item} variant="ghost" size="sm" className="w-full justify-start gap-2 font-mono"
-                  disabled={locked} aria-current={current ? 'true' : undefined}
-                  title={locked ? LOCKED_TITLE : current ? 'Branch atual' : `Trocar para ${item}`}
-                  onClick={() => choose(item)}
-                >
-                  <Check className={cn('shrink-0', !current && 'invisible')} />
-                  <span className="min-w-0 truncate">{item}</span>
-                </Button>
-              );
-            })}
-          </div>
-        )}
-        <form className="flex gap-1" onSubmit={(e) => { e.preventDefault(); void create(); }}>
-          <Input
-            value={name} onChange={(e) => setName(e.target.value)} disabled={locked}
-            placeholder="Nova branch" aria-label="Nome da nova branch"
-            className="h-8 min-w-0 flex-1 font-mono"
-          />
-          <Button type="submit" size="sm" disabled={locked || !name.trim()} title={locked ? LOCKED_TITLE : 'Cria a branch e troca para ela'}>
-            Criar
-          </Button>
-        </form>
-      </PopoverContent>
+    <Popover
+      open={open} onOpenChange={changeOpen} trigger="click" placement="bottomLeft"
+      className="w-64" classNames={{ content: 'grid gap-2 p-2' }}
+      content={
+        <>
+          {locked && <p className="px-1 text-xs text-muted-foreground">{LOCKED_TITLE}</p>}
+          {branchError && <p role="status" className="px-1 text-xs text-destructive">{branchError}</p>}
+          {!branches && !branchError && <p className="px-1 text-xs text-muted-foreground">Lendo as branches…</p>}
+          {branches && (
+            <div className="grid max-h-60 gap-0.5 overflow-y-auto">
+              {branches.local.map((item) => {
+                const current = item === branches.current;
+                return (
+                  <Button
+                    key={item} type="text" size="small" className="w-full justify-start! gap-2 font-mono"
+                    icon={<Check className={cn('shrink-0', !current && 'invisible')} />}
+                    disabled={locked} aria-current={current ? 'true' : undefined}
+                    title={locked ? LOCKED_TITLE : current ? 'Branch atual' : `Trocar para ${item}`}
+                    onClick={() => choose(item)}
+                  >
+                    <span className="min-w-0 truncate">{item}</span>
+                  </Button>
+                );
+              })}
+            </div>
+          )}
+          <form className="flex gap-1" onSubmit={(e) => { e.preventDefault(); void create(); }}>
+            <Input
+              size="small" value={name} onChange={(e) => setName(e.target.value)} disabled={locked}
+              placeholder="Nova branch" aria-label="Nome da nova branch"
+              className="min-w-0 flex-1 font-mono"
+            />
+            <Button type="primary" htmlType="submit" size="small" disabled={locked || !name.trim()} title={locked ? LOCKED_TITLE : 'Cria a branch e troca para ela'}>
+              Criar
+            </Button>
+          </form>
+        </>
+      }
+    >
+      <Button type="text" size="small" icon={GitBranch} className="min-w-0! flex-1! justify-start! px-2! font-mono!" title={`Branch atual: ${branch}. Trocar ou criar uma branch`}>
+        <span className="min-w-0 truncate">{branch}</span>
+      </Button>
     </Popover>
   );
 }
@@ -314,11 +308,12 @@ function FileSection({ title, files, staged, onStage, selected, onSelect }: {
     <section className="grid gap-0.5 px-1 pb-1">
       <div className="flex items-center gap-2 px-2 py-1">
         <h3 className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">{title} ({files.length})</h3>
-        <Button variant="ghost" size="xs" onClick={() => onStage([])}>
+        <Button type="text" size="small" onClick={() => onStage([])}>
           {staged ? 'tirar tudo' : 'preparar tudo'}
         </Button>
       </div>
-      <ul className="grid">
+      {/* A coluna não pode crescer com o nome: sem o minmax(0,1fr), o texto nowrap empurra a lista para fora da seção. */}
+      <ul className="grid grid-cols-[minmax(0,1fr)]">
         {files.map((f) => {
           const kind = (staged ? f.staged : f.unstaged) as GitKind;
           const { letter, title: word } = KIND[kind];
@@ -338,14 +333,12 @@ function FileSection({ title, files, staged, onStage, selected, onSelect }: {
                 <span className="min-w-0 shrink truncate">{name}</span>
                 {dir && <span className="min-w-0 shrink-2 truncate text-xs text-muted-foreground">{dir}</span>}
               </button>
-              <Button
-                variant="ghost" size="icon-xs"
+              <ActionIcon
+                variant="borderless" size="small" icon={staged ? Minus : Plus}
                 aria-label={`${staged ? 'Tirar do preparo' : 'Preparar'} ${f.path}`}
                 title={staged ? 'Tirar do preparo' : 'Preparar'}
                 onClick={() => onStage(pathsOf(f))}
-              >
-                {staged ? <Minus /> : <Plus />}
-              </Button>
+              />
             </li>
           );
         })}

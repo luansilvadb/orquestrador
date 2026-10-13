@@ -1,36 +1,51 @@
 # Design system
 
-A interface usa [shadcn/ui](https://ui.shadcn.com) de verdade (base Radix, estilo `radix-vega`, base de cor `neutral`), com Tailwind CSS v4 pela integração do Vite. Tema escuro neutro; a classe `dark` fica em `index.html`.
+A interface usa o [Lobe UI](https://github.com/lobehub/lobe-ui) (`@lobehub/ui`, sobre Base UI e antd-style), com Tailwind CSS v4 pela integração do Vite. Tema escuro fixo, definido pelo `ThemeProvider` em `src/main.tsx`. Fonte: Inter.
 
 ## Onde fica
 
 | Caminho | Papel |
 | --- | --- |
-| `components.json` | Configuração do registry do shadcn (aliases, estilo, base de cor). |
-| `src/components/ui/` | Componentes gerados pelo CLI oficial (`npx shadcn@latest add ...`). Não editar à mão; regenerar pelo CLI. |
-| `src/lib/utils.ts` | `cn`, gerado pelo CLI. |
-| `src/index.css` | Tokens semânticos do shadcn (`:root` e `.dark`) e os poucos estilos próprios. |
+| `src/main.tsx` | `ThemeProvider` (tema escuro, fonte Inter no antd), um `ConfigProvider` do `@lobehub/ui` com `motion` (de `motion/react`) dentro dele, `ToastHost` e `ModalHost`. |
+| `src/index.css` | Tailwind, fonte Inter, os tokens do tema escuro copiados do Lobe UI, os tokens próprios do app e os poucos estilos globais. |
+| `src/term.ts` | Tema dos terminais xterm (cores em `theme`). |
 
-Componentes em uso: `alert`, `alert-dialog`, `badge`, `button`, `card`, `input`, `label`, `popover` (escolha de branch no painel Git), `progress`, `select`, `sonner`, `tabs` (faixa de abas dos terminais, em `src/terminal-screen.tsx`), `textarea` (mensagem de commit), `toggle-group` (ferramenta e esforço do formulário de escolha) e `toggle`, que é dependência de `toggle-group` (o CLI a instala junto). Para adicionar um componente, use o CLI e liste-o aqui.
+Componentes em uso, todos de `@lobehub/ui/base-ui` (o `Block` vem de `@lobehub/ui`):
 
-Componentes novos do painel Git e das abas, todos pelo CLI oficial (`npx shadcn@latest add tabs popover textarea`), sem dependência nova: `tabs`, `popover` e `textarea`. Os demais componentes do painel (botões, badge, input) já existiam.
+| Componente | Onde |
+| --- | --- |
+| `Block` | `src/App.tsx` (cartões da tela de atualização e de escolha de pasta). |
+| `Alert` | `src/App.tsx`, `src/choice-form.tsx`. |
+| `Badge` | `src/explorer.tsx` (contador de alterações no ícone do Git). |
+| `Button` | `src/App.tsx`, `src/choice-form.tsx`, `src/git.tsx`, `src/terminal-screen.tsx`. |
+| `ActionIcon` | `src/explorer.tsx`, `src/git.tsx`. |
+| `Input`, `TextArea` | `src/choice-form.tsx`, `src/git.tsx` (nome de branch e mensagem de commit). |
+| `InputNumber` | `src/App.tsx` (limite de executores ao mesmo tempo). |
+| `Segmented`, `Select` | `src/choice-form.tsx`. |
+| `Modal` | `src/App.tsx` (confirmação de fechar com terminais trabalhando), `src/choice-form.tsx`. |
+| `Popover` | `src/git.tsx` (escolha de branch). |
+| `Progress` | `src/App.tsx` (download com total conhecido). |
+| `ScrollArea` | `src/explorer.tsx` (árvore de pastas). |
+| `Tag` | `src/terminal-screen.tsx` (estado de cada executor). |
+| `TabsRoot`, `TabsList`, `TabsTab`, `TabsIndicator` | `src/terminal-screen.tsx` (faixa de abas dos terminais). |
+| `toast` | `src/App.tsx`, `src/git.tsx`. |
+
+Para trocar ou adicionar um componente, importe-o de `@lobehub/ui/base-ui` e atualize esta tabela.
 
 ## Regras
 
-- Cores, raio, borda, foco e espaçamento vêm dos tokens semânticos (`bg-card`, `text-muted-foreground`, `border`, `ring`…). Sem cor fixa no componente.
+- Componentes vêm do Lobe UI. Tailwind fica só para layout, espaçamento e tipografia. Cores de texto e de fundo secundárias usam os tokens do Tailwind (`bg-card`, `text-muted-foreground`, `border`, `ring`…), sem cor fixa no componente.
+- Os tokens do Tailwind em `src/index.css` copiam os valores do tema escuro do Lobe UI (`colorBgLayout`, `colorBgContainer`, `colorTextSecondary` etc., comentados ao lado de cada um). Não há CSS variables do tema em runtime, então se o tema mudar, os valores precisam ser atualizados à mão.
 - Os tokens próprios, em `src/index.css`, são: `--status-*`, as cores dos ícones de estado nas abas dos executores; `--terminal`, o fundo dos terminais (`bg-terminal`), com o mesmo valor de `theme.background` em `src/term.ts`, que o xterm recebe por lá e não pela variável; e as cores do diff (`--diff-add` e `--diff-del`). Os de diff valem como texto do sinal `+`/`-` e, com 15% de opacidade, como fundo da linha (`bg-diff-add/15`, `text-diff-del`). Têm valor próprio no tema escuro, com contraste sobre o card.
-- Estado de execução sempre tem texto e ícone, não só cor (`Badge` com rótulo).
-- CSS próprio só para o xterm e a base da página: `.xterm .xterm-viewport` (fundo transparente, para o `bg-terminal` do corpo aparecer) e as alturas e a rolagem de `html`, `body` e `#root`. Os terminais xterm são superfícies especializadas e não usam componentes shadcn.
+- Estado de execução sempre tem texto e ícone, não só cor (`Tag` com rótulo e ícone).
+- A cor do `Tag` de estado vem do token `--status-*` por `style`, porque a prop `color` do `Tag` só aceita hex ou cor predefinida.
+- A barra de progresso indeterminada (download sem total conhecido) é feita com Tailwind (`animate-pulse`), porque o `Progress` do Lobe UI não tem esse modo.
+- Toasts pelo `toast` imperativo; o `ToastHost` em `src/main.tsx` é quem os renderiza.
+- CSS próprio só para o xterm e a base da página: `.xterm .xterm-viewport` (fundo transparente, para o `bg-terminal` do corpo aparecer) e as alturas e a rolagem de `html`, `body` e `#root`. Os terminais xterm são superfícies especializadas e não usam componentes do Lobe UI.
 - Monoespaçado só em terminal e valores técnicos (caminho, modelo, esforço).
 - Sem glows, gradientes decorativos ou acento colorido nas bordas de todos os cards.
-
-## Ajuste manual em `progress`
-
-O `src/components/ui/progress.tsx` gerado pelo CLI desestruturava `value` e usava no transform do indicador, mas não o repassava ao `ProgressPrimitive.Root`. Resultado: `data-state` ficava sempre `indeterminate` e `aria-valuenow` sumia no download com total conhecido. Corrigido com `value={value}` no `Root`, antes do `{...props}`; o resto do componente segue o oficial. Ao regenerar o componente pelo CLI, reaplique essa linha.
-
-## Motion
-
-As animações de entrada e saída são as do shadcn oficial (`tw-animate-css` + variantes `data-open`/`data-closed` de `shadcn/tailwind.css`, importados em `src/index.css`). Verificado no navegador: `AlertDialog` anima overlay e conteúdo nos dois sentidos (`enter`/`exit`, 0,1s). O `Select` do formulário de escolha (`src/choice-form.tsx`) usa `position="popper"` com `align="start"`: é a variante animada do `radix-vega`, sem `animate-none`. O menu abre com `enter` e fecha com `exit`, 0,1s, com `fade-in-0`/`zoom-in-95` e `fade-out-0`/`zoom-out-95`, ancorado logo abaixo do gatilho e com a largura dele.
+- O `ConfigProvider` com `motion` (de `motion/react`) é obrigatório dentro do `ThemeProvider`: sem ele, os componentes de `@lobehub/ui/base-ui` lançam erro ao renderizar. Não tire esse par de `src/main.tsx`.
+- Classe do Tailwind posta num componente do Lobe UI perde quando o componente define a mesma propriedade, porque o CSS do Lobe UI não fica em camada e as utilitárias do Tailwind ficam. Nesses casos use a prop do componente (`size`, `style`, `classNames`, `styles`) ou o modificador `!` do Tailwind, como em `className="w-16! font-mono!"` no `InputNumber` de `src/App.tsx`.
 
 ## Telas e terminais montados
 

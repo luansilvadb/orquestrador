@@ -1,9 +1,8 @@
 // A navegação da coluna de ícones, a árvore de pastas (na tela principal) e a barra de status com a branch.
 // A árvore se atualiza sozinha (usePolling). O status do Git vem do App, que o usa no contador da navegação e na barra de status.
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, File, Files, Folder, FolderOpen, GitBranch, GitCommitHorizontal } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { ChevronDown, ChevronRight, File, Files, Folder, FolderOpen, GitBranch, GitCommitHorizontal, type LucideIcon } from 'lucide-react';
+import { ActionIcon, Badge, ScrollArea } from '@lobehub/ui/base-ui';
 import { backend, message } from './backend';
 import { go, type Route } from './route';
 import { usePolling } from './polling';
@@ -27,25 +26,21 @@ const sameList = (a: DirEntry[] | undefined, b: DirEntry[]) =>
 
 /** Coluna de ícones: uma tela por botão, na ordem Arquivos, Git. O botão da tela aberta tem aria-current. */
 export function Nav({ route, changed }: { route: Route; changed: number }) {
-  const button = (to: Route, label: string, icon: ReactNode, title = label) => (
-    <Button
-      variant={route === to ? 'secondary' : 'ghost'} size="icon-sm"
+  const button = (to: Route, label: string, icon: LucideIcon, title = label) => (
+    <ActionIcon
+      icon={icon} variant="borderless" active={route === to}
       aria-label={label} aria-current={route === to ? 'page' : undefined} title={title}
       onClick={() => go(to)}
-    >
-      {icon}
-    </Button>
+    />
   );
   const gitLabel = changed ? `Git (${changed} ${changed === 1 ? 'arquivo alterado' : 'arquivos alterados'})` : 'Git';
   return (
     <nav aria-label="Telas" className="flex w-11 shrink-0 flex-col items-center gap-1 border-r bg-card py-2">
-      {button('arquivos', 'Arquivos', <Files />)}
+      {button('arquivos', 'Arquivos', Files)}
       <div className="relative">
-        {button('git', gitLabel, <GitCommitHorizontal />, 'Git')}
+        {button('git', gitLabel, GitCommitHorizontal, 'Git')}
         {changed > 0 && (
-          <Badge aria-hidden="true" className="pointer-events-none absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px]">
-            {changed}
-          </Badge>
+          <Badge aria-hidden="true" count={changed} className="pointer-events-none absolute -top-1 -right-1" />
         )}
       </div>
     </nav>
@@ -128,11 +123,13 @@ export function FilesScreen() {
     });
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden py-2">
-      {error && <p role="status" className="px-3 py-1 text-xs text-muted-foreground">{error}</p>}
-      {!tree.children[''] && !error && <p className="px-3 py-1 text-xs text-muted-foreground">Lendo a pasta…</p>}
-      {rows('', 0)}
-    </div>
+    <ScrollArea className="h-full" disableContentFit>
+      <div className="py-2">
+        {error && <p role="status" className="px-3 py-1 text-xs text-muted-foreground">{error}</p>}
+        {!tree.children[''] && !error && <p className="px-3 py-1 text-xs text-muted-foreground">Lendo a pasta…</p>}
+        {rows('', 0)}
+      </div>
+    </ScrollArea>
   );
 }
 

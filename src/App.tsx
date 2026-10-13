@@ -1,14 +1,6 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from 'react';
-import { toast } from 'sonner';
-import { LoaderCircle } from 'lucide-react';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Progress } from '@/components/ui/progress';
-import { Toaster } from '@/components/ui/sonner';
+import { Block } from '@lobehub/ui';
+import { Alert, Button, InputNumber, Modal, Progress, toast } from '@lobehub/ui/base-ui';
 import { cn } from 'cn';
 import { backend, connect, message } from './backend';
 import { ChoiceForm } from './choice-form';
@@ -109,7 +101,7 @@ const updateText = (status: UpdateStatus, fatal: boolean) => {
   }
 };
 
-const report = (e: unknown) => toast.error(message(e), { duration: 7000 });
+const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
 
 export function App() {
   const [state, dispatch] = useReducer(reducer, initial);
@@ -254,7 +246,7 @@ export function App() {
     dispatch({ type: 'overlay', overlay: null });
   }
 
-  // Foco das janelas de escolha: ao fechar, o Dialog não devolve o foco ao botão que as abriu.
+  // Foco das janelas de escolha: ao fechar, a janela não devolve o foco ao botão que as abriu.
   function focusOrchestrator() {
     terminals.get(ORCHESTRATOR)?.term.focus();
   }
@@ -304,33 +296,36 @@ export function App() {
     const retry = update.phase === 'failed';
     return (
       <Screen>
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>Orquestrador</CardTitle>
-            <CardDescription role="status" aria-live="polite">{updateText(update, fatal)}</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4">
+        <Block variant="outlined" direction="vertical" gap={16} padding={24} className="w-full max-w-md">
+          <div className="grid gap-1.5">
+            <h1 className="text-base font-semibold leading-none">Orquestrador</h1>
+            <p role="status" aria-live="polite" className="text-sm text-muted-foreground">{updateText(update, fatal)}</p>
+          </div>
+          <div className="grid gap-4">
             {update.phase === 'downloading' && (
-              // Total desconhecido (ou zero): value null é o indeterminado do Radix; a classe mostra a barra cheia pulsando.
-              <Progress
-                aria-label="Progresso do download da atualização"
-                value={update.total ? Math.min(100, (update.downloaded / update.total) * 100) : null}
-                className="data-[state=indeterminate]:[&>[data-slot=progress-indicator]]:!transform-none data-[state=indeterminate]:[&>[data-slot=progress-indicator]]:animate-pulse"
-              />
+              // Total desconhecido (ou zero): sem percentual, a barra cheia pulsa. O Progress do Lobe UI não tem modo indeterminado.
+              update.total ? (
+                <Progress
+                  aria-label="Progresso do download da atualização"
+                  percent={Math.min(100, (update.downloaded / update.total) * 100)}
+                  showInfo={false}
+                />
+              ) : (
+                <div role="progressbar" aria-label="Progresso do download da atualização" className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div className="h-full w-full animate-pulse rounded-full bg-primary" />
+                </div>
+              )
             )}
             {update.phase === 'failed' && (
-              <Alert variant="destructive" role="alert">
-                <AlertDescription className="select-text">{update.message}</AlertDescription>
-              </Alert>
+              <Alert type="error" role="alert" description={update.message} className="select-text" />
             )}
             {retry && (
-              <Button onClick={retryUpdate} disabled={retrying} className="justify-self-start">
-                {retrying && <LoaderCircle className="animate-spin" />}
+              <Button type="primary" onClick={retryUpdate} disabled={retrying} loading={retrying} className="justify-self-start">
                 Tentar novamente
               </Button>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </Block>
       </Screen>
     );
   }
@@ -338,23 +333,20 @@ export function App() {
   if (!state.project) {
     return (
       <Screen>
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>Orquestrador</CardTitle>
-            <CardDescription>
+        <Block variant="outlined" direction="vertical" gap={16} padding={24} className="w-full max-w-md">
+          <div className="grid gap-1.5">
+            <h1 className="text-base font-semibold leading-none">Orquestrador</h1>
+            <p className="text-sm text-muted-foreground">
               Escolha a pasta do projeto (um repositório Git). O orquestrador e os executores trabalham nela.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4">
+            </p>
+          </div>
+          <div className="grid gap-4">
             {projectError && (
-              <Alert variant="destructive" role="alert">
-                <AlertDescription className="select-text">{projectError}</AlertDescription>
-              </Alert>
+              <Alert type="error" role="alert" description={projectError} className="select-text" />
             )}
-            <Button onClick={chooseProject} className="justify-self-start">Escolher pasta do projeto</Button>
-          </CardContent>
-        </Card>
-        <Toaster position="bottom-right" />
+            <Button type="primary" onClick={chooseProject} className="justify-self-start">Escolher pasta do projeto</Button>
+          </div>
+        </Block>
       </Screen>
     );
   }
@@ -368,17 +360,19 @@ export function App() {
         </code>
         <span className="text-xs text-muted-foreground">{counts}</span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Label className="text-xs text-muted-foreground" title="Quantos executores rodam ao mesmo tempo (1 a 16); os demais ficam na fila">
+          <label className="flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground" title="Quantos executores rodam ao mesmo tempo (1 a 16); os demais ficam na fila">
             simultâneos
-            <Input
-              type="number" min={1} max={16} step={1} inputMode="numeric"
-              value={maxText}
-              onChange={(e) => setMaxText(e.target.value)}
+            {/* O blur do wrapper confirma (o foco sai do campo); o Enter tira o foco. Valor vazio vira null. */}
+            <InputNumber
+              size="small" min={1} max={16} step={1}
+              value={maxText === '' ? null : Number(maxText)}
+              onChange={(value) => setMaxText(value === null ? '' : String(value))}
               onBlur={commitMax}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-              className="h-8 w-16 font-mono"
+              onPressEnter={(e) => (e.target as HTMLInputElement).blur()}
+              controls={false}
+              className="w-16! font-mono!"
             />
-          </Label>
+          </label>
         </div>
       </header>
 
@@ -411,7 +405,6 @@ export function App() {
 
       <StatusBar branch={git.data?.branch} />
 
-      <Toaster position="bottom-right" />
       {/* As três escolhas são janelas: a do orquestrador (início e executores) e uma só para os executores aguardando. */}
       {options && (
         <>
@@ -439,18 +432,23 @@ export function App() {
           />
         </>
       )}
-      <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!open) settleClose(false); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Fechar o Orquestrador?</AlertDialogTitle>
-            <AlertDialogDescription>Há terminais trabalhando; fechar encerra todos.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => settleClose(true)}>Fechar e encerrar todos</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Esc, clique fora e Cancelar recusam o fechamento; só o botão de perigo confirma. */}
+      <Modal
+        open={confirmOpen}
+        title="Fechar o Orquestrador?"
+        closable={false}
+        keyboard
+        maskClosable
+        onCancel={() => settleClose(false)}
+        footer={(
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => settleClose(false)}>Cancelar</Button>
+            <Button type="primary" danger onClick={() => settleClose(true)}>Fechar e encerrar todos</Button>
+          </div>
+        )}
+      >
+        <p className="text-sm text-muted-foreground">Há terminais trabalhando; fechar encerra todos.</p>
+      </Modal>
     </div>
   );
 }

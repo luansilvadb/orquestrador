@@ -181,7 +181,7 @@ Saída: `src-tauri\target\release\bundle\nsis\Orquestrador_<versão>_x64-setup.e
 
 | Caminho | Papel |
 | --- | --- |
-| `src/` | Frontend em React: tela de atualização, a tela principal (árvore de pastas e terminais), a tela Git, terminais (xterm), formulário de escolha. `mock.ts` é um backend simulado, só em `npm run dev` fora do Tauri. O design system (shadcn/ui) está em `docs/design-system.md`. |
+| `src/` | Frontend em React: tela de atualização, a tela principal (árvore de pastas e terminais), a tela Git, terminais (xterm), formulário de escolha. `mock.ts` é um backend simulado, só em `npm run dev` fora do Tauri. O design system (Lobe UI) está em `docs/design-system.md`. |
 | `src/terminal-screen.tsx` | Os terminais da tela principal: faixa de abas (orquestrador e um executor por aba), a barra da aba ativa e o terminal dela. |
 | `src/route.ts` | A rota por hash das duas telas (`#/arquivos`, `#/git`). Sem hash, hash desconhecido ou `#/terminais` cai em `#/arquivos`. |
 | `src/explorer.tsx` | A coluna de ícones da navegação, a árvore de pastas (na tela principal) e a barra de status com a branch. |

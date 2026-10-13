@@ -1,17 +1,10 @@
-// O formulário de ferramenta, modelo e esforço numa janela (Dialog): o mesmo para o orquestrador e para os executores.
+// O formulário de ferramenta, modelo e esforço numa janela (Modal): o mesmo para o orquestrador e para os executores.
 import { useId, useState, type FormEvent } from 'react';
-import { LoaderCircle } from 'lucide-react';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Alert, Button, Input, Modal, Segmented, Select } from '@lobehub/ui/base-ui';
 import { message } from './backend';
 import type { Choice, Options, Tool, ToolOption } from './types';
 
-// Valores sentinela: o Select e o ToggleGroup não aceitam '' como valor de item. '' no Choice = padrão do CLI.
+// Valores sentinela: as opções do Select precisam de um valor não vazio. '' no Choice = padrão do CLI.
 const DEFAULT = '__default__';
 const CUSTOM = '__custom__';
 
@@ -39,25 +32,30 @@ type Props = {
   onClosed?: () => void;
 };
 
-export function ChoiceForm({ open, onCancel, onClosed, ...form }: Props) {
+export function ChoiceForm({ open, title, onCancel, onClosed, ...form }: Props) {
+  // Sem onCancel: Esc, clique fora e o X não fecham; a janela só fecha ao confirmar.
   const closable = !!onCancel;
+  // afterClose roda depois da animação de saída: quem chama usa para devolver o foco ao terminal do orquestrador.
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel?.(); }}>
-      <DialogContent
-        className="sm:max-w-[460px]"
-        showCloseButton={closable}
-        onEscapeKeyDown={(e) => { if (!closable) e.preventDefault(); }}
-        onInteractOutside={(e) => { if (!closable) e.preventDefault(); }}
-        onCloseAutoFocus={(e) => { e.preventDefault(); onClosed?.(); }}
-      >
-        {/* Desmontado ao fechar: a abertura seguinte começa do estado inicial, sem sobra da anterior. */}
-        <ChoiceFields {...form} onCancel={onCancel} />
-      </DialogContent>
-    </Dialog>
+    <Modal
+      open={open}
+      title={title}
+      width={460}
+      classNames={{ title: 'text-base font-semibold' }}
+      footer={false}
+      closable={closable}
+      keyboard={closable}
+      maskClosable={closable}
+      onCancel={onCancel}
+      afterClose={onClosed}
+    >
+      {/* Desmontado ao fechar (o Modal só renderiza o conteúdo enquanto a janela está montada): a abertura seguinte começa do estado inicial. */}
+      <ChoiceFields {...form} onCancel={onCancel} />
+    </Modal>
   );
 }
 
-function ChoiceFields({ title, hint, options, initial, confirmLabel, onConfirm, onCancel }: Omit<Props, 'open'>) {
+function ChoiceFields({ hint, options, initial, confirmLabel, onConfirm, onCancel }: Omit<Props, 'open' | 'title' | 'onClosed'>) {
   const ids = { model: useId(), tool: useId(), effort: useId() };
   const [choice, setChoice] = useState<Choice>(() => {
     const picked = options.tools.some((t) => t.name === initial.tool) ? initial : { tool: options.tools[0].name, model: '', effort: '' };
@@ -111,35 +109,32 @@ function ChoiceFields({ title, hint, options, initial, confirmLabel, onConfirm, 
 
   return (
     <form onSubmit={submit} className="grid gap-5">
-      <DialogHeader>
-        <DialogTitle className="text-base font-semibold">{title}</DialogTitle>
-        <DialogDescription>{hint}</DialogDescription>
-      </DialogHeader>
+      <p className="text-sm text-muted-foreground">{hint}</p>
 
       <div className="grid gap-2">
-        <Label id={ids.tool}>Ferramenta</Label>
-        <ToggleGroup aria-labelledby={ids.tool} type="single" variant="outline" value={choice.tool} spacing={0}
-          onValueChange={(v) => v && pickTool(v as Tool)} className="justify-start">
-          {options.tools.map((t) => (
-            <ToggleGroupItem key={t.name} value={t.name} className="px-4 font-mono">{t.name}</ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+        <label id={ids.tool} className="text-sm font-medium">Ferramenta</label>
+        <div role="group" aria-labelledby={ids.tool}>
+          <Segmented
+            value={choice.tool}
+            onChange={(v) => pickTool(v as Tool)}
+            options={options.tools.map((t) => ({ value: t.name, label: t.name, className: 'font-mono' }))}
+          />
+        </div>
       </div>
 
       <div className="grid gap-2">
-        <Label htmlFor={ids.model}>Modelo</Label>
-        <Select value={modelValue} onValueChange={pickModel}>
-          <SelectTrigger id={ids.model} className="w-full font-mono">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent position="popper" align="start">
-            <SelectItem value={DEFAULT}>padrão do CLI</SelectItem>
-            {tool.models.map((m) => (
-              <SelectItem key={m.name} value={m.name} className="font-mono">{m.name}</SelectItem>
-            ))}
-            <SelectItem value={CUSTOM}>Outro (digitado abaixo)</SelectItem>
-          </SelectContent>
-        </Select>
+        <label htmlFor={ids.model} className="text-sm font-medium">Modelo</label>
+        <Select
+          id={ids.model}
+          className="w-full font-mono"
+          value={modelValue}
+          onChange={(v) => pickModel(v as string)}
+          options={[
+            { value: DEFAULT, label: 'padrão do CLI' },
+            ...tool.models.map((m) => ({ value: m.name, label: m.name, className: 'font-mono' })),
+            { value: CUSTOM, label: 'Outro (digitado abaixo)' },
+          ]}
+        />
         <Input
           aria-label="Nome de outro modelo"
           value={custom ? choice.model : ''}
@@ -152,31 +147,27 @@ function ChoiceFields({ title, hint, options, initial, confirmLabel, onConfirm, 
       </div>
 
       <div className="grid gap-2">
-        <Label id={ids.effort}>Esforço</Label>
-        <ToggleGroup aria-labelledby={ids.effort} type="single" variant="outline" size="sm" spacing={0}
-          value={choice.effort || DEFAULT} className="flex-wrap justify-start"
-          onValueChange={(v) => v && setChoice((c) => ({ ...c, effort: v === DEFAULT ? '' : v }))}>
-          {[DEFAULT, ...efforts].map((e) => (
-            <ToggleGroupItem key={e} value={e} className="font-mono">{e === DEFAULT ? 'padrão' : e}</ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+        <label id={ids.effort} className="text-sm font-medium">Esforço</label>
+        <div role="group" aria-labelledby={ids.effort} className="flex flex-wrap">
+          <Segmented
+            size="small"
+            value={choice.effort || DEFAULT}
+            onChange={(v) => setChoice((c) => ({ ...c, effort: v === DEFAULT ? '' : v }))}
+            options={[DEFAULT, ...efforts].map((e) => ({ value: e, label: e === DEFAULT ? 'padrão' : e, className: 'font-mono' }))}
+          />
+        </div>
       </div>
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      {error && <Alert type="error" description={error} />}
 
-      <DialogFooter>
+      <div className="flex justify-end gap-2">
         {onCancel && (
-          <Button type="button" variant="outline" onClick={onCancel}>Cancelar</Button>
+          <Button htmlType="button" onClick={onCancel}>Cancelar</Button>
         )}
-        <Button type="submit" disabled={busy}>
-          {busy && <LoaderCircle className="animate-spin" />}
+        <Button type="primary" htmlType="submit" loading={busy} disabled={busy}>
           {confirmLabel}
         </Button>
-      </DialogFooter>
+      </div>
     </form>
   );
 }
