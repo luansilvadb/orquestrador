@@ -10,6 +10,7 @@ pub mod hook;
 pub mod proc;
 pub mod pty;
 pub mod roles;
+pub mod search;
 pub mod session;
 pub mod update;
 
@@ -45,6 +46,14 @@ fn get_options(core: State<Core>, gate: State<Gate>) -> Result<Options, String> 
 fn list_dir(core: State<Core>, gate: State<Gate>, path: String) -> Result<Vec<files::Entry>, String> {
     gate.ensure_open()?;
     files::list(&core.repo()?, &path)
+}
+
+/// Busca `query` nos arquivos do projeto (rastreados e não rastreados, sem o ignorado e sem binário). Consulta
+/// vazia não busca nada.
+#[tauri::command(async)]
+fn search(core: State<Core>, gate: State<Gate>, query: String, case_sensitive: bool, whole_word: bool, regex: bool) -> Result<search::Results, String> {
+    gate.ensure_open()?;
+    search::search(&core.repo()?, &query, case_sensitive, whole_word, regex)
 }
 
 /// O estado do Git do projeto para o painel: branch, ahead/behind e os arquivos alterados.
@@ -126,6 +135,13 @@ fn git_create_branch(core: State<Core>, gate: State<Gate>, name: String) -> Resu
 fn start_orchestrator(core: State<Core>, gate: State<Gate>, choice: Choice, cols: u16, rows: u16) -> Result<(), String> {
     gate.ensure_open()?;
     core.start_orchestrator(choice, cols, rows)
+}
+
+/// Abre o shell do usuário na pasta do projeto. Recusado se já houver um aberto.
+#[tauri::command(async)]
+fn start_shell(core: State<Core>, gate: State<Gate>, cols: u16, rows: u16) -> Result<(), String> {
+    gate.ensure_open()?;
+    core.start_shell(cols, rows)
 }
 
 #[tauri::command(async)]
@@ -226,6 +242,7 @@ pub fn run(context: tauri::Context) {
             choose_project,
             get_options,
             list_dir,
+            search,
             git_status,
             git_diff,
             git_stage,
@@ -238,6 +255,7 @@ pub fn run(context: tauri::Context) {
             git_switch,
             git_create_branch,
             start_orchestrator,
+            start_shell,
             set_executor_choice,
             set_max_parallel,
             term_write,

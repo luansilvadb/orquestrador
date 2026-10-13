@@ -17,6 +17,7 @@ use std::time::Duration;
 pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
 pub const ORCHESTRATOR: &str = "orchestrator";
+pub const SHELL: &str = "shell";
 const EXECUTOR_SIZE: (u16, u16) = (110, 30);
 const SEM_PROJETO: &str = "Escolha a pasta do projeto primeiro.";
 /// Acima disto o prompt não vai na linha de comando (o limite do Windows é 32767 caracteres).
@@ -285,6 +286,27 @@ impl Core {
         Ok(())
     }
 
+    /// Abre o PowerShell do usuário na pasta do projeto. Recusado se já houver um vivo. Cada início tem buffer novo.
+    pub fn start_shell(&self, cols: u16, rows: u16) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap();
+        let project = inner.project.clone().ok_or(SEM_PROJETO)?;
+        if inner.slots.get(SHELL).is_some_and(|s| s.term.is_some()) {
+            return Err("Já há um shell aberto.".into());
+        }
+        inner.slots.remove(SHELL);
+        let mut started = Err(String::new());
+        for program in cli::SHELLS {
+            started = self.spawn(&mut inner, SHELL, &cli::shell(program, &project), Some((cols, rows)));
+            if started.is_ok() {
+                break;
+            }
+        }
+        if started.is_err() {
+            inner.slots.remove(SHELL);
+        }
+        started
+    }
+
     pub fn set_executor_choice(&self, choice: Choice) -> Result<(), String> {
         config::check_choice("executor", &choice)?;
         let mut inner = self.inner.lock().unwrap();
@@ -308,9 +330,9 @@ impl Core {
         Ok(())
     }
 
-    /// Só o orquestrador recebe teclado; qualquer outro id é ignorado.
+    /// Só o orquestrador e o shell recebem teclado; os executores são somente leitura e qualquer outro id é ignorado.
     pub fn term_write(&self, id: &str, data: &str) {
-        if id != ORCHESTRATOR {
+        if id != ORCHESTRATOR && id != SHELL {
             return;
         }
         if let Some(term) = self.inner.lock().unwrap().slots.get_mut(id).and_then(|s| s.term.as_mut()) {
@@ -359,12 +381,14 @@ impl Core {
 
     pub fn has_running(&self) -> bool {
         let inner = self.inner.lock().unwrap();
-        inner.session.is_some() || inner.slots.values().any(|s| s.term.is_some())
+        inner.session.is_some() || inner.slots.iter().any(|(id, s)| id.as_str() != SHELL && s.term.is_some())
     }
 
-    /// Mata tudo e limpa a sessão e a regra.
+    /// Mata tudo, o shell inclusive, e limpa a sessão e a regra.
     pub fn shutdown(&self) {
-        self.teardown(&mut self.inner.lock().unwrap());
+        let mut inner = self.inner.lock().unwrap();
+        self.teardown(&mut inner);
+        inner.slots.remove(SHELL);
     }
 
     /// A pasta da sessão viva, para os testes e para diagnóstico.
@@ -379,7 +403,8 @@ impl Core {
 
     fn teardown(&self, inner: &mut Inner) {
         inner.epoch += 1;
-        inner.slots.clear();
+        // O shell não pertence à sessão: sai daqui e só `shutdown` o mata.
+        inner.slots.retain(|id, _| id.as_str() == SHELL);
         inner.nodes.clear();
         inner.batches.clear();
         inner.seen.clear();
@@ -420,6 +445,9 @@ impl Core {
         if id == ORCHESTRATOR {
             self.teardown(&mut inner);
             (self.emit)("orchestrator-exit", json!({ "code": code }));
+        } else if id == SHELL {
+            inner.slots.remove(SHELL);
+            (self.emit)("shell-exit", json!({ "code": code }));
         } else if let Some(i) = inner.nodes.iter().position(|n| n.info.id == id && n.info.state.is_live()) {
             // O sinal de fim pode ter chegado junto com a saída do processo.
             match self.signal(&inner.nodes[i]) {
@@ -710,6 +738,10 @@ mod tests {
 
     /// Um Core com um repositório de teste (branch `main` e `outra`), sem CLI real nem configuração.
     fn git_core(tag: &str) -> (Core, std::path::PathBuf) {
+        git_core_with(tag, Arc::new(|_: &str, _: Value| {}))
+    }
+
+    fn git_core_with(tag: &str, emit: Emit) -> (Core, std::path::PathBuf) {
         let root = std::env::temp_dir().join(format!("orq-core-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let repo = root.join("repo");
@@ -726,7 +758,6 @@ mod tests {
         let fake = String::from("fake");
         let exes = Exes { claude: fake.clone(), codex: fake.clone(), app: fake.clone(), delegate: fake };
         let places = session::Places { temp: root.join("temp"), codex_rules: root.join("rules"), global_dirs: vec![] };
-        let emit: Emit = Arc::new(|_: &str, _: Value| {});
         let core = Core::new(exes, places, root.join("config.json"), emit);
         core.set_project(&repo).unwrap();
         (core, root)
@@ -795,6 +826,58 @@ mod tests {
         assert!(core.git_idle(|dir| git::switch(dir, "inexistente")).is_err());
         assert!(!git_exclusivo(&core), "depois de falha");
         assert_eq!(core.git_idle(|dir| git::switch(dir, "main")), Ok(()), "a operação seguinte passa");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Espera `ok` ficar verdadeiro, até 15 segundos.
+    fn espera(mut ok: impl FnMut() -> bool) -> bool {
+        let fim = std::time::Instant::now() + Duration::from_secs(15);
+        while !ok() {
+            if std::time::Instant::now() > fim {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        true
+    }
+
+    #[test]
+    fn shell_abre_recusa_o_segundo_sai_com_exit_e_volta_a_abrir() {
+        let eventos = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+        let sink = eventos.clone();
+        let emit: Emit = Arc::new(move |ev: &str, p: Value| sink.lock().unwrap().push((ev.to_string(), p)));
+        let (core, root) = git_core_with("shell", emit);
+        assert_eq!(core.start_shell(80, 24), Ok(()));
+        assert_eq!(core.start_shell(80, 24).unwrap_err(), "Já há um shell aberto.");
+        assert!(!core.has_running(), "o shell vivo não faz o app pedir confirmação");
+        core.term_write(SHELL, "exit\r");
+        assert!(espera(|| eventos.lock().unwrap().iter().any(|(ev, _)| ev == "shell-exit")), "shell-exit não chegou");
+        let saida = eventos.lock().unwrap().iter().find(|(ev, _)| ev == "shell-exit").unwrap().1.clone();
+        assert!(saida.get("code").is_some(), "o payload traz o código: {saida}");
+        assert_eq!(core.term_snapshot(SHELL).seq, 0, "o slot saiu com o processo");
+        assert_eq!(core.start_shell(80, 24), Ok(()), "depois da saída, volta a abrir");
+        core.shutdown();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn teardown_do_orquestrador_deixa_o_shell_e_o_shutdown_o_leva() {
+        let (core, root) = git_core("shell-teardown");
+        core.start_shell(80, 24).unwrap();
+        {
+            let mut inner = core.inner.lock().unwrap();
+            inner.slots.insert(ORCHESTRATOR.into(), Slot::new(99));
+            inner.slots.insert("exec-1".into(), Slot::new(0));
+        }
+        // A saída do orquestrador (gen 99) passa por `on_exit`, que chama o teardown da sessão.
+        core.on_exit(ORCHESTRATOR, 99, Some(0));
+        {
+            let inner = core.inner.lock().unwrap();
+            assert!(!inner.slots.contains_key(ORCHESTRATOR) && !inner.slots.contains_key("exec-1"));
+            assert!(inner.slots.get(SHELL).is_some_and(|s| s.term.is_some()), "o shell sobrevive à saída do orquestrador");
+        }
+        core.shutdown();
+        assert!(!core.inner.lock().unwrap().slots.contains_key(SHELL), "o shutdown leva o shell");
         let _ = std::fs::remove_dir_all(&root);
     }
 

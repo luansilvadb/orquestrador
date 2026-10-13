@@ -86,6 +86,14 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &s
     Spawn { program, args, cwd: project.to_string(), env: vec![], path_first: vec![dir] }
 }
 
+/// Os PowerShells que o shell do usuário tenta, nesta ordem: o primeiro que iniciar vale.
+pub const SHELLS: [&str; 2] = ["pwsh.exe", "powershell.exe"];
+
+/// O shell do usuário: um PowerShell interativo na pasta do projeto, sem env nem pasta à frente do PATH.
+pub fn shell(program: &str, project: &str) -> Spawn {
+    Spawn { program: program.to_string(), args: strs(&["-NoLogo"]), cwd: project.to_string(), env: vec![], path_first: vec![] }
+}
+
 /// O prompt inicial de um executor: o texto de `roles::EXECUTOR` seguido da tarefa.
 pub fn executor_prompt(task: &str) -> String {
     format!("{}\n{}", EXECUTOR.trim_end(), task.trim())

@@ -1,16 +1,18 @@
 // Backend simulado, só para desenvolvimento no navegador (nunca entra no build de produção).
 // Digite no orquestrador: `lote` (6 tarefas), `sair` (termina com código 0), `sair 3` (código 3).
-// Na URL: `?mock=nogit` faz a escolha da pasta falhar como "fora de um repositório Git".
+// No painel Terminal (Ctrl+`), o shell simulado ecoa o que se digita; `exit` encerra o shell (código 0) e o painel fecha.
+// Na URL: `?mock=nogit` faz a escolha da pasta falhar como "fora de um repositório Git"; `?mock=noshell` faz o shell não abrir.
 // Na URL: `?update=falha` mostra a atualização bloqueada por falta de internet (a nova tentativa libera) e
 // `?update=download` simula o download. Sem parâmetro, o uso já vem liberado, como no build de desenvolvimento.
 // No console: `__mock.close()` simula fechar a janela; `__mock.writes` e `__mock.sizes` registram o que chegou.
 // `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto.
 // A árvore (`list_dir`) é em memória: muda só com o executor que termina bem (cria `src/tarefa-<lote>-<n>.ts`) e com `__mock.remove`.
 // O Git é resposta fixa: status, branches e diffs não mudam, e as ações de escrita só devolvem null ou um texto fixo.
+// Na pesquisa (Ctrl+Shift+F), `search` filtra de verdade, mas só os arquivos de `TEXTS` têm linhas; os demais não casam nada.
 import type { Transport } from './backend';
 import {
-  ORCHESTRATOR, type Choice, type Events, type ExecutorNode, type GitDiff, type GitFile,
-  type GitKind, type NodeState, type Options, type UpdateStatus,
+  ORCHESTRATOR, SHELL, type Choice, type Events, type ExecutorNode, type GitDiff, type GitFile,
+  type GitKind, type NodeState, type Options, type SearchFile, type SearchMatch, type SearchOptions, type SearchResults, type UpdateStatus,
 } from './types';
 
 type Handler = (payload: never) => void;
@@ -89,6 +91,15 @@ const PATCH = [
   '@@ -1 +1,3 @@', ' # Orquestrador', '+', '+Painel Git em andamento.', '',
 ].join('\n');
 
+// Conteúdo simulado de alguns arquivos da árvore, para a pesquisa. Linhas separadas por "\n".
+const TEXTS: Record<string, string> = {
+  'README.md': '# Orquestrador\n\nUm app para Windows que põe CLIs de IA para trabalhar em papéis separados.\nO orquestrador lê o projeto e delega; os executores trabalham em paralelo.\n',
+  'docs/design-system.md': '# Design system\n\nA interface usa o Lobe UI, com Tailwind CSS v4. Tema escuro fixo.\nMonoespaçado só em terminal e valores técnicos.\n',
+  'src/App.tsx': 'import { useState } from \'react\';\n\nexport function App() {\n  const [route, setRoute] = useState(\'arquivos\');\n  return <main>Orquestrador {route}</main>;\n}\n',
+  'src/main.tsx': 'import { createRoot } from \'react-dom/client\';\nimport { App } from \'./App\';\n\ncreateRoot(document.getElementById(\'root\')!).render(<App />);\n',
+  'src/lib/utils.ts': '// Caminho relativo com "/": a raiz é vazia.\nexport const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);\n',
+};
+
 /** Pasta pelo caminho relativo com "/" ('' é a raiz); arquivo ou caminho inexistente dá undefined. */
 function folderAt(path: string): Folder | undefined {
   let node: Entry | undefined = tree;
@@ -112,6 +123,8 @@ function removePath(path: string) {
 }
 
 let alive = false, line = '', batches = 0, executorChoice: Choice | null = null, closeHandler: (() => Promise<boolean>) | null = null;
+// Shell do painel Terminal: vive à parte do orquestrador (sobrevive a `sair`), e só `exit` o encerra.
+let shellAlive = false, shellLine = '';
 const jobs = new Map<string, Job>();
 const debug = { writes: [] as string[], sizes: {} as Record<string, string>, close: async () => {
   const closed = closeHandler ? await closeHandler() : true;
@@ -218,7 +231,8 @@ function startBatch() {
 function killAll() {
   for (const job of jobs.values()) clearInterval(job.timer);
   jobs.clear();
-  terms.clear();
+  // O shell não depende do orquestrador: o terminal dele fica.
+  for (const id of [...terms.keys()]) if (id !== SHELL) terms.delete(id);
   reported.clear();
   alive = false;
   executorChoice = null;
@@ -243,6 +257,30 @@ function typed(data: string) {
   }
 }
 
+const SHELL_PROMPT = 'PS C:\\projetos\\exemplo> ';
+function shellTyped(data: string) {
+  for (const char of data) {
+    if (char === '\r') {
+      const command = shellLine.trim();
+      shellLine = '';
+      out(SHELL, '\r\n');
+      if (command === 'exit') {
+        shellAlive = false;
+        terms.delete(SHELL);
+        emit('shell-exit', { code: 0 });
+        return;
+      }
+      if (command) out(SHELL, `eco: ${command}\r\n`);
+      out(SHELL, SHELL_PROMPT);
+    } else if (char === '\x7f') {
+      if (shellLine) { shellLine = shellLine.slice(0, -1); out(SHELL, '\b \b'); }
+    } else if (char >= ' ') {
+      shellLine += char;
+      out(SHELL, char);
+    }
+  }
+}
+
 // ---------- Git simulado: respostas fixas, sem estado ----------
 
 // Diff: .png é binário e o JSON é grande demais; o resto recebe o patch de exemplo.
@@ -250,6 +288,33 @@ function diffOf(path: string): GitDiff {
   if (path.endsWith('.png')) return { binary: true, tooLarge: false, patch: '' };
   if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, patch: '' };
   return { binary: false, tooLarge: false, patch: PATCH };
+}
+
+// Mesmo limite do backend: até 2000 linhas casadas; mais que isso marca `truncated`.
+const SEARCH_LIMIT = 2000;
+function searchText({ query, caseSensitive, wholeWord, regex }: SearchOptions & { query: string }): SearchResults {
+  if (!query) return { files: [], truncated: false };
+  let pattern: RegExp;
+  try {
+    const source = regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    pattern = new RegExp(wholeWord ? `\\b(?:${source})\\b` : source, caseSensitive ? '' : 'i');
+  } catch {
+    throw 'Expressão regular inválida. Confira a sintaxe.';
+  }
+  const found: { path: string; line: number; text: string }[] = [];
+  for (const path of Object.keys(TEXTS).sort()) {
+    TEXTS[path].split('\n').forEach((text, i) => {
+      if (pattern.test(text)) found.push({ path, line: i + 1, text: text.slice(0, 400) });
+    });
+  }
+  const files: SearchFile[] = [];
+  for (const { path, line, text } of found.slice(0, SEARCH_LIMIT)) {
+    const last = files[files.length - 1];
+    const match: SearchMatch = { line, text };
+    if (last?.path === path) last.matches.push(match);
+    else files.push({ path, matches: [match] });
+  }
+  return { files, truncated: found.length > SEARCH_LIMIT };
 }
 
 const commands: Record<string, (args: any) => unknown> = {
@@ -283,9 +348,18 @@ const commands: Record<string, (args: any) => unknown> = {
     schedule();
   },
   set_max_parallel: ({ value }: { value: number }) => { options.maxParallel = value; schedule(); },
+  start_shell: () => {
+    if (new URLSearchParams(location.search).get('mock') === 'noshell') throw 'Não foi possível abrir o PowerShell: o programa não foi encontrado.';
+    // Começa do zero: o terminal antigo (se houver) some, como no backend.
+    terms.delete(SHELL);
+    shellAlive = true;
+    shellLine = '';
+    out(SHELL, SHELL_PROMPT);
+  },
   term_write: ({ id, data }: { id: string; data: string }) => {
     debug.writes.push(id);
     if (id === ORCHESTRATOR && alive) typed(data);
+    if (id === SHELL && shellAlive) shellTyped(data);
   },
   clipboard_files: () => [] as string[],
   list_dir: ({ path }: { path: string }) => {
@@ -304,6 +378,7 @@ const commands: Record<string, (args: any) => unknown> = {
   git_branches: () => ({ current: 'main', local: ['main', 'feat/painel-git'] }),
   git_switch: () => null,
   git_create_branch: () => null,
+  search: (args: SearchOptions & { query: string }) => searchText(args),
   term_resize: ({ id, cols, rows }: { id: string; cols: number; rows: number }) => { debug.sizes[id] = `${cols}x${rows}`; },
   term_snapshot: ({ id }: { id: string }) => {
     const term = terms.get(id);

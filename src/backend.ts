@@ -2,7 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { Choice, DirEntry, Events, GitBranches, GitDiff, GitStatus, Options, Snapshot, UpdateStatus } from './types';
+import type { Choice, DirEntry, Events, GitBranches, GitDiff, GitStatus, Options, SearchOptions, SearchResults, Snapshot, UpdateStatus } from './types';
 
 export interface Transport {
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
@@ -53,6 +53,8 @@ export const backend = {
   getOptions: () => call<Options>('get_options'),
   startOrchestrator: (choice: Choice, cols: number, rows: number) =>
     call<void>('start_orchestrator', { choice, cols, rows }),
+  // Shell do usuário na pasta do projeto, no terminal de id "shell". Erro vem como mensagem em português.
+  startShell: (cols: number, rows: number) => call<void>('start_shell', { cols, rows }),
   setExecutorChoice: (choice: Choice) => call<void>('set_executor_choice', { choice }),
   setMaxParallel: (value: number) => call<void>('set_max_parallel', { value }),
   termWrite: (id: string, data: string) => call<void>('term_write', { id, data }),
@@ -77,6 +79,8 @@ export const backend = {
   gitBranches: () => call<GitBranches>('git_branches'),
   gitSwitch: (name: string) => call<void>('git_switch', { name }),
   gitCreateBranch: (name: string) => call<void>('git_create_branch', { name }),
+  // Pesquisa de texto nos arquivos do projeto. Regex inválida rejeita com a mensagem em português; consulta vazia devolve lista vazia.
+  search: (query: string, options: SearchOptions) => call<SearchResults>('search', { query, ...options }),
 };
 
 /** Erros do backend já chegam como mensagem em português. */

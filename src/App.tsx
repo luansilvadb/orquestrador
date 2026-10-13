@@ -5,11 +5,13 @@ import { backend, connect, host, message } from './backend';
 import { ChoiceForm } from './choice-form';
 import { FilesScreen, Nav, StatusBar, type Route } from './explorer';
 import { GitScreen, usePolled } from './git';
+import { SearchScreen } from './search';
 import { FINISHED, STATES, TerminalsScreen } from './terminal-screen';
+import type { TermView } from './term';
 import { terminals } from './terminals';
 import { TitleBar } from './titlebar';
 import {
-  ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus,
+  ORCHESTRATOR, SHELL, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus,
 } from './types';
 
 const MB = 1024 * 1024;
@@ -109,6 +111,8 @@ export function App() {
     stateRef.current = state;
   });
   const [route, setRoute] = useState<Route>('arquivos');
+  // Sobe a cada Ctrl+Shift+F: a pesquisa refoca o campo mesmo se já estiver na tela.
+  const [searchFocus, setSearchFocus] = useState(0);
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
   // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
   const git = usePolled(() => backend.gitStatus(), state.update.phase === 'ready' && !!state.project, true);
@@ -122,6 +126,9 @@ export function App() {
   const [maxValue, setMaxValue] = useState<number | null>(null);
   const maxParallel = state.options?.maxParallel;
   useEffect(() => setMaxValue(maxParallel ?? null), [maxParallel]);
+  // Painel Terminal: o TermHost monta na primeira abertura e, depois, só se esconde (não desmonta, para o fluxo não se acumular).
+  const [shellOpen, setShellOpen] = useState(false);
+  const [shellMounted, setShellMounted] = useState(false);
 
   // ---------- ações ----------
 
@@ -161,6 +168,8 @@ export function App() {
         host().listen('executor-choice', (choice) => dispatch({ type: 'executorChoice', choice })),
         host().listen('orchestrator-exit', ({ code }) =>
           resetOrchestrator(`O orquestrador terminou (${code === null ? 'sem código de saída' : `código de saída ${code}`}).`)),
+        // `exit` no shell: o backend descarta o terminal, então o painel fecha e o TermHost sai.
+        host().listen('shell-exit', () => closeShell()),
         host().onCloseRequested(async () => {
           try {
             if (await backend.hasRunning() && !(await askClose())) return false;
@@ -275,6 +284,68 @@ export function App() {
     }
   }
 
+  // Fechar o painel só esconde; o shell segue vivo no backend.
+  function closeShell() {
+    terminals.forget(SHELL);
+    setShellOpen(false);
+    setShellMounted(false);
+  }
+
+  function toggleShell() {
+    if (shellOpen) return setShellOpen(false);
+    setShellOpen(true);
+    if (!shellMounted) {
+      // Sobra de um shell antigo não pode aparecer no primeiro terminal novo.
+      terminals.forget(SHELL);
+      return setShellMounted(true);
+    }
+    // Escondido, o xterm não recalcula o tamanho: reajusta e recebe o foco quando o painel volta a aparecer.
+    requestAnimationFrame(() => {
+      terminals.get(SHELL)?.fit();
+      terminals.get(SHELL)?.term.focus();
+    });
+  }
+
+  // Primeiro terminal montado do painel: inicia o shell com as colunas e linhas do xterm. Se falhar, mostra o erro e fecha o painel.
+  async function startShell(view: TermView) {
+    terminals.forget(SHELL);
+    try {
+      await backend.startShell(view.term.cols, view.term.rows);
+      view.setLive();
+      await view.attach();
+      view.term.focus();
+    } catch (e) {
+      report(e);
+      closeShell();
+    }
+  }
+
+  // Ctrl+` abre e fecha o painel de qualquer lugar. A captura no window vem antes do xterm, que não recebe a tecla.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey || e.code !== 'Backquote') return;
+      e.preventDefault();
+      e.stopPropagation();
+      toggleShell();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [shellOpen, shellMounted]);
+
+  // Ctrl+Shift+F abre a pesquisa e foca o campo, de qualquer lugar (com projeto aberto). Mesma captura no window do Ctrl+`.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyF') return;
+      if (!stateRef.current.project || stateRef.current.update.phase !== 'ready') return;
+      e.preventDefault();
+      e.stopPropagation();
+      setRoute('pesquisa');
+      setSearchFocus((n) => n + 1);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
   // ---------- derivados ----------
 
   const { update, orchestrator, executors, options } = state;
@@ -288,8 +359,8 @@ export function App() {
     .map(([n, label]) => `${n} ${label}`)
     .join(' · ');
   const changed = git.data?.files.length ?? 0;
-  // As duas telas ficam montadas; a rota só escolhe qual aparece. Inativa vai para invisible, nunca para display none.
-  const shown = (to: Route) => `absolute inset-0${route !== to ? ' invisible' : ''}`;
+  // As telas ficam montadas; a rota só escolhe qual aparece. Inativa vai para invisible, nunca para display none.
+  const shown = (...to: Route[]) => `absolute inset-0${to.includes(route) ? '' : ' invisible'}`;
 
   // ---------- telas ----------
 
@@ -365,10 +436,16 @@ export function App() {
       <Flexbox horizontal flex={1} className="min-h-0">
         <Nav route={route} changed={changed} onGo={setRoute} />
         <main className="relative min-h-0 min-w-0 flex-1">
-          <div className={shown('arquivos')}>
+          <div className={shown('arquivos', 'pesquisa')}>
             <Flexbox horizontal height="100%">
-              <div className="h-full w-[280px] shrink-0 border-r bg-background">
-                <FilesScreen />
+              {/* Árvore e pesquisa ocupam a mesma faixa: as duas montadas, a inativa só invisível (os terminais não mudam de tamanho). */}
+              <div className="relative h-full w-[280px] shrink-0 border-r bg-background">
+                <div className={shown('arquivos')}>
+                  <FilesScreen />
+                </div>
+                <div className={shown('pesquisa')}>
+                  <SearchScreen active={route === 'pesquisa'} focusKey={searchFocus} />
+                </div>
               </div>
               <Flexbox height="100%" flex={1} allowShrink>
                 <TerminalsScreen
@@ -376,9 +453,13 @@ export function App() {
                   executors={executors}
                   executorChoice={state.executorChoice}
                   notice={state.notice}
+                  shellOpen={shellOpen}
+                  shellMounted={shellMounted}
                   onOpen={openOrchestrator}
                   onExecutorChoice={toggleExecutorChoice}
                   onStop={(id) => backend.stopExecutor(id).catch(report)}
+                  onShellClose={() => setShellOpen(false)}
+                  onShellReady={startShell}
                 />
               </Flexbox>
             </Flexbox>
@@ -389,14 +470,14 @@ export function App() {
         </main>
       </Flexbox>
 
-      <StatusBar branch={git.data?.branch} />
+      <StatusBar branch={git.data?.branch} terminalOpen={shellOpen} onToggleTerminal={toggleShell} />
 
       {/* As duas escolhas são janelas: a do orquestrador (início) e uma só para os executores. Com um executor aguardando escolha, a janela dele é a única e não fecha sem confirmar: nunca duas empilhadas. */}
       {options && (
         <>
           <ChoiceForm
             open={orchestrator?.overlay === 'start'}
-            title="Orquestrador" hint="Só lê o projeto e delega. É o único terminal onde você digita."
+            title="Orquestrador" hint="Só lê o projeto e delega. Você conversa com ele neste terminal."
             options={options} initial={options.last.orchestrator} confirmLabel="Abrir terminal"
             onCancel={() => resetOrchestrator()} onConfirm={startOrchestrator} onClosed={focusOrchestrator}
           />

@@ -1,11 +1,13 @@
 // Os terminais, ao lado da árvore de pastas na tela principal: o orquestrador e um executor por aba. Todos ficam montados; só o da aba ativa aparece.
-import { useState, type ComponentType, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { Bot, CircleCheck, CircleHelp, CircleX, Clock, Hourglass, LoaderCircle, SlidersHorizontal, Square } from 'lucide-react';
 import { Button, colorsPreset, Tag, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
 import { Center, Flexbox, type PresetColorKey } from '@lobehub/ui';
 import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
+import type { TermView } from './term';
 import { attachExecutor, TermHost, terminals } from './terminals';
+import { ShellPanel } from './shell-panel';
 import { ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Tool } from './types';
 
 // Cada estado: rótulo e ícone com texto (regra do design system); a cor é um nome predefinido do Lobe UI, o mesmo para o Tag e para o ícone da aba.
@@ -60,23 +62,41 @@ const Cover = ({ children }: { children: ReactNode }) => (
   </Flexbox>
 );
 
+// Quanto da coluna fica fora do painel Terminal: padding de 16 px em cima e embaixo, a faixa de abas (36 px), os dois
+// gaps de 8 px e a margem de 4 px do painel, além de um mínimo de 160 px para o cartão de cima nunca sumir.
+const RESERVED_HEIGHT = 16 * 2 + 36 + 8 * 2 + 4 + 160;
+
 type TerminalsProps = {
   orchestrator: { choice: Choice | null; started: boolean } | null;
   executors: ExecutorNode[];
   executorChoice: Choice | null;
   notice: string;
+  shellOpen: boolean;
+  shellMounted: boolean;
   onOpen: () => void;
   onExecutorChoice: () => void;
   onStop: (id: string) => void;
+  onShellClose: () => void;
+  onShellReady: (view: TermView) => void;
 };
 
-/** Abas em cima (orquestrador fixo, um executor por aba) e, embaixo, o terminal da aba ativa. */
-export function TerminalsScreen({ orchestrator, executors, executorChoice, notice, onOpen, onExecutorChoice, onStop }: TerminalsProps) {
+/** Abas em cima (orquestrador fixo, um executor por aba) e, embaixo, o terminal da aba ativa. O painel Terminal fica por último. */
+export function TerminalsScreen({
+  orchestrator, executors, executorChoice, notice, shellOpen, shellMounted, onOpen, onExecutorChoice, onStop, onShellClose, onShellReady,
+}: TerminalsProps) {
   const [picked, setPicked] = useState<string>(ORCHESTRATOR);
   // Aba de executor que sumiu (executor que terminou, reset do orquestrador) volta para a do orquestrador.
   const active = executors.some((e) => e.id === picked) ? picked : ORCHESTRATOR;
   const node = executors.find((e) => e.id === active);
   const meta = node && STATES[node.state];
+  // Altura da coluna: o painel Terminal pode crescer até deixar o cartão de cima no mínimo.
+  const column = useRef<HTMLDivElement>(null);
+  const [columnHeight, setColumnHeight] = useState(0);
+  useEffect(() => {
+    const observer = new ResizeObserver(() => setColumnHeight(column.current?.clientHeight ?? 0));
+    observer.observe(column.current!);
+    return () => observer.disconnect();
+  }, []);
 
   // Clicar na aba do orquestrador dá foco ao terminal dele, depois que a aba fica visível.
   const choose = (id: string) => {
@@ -85,7 +105,7 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
   };
 
   return (
-    <Flexbox className="min-h-0" width="100%" height="100%" gap={8} padding={16}>
+    <Flexbox ref={column} className="min-h-0" width="100%" height="100%" gap={8} padding={16}>
       {/* Só a faixa de abas: os terminais são renderizados logo abaixo, por este arquivo. */}
       <TabsRoot value={active} onValueChange={(key: string) => choose(key)} className="min-w-0 gap-0">
         <TabsList className="h-9 w-full flex-nowrap justify-start overflow-x-auto overflow-y-hidden rounded-full [scrollbar-width:none]">
@@ -181,12 +201,17 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
               {notice && <Text as="p" role="status" fontSize={14} className="rounded-md border bg-card px-3 py-1.5">{notice}</Text>}
               <Button type="primary" onClick={onOpen}>Abrir terminal</Button>
               <Text as="p" type="secondary" fontSize={12} align="center">
-                Abre o orquestrador: o único terminal onde você digita. Os executores aparecem em abas quando ele delega.
+                Abre o orquestrador, com quem você conversa. Os executores aparecem em abas quando ele delega.
               </Text>
             </Flexbox>
           )}
         </div>
       </Flexbox>
+
+      <ShellPanel
+        open={shellOpen} mounted={shellMounted} maxHeight={columnHeight - RESERVED_HEIGHT}
+        onClose={onShellClose} onReady={onShellReady}
+      />
     </Flexbox>
   );
 }

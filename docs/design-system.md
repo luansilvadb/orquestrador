@@ -16,24 +16,24 @@ Componentes em uso. Os de `@lobehub/ui` são `Block`, `Center`, `Flexbox` e `Pat
 | --- | --- |
 | `Alert` | `src/App.tsx`, `src/choice-form.tsx`. |
 | `Block` | `src/App.tsx` (cartões da tela de atualização e de escolha de pasta). |
-| `Button` | `src/App.tsx`, `src/choice-form.tsx`, `src/git.tsx`, `src/terminal-screen.tsx`. |
+| `Button` | `src/App.tsx`, `src/choice-form.tsx`, `src/explorer.tsx`, `src/git.tsx`, `src/terminal-screen.tsx`. |
 | `Center` | `src/App.tsx`, `src/terminal-screen.tsx` (centralização de conteúdo). |
-| `Flexbox` | `src/titlebar.tsx`, `src/explorer.tsx`, `src/choice-form.tsx`, `src/terminal-screen.tsx`, `src/git.tsx`, `src/App.tsx` (layout em coluna e em linha). |
-| `ActionIcon` | `src/explorer.tsx`, `src/git.tsx`. |
+| `Flexbox` | `src/titlebar.tsx`, `src/explorer.tsx`, `src/choice-form.tsx`, `src/terminal-screen.tsx`, `src/git.tsx`, `src/App.tsx`, `src/shell-panel.tsx`, `src/search.tsx` (layout em coluna e em linha). |
+| `ActionIcon` | `src/explorer.tsx`, `src/git.tsx`, `src/shell-panel.tsx`, `src/search.tsx` (opções, atualizar, limpar e recolher). |
 | `Badge` | `src/explorer.tsx` (contador de alterações no ícone do Git). |
-| `DraggablePanel` | `src/git.tsx` (painel lateral da tela do Git, redimensionável). |
-| `Input` | `src/choice-form.tsx`, `src/git.tsx` (nome de branch). |
+| `DraggablePanel` | `src/git.tsx` (painel lateral da tela do Git, redimensionável), `src/shell-panel.tsx` (painel Terminal, redimensionável pela borda de cima). |
+| `Input` | `src/choice-form.tsx`, `src/git.tsx` (nome de branch), `src/search.tsx` (campo da pesquisa, com as opções no `suffix`). |
 | `TextArea` | `src/git.tsx` (mensagem de commit). |
 | `InputNumber` | `src/App.tsx` (limite de executores ao mesmo tempo). |
 | `Modal` | `src/App.tsx` (confirmação de fechar com terminais trabalhando), `src/choice-form.tsx`. |
 | `Popover` | `src/git.tsx` (escolha de branch). |
 | `PatchDiff` | `src/git.tsx` (diff da alteração selecionada). |
 | `Progress` | `src/App.tsx` (download com total conhecido e download sem total, indeterminado). |
-| `ScrollArea` | `src/explorer.tsx` (árvore de pastas). |
+| `ScrollArea` | `src/explorer.tsx` (árvore de pastas), `src/search.tsx` (lista de resultados). |
 | `Segmented`, `Select` | `src/choice-form.tsx`. |
 | `Tag` | `src/terminal-screen.tsx` (estado de cada executor). |
 | `TabsRoot`, `TabsList`, `TabsTab`, `TabsIndicator` | `src/terminal-screen.tsx` (faixa de abas dos terminais). |
-| `Text` | `src/titlebar.tsx`, `src/explorer.tsx`, `src/choice-form.tsx`, `src/terminal-screen.tsx`, `src/git.tsx`, `src/App.tsx`. |
+| `Text` | `src/titlebar.tsx`, `src/explorer.tsx`, `src/choice-form.tsx`, `src/terminal-screen.tsx`, `src/git.tsx`, `src/App.tsx`, `src/shell-panel.tsx`, `src/search.tsx`. |
 | `Tree` | `src/explorer.tsx` (árvore de pastas). |
 | `toast` | `src/App.tsx`, `src/git.tsx`. |
 
@@ -53,11 +53,11 @@ Para trocar ou adicionar um componente, importe-o de `@lobehub/ui/base-ui` (ou d
 - Diff usa o `PatchDiff`; o app não define cores de diff.
 - Toasts pelo `toast` imperativo; o `ToastHost` em `src/main.tsx` é quem os renderiza.
 - CSS próprio em `src/index.css` só para o que o Lobe UI não cobre: a ordem da camada `lobe-base`, declarada no topo antes do `@import` do Tailwind, entre `base` e `components` (`@layer theme, base, lobe-base, components, utilities`), para o Flexbox do Lobe UI vencer o preflight do Tailwind (que zera `padding`) e as utilitárias do Tailwind vencerem o Flexbox; `.xterm .xterm-viewport` (fundo transparente, para o `bg-terminal` do corpo aparecer); e as alturas e a rolagem de `html`, `body` e `#root`. Os terminais xterm são superfícies especializadas e não usam componentes do Lobe UI.
-- Monoespaçado só em terminal e valores técnicos (caminho, modelo, esforço).
+- Monoespaçado só em terminal e valores técnicos (caminho, modelo, esforço, número e trecho de linha da pesquisa).
 - Sem glows, gradientes decorativos ou acento colorido nas bordas de todos os cards.
 - O `ConfigProvider` com `motion` (de `motion/react`) é obrigatório dentro do `ThemeProvider`: sem ele, os componentes de `@lobehub/ui/base-ui` lançam erro ao renderizar. Não tire esse par de `src/main.tsx`.
 - Se uma classe do Tailwind não ganhar de um componente do Lobe UI, use a prop do componente (`size`, `style`, `classNames`, `styles`) ou o modificador `!` do Tailwind, como em `className="w-16! font-mono!"` no `InputNumber` de `src/App.tsx`.
 
 ## Telas e terminais montados
 
-São duas telas, com a rota em `src/route.ts`: a principal (`#/arquivos`, o padrão), com a árvore de pastas à esquerda (faixa fixa de 280px) e os terminais à direita; e a do Git (`#/git`). Ambas ficam montadas o tempo todo, em `src/App.tsx`. A rota só escolhe qual aparece; a inativa vai para `invisible`, nunca é desmontada. Na tela principal vale o mesmo para os terminais: todos ficam montados e só o da aba ativa aparece. O motivo: o xterm recalcula colunas e linhas quando sai do layout ou volta, e manda o tamanho errado ao PTY se isso acontecer.
+São três telas, com a rota em `src/App.tsx` (um estado, com o tipo `Route` em `src/explorer.tsx`): Arquivos, o padrão, com a árvore de pastas à esquerda (faixa fixa de 280px) e os terminais à direita; Pesquisar, que ocupa a mesma faixa de 280px no lugar da árvore e deixa os terminais no lugar; e Git, que troca a área central inteira. Todas ficam montadas o tempo todo, em `src/App.tsx`. Dentro da faixa de 280px, a árvore e a pesquisa ficam sobrepostas (`absolute inset-0`) e a inativa vai para `invisible`. A rota só escolhe qual aparece; nada é desmontado e nada usa `display: none`. Na tela principal vale o mesmo para os terminais: todos ficam montados e só o da aba ativa aparece. O motivo: o xterm recalcula colunas e linhas quando sai do layout ou volta, e manda o tamanho errado ao PTY se isso acontecer. Por isso a troca entre Arquivos e Pesquisar não pode desmontar a coluna dos terminais nem mudar o tamanho dela.

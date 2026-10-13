@@ -37,6 +37,12 @@ export type GitStatus = { branch: string; ahead: number; behind: number; files: 
 export type GitDiff = { binary: boolean; tooLarge: boolean; patch: string };
 export type GitBranches = { current: string; local: string[] };
 
+// Pesquisa de texto (contrato do backend, JSON em camelCase). `path` é relativo à raiz, com "/"; uma entrada por linha que casa.
+export type SearchMatch = { line: number; text: string };
+export type SearchFile = { path: string; matches: SearchMatch[] };
+export type SearchResults = { files: SearchFile[]; truncated: boolean };
+export type SearchOptions = { caseSensitive: boolean; wholeWord: boolean; regex: boolean };
+
 export type TermData = { id: string; seq: number; data: string };
 export type Snapshot = { seq: number; data: string };
 export type NodeStateEvent = { id: string; state: NodeState; choice: Choice | null };
@@ -47,7 +53,10 @@ export type Events = {
   'node-state': NodeStateEvent;
   'executor-choice': Choice;
   'orchestrator-exit': { code: number | null };
+  'shell-exit': { code: number | null };
   'update-status': UpdateStatus;
 };
 
 export const ORCHESTRATOR = 'orchestrator';
+// Id fixo do terminal do shell do usuário (o painel Terminal).
+export const SHELL = 'shell';

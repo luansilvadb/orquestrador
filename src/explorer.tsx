@@ -1,14 +1,14 @@
-// A navegação da coluna de ícones, a árvore de pastas (na tela principal) e a barra de status com a branch.
+// A navegação da coluna de ícones, a árvore de pastas (na tela principal) e a barra de status com a branch e o botão do Terminal.
 // A árvore se atualiza sozinha (usePolling). O status do Git vem do App, que o usa no contador da navegação e na barra de status.
 import { useLayoutEffect, useRef, useState } from 'react';
-import { File, Files, Folder, FolderOpen, GitBranch, type LucideIcon } from 'lucide-react';
-import { ActionIcon, Badge, ScrollArea, Text, Tree, type TreeDataNode } from '@lobehub/ui/base-ui';
+import { File, Files, Folder, FolderOpen, GitBranch, type LucideIcon, Search, SquareTerminal } from 'lucide-react';
+import { ActionIcon, Badge, Button, ScrollArea, Text, Tree, type TreeDataNode } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
 import { usePolling } from './polling';
 import type { DirEntry } from './types';
 
-export type Route = 'arquivos' | 'git';
+export type Route = 'arquivos' | 'pesquisa' | 'git';
 
 // Caminho relativo com "/" (como o backend); a raiz é ''.
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
@@ -26,7 +26,7 @@ const sameList = (a: DirEntry[] | undefined, b: DirEntry[]) =>
 // Seleção fica sempre vazia: clicar na linha abre ou fecha a pasta, sem marcar nada.
 const NO_SELECTION: string[] = [];
 
-/** Coluna de ícones: uma tela por botão, na ordem Arquivos, Git. O botão da tela aberta tem aria-current. */
+/** Coluna de ícones: uma tela por botão, na ordem Arquivos, Pesquisar, Git. O botão da tela aberta tem aria-current. */
 export function Nav({ route, changed, onGo }: { route: Route; changed: number; onGo: (to: Route) => void }) {
   const button = (to: Route, label: string, icon: LucideIcon, title = label) => (
     <ActionIcon
@@ -39,6 +39,7 @@ export function Nav({ route, changed, onGo }: { route: Route; changed: number; o
   return (
     <Flexbox as="nav" aria-label="Telas" flex="none" width={44} align="center" gap={4} paddingBlock={8} className="border-r bg-card">
       {button('arquivos', 'Arquivos', Files)}
+      {button('pesquisa', 'Pesquisar', Search, 'Pesquisar (Ctrl+Shift+F)')}
       <div className="relative">
         {button('git', gitLabel, GitBranch, 'Git')}
         {changed > 0 && (
@@ -145,8 +146,12 @@ export function FilesScreen() {
   );
 }
 
-/** Barra de status fina embaixo da tela principal: só a branch atual do projeto. */
-export function StatusBar({ branch }: { branch: string | undefined }) {
+/** Barra de status fina embaixo da tela principal: a branch atual do projeto e o botão do painel Terminal (marcado quando aberto). */
+export function StatusBar({ branch, terminalOpen, onToggleTerminal }: {
+  branch: string | undefined;
+  terminalOpen: boolean;
+  onToggleTerminal: () => void;
+}) {
   return (
     <Flexbox as="footer" horizontal align="center" gap={6} height={24} flex="none" paddingInline={12} className="border-t bg-card">
       {branch && (
@@ -155,6 +160,13 @@ export function StatusBar({ branch }: { branch: string | undefined }) {
           <Text as="span" code fontSize={12} ellipsis title={branch}>{branch}</Text>
         </>
       )}
+      <Button
+        type="text" size="small" icon={SquareTerminal} aria-pressed={terminalOpen}
+        title="Painel Terminal (Ctrl+`)" className={`ml-auto shrink-0${terminalOpen ? ' bg-muted' : ''}`}
+        onClick={onToggleTerminal}
+      >
+        Terminal
+      </Button>
     </Flexbox>
   );
 }
