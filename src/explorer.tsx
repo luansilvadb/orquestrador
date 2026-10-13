@@ -82,19 +82,23 @@ export function FilesScreen() {
   });
 
   async function toggle(path: string, isOpen: boolean) {
-    if (isOpen) return setTree((prev) => drop(prev, path));
-    setTree((prev) => ({ ...prev, expanded: [...prev.expanded, path] }));
+    // Fechar só tira a pasta (e as de dentro) da lista de abertas: o conteúdo fica até a animação terminar.
+    if (isOpen) return setTree((prev) => ({ ...prev, expanded: prev.expanded.filter((p) => p !== path && !inside(path, p)) }));
+    // A lista chega antes da pasta abrir, para o painel medir a altura já com o conteúdo.
     try {
       const list = await backend.listDir(path);
-      setTree((prev) => (prev.expanded.includes(path) ? { ...prev, children: { ...prev.children, [path]: list } } : prev));
+      setTree((prev) => ({
+        children: { ...prev.children, [path]: list },
+        expanded: prev.expanded.includes(path) ? prev.expanded : [...prev.expanded, path],
+      }));
     } catch {
       // A pasta sumiu antes de abrir: sai da árvore sem erro na tela, como na atualização.
       setTree((prev) => drop(prev, path));
     }
   }
 
-  // O Tree só mostra seta e abre uma pasta que tem filhos. Por isso toda pasta recebe ao menos um filho:
-  // se a lista ainda não chegou, esse filho é um aviso (não selecionável), e a pasta não parece folha.
+  // O Tree só mostra seta e abre uma pasta que tem filhos. Por isso toda pasta ainda sem lista guardada recebe
+  // um filho provisório (não selecionável), e a pasta não parece folha. Ele some quando a lista chega.
   const nodes = (dir: string): TreeDataNode[] =>
     (tree.children[dir] ?? []).map((entry): TreeDataNode => {
       const path = join(dir, entry.name);
