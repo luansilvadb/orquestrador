@@ -18,6 +18,7 @@ pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
 pub const ORCHESTRATOR: &str = "orchestrator";
 const EXECUTOR_SIZE: (u16, u16) = (110, 30);
+const SEM_PROJETO: &str = "Escolha a pasta do projeto primeiro.";
 /// Acima disto o prompt não vai na linha de comando (o limite do Windows é 32767 caracteres).
 const PROMPT_ARG_MAX: usize = 20_000;
 
@@ -121,6 +122,12 @@ struct Slot {
     gen: u64,
 }
 
+impl Slot {
+    fn new(gen: u64) -> Slot {
+        Slot { buffer: Shared::new(Mutex::new(Buffer::default())), term: None, size: EXECUTOR_SIZE, gen }
+    }
+}
+
 struct Node {
     info: ExecutorNode,
     dir: PathBuf,
@@ -211,13 +218,9 @@ impl Core {
         Ok(root)
     }
 
-    fn project(&self) -> Result<String, String> {
-        self.inner.lock().unwrap().project.clone().ok_or_else(|| "Escolha a pasta do projeto primeiro.".into())
-    }
-
     /// A pasta do projeto como caminho, para os comandos que a recebem.
     pub fn repo(&self) -> Result<PathBuf, String> {
-        self.project().map(PathBuf::from)
+        self.inner.lock().unwrap().project.clone().map(PathBuf::from).ok_or_else(|| SEM_PROJETO.into())
     }
 
     /// Roda `run` com a pasta do projeto, mas só se nenhum executor estiver pendente e nenhuma outra operação
@@ -233,7 +236,7 @@ impl Core {
             if inner.git_exclusive {
                 return Err("Outra operação do Git está em andamento.".into());
             }
-            let project = inner.project.clone().ok_or("Escolha a pasta do projeto primeiro.")?;
+            let project = inner.project.clone().ok_or(SEM_PROJETO)?;
             inner.git_exclusive = true;
             project
         };
@@ -254,7 +257,7 @@ impl Core {
     pub fn start_orchestrator(&self, choice: Choice, cols: u16, rows: u16) -> Result<(), String> {
         config::check_choice("orchestrator", &choice)?;
         let mut inner = self.inner.lock().unwrap();
-        let project = inner.project.clone().ok_or("Escolha a pasta do projeto primeiro.")?;
+        let project = inner.project.clone().ok_or(SEM_PROJETO)?;
         if inner.session.is_some() {
             return Err("Já há um orquestrador aberto.".into());
         }
@@ -389,7 +392,7 @@ impl Core {
     fn spawn(&self, inner: &mut Inner, id: &str, spawn: &cli::Spawn, size: Option<(u16, u16)>) -> Result<(), String> {
         inner.counter += 1;
         let gen = inner.counter;
-        let slot = inner.slots.entry(id.to_string()).or_insert_with(|| Slot { buffer: Shared::new(Mutex::new(Buffer::default())), term: None, size: EXECUTOR_SIZE, gen });
+        let slot = inner.slots.entry(id.to_string()).or_insert_with(|| Slot::new(gen));
         slot.gen = gen;
         if let Some(size) = size {
             slot.size = size;
@@ -504,7 +507,7 @@ impl Core {
                 inner.counter += 1;
                 let node_id = format!("exec-{}", inner.counter);
                 let info = ExecutorNode { id: node_id.clone(), batch: id.clone(), index, title: titles[index].clone(), state: NodeState::AwaitingChoice, choice: None };
-                inner.slots.insert(node_id.clone(), Slot { buffer: Shared::new(Mutex::new(Buffer::default())), term: None, size: EXECUTOR_SIZE, gen: 0 });
+                inner.slots.insert(node_id.clone(), Slot::new(0));
                 inner.nodes.push(Node { info, dir: exec.join(&node_id), prompt: cli::executor_prompt(task) });
             }
             // Cada nó entra na sessão já no estado em que vai ficar: rodando, na fila ou esperando a escolha.

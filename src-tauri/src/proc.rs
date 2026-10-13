@@ -121,18 +121,40 @@ fn filetime(t: FILETIME) -> u64 {
     ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64
 }
 
-/// Hora de criação de um processo, no mesmo número que `StartTime.ToFileTimeUtc()` do PowerShell.
-pub fn start_time(pid: u32) -> Option<u64> {
+/// Abre o processo só para consulta, lê com `ler` e fecha o handle em qualquer caso. `Err` traz o código
+/// do Windows quando o processo não abre; `Ok(None)` quando abre mas `ler` não consegue.
+fn consulta<T>(pid: u32, ler: impl FnOnce(HANDLE) -> Option<T>) -> Result<Option<T>, u32> {
     unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if process.is_null() {
-            return None;
+            return Err(GetLastError());
         }
+        let lido = ler(process);
+        CloseHandle(process);
+        Ok(lido)
+    }
+}
+
+/// Hora de criação de um processo aberto para consulta.
+fn hora_de_criacao(process: HANDLE) -> Option<u64> {
+    unsafe {
         let mut times: [FILETIME; 4] = std::mem::zeroed();
         let ok = GetProcessTimes(process, &mut times[0], &mut times[1], &mut times[2], &mut times[3]);
-        CloseHandle(process);
         (ok != 0).then(|| filetime(times[0]))
     }
+}
+
+/// Código de saída de um processo aberto para consulta: `STILL_ACTIVE` enquanto ele roda.
+fn codigo_de_saida(process: HANDLE) -> Option<u32> {
+    unsafe {
+        let mut code = 0u32;
+        (GetExitCodeProcess(process, &mut code) != 0).then_some(code)
+    }
+}
+
+/// Hora de criação de um processo, no mesmo número que `StartTime.ToFileTimeUtc()` do PowerShell.
+pub fn start_time(pid: u32) -> Option<u64> {
+    consulta(pid, hora_de_criacao).ok().flatten()
 }
 
 #[derive(Debug, PartialEq)]
@@ -146,21 +168,11 @@ pub enum Owner {
 /// também bater. Processo que não pode ser lido é `Unknown`.
 pub fn owner_state(pid: u32, started: u64) -> Owner {
     const STILL_ACTIVE: u32 = 259;
-    unsafe {
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if process.is_null() {
-            return if GetLastError() == ERROR_INVALID_PARAMETER { Owner::Dead } else { Owner::Unknown };
-        }
-        let mut times: [FILETIME; 4] = std::mem::zeroed();
-        let mut code = 0u32;
-        let ok = GetProcessTimes(process, &mut times[0], &mut times[1], &mut times[2], &mut times[3]) != 0
-            && GetExitCodeProcess(process, &mut code) != 0;
-        CloseHandle(process);
-        match ok {
-            false => Owner::Unknown,
-            true if code == STILL_ACTIVE && filetime(times[0]) == started => Owner::Alive,
-            true => Owner::Dead,
-        }
+    match consulta(pid, |p| Some((hora_de_criacao(p)?, codigo_de_saida(p)?))) {
+        Err(erro) if erro == ERROR_INVALID_PARAMETER => Owner::Dead,
+        Err(_) | Ok(None) => Owner::Unknown,
+        Ok(Some((criada, code))) if code == STILL_ACTIVE && criada == started => Owner::Alive,
+        Ok(Some(_)) => Owner::Dead,
     }
 }
 

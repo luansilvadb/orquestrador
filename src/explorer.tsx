@@ -5,9 +5,10 @@ import { File, Files, Folder, FolderOpen, GitBranch, type LucideIcon } from 'luc
 import { ActionIcon, Badge, ScrollArea, Text, Tree, type TreeDataNode } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
-import { go, type Route } from './route';
 import { usePolling } from './polling';
 import type { DirEntry } from './types';
+
+export type Route = 'arquivos' | 'git';
 
 // Caminho relativo com "/" (como o backend); a raiz é ''.
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
@@ -26,12 +27,12 @@ const sameList = (a: DirEntry[] | undefined, b: DirEntry[]) =>
 const NO_SELECTION: string[] = [];
 
 /** Coluna de ícones: uma tela por botão, na ordem Arquivos, Git. O botão da tela aberta tem aria-current. */
-export function Nav({ route, changed }: { route: Route; changed: number }) {
+export function Nav({ route, changed, onGo }: { route: Route; changed: number; onGo: (to: Route) => void }) {
   const button = (to: Route, label: string, icon: LucideIcon, title = label) => (
     <ActionIcon
       icon={icon} variant="borderless" active={route === to}
       aria-label={label} aria-current={route === to ? 'page' : undefined} title={title}
-      onClick={() => go(to)}
+      onClick={() => onGo(to)}
     />
   );
   const gitLabel = changed ? `Git (${changed} ${changed === 1 ? 'arquivo alterado' : 'arquivos alterados'})` : 'Git';

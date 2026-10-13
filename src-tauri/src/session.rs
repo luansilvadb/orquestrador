@@ -8,6 +8,7 @@ use crate::proc::{owner_state, start_time, Owner};
 use crate::roles;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A justificativa que a regra do Codex leva; é o que o Codex mostra ao aprovar a regra.
 const JUSTIFICATION: &str = "Delegacao autorizada ao executor";
@@ -106,7 +107,8 @@ impl Session {
     /// Cria a pasta e tudo o que a sessão usa. O que falhar no meio é desfeito por quem chamou,
     /// com `remove`: por isso `dir` e `rule` são devolvidos mesmo no erro.
     pub fn create(places: &Places, delegate: &str, project: &str, cfg: &Config) -> (Session, Result<(), String>) {
-        let name = format!("strategist-{}", uuid::Uuid::new_v4().simple());
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let name = format!("strategist-{nanos:032x}");
         let session = Session {
             command: command_for(&name),
             rule: places.codex_rules.join(format!("{name}.rules")),

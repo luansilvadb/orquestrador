@@ -2,14 +2,11 @@
 // Digite no orquestrador: `lote` (6 tarefas), `sair` (termina com código 0), `sair 3` (código 3).
 // Na URL: `?mock=nogit` faz a escolha da pasta falhar como "fora de um repositório Git".
 // Na URL: `?update=falha` mostra a atualização bloqueada por falta de internet (a nova tentativa libera) e
-// `?update=download` simula o download (`indeterminado` e `total-zero`: tamanho desconhecido). Sem parâmetro, o uso já vem liberado, como no build de desenvolvimento.
+// `?update=download` simula o download. Sem parâmetro, o uso já vem liberado, como no build de desenvolvimento.
 // No console: `__mock.close()` simula fechar a janela; `__mock.writes` e `__mock.sizes` registram o que chegou.
-// `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto (a lista da tela some com ele sozinha).
-// A árvore (`list_dir`) e o Git (`git_*`) são dados em memória: a árvore muda só com o executor e `__mock.remove`.
-// O Git é uma lista fixa de alterações (um arquivo em duas seções, um binário, um grande demais para o diff, um não
-// rastreado), com os diffs escritos à mão. Preparar, tirar, commitar, criar e trocar branch funcionam; fetch, pull e push mexem em ahead/behind (push recusa
-// se o remoto tem commits novos). Um executor que termina bem cria `src/tarefa-<lote>-<n>.ts`, que aparece como não rastreado.
-// Com executor não finalizado, pull, troca e criação de branch são recusados, como no backend.
+// `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto.
+// A árvore (`list_dir`) é em memória: muda só com o executor que termina bem (cria `src/tarefa-<lote>-<n>.ts`) e com `__mock.remove`.
+// O Git é resposta fixa: status, branches e diffs não mudam, e as ações de escrita só devolvem null ou um texto fixo.
 import type { Transport } from './backend';
 import {
   ORCHESTRATOR, type Choice, type Events, type ExecutorNode, type GitDiff, type GitFile,
@@ -78,7 +75,7 @@ const tree = folder({
 // Lista do Git: só os arquivos alterados, com o lado preparado (`staged`) e o das alterações (`unstaged`).
 const entry = (path: string, staged: GitKind | null, unstaged: GitKind | null): GitFile => ({ path, origPath: null, staged, unstaged });
 const byPath = (a: GitFile, b: GitFile) => a.path.localeCompare(b.path, 'pt-BR');
-let files: GitFile[] = [
+const files: GitFile[] = [
   entry('README.md', null, 'modified'),
   entry('docs/design-system.md', 'modified', null),
   entry('docs/rascunho-painel.md', null, 'untracked'),
@@ -86,32 +83,11 @@ let files: GitFile[] = [
   entry('dados/exportacao.json', null, 'modified'),
   entry('assets/logo.png', null, 'modified'),
 ];
-// Patches escritos à mão, por lado e caminho: `staged:` é o preparado contra o HEAD; `unstaged:`, as alterações contra o preparado.
-const PATCHES: Record<string, string> = {
-  'unstaged:README.md': [
-    'diff --git a/README.md b/README.md', '--- a/README.md', '+++ b/README.md',
-    '@@ -1 +1,3 @@', ' # Orquestrador', '+', '+Painel Git em andamento.', '',
-  ].join('\n'),
-  'staged:docs/design-system.md': [
-    'diff --git a/docs/design-system.md b/docs/design-system.md', '--- a/docs/design-system.md', '+++ b/docs/design-system.md',
-    '@@ -1 +1,3 @@', ' # Design system', '+', '+Tokens semânticos.', '',
-  ].join('\n'),
-  'unstaged:docs/rascunho-painel.md': [
-    'diff --git a/docs/rascunho-painel.md b/docs/rascunho-painel.md', 'new file mode 100644', '--- /dev/null', '+++ b/docs/rascunho-painel.md',
-    '@@ -0,0 +1,3 @@', '+# Rascunho', '+', '+Ideias para o painel Git.', '',
-  ].join('\n'),
-  'staged:src/App.tsx': [
-    'diff --git a/src/App.tsx b/src/App.tsx', '--- a/src/App.tsx', '+++ b/src/App.tsx',
-    '@@ -1,3 +1,3 @@', ' export function App() {', '-  return null;', '+  return <main />;', ' }', '',
-  ].join('\n'),
-  'unstaged:src/App.tsx': [
-    'diff --git a/src/App.tsx b/src/App.tsx', '--- a/src/App.tsx', '+++ b/src/App.tsx',
-    '@@ -1,3 +1,5 @@', ' export function App() {', '   return <main />;', ' }', '+', '+// TODO: abas', '',
-  ].join('\n'),
-};
-const branches = ['main', 'feat/painel-git'];
-let branch = 'main', ahead = 1, behind = 0;
-const BUSY = 'Há executores trabalhando. Espere o lote terminar.';
+// Patch de exemplo: o mesmo para todo arquivo de texto (não é o diff real de cada um).
+const PATCH = [
+  'diff --git a/README.md b/README.md', '--- a/README.md', '+++ b/README.md',
+  '@@ -1 +1,3 @@', ' # Orquestrador', '+', '+Painel Git em andamento.', '',
+].join('\n');
 
 /** Pasta pelo caminho relativo com "/" ('' é a raiz); arquivo ou caminho inexistente dá undefined. */
 function folderAt(path: string): Folder | undefined {
@@ -123,25 +99,16 @@ function folderAt(path: string): Folder | undefined {
 const listing = (dir: Folder) => Object.entries(dir.children)
   .map(([name, entry]) => ({ name, dir: entry.dir }))
   .sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name, 'pt-BR'));
-// Arquivo novo no disco, fora do índice: aparece como não rastreado no painel Git.
+// Arquivo novo no disco: a árvore o mostra.
 function addFile(dirPath: string, name: string) {
   const dir = folderAt(dirPath);
-  if (!dir) return;
-  dir.children[name] = file();
-  files.push(entry(`${dirPath}/${name}`, null, 'untracked'));
+  if (dir) dir.children[name] = file();
 }
-// Apagar pela árvore: o arquivo some do disco (apagado, se estava no Git; some de vez, se era não rastreado).
+// Apagar pela árvore: o arquivo some do disco.
 function removePath(path: string) {
   const parts = path.split('/'), name = parts.pop()!;
   const dir = folderAt(parts.join('/'));
-  const child = dir?.children[name];
-  if (!dir || !child) return;
-  delete dir.children[name];
-  if (child.dir) return;
-  const f = files.find((x) => x.path === path);
-  if (f?.unstaged === 'untracked') files = files.filter((x) => x !== f);
-  else if (f) f.unstaged = 'deleted';
-  else files.push(entry(path, null, 'deleted'));
+  if (dir) delete dir.children[name];
 }
 
 let alive = false, line = '', batches = 0, executorChoice: Choice | null = null, closeHandler: (() => Promise<boolean>) | null = null;
@@ -158,13 +125,13 @@ const PROMPT = '\x1b[38;5;105morquestrador>\x1b[0m ';
 const MB = 1024 * 1024;
 let update: UpdateStatus = { phase: 'ready' };
 const setUpdate = (next: UpdateStatus) => { update = next; emit('update-status', next); };
-// `total` null (tamanho desconhecido) ou 0 mostram o progresso indeterminado; o tamanho real é 40 MB.
-function demoDownload(total: number | null = 40 * MB) {
+// Download de 40 MB em passos de 2 MB; depois instala e volta a pronto.
+function demoDownload() {
   const size = 40 * MB;
   let downloaded = 0;
   const tick = () => {
     downloaded = Math.min(size, downloaded + 2 * MB);
-    setUpdate({ phase: 'downloading', version: '0.2.0', downloaded, total });
+    setUpdate({ phase: 'downloading', version: '0.2.0', downloaded, total: size });
     if (downloaded < size) return void setTimeout(tick, 150);
     setUpdate({ phase: 'installing', version: '0.2.0' });
     setTimeout(() => setUpdate({ phase: 'ready' }), 1500);
@@ -174,8 +141,6 @@ function demoDownload(total: number | null = 40 * MB) {
 const updateMode = new URLSearchParams(location.search).get('update');
 if (updateMode === 'falha') update = { phase: 'failed', message: 'Não foi possível verificar atualizações: sem conexão com o GitHub.' };
 if (updateMode === 'download') demoDownload();
-if (updateMode === 'indeterminado') demoDownload(null);
-if (updateMode === 'total-zero') demoDownload(0);
 
 function setState(job: Job, state: NodeState) {
   job.state = state;
@@ -278,71 +243,13 @@ function typed(data: string) {
   }
 }
 
-// ---------- Git simulado ----------
+// ---------- Git simulado: respostas fixas, sem estado ----------
 
-// Executor ou orquestrador com tarefa aberta: a mesma trava do backend para pull, troca e criação de branch.
-const busy = () => [...jobs.values()].some((j) => !['done', 'stopped', 'failed'].includes(j.state));
-
-// Lista vazia vale para tudo, como no backend.
-const known = (path: string) => {
-  const f = files.find((x) => x.path === path);
-  if (!f) throw `Arquivo não encontrado no repositório: ${path}`;
-  return f;
-};
-function stage(paths: string[]) {
-  const targets = paths.length ? paths : files.filter((f) => f.unstaged).map((f) => f.path);
-  for (const path of targets) {
-    const f = known(path);
-    if (!f.unstaged) continue;
-    // O que estava nas alterações vai para o preparado; arquivo novo continua novo.
-    f.staged = f.staged === 'added' || f.unstaged === 'untracked' ? 'added' : f.unstaged;
-    f.unstaged = null;
-  }
-}
-function unstage(paths: string[]) {
-  const targets = paths.length ? paths : files.filter((f) => f.staged).map((f) => f.path);
-  for (const path of targets) {
-    const f = known(path);
-    if (!f.staged) continue;
-    // Tirado do preparo, o que era novo volta a não rastreado.
-    f.unstaged = f.staged === 'added' ? 'untracked' : f.staged;
-    f.staged = null;
-  }
-}
-function commit(message: string) {
-  if (!message.trim()) throw 'A mensagem do commit está vazia.';
-  if (!files.some((f) => f.staged)) throw 'Nada preparado para commitar.';
-  for (const f of files) f.staged = null;
-  // O que não sobrou em alterações sai da lista.
-  files = files.filter((f) => f.unstaged);
-  ahead++;
-}
-// Remoto simulado: fetch traz 2 commits de fora; pull os recebe; push só envia se nada novo chegou do remoto.
-const fetchRemote = () => {
-  behind = Math.max(behind, 2);
-  return `From github.com:luansilvadb/orquestrador\n   1a2b3c4..5d6e7f8  ${branch} -> origin/${branch}\n`;
-};
-const pullRemote = () => {
-  if (busy()) throw BUSY;
-  if (!behind) return 'Already up to date.\n';
-  const n = behind;
-  behind = 0;
-  return `Atualizando de origin/${branch}\nFast-forward\n ${n} commits recebidos\n`;
-};
-const pushRemote = () => {
-  if (behind) throw 'O envio foi recusado: o remoto tem commits que você não recebeu. Receba antes e tente de novo.';
-  if (!ahead) return 'Everything up-to-date\n';
-  const n = ahead;
-  ahead = 0;
-  return `Enviando ${n} commit(s) para origin/${branch}\n   1a2b3c4..5d6e7f8  ${branch} -> ${branch}\n`;
-};
-
-// Diff: o que não tem patch escrito aqui sai vazio ("Sem alterações neste arquivo").
-function diffOf(path: string, staged: boolean): GitDiff {
-  known(path);
+// Diff: .png é binário e o JSON é grande demais; o resto recebe o patch de exemplo.
+function diffOf(path: string): GitDiff {
   if (path.endsWith('.png')) return { binary: true, tooLarge: false, patch: '' };
   if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, patch: '' };
-  return { binary: false, tooLarge: false, patch: PATCHES[`${staged ? 'staged' : 'unstaged'}:${path}`] ?? '' };
+  return { binary: false, tooLarge: false, patch: PATCH };
 }
 
 const commands: Record<string, (args: any) => unknown> = {
@@ -386,30 +293,17 @@ const commands: Record<string, (args: any) => unknown> = {
     if (!dir) throw `Pasta não encontrada: ${path}`;
     return listing(dir);
   },
-  git_status: () => ({ branch, ahead, behind, files: [...files].sort(byPath) }),
-  git_diff: ({ path, staged }: { path: string; staged: boolean }) => diffOf(path, staged),
-  git_stage: ({ paths }: { paths: string[] }) => { stage(paths); return null; },
-  git_unstage: ({ paths }: { paths: string[] }) => { unstage(paths); return null; },
-  git_commit: ({ message }: { message: string }) => { commit(message); return null; },
-  git_fetch: () => fetchRemote(),
-  git_pull: () => pullRemote(),
-  git_push: () => pushRemote(),
-  git_branches: () => ({ current: branch, local: [...branches] }),
-  git_switch: ({ name }: { name: string }) => {
-    if (busy()) throw BUSY;
-    if (!branches.includes(name)) throw `Branch não encontrada: ${name}`;
-    branch = name;
-    return null;
-  },
-  git_create_branch: ({ name }: { name: string }) => {
-    if (busy()) throw BUSY;
-    const next = name.trim();
-    if (!next) throw 'Informe o nome da branch.';
-    if (branches.includes(next)) throw `A branch ${next} já existe.`;
-    branches.push(next);
-    branch = next;
-    return null;
-  },
+  git_status: () => ({ branch: 'main', ahead: 1, behind: 0, files: [...files].sort(byPath) }),
+  git_diff: ({ path }: { path: string }) => diffOf(path),
+  git_stage: () => null,
+  git_unstage: () => null,
+  git_commit: () => null,
+  git_fetch: () => 'From github.com:luansilvadb/orquestrador\n   1a2b3c4..5d6e7f8  main -> origin/main\n',
+  git_pull: () => 'Already up to date.\n',
+  git_push: () => 'Enviando 1 commit(s) para origin/main\n   1a2b3c4..5d6e7f8  main -> main\n',
+  git_branches: () => ({ current: 'main', local: ['main', 'feat/painel-git'] }),
+  git_switch: () => null,
+  git_create_branch: () => null,
   term_resize: ({ id, cols, rows }: { id: string; cols: number; rows: number }) => { debug.sizes[id] = `${cols}x${rows}`; },
   term_snapshot: ({ id }: { id: string }) => {
     const term = terms.get(id);

@@ -110,9 +110,11 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
           <Flexbox horizontal align="center" gap={8} height={36} flex="none" paddingInline={12} className="whitespace-nowrap border-b">
             {node && meta ? (
               <>
-                <Tag className="shrink-0" color={meta.color} icon={<meta.icon className={node.state === 'running' ? 'animate-spin' : undefined} />}>
-                  {meta.label}
-                </Tag>
+                {node.state !== 'running' && (
+                  <Tag className="shrink-0" color={meta.color} icon={<meta.icon />}>
+                    {meta.label}
+                  </Tag>
+                )}
                 <Text as="span" code type="secondary" className="shrink-0">#{node.index + 1}</Text>
                 <Text ellipsis className="min-w-0 flex-1" title={node.title}>{node.title}</Text>
                 {node.choice && <ChoiceText choice={node.choice} flex="none" />}

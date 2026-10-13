@@ -1,11 +1,10 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { Block, Center, Flexbox } from '@lobehub/ui';
 import { Alert, Button, InputNumber, Modal, Progress, Text, toast } from '@lobehub/ui/base-ui';
-import { backend, connect, message } from './backend';
+import { backend, connect, host, message } from './backend';
 import { ChoiceForm } from './choice-form';
-import { FilesScreen, Nav, StatusBar } from './explorer';
+import { FilesScreen, Nav, StatusBar, type Route } from './explorer';
 import { GitScreen, usePolled } from './git';
-import { useRoute, type Route } from './route';
 import { FINISHED, STATES, TerminalsScreen } from './terminal-screen';
 import { terminals } from './terminals';
 import { TitleBar } from './titlebar';
@@ -109,7 +108,7 @@ export function App() {
   useLayoutEffect(() => {
     stateRef.current = state;
   });
-  const route = useRoute();
+  const [route, setRoute] = useState<Route>('arquivos');
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
   // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
   const git = usePolled(() => backend.gitStatus(), state.update.phase === 'ready' && !!state.project, true);
@@ -120,9 +119,9 @@ export function App() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const closeAnswer = useRef<((ok: boolean) => void) | null>(null);
   const updateEvents = useRef(0);
-  const [maxText, setMaxText] = useState('');
+  const [maxValue, setMaxValue] = useState<number | null>(null);
   const maxParallel = state.options?.maxParallel;
-  useEffect(() => setMaxText(maxParallel === undefined ? '' : String(maxParallel)), [maxParallel]);
+  useEffect(() => setMaxValue(maxParallel ?? null), [maxParallel]);
 
   // ---------- ações ----------
 
@@ -146,23 +145,23 @@ export function App() {
       await connect();
       setConnected(true);
       await Promise.all([
-        backend.listen('update-status', (status) => {
+        host().listen('update-status', (status) => {
           updateEvents.current++;
           dispatch({ type: 'update', status });
         }),
-        backend.listen('term-data', (data) => terminals.push(data)),
-        backend.listen('node-added', (node) => dispatch({ type: 'nodeAdded', node })),
-        backend.listen('node-state', ({ id, state: next, choice }) => {
+        host().listen('term-data', (data) => terminals.push(data)),
+        host().listen('node-added', (node) => dispatch({ type: 'nodeAdded', node })),
+        host().listen('node-state', ({ id, state: next, choice }) => {
           dispatch({ type: 'nodeState', id, state: next, choice });
           // Os dois estados vivos: o PTY já existe, então setLive só reenvia o tamanho. Não recria nem zera o terminal.
           if (next === 'running' || next === 'awaiting-orchestrator') terminals.get(id)?.setLive();
           // Executor que terminou fecha a própria aba; a resposta dele já seguiu para o orquestrador.
           if (FINISHED.includes(next)) void clearDone();
         }),
-        backend.listen('executor-choice', (choice) => dispatch({ type: 'executorChoice', choice })),
-        backend.listen('orchestrator-exit', ({ code }) =>
+        host().listen('executor-choice', (choice) => dispatch({ type: 'executorChoice', choice })),
+        host().listen('orchestrator-exit', ({ code }) =>
           resetOrchestrator(`O orquestrador terminou (${code === null ? 'sem código de saída' : `código de saída ${code}`}).`)),
-        backend.onCloseRequested(async () => {
+        host().onCloseRequested(async () => {
           try {
             if (await backend.hasRunning() && !(await askClose())) return false;
             await backend.shutdown();
@@ -255,14 +254,14 @@ export function App() {
 
   async function commitMax() {
     const current = stateRef.current.options!.maxParallel;
-    const value = Math.min(16, Math.max(1, Math.round(Number(maxText)) || current));
+    const value = Math.min(16, Math.max(1, Math.round(maxValue ?? 0) || current));
     try {
       await backend.setMaxParallel(value);
       dispatch({ type: 'maxParallel', value });
-      setMaxText(String(value));
+      setMaxValue(value);
     } catch (e) {
       report(e);
-      setMaxText(String(current));
+      setMaxValue(current);
     }
   }
 
@@ -297,56 +296,41 @@ export function App() {
   if (!ready) {
     const retry = update.phase === 'failed';
     return (
-      <Screen connected={connected}>
-        <Block variant="outlined" direction="vertical" gap={16} padding={24} className="w-full max-w-md">
-          <Flexbox gap={6}>
-            <Text as="h1" fontSize={16} weight={600} lineHeight={1}>Orquestrador</Text>
-            <Text as="p" type="secondary" fontSize={14} role="status" aria-live="polite">{updateText(update, fatal)}</Text>
-          </Flexbox>
-          <Flexbox gap={16}>
-            {update.phase === 'downloading' && (
-              // Total desconhecido (ou zero): sem percentual, a barra cheia com o brilho do status active. O Progress não tem modo indeterminado de fato.
-              update.total ? (
-                <Progress
-                  aria-label="Progresso do download da atualização"
-                  percent={Math.min(100, (update.downloaded / update.total) * 100)}
-                  showInfo={false}
-                />
-              ) : (
-                <Progress aria-label="Progresso do download da atualização" percent={100} status="active" showInfo={false} />
-              )
-            )}
-            {update.phase === 'failed' && (
-              <Alert type="error" role="alert" description={update.message} className="select-text" />
-            )}
-            {retry && (
-              <Button type="primary" onClick={retryUpdate} disabled={retrying} loading={retrying} className="self-start">
-                Tentar novamente
-              </Button>
-            )}
-          </Flexbox>
-        </Block>
+      <Screen connected={connected} description={(
+        <Text as="p" type="secondary" fontSize={14} role="status" aria-live="polite">{updateText(update, fatal)}</Text>
+      )}>
+        {update.phase === 'downloading' && (
+          // Total desconhecido (ou zero): sem percentual, a barra cheia com o brilho do status active. O Progress não tem modo indeterminado de fato.
+          <Progress
+            aria-label="Progresso do download da atualização"
+            percent={update.total ? Math.min(100, (update.downloaded / update.total) * 100) : 100}
+            status={update.total ? undefined : 'active'}
+            showInfo={false}
+          />
+        )}
+        {update.phase === 'failed' && (
+          <Alert type="error" role="alert" description={update.message} className="select-text" />
+        )}
+        {retry && (
+          <Button type="primary" onClick={retryUpdate} disabled={retrying} loading={retrying} className="self-start">
+            Tentar novamente
+          </Button>
+        )}
       </Screen>
     );
   }
 
   if (!state.project) {
     return (
-      <Screen connected={connected}>
-        <Block variant="outlined" direction="vertical" gap={16} padding={24} className="w-full max-w-md">
-          <Flexbox gap={6}>
-            <Text as="h1" fontSize={16} weight={600} lineHeight={1}>Orquestrador</Text>
-            <Text as="p" type="secondary" fontSize={14}>
-              Escolha a pasta do projeto (um repositório Git). O orquestrador e os executores trabalham nela.
-            </Text>
-          </Flexbox>
-          <Flexbox gap={16}>
-            {projectError && (
-              <Alert type="error" role="alert" description={projectError} className="select-text" />
-            )}
-            <Button type="primary" onClick={chooseProject} className="self-start">Escolher pasta do projeto</Button>
-          </Flexbox>
-        </Block>
+      <Screen connected={connected} description={(
+        <Text as="p" type="secondary" fontSize={14}>
+          Escolha a pasta do projeto (um repositório Git). O orquestrador e os executores trabalham nela.
+        </Text>
+      )}>
+        {projectError && (
+          <Alert type="error" role="alert" description={projectError} className="select-text" />
+        )}
+        <Button type="primary" onClick={chooseProject} className="self-start">Escolher pasta do projeto</Button>
       </Screen>
     );
   }
@@ -367,8 +351,8 @@ export function App() {
             {/* O blur do wrapper confirma (o foco sai do campo); o Enter tira o foco. Valor vazio vira null. */}
             <InputNumber
               size="small" min={1} max={16} step={1}
-              value={maxText === '' ? null : Number(maxText)}
-              onChange={(value) => setMaxText(value === null ? '' : String(value))}
+              value={maxValue}
+              onChange={(value) => setMaxValue(value)}
               onBlur={commitMax}
               onPressEnter={(e) => (e.target as HTMLInputElement).blur()}
               controls={false}
@@ -379,7 +363,7 @@ export function App() {
       </TitleBar>
 
       <Flexbox horizontal flex={1} className="min-h-0">
-        <Nav route={route} changed={changed} />
+        <Nav route={route} changed={changed} onGo={setRoute} />
         <main className="relative min-h-0 min-w-0 flex-1">
           <div className={shown('arquivos')}>
             <Flexbox horizontal height="100%">
@@ -407,7 +391,7 @@ export function App() {
 
       <StatusBar branch={git.data?.branch} />
 
-      {/* As três escolhas são janelas: a do orquestrador (início e executores) e uma só para os executores aguardando. */}
+      {/* As duas escolhas são janelas: a do orquestrador (início) e uma só para os executores. Com um executor aguardando escolha, a janela dele é a única e não fecha sem confirmar: nunca duas empilhadas. */}
       {options && (
         <>
           <ChoiceForm
@@ -416,20 +400,14 @@ export function App() {
             options={options} initial={options.last.orchestrator} confirmLabel="Abrir terminal"
             onCancel={() => resetOrchestrator()} onConfirm={startOrchestrator} onClosed={focusOrchestrator}
           />
-          {/* Com um executor aguardando escolha, só a janela dele fica aberta: nunca duas empilhadas. */}
           <ChoiceForm
-            open={orchestrator?.overlay === 'executor' && count('awaiting-choice') === 0}
-            title="Executores"
-            hint="Ferramenta, modelo e esforço dos próximos executores. Os que já estão rodando não mudam."
+            open={orchestrator?.overlay === 'executor' || count('awaiting-choice') > 0}
+            title={count('awaiting-choice') > 0 ? 'Escolha dos executores' : 'Executores'}
+            hint={count('awaiting-choice') > 0
+              ? 'Vale para este e para os próximos executores enquanto o orquestrador estiver aberto.'
+              : 'Ferramenta, modelo e esforço dos próximos executores. Os que já estão rodando não mudam.'}
             options={options} initial={state.executorChoice ?? options.last.executor} confirmLabel="Usar nos executores"
-            onCancel={() => dispatch({ type: 'overlay', overlay: null })}
-            onConfirm={(choice) => saveExecutorChoice(choice)} onClosed={focusOrchestrator}
-          />
-          <ChoiceForm
-            open={count('awaiting-choice') > 0}
-            title="Escolha dos executores"
-            hint="Vale para este e para os próximos executores enquanto o orquestrador estiver aberto."
-            options={options} initial={state.executorChoice ?? options.last.executor} confirmLabel="Usar nos executores"
+            onCancel={count('awaiting-choice') > 0 ? undefined : () => dispatch({ type: 'overlay', overlay: null })}
             onConfirm={(choice) => saveExecutorChoice(choice)} onClosed={focusOrchestrator}
           />
         </>
@@ -456,11 +434,19 @@ export function App() {
 }
 
 /** Atualização e escolha de projeto: barra no topo e o cartão centralizado no espaço que sobra. */
-function Screen({ connected, children }: { connected: boolean; children: ReactNode }) {
+function Screen({ connected, description, children }: { connected: boolean; description: ReactNode; children: ReactNode }) {
   return (
     <Flexbox height="100dvh">
       <TitleBar connected={connected} />
-      <Center flex={1} padding={24} className="min-h-0">{children}</Center>
+      <Center flex={1} padding={24} className="min-h-0">
+        <Block variant="outlined" direction="vertical" gap={16} padding={24} className="w-full max-w-md">
+          <Flexbox gap={6}>
+            <Text as="h1" fontSize={16} weight={600} lineHeight={1}>Orquestrador</Text>
+            {description}
+          </Flexbox>
+          <Flexbox gap={16}>{children}</Flexbox>
+        </Block>
+      </Center>
     </Flexbox>
   );
 }

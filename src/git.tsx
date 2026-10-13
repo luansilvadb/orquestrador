@@ -25,6 +25,18 @@ const lastLine = (text: string) => text.trim().split('\n').pop() ?? '';
 const commits = (n: number) => `${n} ${n === 1 ? 'commit' : 'commits'}`;
 // Caminhos de um arquivo para preparar ou tirar: renomeado leva o nome antigo junto.
 const pathsOf = (f: GitFile) => (f.origPath ? [f.path, f.origPath] : [f.path]);
+// Uma ação: erro em toast, o status relido de qualquer jeito, e devolve se deu certo.
+async function run(task: () => Promise<unknown>, refresh: () => Promise<void>): Promise<boolean> {
+  try {
+    await task();
+    return true;
+  } catch (e) {
+    fail(e);
+    return false;
+  } finally {
+    await refresh();
+  }
+}
 
 /**
  * Consulta repetida (usePolling) e a mesma consulta sob demanda (`refresh`). O estado só muda quando a resposta é outra, para não piscar.
@@ -93,42 +105,20 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
   const unstaged = status.files.filter((f) => f.unstaged);
   const canCommit = !!text.trim() && staged.length > 0 && !committing;
 
-  // Ação simples: erro em toast e o status relido logo em seguida.
-  async function act(task: () => Promise<unknown>) {
-    try {
-      await task();
-    } catch (e) {
-      fail(e);
-    } finally {
-      await refresh();
-    }
-  }
-
   async function remote(kind: Op) {
     setOp(kind);
-    try {
+    await run(async () => {
       const out = await REMOTE[kind].run();
       toast.success({ title: REMOTE[kind].done, description: lastLine(out), duration: 3000 });
-    } catch (e) {
-      fail(e);
-    } finally {
-      setOp(null);
-      await refresh();
-    }
+    }, refresh);
+    setOp(null);
   }
 
   async function commit() {
     if (!canCommit) return;
     setCommitting(true);
-    try {
-      await backend.gitCommit(text.trim());
-      setText('');
-    } catch (e) {
-      fail(e);
-    } finally {
-      setCommitting(false);
-      await refresh();
-    }
+    if (await run(() => backend.gitCommit(text.trim()), refresh)) setText('');
+    setCommitting(false);
   }
 
   const busy = op !== null;
@@ -179,15 +169,15 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
         />
         <Button
           type="primary" size="small" style={{ alignSelf: 'flex-start' }} disabled={!canCommit} loading={committing}
-          title={canCommit ? 'Commita o que está preparado' : commitHint} onClick={commit}
+          title={commitHint} onClick={commit}
         >
           Commit
         </Button>
       </Flexbox>
 
       <Flexbox className="min-h-0 overflow-y-auto" flex={1} paddingBlock={4} style={{ paddingRight: 12 }}>
-        <FileSection title="Preparadas" files={staged} staged onStage={(paths) => act(() => backend.gitUnstage(paths))} selected={selected} onSelect={onSelect} />
-        <FileSection title="Alterações" files={unstaged} staged={false} onStage={(paths) => act(() => backend.gitStage(paths))} selected={selected} onSelect={onSelect} />
+        <FileSection title="Preparadas" files={staged} staged onStage={(paths) => run(() => backend.gitUnstage(paths), refresh)} selected={selected} onSelect={onSelect} />
+        <FileSection title="Alterações" files={unstaged} staged={false} onStage={(paths) => run(() => backend.gitStage(paths), refresh)} selected={selected} onSelect={onSelect} />
         {!staged.length && !unstaged.length && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 12, paddingBlock: 8 }}>Nenhuma alteração.</Text>}
       </Flexbox>
     </Flexbox>
@@ -223,27 +213,16 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
     }
   }
 
-  // Trocar ou criar: o popover fecha se deu certo; erro vai para toast, e o status é relido de qualquer jeito.
-  async function change(task: () => Promise<void>) {
-    try {
-      await task();
-      setOpen(false);
-    } catch (e) {
-      fail(e);
-    } finally {
-      await refresh();
-    }
-  }
-
+  // Trocar ou criar: o popover fecha só se deu certo.
   async function choose(target: string) {
     if (target === branches?.current) return;
-    await change(() => backend.gitSwitch(target));
+    if (await run(() => backend.gitSwitch(target), refresh)) setOpen(false);
   }
 
   async function create() {
     const target = name.trim();
     if (!target || locked) return;
-    await change(() => backend.gitCreateBranch(target));
+    if (await run(() => backend.gitCreateBranch(target), refresh)) setOpen(false);
   }
 
   // trigger="click": o padrão do Popover do Lobe UI é abrir com o mouse em cima.

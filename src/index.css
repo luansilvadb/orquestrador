@@ -16,7 +16,6 @@
     --color-destructive: var(--ant-color-error);
     --color-muted-foreground: var(--ant-color-text-secondary);
     --color-muted: var(--ant-color-fill-tertiary);
-    --color-primary: var(--ant-color-primary);
     --color-card: var(--ant-color-bg-container);
     --color-foreground: var(--ant-color-text);
     --color-terminal: var(--terminal);

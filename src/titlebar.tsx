@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Copy, Minus, Square, X, type LucideIcon } from 'lucide-react';
 import { Flexbox } from '@lobehub/ui';
 import { Text } from '@lobehub/ui/base-ui';
-import { backend } from './backend';
+import { host } from './backend';
 
 function WindowButton({ label, icon: Icon, danger, disabled, onClick }: {
   label: string; icon: LucideIcon; danger?: boolean; disabled: boolean; onClick: () => void;
@@ -30,11 +30,11 @@ export function TitleBar({ connected, children }: { connected: boolean; children
     if (!connected) return;
     let active = true;
     let unlisten: (() => void) | undefined;
-    const refresh = () => void backend.isMaximized().then((value) => {
+    const refresh = () => void host().isMaximized().then((value) => {
       if (active) setMaximized(value);
     });
     refresh();
-    void backend.onResized(refresh).then((off) => {
+    void host().onResized(refresh).then((off) => {
       if (active) unlisten = off;
       else off();
     });
@@ -50,12 +50,12 @@ export function TitleBar({ connected, children }: { connected: boolean; children
       <Text as="span" data-tauri-drag-region className="px-3" fontSize={14} weight={600}>Orquestrador</Text>
       <Flexbox data-tauri-drag-region horizontal align="center" gap={12} flex={1} allowShrink style={{ paddingRight: 12 }}>{children}</Flexbox>
       <Flexbox horizontal height="100%" flex="none">
-        <WindowButton label="Minimizar" icon={Minus} disabled={!connected} onClick={() => backend.minimize()} />
+        <WindowButton label="Minimizar" icon={Minus} disabled={!connected} onClick={() => host().minimize()} />
         <WindowButton
           label={maximized ? 'Restaurar' : 'Maximizar'} icon={maximized ? Copy : Square}
-          disabled={!connected} onClick={() => backend.toggleMaximize()}
+          disabled={!connected} onClick={() => host().toggleMaximize()}
         />
-        <WindowButton label="Fechar" icon={X} danger disabled={!connected} onClick={() => backend.close()} />
+        <WindowButton label="Fechar" icon={X} danger disabled={!connected} onClick={() => host().close()} />
       </Flexbox>
     </Flexbox>
   );

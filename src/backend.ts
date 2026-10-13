@@ -42,15 +42,10 @@ export async function connect(): Promise<void> {
 
 const call = <T>(cmd: string, args?: Record<string, unknown>) => transport.invoke(cmd, args) as Promise<T>;
 
-export const backend = {
-  listen: <K extends keyof Events>(event: K, handler: (payload: Events[K]) => void) => transport.listen(event, handler),
-  onCloseRequested: (mayClose: () => Promise<boolean>) => transport.onCloseRequested(mayClose),
-  minimize: () => transport.minimize(),
-  toggleMaximize: () => transport.toggleMaximize(),
-  close: () => transport.close(),
-  isMaximized: () => transport.isMaximized(),
-  onResized: (handler: () => void) => transport.onResized(handler),
+/** Acesso direto à janela e aos eventos (escuta, fechamento, barra de título). */
+export const host = (): Transport => transport;
 
+export const backend = {
   updateStatus: () => call<UpdateStatus>('update_status'),
   retryUpdate: () => call<UpdateStatus>('retry_update'),
 
