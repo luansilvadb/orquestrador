@@ -1,23 +1,19 @@
-// A tela Git: à esquerda o painel de controle de versão (cabeçalho, branch, mensagem com o commit e as seções Preparadas
-// e Alterações); à direita as alterações do arquivo selecionado. Tudo roda na pasta do projeto e só por clique do usuário.
-// O status atualiza sozinho (usePolled, no App); cada ação atualiza na hora.
+// Painel Git da barra lateral: o controle de versão (branch, commit, Preparadas, Alterações e Gráfico) ou o histórico do projeto e de um arquivo.
+// Clique num arquivo abre a revisão em prévia; duplo clique abre de vez; conflito abre o conflito. O histórico abre o arquivo de um commit.
+// Tudo roda na pasta do projeto e só por clique do usuário. O status atualiza sozinho (usePolled, no App); cada ação atualiza na hora.
 import { useEffect, useRef, useState } from 'react';
-import { ActionIcon, Button, DraggablePanel, DropdownMenu, Input, Popover, Text, TextArea, toast } from '@lobehub/ui/base-ui';
-import { Flexbox, PatchDiff } from '@lobehub/ui';
-import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, File, GitBranch, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
+import { ActionIcon, Button, ContextMenuTrigger, DropdownMenu, Input, Popover, Text, TextArea, toast } from '@lobehub/ui/base-ui';
+import { Flexbox } from '@lobehub/ui';
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, File, GitBranch, History, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
 import { backend, message } from './backend';
+import { GRAPH_DEFAULT, GraphSection, type GraphRemote } from './git-graph-view';
+import { HistoryPanel, type HistoryRequest, KIND, nextHistoryId, splitPath } from './git-history';
 import { usePolling } from './polling';
-import type { GitBranches, GitDiff, GitFile, GitKind, GitStatus } from './types';
+import type { DiffSide, TabTarget } from './workspace-model';
+import type { GitGuard } from './git-guard';
+import type { GitBranches, GitFile, GitKind, GitStatus } from './types';
 
 const LOCKED_TITLE = 'Há executores trabalhando. Espere o lote terminar.';
-const KIND: Record<GitKind, { letter: string; title: string }> = {
-  modified: { letter: 'M', title: 'modificado' },
-  added: { letter: 'A', title: 'novo' },
-  deleted: { letter: 'D', title: 'apagado' },
-  renamed: { letter: 'R', title: 'renomeado' },
-  untracked: { letter: 'U', title: 'não rastreado' },
-  conflicted: { letter: 'C', title: 'em conflito' },
-};
 
 // Erro de ação: a mensagem do backend em toast, selecionável (o body tem user-select: none).
 const fail = (e: unknown) => toast.error({ title: <span className="select-text">{message(e)}</span>, duration: 7000 });
@@ -25,6 +21,8 @@ const lastLine = (text: string) => text.trim().split('\n').pop() ?? '';
 const commits = (n: number) => `${n} ${n === 1 ? 'commit' : 'commits'}`;
 // Caminhos de um arquivo para preparar ou tirar: renomeado leva o nome antigo junto.
 const pathsOf = (f: GitFile) => (f.origPath ? [f.path, f.origPath] : [f.path]);
+// Chave de uma linha marcada: o lado separa a preparada da alteração do mesmo arquivo.
+const keyOf = (side: DiffSide, path: string) => `${side}:${path}`;
 // Uma ação: erro em toast, o status relido de qualquer jeito, e devolve se deu certo.
 async function run(task: () => Promise<unknown>, refresh: () => Promise<void>): Promise<boolean> {
   try {
@@ -68,6 +66,25 @@ export function usePolled<T>(read: () => Promise<T>, enabled: boolean, clearOnEr
   return { data, error, refresh };
 }
 
+type GitPoll = ReturnType<typeof usePolled<GitStatus>>;
+/** Opções de abertura pedidas à tela de cima. `permanent` abre de vez (duplo clique) em vez de prévia. */
+export type OpenTargetOptions = { permanent?: boolean; side?: DiffSide };
+export type OpenFileOptions = { permanent?: boolean; line?: number; col?: number; side?: DiffSide };
+export type GitSidebarProps = {
+  git: GitPoll;
+  locked: boolean;
+  /** Trava compartilhada com o editor central: uma operação Git da UI por vez, nas duas telas. */
+  guard: GitGuard;
+  /** A tela Git está aberta: sem isso, o histórico não consulta o Git. */
+  active: boolean;
+  /** Alvo aberto no editor central: marca a linha de diff (do mesmo lado) ou de conflito correspondente. */
+  selected?: TabTarget | null;
+  onOpenTarget: (target: TabTarget, options?: OpenTargetOptions) => void;
+  onOpenFile: (path: string, options?: OpenFileOptions) => void;
+  /** Pedido de histórico: um `id` novo abre a lista (do projeto, ou do arquivo em `path`). */
+  historyRequest?: HistoryRequest;
+};
+
 type Remote = 'fetch' | 'pull' | 'push';
 // Operação em curso. O commit com push passa por 'commit' e depois por 'push'.
 // stage e branch entram na mesma trava: enquanto uma roda, nada mexe no índice nem na branch.
@@ -84,18 +101,38 @@ const BUSY_TEXT: Record<Busy, string> = {
 };
 const MODE_LABEL: Record<CommitMode, string> = { commit: 'Commit', 'commit-push': 'Commit e Push' };
 
-/** Arquivo selecionado na tela Git: o caminho e o lado (preparado ou não) da seção clicada. */
-type Selection = { path: string; staged: boolean };
+/** Uma linha de diff ou de conflito está aberta no editor? O lado separa as seções; conflito vale no lado em conflito. */
+function isOpenTarget(target: TabTarget | null | undefined, side: DiffSide, f: GitFile) {
+  if (!target) return false;
+  if (target.kind === 'conflict') return target.path === f.path && f[side] === 'conflicted';
+  return target.kind === 'diff' && target.side === side && target.path === f.path;
+}
 
-/** Painel do Git: cabeçalho com atualizar e o menu de Buscar, Receber e Enviar; a branch; o commit; e as duas seções. */
-function GitPanel({ status, error, refresh, locked, selected, onSelect, onOpenFile }: {
+/** O que cada linha pode fazer, vindo do painel (que tem o estado e as travas). */
+type RowActions = {
+  pick: (f: GitFile, side: DiffSide, ctrl: boolean) => void;
+  review: (f: GitFile, side: DiffSide) => void;
+  openFile: (f: GitFile) => void;
+  stage: (f: GitFile, side: DiffSide, list: GitFile[]) => void;
+  stageAll: (side: DiffSide) => void;
+};
+
+/**
+ * Controle de versão: cabeçalho com atualizar, histórico e o menu de Buscar, Receber e Enviar; a branch; o commit; e as duas seções.
+ * Fica montado mesmo com o histórico na frente: a mensagem digitada e os recolhidos não se perdem.
+ */
+function ChangesPanel({ status, error, refresh, locked, guard, active, selected, onOpenTarget, onOpenFile, onShowHistory }: {
   status: GitStatus | null;
   error: string;
   refresh: () => Promise<void>;
   locked: boolean;
-  selected: Selection | null;
-  onSelect: (path: string, staged: boolean) => void;
-  onOpenFile: (path: string) => void;
+  guard: GitGuard;
+  /** Tela Git aberta e esta lista visível: só então o gráfico consulta o Git. */
+  active: boolean;
+  selected: TabTarget | null | undefined;
+  onOpenTarget: (target: TabTarget, options?: OpenTargetOptions) => void;
+  onOpenFile: (path: string, options?: OpenFileOptions) => void;
+  onShowHistory: () => void;
 }) {
   const [busy, setBusy] = useState<Busy | null>(null);
   // O segundo clique chega antes de o estado (busy) mudar: a trava que vale é a do ref.
@@ -103,7 +140,13 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect, onOpenFi
   const [text, setText] = useState('');
   const [mode, setMode] = useState<CommitMode>('commit');
   // Recolhido fica aqui, no painel, e não na seção: a seção some quando a lista esvazia, e o estado não pode sumir junto.
-  const [collapsed, setCollapsed] = useState({ staged: false, unstaged: false });
+  const [collapsed, setCollapsed] = useState({ staged: false, unstaged: false, graph: false });
+  // Altura que o divisor deu à seção Gráfico, e o contador de pedidos de recarregar o gráfico (cada ação soma 1).
+  const [graphHeight, setGraphHeight] = useState(GRAPH_DEFAULT);
+  const [graphTick, setGraphTick] = useState(0);
+  // Linhas marcadas com Ctrl+clique. Preparar ou tirar age sobre elas quando a linha escolhida está marcada.
+  const [marked, setMarked] = useState<Set<string>>(new Set());
+  const refreshGraph = () => setGraphTick((n) => n + 1);
 
   if (!status) {
     return (
@@ -119,11 +162,27 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect, onOpenFi
   const unstaged = status.files.filter((f) => f.unstaged);
   const canCommit = !!text.trim() && staged.length > 0 && !busy;
   const hint = !staged.length ? 'Prepare arquivos para commitar' : !text.trim() ? 'Escreva a mensagem do commit' : '';
+  // Buscar, Receber e Enviar: o menu do cabeçalho e os botões do gráfico usam o mesmo rótulo e a mesma trava.
+  const remoteLabel: Record<GraphRemote, string> = {
+    fetch: 'Buscar', pull: status.behind > 0 ? `Receber (${commits(status.behind)})` : 'Receber', push: status.ahead > 0 ? `Enviar (${commits(status.ahead)})` : 'Enviar',
+  };
+  const remoteOff: Record<GraphRemote, boolean> = { fetch: busy !== null, pull: busy !== null || locked, push: busy !== null };
   const remoteMenu = [
-    { key: 'fetch', label: 'Buscar', disabled: busy !== null, onClick: () => void remote('fetch') },
-    { key: 'pull', label: status.behind > 0 ? `Receber (${commits(status.behind)})` : 'Receber', disabled: busy !== null || locked, onClick: () => void remote('pull') },
-    { key: 'push', label: status.ahead > 0 ? `Enviar (${commits(status.ahead)})` : 'Enviar', disabled: busy !== null, onClick: () => void remote('push') },
+    { key: 'fetch', label: remoteLabel.fetch, disabled: remoteOff.fetch, onClick: () => void remote('fetch') },
+    { key: 'pull', label: remoteLabel.pull, disabled: remoteOff.pull, onClick: () => void remote('pull') },
+    { key: 'push', label: remoteLabel.push, disabled: remoteOff.push, onClick: () => void remote('push') },
   ];
+  const remoteActions = {
+    fetch: { label: remoteLabel.fetch, disabled: remoteOff.fetch },
+    pull: { label: remoteLabel.pull, disabled: remoteOff.pull },
+    push: { label: remoteLabel.push, disabled: remoteOff.push },
+  };
+  const running = busy === 'fetch' || busy === 'pull' || busy === 'push' ? busy : null;
+  // Depois de Buscar, Receber, Enviar ou commit, o gráfico recarrega junto com o status.
+  const refreshWithGraph = async () => {
+    refreshGraph();
+    await refresh();
+  };
   // A escolha só muda o modo do botão e do Ctrl+Enter: nada roda aqui.
   const modeMenu = (['commit', 'commit-push'] as const).map((key) => ({
     key, label: MODE_LABEL[key], icon: mode === key ? <Check /> : undefined, onClick: () => setMode(key),
@@ -132,6 +191,8 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect, onOpenFi
   // Uma operação por vez, com a mesma trava do ref. Libera no finally: sucesso ou erro, a tela volta a aceitar ações.
   const withBusy: WithBusy = async (kind, task) => {
     if (busyRef.current) return undefined;
+    // Trava compartilhada: se o editor central está salvando ou gravando um diff, esta ação espera (e avisa).
+    if (!guard.enter(kind)) return undefined;
     busyRef.current = true;
     setBusy(kind);
     try {
@@ -139,13 +200,14 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect, onOpenFi
     } finally {
       busyRef.current = false;
       setBusy(null);
+      guard.leave();
     }
   };
 
   const remote = (kind: Remote) => withBusy(kind, () => run(async () => {
     const out = await REMOTE[kind].run();
     toast.success({ title: REMOTE[kind].done, description: lastLine(out), duration: 3000 });
-  }, refresh));
+  }, refreshWithGraph));
 
   // Commit, e depois o push. O push só sai se o commit deu certo: commit com erro mantém a mensagem e não envia.
   // Commit feito limpa a mensagem mesmo se o envio falhar, para ninguém commitar o mesmo texto de novo; Enviar no menu tenta só o envio.
@@ -155,14 +217,14 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect, onOpenFi
     const sent = text;
     const msg = sent.trim();
     await withBusy('commit', async () => {
-      if (await run(() => backend.gitCommit(msg), refresh)) {
+      if (await run(() => backend.gitCommit(msg), refreshWithGraph)) {
         setText((now) => (now === sent ? '' : now));
         if (then === 'commit-push') {
           setBusy('push');
           const pushed = await run(async () => {
             const out = await backend.gitPush();
             toast.success({ title: REMOTE.push.done, description: lastLine(out), duration: 3000 });
-          }, refresh);
+          }, refreshWithGraph);
           if (!pushed) toast.warning({ title: 'Commit criado, mas o envio falhou', description: 'Use Enviar no menu para tentar de novo. Não precisa commitar outra vez.', duration: 7000 });
         } else {
           toast.success({ title: 'Commit criado', duration: 3000 });
@@ -171,14 +233,47 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect, onOpenFi
     });
   }
 
-  // Preparar ou tirar do preparo: lista vazia vale para tudo.
-  const stage = (paths: string[], unstage: boolean) => withBusy('stage', () => run(() => (unstage ? backend.gitUnstage(paths) : backend.gitStage(paths)), refresh));
+  // Preparar ou tirar do preparo: lista vazia vale para tudo. Deu certo, a marcação some junto com a linha.
+  const stagePaths = (paths: string[], unstage: boolean) => withBusy('stage', async () => {
+    if (await run(() => (unstage ? backend.gitUnstage(paths) : backend.gitStage(paths)), refresh)) setMarked(new Set());
+  });
   const toggle = (key: keyof typeof collapsed) => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  // Abre a revisão do lado escolhido. Conflito abre o conflito, e não o diff.
+  const openRow = (f: GitFile, side: DiffSide, permanent: boolean) => {
+    const target: TabTarget = f[side] === 'conflicted' ? { kind: 'conflict', path: f.path } : { kind: 'diff', side, path: f.path };
+    onOpenTarget(target, { permanent });
+  };
+  const actions: RowActions = {
+    pick: (f, side, ctrl) => {
+      const key = keyOf(side, f.path);
+      if (ctrl) {
+        setMarked((prev) => {
+          const next = new Set(prev);
+          if (next.has(key)) next.delete(key);
+          else next.add(key);
+          return next;
+        });
+        return;
+      }
+      setMarked(new Set([key]));
+      openRow(f, side, false);
+    },
+    review: (f, side) => openRow(f, side, true),
+    openFile: (f) => onOpenFile(f.path, { permanent: true }),
+    stage: (f, side, list) => {
+      const batch = marked.has(keyOf(side, f.path)) ? list.filter((x) => marked.has(keyOf(side, x.path))) : [];
+      const picked = batch.length > 1 ? batch : [f];
+      void stagePaths(picked.flatMap(pathsOf), side === 'staged');
+    },
+    stageAll: (side) => void stagePaths([], side === 'staged'),
+  };
 
   return (
     <Flexbox className="min-h-0" flex={1}>
       <Flexbox horizontal align="center" gap={2} paddingInline={12} paddingBlock={6}>
         <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">Controle de versão</Text>
+        <ActionIcon size="small" variant="borderless" icon={History} aria-label="Ver o histórico do projeto" title="Histórico do projeto" onClick={onShowHistory} />
         <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar status" title="Atualizar status do Git" onClick={() => void refresh()} />
         <DropdownMenu items={remoteMenu} placement="bottomRight">
           <ActionIcon
@@ -233,18 +328,26 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect, onOpenFi
       </Flexbox>
 
       <Flexbox className="min-h-0 overflow-y-auto overflow-x-hidden" flex={1} paddingBlock={4} style={{ paddingRight: 12 }}>
-        {/* Sem arquivos preparados, a seção some (como no VS Code); o estado de recolhido continua no GitPanel. */}
+        {/* Sem arquivos preparados, a seção some (como no VS Code); o estado de recolhido continua no ChangesPanel. */}
         {staged.length > 0 && (
           <FileSection
-            title="Preparadas" files={staged} staged collapsed={collapsed.staged} onToggle={() => toggle('staged')}
-            busy={busy !== null} onStage={(paths) => stage(paths, true)} selected={selected} onSelect={onSelect} onOpenFile={onOpenFile}
+            title="Preparadas" side="staged" files={staged} collapsed={collapsed.staged} onToggle={() => toggle('staged')}
+            busy={busy !== null} marked={marked} open={selected} actions={actions}
           />
         )}
         <FileSection
-          title="Alterações" files={unstaged} staged={false} collapsed={collapsed.unstaged} onToggle={() => toggle('unstaged')}
-          busy={busy !== null} onStage={(paths) => stage(paths, false)} selected={selected} onSelect={onSelect} onOpenFile={onOpenFile}
+          title="Alterações" side="unstaged" files={unstaged} collapsed={collapsed.unstaged} onToggle={() => toggle('unstaged')}
+          busy={busy !== null} marked={marked} open={selected} actions={actions}
         />
       </Flexbox>
+
+      {/* Gráfico: aberto, divide a altura com a lista de arquivos pelo divisor; fechado, é só o cabeçalho no pé do painel. */}
+      <GraphSection
+        open={!collapsed.graph} onToggle={() => toggle('graph')} height={graphHeight} onHeight={setGraphHeight}
+        head={status.head} stamp={[graphTick, status.head, status.branch, status.ahead, status.behind].join('|')}
+        active={active} selected={selected} onOpenTarget={onOpenTarget} onRefresh={refreshGraph}
+        remote={remoteActions} running={running} onRemote={(kind) => void remote(kind)}
+      />
     </Flexbox>
   );
 }
@@ -349,21 +452,22 @@ function BranchPicker({ branch, locked, busy, withBusy, refresh }: {
 
 /**
  * Uma seção do painel: cabeçalho com o chevron, o título e a contagem à direita, e ao lado as ações de tudo (irmãs, não aninhadas).
- * Recolhida, mostra só o cabeçalho. Vazia, mostra o aviso no lugar da lista.
+ * Recolhida, mostra só o cabeçalho. Vazia, mostra o aviso no lugar da lista. Cada linha tem o menu de contexto (clique direito ou Shift+F10).
  */
-function FileSection({ title, files, staged, collapsed, onToggle, busy, onStage, selected, onSelect, onOpenFile }: {
+function FileSection({ title, side, files, collapsed, onToggle, busy, marked, open, actions }: {
   title: string;
+  side: DiffSide;
   files: GitFile[];
-  staged: boolean;
   collapsed: boolean;
   onToggle: () => void;
   busy: boolean;
-  onStage: (paths: string[]) => void;
-  selected: Selection | null;
-  onSelect: (path: string, staged: boolean) => void;
-  onOpenFile: (path: string) => void;
+  marked: Set<string>;
+  open: TabTarget | null | undefined;
+  actions: RowActions;
 }) {
+  const staged = side === 'staged';
   const allLabel = staged ? 'Tirar todas do preparo' : 'Preparar todas';
+  const markedHere = files.filter((f) => marked.has(keyOf(side, f.path))).length;
   return (
     <Flexbox as="section" gap={0}>
       <Flexbox horizontal align="center" gap={2} paddingInline={4}>
@@ -379,54 +483,68 @@ function FileSection({ title, files, staged, collapsed, onToggle, busy, onStage,
         </button>
         <ActionIcon
           size="small" variant="borderless" icon={staged ? Minus : Plus} disabled={busy || !files.length}
-          aria-label={allLabel} title={allLabel} onClick={() => onStage([])}
+          aria-label={allLabel} title={allLabel} onClick={() => actions.stageAll(side)}
         />
       </Flexbox>
       {!collapsed && (files.length ? (
         // A coluna não pode crescer com o nome: sem o minmax(0,1fr), o texto nowrap empurra a lista para fora da seção.
         <ul className="grid grid-cols-[minmax(0,1fr)]">
           {files.map((f) => {
-            const kind = (staged ? f.staged : f.unstaged) as GitKind;
+            const kind = f[side] as GitKind;
             const { letter, title: word } = KIND[kind];
-            const slash = f.path.lastIndexOf('/');
-            const name = f.path.slice(slash + 1);
-            const dir = slash >= 0 ? f.path.slice(0, slash) : '';
+            const { name, dir } = splitPath(f.path);
             const full = f.origPath ? `${f.path} (renomeado de ${f.origPath})` : f.path;
-            const isSelected = selected?.path === f.path && selected.staged === staged;
+            const key = keyOf(side, f.path);
+            const isOpen = isOpenTarget(open, side, f);
+            const isMarked = marked.has(key);
+            const batch = markedHere > 1 && isMarked;
+            const stageLabel = `${staged ? 'Tirar do preparo' : 'Preparar'}${batch ? ` (${markedHere})` : ''}`;
+            const menu = [
+              { key: 'review', label: kind === 'conflicted' ? 'Resolver conflito' : 'Revisar alterações', onClick: () => actions.review(f, side) },
+              // Apagado não existe como arquivo atual: nada de abrir no editor.
+              ...(kind === 'deleted' ? [] : [{ key: 'open', label: 'Abrir arquivo', onClick: () => actions.openFile(f) }]),
+              { key: 'stage', label: stageLabel, disabled: busy, onClick: () => actions.stage(f, side, files) },
+            ];
             return (
-              // Linha em três partes, sem nada por cima: a área de texto, o slot das ações (sempre reservado, só aparece no hover ou foco) e a letra do estado, à direita.
-              <li
-                key={f.path}
-                className={`group flex h-6 items-center rounded-sm hover:bg-muted${isSelected ? ' bg-muted shadow-[inset_2px_0_0_var(--ant-color-primary)]' : ''}`}
-              >
-                <button
-                  type="button" onClick={() => onSelect(f.path, staged)} aria-current={isSelected ? 'true' : undefined}
-                  title={`${full}: ${word}. Ver alterações`}
-                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm pl-6 pr-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-                >
-                  <File className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                  <Text as="span" fontSize={13} ellipsis className="max-w-[70%] shrink-0">{name}</Text>
-                  {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 flex-1">{dir}</Text>}
-                </button>
-                {/* Largura fixa: o nome não salta no hover, e as ações nunca cobrem a letra. Sem pointer-events fora do hover, o clique passa; com opacity, o Tab alcança as ações. */}
-                <Flexbox
-                  horizontal align="center" justify="flex-end" className="w-12 shrink-0 pointer-events-none opacity-0 transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
-                >
-                  {kind !== 'deleted' && (
-                    <ActionIcon
-                      size="small" variant="borderless" icon={SquareArrowOutUpRight}
-                      aria-label={`Abrir ${f.path} no editor`} title="Abrir no editor"
-                      onClick={() => onOpenFile(f.path)}
-                    />
-                  )}
-                  <ActionIcon
-                    size="small" variant="borderless" icon={staged ? Minus : Plus} disabled={busy}
-                    aria-label={`${staged ? 'Tirar do preparo' : 'Preparar'} ${f.path}`}
-                    title={staged ? 'Tirar do preparo' : 'Preparar'}
-                    onClick={() => onStage(pathsOf(f))}
-                  />
-                </Flexbox>
-                <Text as="span" title={word} fontSize={12} weight={600} type="secondary" className="w-5 shrink-0 pr-1 text-center font-mono">{letter}</Text>
+              <li key={f.path}>
+                <ContextMenuTrigger items={menu}>
+                  {/* Linha em três partes, sem nada por cima: a área de texto, o slot das ações (sempre reservado, só aparece no hover ou foco) e a letra do estado, à direita. */}
+                  <div
+                    className={`group flex h-6 items-center rounded-sm hover:bg-muted${isOpen ? ' bg-muted shadow-[inset_2px_0_0_var(--ant-color-primary)]' : ''}${isMarked ? ' ring-1 ring-inset ring-ring/40' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      onClick={(e) => actions.pick(f, side, e.ctrlKey || e.metaKey)}
+                      onDoubleClick={() => actions.review(f, side)}
+                      aria-current={isOpen ? 'true' : undefined}
+                      title={`${full}: ${word}. Ver alterações (duplo clique abre de vez; Ctrl+clique marca)`}
+                      className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm pl-6 pr-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                    >
+                      <File className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                      <Text as="span" fontSize={13} ellipsis className="max-w-[70%] shrink-0">{name}</Text>
+                      {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 flex-1">{dir}</Text>}
+                    </button>
+                    {/* Largura fixa: o nome não salta no hover, e as ações nunca cobrem a letra. Sem pointer-events fora do hover, o clique passa; com opacity, o Tab alcança as ações. */}
+                    <Flexbox
+                      horizontal align="center" justify="flex-end" className="w-12 shrink-0 pointer-events-none opacity-0 transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+                    >
+                      {kind !== 'deleted' && (
+                        <ActionIcon
+                          size="small" variant="borderless" icon={SquareArrowOutUpRight}
+                          aria-label={`Abrir ${f.path} no editor`} title="Abrir no editor"
+                          onClick={() => actions.openFile(f)}
+                        />
+                      )}
+                      <ActionIcon
+                        size="small" variant="borderless" icon={staged ? Minus : Plus} disabled={busy}
+                        aria-label={`${stageLabel} ${f.path}`}
+                        title={staged ? 'Tirar do preparo' : 'Preparar'}
+                        onClick={() => actions.stage(f, side, files)}
+                      />
+                    </Flexbox>
+                    <Text as="span" title={word} fontSize={12} weight={600} type="secondary" className="w-5 shrink-0 pr-1 text-center font-mono">{letter}</Text>
+                  </div>
+                </ContextMenuTrigger>
               </li>
             );
           })}
@@ -439,86 +557,45 @@ function FileSection({ title, files, staged, collapsed, onToggle, busy, onStage,
 }
 
 /**
- * Tela Git: o painel à esquerda, com a borda direita arrastável, na mesma largura da faixa de arquivos (o App guarda a largura);
- * à direita, as alterações do arquivo selecionado.
+ * Barra lateral do Git: o controle de versão, ou o histórico (do projeto, ou do arquivo de `historyRequest`).
+ * Os dois ficam montados: alternar não perde a mensagem do commit, os recolhidos nem a lista de commits.
  */
-export function GitScreen({ git, locked, active, width, minWidth, maxWidth, onWidthChange, onOpenFile }: {
-  git: ReturnType<typeof usePolled<GitStatus>>;
-  locked: boolean;
-  active: boolean;
-  width: number;
-  minWidth: number;
-  maxWidth?: number;
-  onWidthChange: (width: number) => void;
-  onOpenFile: (path: string) => void;
-}) {
-  const [selected, setSelected] = useState<Selection | null>(null);
-  const { data, error, refresh } = git;
+export function GitSidebar({ git, locked, guard, active, selected, onOpenTarget, onOpenFile, historyRequest }: GitSidebarProps) {
+  const [view, setView] = useState<'changes' | 'history'>('changes');
+  const [request, setRequest] = useState<HistoryRequest>({ path: null, id: 0 });
+  const requestId = historyRequest?.id;
 
-  // Arquivo que sai da seção (commit, preparo ou desfazer) deixa de estar selecionado.
+  // Pedido com `id` novo abre o histórico no escopo pedido. O mesmo id não repete o pedido.
   useEffect(() => {
-    if (!selected || !data) return;
-    const listed = data.files.some((f) => f.path === selected.path && (selected.staged ? f.staged : f.unstaged));
-    if (!listed) setSelected(null);
-  }, [data, selected]);
+    // id 0 é o pedido inicial da montagem: não é pedido de histórico, a barra abre nas alterações.
+    if (!historyRequest || historyRequest.id === 0) return;
+    setRequest(historyRequest);
+    setView('history');
+    // Só o id conta: o App pode passar um objeto novo a cada render.
+  }, [requestId]);
 
-  return (
-    <Flexbox horizontal height="100%" className="min-h-0">
-      <DraggablePanel
-        placement="left" minWidth={minWidth} maxWidth={maxWidth} size={{ width }} expandable={false} showHandleWideArea={false}
-        onSizeChange={(_, size) => typeof size?.width === 'number' && onWidthChange(size.width)}
-        backgroundColor="var(--ant-color-bg-layout)"
-      >
-        <Flexbox height="100%">
-          <GitPanel
-            status={data} error={error} refresh={refresh} locked={locked}
-            selected={selected} onSelect={(path, staged) => setSelected({ path, staged })} onOpenFile={onOpenFile}
-          />
-        </Flexbox>
-      </DraggablePanel>
-      <Flexbox flex={1} height="100%" className="min-h-0 min-w-0">
-        {selected
-          ? <DiffView key={`${selected.staged}:${selected.path}`} path={selected.path} staged={selected.staged} active={active} />
-          : <Text as="p" fontSize={14} type="secondary" style={{ padding: 16 }}>Clique num arquivo para ver as alterações.</Text>}
-      </Flexbox>
-    </Flexbox>
-  );
-}
+  // O cabeçalho alterna para o histórico do projeto inteiro; de volta, a lista de mudanças.
+  const showHistory = () => {
+    setRequest({ path: null, id: nextHistoryId() });
+    setView('history');
+  };
+  const showChanges = () => setView('changes');
 
-/**
- * Alterações de um arquivo: o patch unificado, mostrado pelo PatchDiff do Lobe UI, com rolagem.
- * Atualiza só enquanto a tela Git está visível (`active`); o que não mudou não é trocado, então a rolagem fica como está.
- */
-function DiffView({ path, staged, active }: { path: string; staged: boolean; active: boolean }) {
-  const { data: diff, error } = usePolled<GitDiff>(() => backend.gitDiff(path, staged), active, false);
-
-  const note = (text: string, type: 'danger' | 'secondary' | undefined = 'secondary') => (
-    <Flexbox padding={16}>
-      <Text as="p" role="status" fontSize={14} type={type}>{text}</Text>
-    </Flexbox>
-  );
-  let body;
-  if (!diff) body = note(error || 'Lendo as alterações…', error ? 'danger' : undefined);
-  else if (diff.binary) body = note('Arquivo binário: não há linhas para mostrar.');
-  else if (diff.tooLarge) body = note('Alteração grande demais para mostrar aqui.');
-  else if (!diff.patch) body = note('Sem alterações neste arquivo.');
-  else {
-    body = (
-      <Flexbox height="100%" className="overflow-auto select-text">
-        <PatchDiff patch={diff.patch} viewMode="unified" showHeader={false} variant="borderless" />
-      </Flexbox>
-    );
-  }
-
+  const { data, error, refresh } = git;
   return (
     <Flexbox height="100%" className="min-h-0">
-      <Flexbox horizontal align="center" gap={8} paddingInline={12} paddingBlock={4} className="border-b bg-card">
-        <Text as="code" code type="secondary" fontSize={12} ellipsis title={path} className="min-w-0">
-          {path}{staged ? ' (preparado)' : ''}
-        </Text>
-        {error && diff && <Text as="span" role="status" type="danger" fontSize={12} className="shrink-0">{error}</Text>}
-      </Flexbox>
-      <Flexbox flex={1} className="min-h-0">{body}</Flexbox>
+      <div className={view === 'changes' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+        <ChangesPanel
+          status={data} error={error} refresh={refresh} locked={locked} guard={guard} selected={selected}
+          active={active && view === 'changes'} onOpenTarget={onOpenTarget} onOpenFile={onOpenFile} onShowHistory={showHistory}
+        />
+      </div>
+      <div className={view === 'history' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+        <HistoryPanel
+          request={request} active={active && view === 'history'} selected={selected}
+          onOpenTarget={onOpenTarget} onShowChanges={showChanges}
+        />
+      </div>
     </Flexbox>
   );
 }

@@ -2,7 +2,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { Choice, ClipboardSnapshot, DirEntry, Events, FileContent, GitBranches, GitDiff, GitStatus, Options, SearchOptions, SearchResults, Snapshot, UpdateStatus } from './types';
+import type {
+  Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GitBranches, GitDiff, GitStatus, GraphCommit, HunkRef, Moved, Options,
+  Pasted, QuickOpen, ReplaceApplied, ReplacePreview, ReplaceQuery, ReplaceRequest, ReviewDiff, SearchFilter, SearchOptions, SearchResults, Snapshot, UpdateStatus,
+} from './types';
 
 export interface Transport {
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
@@ -71,10 +74,16 @@ export const backend = {
   // Conteúdo de um arquivo, com o mesmo caminho de `listDir`. Erro chega como mensagem em português.
   readFile: (path: string) => call<FileContent>('read_file', { path }),
   writeFile: (path: string, text: string) => call<void>('write_file', { path, text }),
+  // Grava só se o arquivo ainda é `base` (o texto lido, sem BOM) e ainda tem o BOM `bom`; senão rejeita sem gravar.
+  writeFileChecked: (path: string, text: string, base: string, bom: boolean) => call<void>('write_file_checked', { path, text, base, bom }),
   // Ações de um arquivo da árvore, com o caminho relativo ao projeto. Erro vem como mensagem em português.
   // Renomear devolve o caminho novo; nunca sobrescreve. Excluir manda à Lixeira do Windows.
   renameFile: (path: string, name: string) => call<string>('rename_file', { path, name }),
   deleteFile: (path: string) => call<void>('delete_file', { path }),
+  // Lote: `done` é o que foi feito e `error` o que parou (null se tudo deu certo). Nada é desfeito em caso de erro.
+  deleteFiles: (paths: string[]) => call<Batch<string>>('delete_files', { paths }),
+  moveFiles: (paths: string[], dest: string) => call<Batch<Moved>>('move_files', { paths, dest }),
+  copyFiles: (paths: string[], cut: boolean) => call<void>('copy_files', { paths, cut }),
   revealFile: (path: string) => call<void>('reveal_file', { path }),
   openWith: (path: string) => call<void>('open_with', { path }),
   copyFile: (path: string, cut: boolean) => call<void>('copy_file', { path, cut }),
@@ -86,6 +95,8 @@ export const backend = {
   // Clipboard lido na hora da ação. Colar recebe essa mesma lista: a checagem de alterações e a operação usam o que foi lido aqui.
   clipboardSnapshot: () => call<ClipboardSnapshot>('clipboard_snapshot'),
   pasteFiles: (dest: string, snap: ClipboardSnapshot) => call<string[]>('paste_files', { dest, snap }),
+  // Mesma colagem, com o detalhe: `from` absoluto como estava no clipboard, `to` relativo ao projeto; `error` diz o que parou.
+  pasteFilesDetailed: (dest: string, snap: ClipboardSnapshot) => call<Batch<Pasted>>('paste_files_detailed', { dest, snap }),
   // Painel Git. Caminhos relativos à raiz do projeto, com "/"; lista vazia em stage/unstage vale para tudo.
   gitStatus: () => call<GitStatus>('git_status'),
   gitDiff: (path: string, staged: boolean) => call<GitDiff>('git_diff', { path, staged }),
@@ -98,8 +109,32 @@ export const backend = {
   gitBranches: () => call<GitBranches>('git_branches'),
   gitSwitch: (name: string) => call<void>('git_switch', { name }),
   gitCreateBranch: (name: string) => call<void>('git_create_branch', { name }),
+  // Revisão por bloco. `revision` do diff e de cada bloco (`HunkRef`) é o que a tela leu; mudança depois disso é recusada.
+  gitReviewDiff: (path: string, staged: boolean) => call<ReviewDiff>('git_review_diff', { path, staged }),
+  gitStageHunk: (hunk: HunkRef) => call<void>('git_stage_hunk', { hunk }),
+  gitUnstageHunk: (hunk: HunkRef) => call<void>('git_unstage_hunk', { hunk }),
+  gitDiscardHunk: (hunk: HunkRef) => call<void>('git_discard_hunk', { hunk }),
+  gitDiscardFile: (path: string, revision: string) => call<void>('git_discard_file', { path, revision }),
+  // Histórico: `limit` até 200 e `skip` os já mostrados; com `path`, só os commits que tocaram o arquivo.
+  gitHistory: (limit: number, skip: number, path?: string) => call<Commit[]>('git_history', { limit, skip, path: path ?? null }),
+  // Gráfico: HEAD e o upstream da branch atual, mais novo primeiro; `limit` até 200 e `skip` os já mostrados. Sem commit, lista vazia.
+  gitGraph: (limit: number, skip: number) => call<GraphCommit[]>('git_graph', { limit, skip }),
+  gitCommitDetail: (id: string) => call<CommitDetail>('git_commit_detail', { id }),
+  gitCommitDiff: (id: string, path?: string) => call<GitDiff>('git_commit_diff', { id, path: path ?? null }),
+  // Conflito: os lados, o texto atual e a revisão. A gravação da resolução só vale se a pasta ainda está nessa revisão.
+  gitConflict: (path: string) => call<Conflict>('git_conflict', { path }),
+  gitWriteResolution: (path: string, content: string, revision: string, markResolved: boolean) =>
+    call<void>('git_write_resolution', { path, content, revision, markResolved }),
+  gitAcceptDeletion: (path: string, revision: string) => call<void>('git_accept_deletion', { path, revision }),
   // Pesquisa de texto nos arquivos do projeto. Regex inválida rejeita com a mensagem em português; consulta vazia devolve lista vazia.
-  search: (query: string, options: SearchOptions) => call<SearchResults>('search', { query, ...options }),
+  // Filtros de caminho são opcionais; sem eles, busca em todos os arquivos.
+  search: (query: string, options: SearchOptions, filter: SearchFilter = { include: [], exclude: [] }) =>
+    call<SearchResults>('search', { query: { text: query, ...options, ...filter } }),
+  // Abertura rápida pelo nome ou caminho (termos separados por espaço). Só rastreados e não ignorados.
+  quickOpen: (term: string) => call<QuickOpen>('quick_open', { term }),
+  // Prévia da substituição: não grava. A aplicação só toca nos arquivos escolhidos da prévia, com a revisão que ela mostrou; erros voltam por arquivo.
+  replacePreview: (query: ReplaceQuery, replacement: string) => call<ReplacePreview>('replace_preview', { query, replacement }),
+  replaceApply: (request: ReplaceRequest) => call<ReplaceApplied>('replace_apply', { request }),
 };
 
 /** Erros do backend já chegam como mensagem em português. */

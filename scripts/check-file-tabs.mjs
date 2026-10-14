@@ -1,91 +1,11 @@
-// Check das regras puras da faixa de abas (src/file-tab-actions.ts): fechamentos em lote, vizinha, fixadas e textos copiados.
-// Roda sem dependências e sem navegador: `node scripts/check-file-tabs.mjs`. Sai com 1 e mostra a falha se alguma regra quebrar.
+// Check das regras puras de caminho e nome usadas pelo app (src/file-tab-actions.ts): texto copiado, caminho relativo, pasta que contém,
+// e nomes recusados no Windows. Roda sem dependências e sem navegador: `node scripts/check-file-tabs.mjs`. Sai com 1 se alguma regra quebrar.
+// As regras de abas (fechamento em lote, vizinha, fixadas, renomear) estão em scripts/check-workspace.mjs, no modelo que o editor usa.
 import assert from 'node:assert/strict';
-import {
-  batchTargets, dropFrom, fileNameError, isWithin, neighborAfterClose, pathText, pinFrom, pinnedFirst, relativeTo, renamedFiles, settleBatch,
-} from '../src/file-tab-actions.ts';
+import { fileNameError, isWithin, pathText, relativeTo } from '../src/file-tab-actions.ts';
 
 const checks = [];
 const check = (name, fn) => checks.push({ name, fn });
-const none = new Set();
-
-const paths = ['a.ts', 'b.ts', 'c.ts', 'd.ts'];
-
-check('Fechar Outros: não inclui a aba de referência nem fixadas', () => {
-  assert.deepEqual(batchTargets(paths, ['a.ts'], none, 'others', 'c.ts'), ['b.ts', 'd.ts']);
-});
-check('Fechar Outros sem referência não alcança nada', () => {
-  assert.deepEqual(batchTargets(paths, [], none, 'others'), []);
-});
-check('Fechar à Direita: só as não fixadas depois da referência', () => {
-  assert.deepEqual(batchTargets(paths, ['c.ts'], none, 'right', 'b.ts'), ['d.ts']);
-});
-check('Fechar à Direita da última aba: vazio', () => {
-  assert.deepEqual(batchTargets(paths, [], none, 'right', 'd.ts'), []);
-});
-check('Fechar Salvos: pula sujas e fixadas', () => {
-  assert.deepEqual(batchTargets(paths, ['b.ts'], new Set(['c.ts']), 'saved'), ['a.ts', 'd.ts']);
-});
-check('Fechar Tudo: só as não fixadas (fixadas ficam)', () => {
-  assert.deepEqual(batchTargets(paths, ['a.ts', 'd.ts'], none, 'all'), ['b.ts', 'c.ts']);
-});
-
-check('Vizinha ao fechar: a da direita entre as que ficam', () => {
-  assert.equal(neighborAfterClose(paths, 'b.ts', new Set(['b.ts'])), 'c.ts');
-});
-check('Vizinha ao fechar: sem direita, a da esquerda', () => {
-  assert.equal(neighborAfterClose(paths, 'd.ts', new Set(['d.ts'])), 'c.ts');
-});
-check('Vizinha ao fechar: pula as que também saem', () => {
-  assert.equal(neighborAfterClose(paths, 'b.ts', new Set(['b.ts', 'c.ts'])), 'd.ts');
-});
-check('Vizinha ao fechar: nenhuma sobra, null', () => {
-  assert.equal(neighborAfterClose(['a.ts'], 'a.ts', new Set(['a.ts'])), null);
-});
-
-check('Fixadas vão para o começo, na ordem que já tinham', () => {
-  assert.deepEqual(pinnedFirst(paths, ['c.ts', 'a.ts']), ['a.ts', 'c.ts', 'b.ts', 'd.ts']);
-});
-check('Fixar move a aba para o começo; desafixar a devolve à ordem', () => {
-  const pinned = pinFrom({ paths, active: 'b.ts', pinned: [] }, 'c.ts');
-  assert.deepEqual(pinned.paths, ['c.ts', 'a.ts', 'b.ts', 'd.ts']);
-  assert.deepEqual(pinned.pinned, ['c.ts']);
-  assert.deepEqual(pinFrom(pinned, 'c.ts').pinned, []);
-});
-check('Fixar caminho que não está aberto não muda o estado', () => {
-  const state = { paths, active: 'a.ts', pinned: [] };
-  assert.equal(pinFrom(state, 'zzz.ts'), state);
-});
-check('Fechar a ativa passa a ativa para a vizinha; fechar outra a mantém', () => {
-  const state = { paths, active: 'b.ts', pinned: ['a.ts'] };
-  assert.equal(dropFrom(state, new Set(['b.ts'])).active, 'c.ts');
-  assert.equal(dropFrom(state, new Set(['d.ts'])).active, 'b.ts');
-  assert.deepEqual(dropFrom(state, new Set(['a.ts'])).pinned, []);
-});
-
-check('Fechamento em lote sem rascunho: fecha sem perguntar', async () => {
-  let asked = false;
-  const result = await settleBatch('all', undefined,
-    () => ({ paths, pinned: [], dirty: none }), async () => { asked = true; return true; });
-  assert.deepEqual(result, paths);
-  assert.equal(asked, false);
-});
-check('Cancelar a confirmação não fecha nenhuma aba', async () => {
-  const result = await settleBatch('all', undefined,
-    () => ({ paths, pinned: [], dirty: new Set(['a.ts']) }), async () => false);
-  assert.equal(result, null);
-});
-check('Confirmar fecha as não fixadas, sujas inclusive', async () => {
-  const result = await settleBatch('all', undefined,
-    () => ({ paths, pinned: ['d.ts'], dirty: new Set(['a.ts']) }), async () => true);
-  assert.deepEqual(result, ['a.ts', 'b.ts', 'c.ts']);
-});
-check('Cancelar com uma suja e uma limpa conserva as duas (lote Fechar Tudo)', async () => {
-  const dirty = new Set(['a.ts']);
-  const result = await settleBatch('all', undefined,
-    () => ({ paths: ['a.ts', 'b.ts'], pinned: [], dirty }), async () => false);
-  assert.equal(result, null);
-});
 
 check('Texto relativo usa o separador do Windows quando o projeto tem \\', () => {
   assert.equal(pathText('relative', 'src/App.tsx', 'D:\\orquestrador'), 'src\\App.tsx');
@@ -153,16 +73,6 @@ check('Nome recusado traz o motivo em português, com a barra invertida inteira'
   assert.equal(fileNameError('a\\b'), 'O nome tem caractere que o Windows não aceita: < > : " / \\ | ? *');
   assert.equal(fileNameError('CON.txt'), '“CON.txt” é um nome reservado pelo Windows.');
 });
-check('Renomear troca o caminho na aba, na ativa e nos fixados, sem mudar a ordem', () => {
-  const state = { paths: ['a.ts', 'b.ts', 'c.ts'], active: 'b.ts', pinned: ['a.ts'] };
-  assert.deepEqual(renamedFiles(state, 'b.ts', 'x.ts'), { paths: ['a.ts', 'x.ts', 'c.ts'], active: 'x.ts', pinned: ['a.ts'] });
-  assert.deepEqual(renamedFiles(state, 'a.ts', 'y.ts'), { paths: ['y.ts', 'b.ts', 'c.ts'], active: 'b.ts', pinned: ['y.ts'] });
-});
-check('Renomear arquivo que não está aberto não muda o estado', () => {
-  const state = { paths: ['a.ts'], active: 'a.ts', pinned: [] };
-  assert.equal(renamedFiles(state, 'zzz.ts', 'y.ts'), state);
-});
-
 let failed = 0;
 for (const { name, fn } of checks) {
   try {

@@ -5,11 +5,14 @@ use crate::proc::quiet;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use windows_sys::core::{GUID, HRESULT};
-use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS};
-use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, ERROR_SHARING_VIOLATION};
+use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, FILE_SHARE_READ};
 use windows_sys::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
 use windows_sys::Win32::UI::Shell::{
     SHCreateItemFromParsingName, FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_RENAMEONCOLLISION,
@@ -28,13 +31,15 @@ pub struct Entry {
     pub dir: bool,
 }
 
-/// O conteúdo de um arquivo. `text` vai sem BOM e vazio quando o arquivo é binário ou grande demais.
+/// O conteúdo de um arquivo. `text` vai sem BOM e vazio quando o arquivo é binário ou grande demais. `bom` diz se o
+/// arquivo começa com BOM UTF-8: a gravação verificada precisa saber disso para devolver o mesmo BOM.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Content {
     pub binary: bool,
     pub too_large: bool,
     pub read_only: bool,
+    pub bom: bool,
     pub text: String,
 }
 
@@ -65,14 +70,14 @@ pub fn read(project: &Path, rel: &str) -> Result<Content, String> {
     let file = inside(project, rel, false)?;
     let size = std::fs::metadata(&file).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?.len();
     if size > MAX_FILE {
-        return Ok(Content { binary: false, too_large: true, read_only: false, text: String::new() });
+        return Ok(Content { binary: false, too_large: true, read_only: false, bom: false, text: String::new() });
     }
     let bytes = std::fs::read(&file).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?;
     if bytes[..bytes.len().min(BINARY_SNIFF)].contains(&0) {
-        return Ok(Content { binary: true, too_large: false, read_only: false, text: String::new() });
+        return Ok(Content { binary: true, too_large: false, read_only: false, bom: false, text: String::new() });
     }
-    let text = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes[..]);
-    Ok(Content { binary: false, too_large: false, read_only: std::str::from_utf8(text).is_err(), text: String::from_utf8_lossy(text).into_owned() })
+    let text = bytes.strip_prefix(&BOM).unwrap_or(&bytes[..]);
+    Ok(Content { binary: false, too_large: false, read_only: std::str::from_utf8(text).is_err(), bom: text.len() != bytes.len(), text: String::from_utf8_lossy(text).into_owned() })
 }
 
 /// Grava o texto em um arquivo existente do projeto, preservando o BOM UTF-8 quando houver.
@@ -98,6 +103,93 @@ pub fn write(project: &Path, rel: &str, text: &str) -> Result<(), String> {
     }
     bytes.extend_from_slice(text.as_bytes());
     std::fs::write(&file, bytes).map_err(|e| format!("Não foi possível gravar o arquivo: {e}"))
+}
+
+/// Bytes do BOM UTF-8.
+const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+
+/// Grava `text` em `rel` só se o arquivo ainda é `base` (o texto que a tela leu) e ainda tem o mesmo BOM (`base_bom`).
+/// Se mudou, sumiu, virou link, mudou de lugar, não é UTF-8 ou é binário, recusa e não grava nada. A decisão é deste
+/// backend, não da tela.
+///
+/// Durante a comparação e a escrita o arquivo fica aberto sem `FILE_SHARE_WRITE` (ver `hold`): outro programa não
+/// consegue gravar nele no meio. A janela residual é a de quem já tinha o arquivo aberto para gravar antes desta chamada.
+/// Se `base` usa só CRLF e `text` veio só com LF (o textarea normaliza), `text` volta a ter CRLF. Não há gravação atômica:
+/// se a escrita falha no meio, o erro avisa que o arquivo pode ter ficado parcial.
+pub fn write_checked(project: &Path, rel: &str, text: &str, base: &str, base_bom: bool) -> Result<(), String> {
+    let text = restore_eol(text, base);
+    if text.len() as u64 > MAX_FILE {
+        return Err("O arquivo ficaria grande demais para abrir aqui.".into());
+    }
+    let mut file = hold(project, rel)?;
+    let mut current = Vec::new();
+    file.seek(SeekFrom::Start(0)).and_then(|_| file.read_to_end(&mut current)).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?;
+    if current.len() as u64 > MAX_FILE {
+        return Err("O arquivo ficou grande demais para gravar aqui. Nada foi gravado.".into());
+    }
+    if current[..current.len().min(BINARY_SNIFF)].contains(&0) {
+        return Err("Não é possível gravar um arquivo binário. Nada foi gravado.".into());
+    }
+    let (bom, content) = match current.strip_prefix(&BOM) {
+        Some(content) => (true, content),
+        None => (false, current.as_slice()),
+    };
+    if std::str::from_utf8(content).is_err() {
+        return Err("Não é possível gravar um arquivo que não é UTF-8 válido. Nada foi gravado.".into());
+    }
+    if bom != base_bom || content != base.as_bytes() {
+        return Err("O arquivo foi alterado por outro programa desde que foi aberto. Nada foi gravado.".into());
+    }
+    let mut bytes = Vec::with_capacity(text.len() + BOM.len());
+    if bom {
+        bytes.extend_from_slice(&BOM);
+    }
+    bytes.extend_from_slice(text.as_bytes());
+    put(&mut file, &bytes).map_err(|e| format!("Não foi possível gravar o arquivo: {e}. Ele pode ter ficado parcialmente gravado; confira antes de tentar de novo."))
+}
+
+/// Escreve `bytes` no começo do arquivo já aberto e corta o que sobrar, para o tamanho novo.
+fn put(file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(bytes)?;
+    file.set_len(bytes.len() as u64)?;
+    file.sync_all()
+}
+
+/// Abre `rel` para ler e gravar, sem deixar outro programa gravar, renomear ou apagar até o `File` ser solto: o
+/// `FILE_SHARE_READ` sozinho recusa quem pede escrita ou exclusão. Antes de abrir, `plain_file` valida o caminho; depois,
+/// confere de novo que o último nível não virou link e que o caminho ainda leva ao mesmo arquivo. Como o arquivo aberto não
+/// pode mais ser renomeado por outro programa, isso fecha a troca por link entre a validação e a abertura.
+fn hold(project: &Path, rel: &str) -> Result<File, String> {
+    let lexical = plain_file(project, rel)?;
+    let real = inside(project, rel, false)?;
+    let file = OpenOptions::new().read(true).write(true).share_mode(FILE_SHARE_READ).open(&lexical).map_err(open_err)?;
+    let link = std::fs::symlink_metadata(&lexical).is_ok_and(|m| m.file_type().is_symlink());
+    if link || lexical.canonicalize().ok().as_deref() != Some(real.as_path()) {
+        return Err(format!("{rel} mudou de lugar desde a validação. Nada foi gravado."));
+    }
+    Ok(file)
+}
+
+/// Mensagem para quem não conseguiu abrir o arquivo para gravar. Outro programa com o arquivo aberto para gravar cai aqui.
+fn open_err(e: std::io::Error) -> String {
+    match e.raw_os_error().map(|c| c as u32) {
+        Some(ERROR_SHARING_VIOLATION) => "Outro programa está gravando este arquivo agora. Nada foi gravado; tente de novo.".into(),
+        _ if e.kind() == std::io::ErrorKind::NotFound => "O arquivo não existe mais. Nada foi gravado.".into(),
+        _ => format!("Não foi possível abrir o arquivo para gravar: {e}"),
+    }
+}
+
+/// Se `base` tem só CRLF (toda quebra é `\r\n`) e `text` não tem nenhum `\r`, cada `\n` de `text` vira `\r\n`. É o caso do
+/// textarea, que devolve só LF. Qualquer outro texto volta igual.
+fn restore_eol(text: &str, base: &str) -> String {
+    let lf = base.matches('\n').count();
+    let crlf = base.matches("\r\n").count();
+    if crlf > 0 && crlf == lf && !text.contains('\r') {
+        text.replace('\n', "\r\n")
+    } else {
+        text.to_string()
+    }
 }
 
 /// Nomes que o Windows reserva, com ou sem extensão (`CON.txt` também é reservado).
@@ -186,37 +278,38 @@ pub fn plain_file(project: &Path, rel: &str) -> Result<PathBuf, String> {
 /// recusa. Só a troca de maiúsculas e minúsculas do mesmo arquivo passa por cima do próprio nome. Devolve o caminho novo.
 pub fn rename(project: &Path, rel: &str, name: &str) -> Result<String, String> {
     check_name(name)?;
-    let file = own_file(project, rel)?;
-    let current = rel.rsplit('/').next().unwrap_or(rel);
-    if current == name {
-        return Ok(rel.to_string());
+    let it = item(project, rel)?;
+    if it.name == name {
+        return Ok(it.rel);
     }
-    let parent = rel.rsplit_once('/').map_or("", |(parent, _)| parent);
-    let next = if parent.is_empty() { name.to_string() } else { format!("{parent}/{name}") };
-    let dest = file.with_file_name(name);
+    let next = match it.rel.rsplit_once('/') {
+        Some((parent, _)) => format!("{parent}/{name}"),
+        None => name.to_string(),
+    };
+    let dest = it.path.with_file_name(name);
     let occupied = std::fs::symlink_metadata(&dest).is_ok();
     let link = std::fs::symlink_metadata(&dest).is_ok_and(|m| m.file_type().is_symlink());
-    let same_file = occupied && !link && std::fs::canonicalize(&dest).ok().as_deref() == Some(file.as_path());
+    let same_file = occupied && !link && dest.canonicalize().ok() == it.path.canonicalize().ok();
     if occupied && !same_file {
-        return Err(format!("Já existe um arquivo chamado “{name}” nesta pasta."));
+        return Err(format!("Já existe um item chamado “{name}” nesta pasta."));
     }
     if same_file {
         // O Windows vê `a.txt` e `A.txt` como um só: vai primeiro para um nome temporário, sem sobrescrever.
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-        let tmp = file.with_file_name(format!(".orq-renomear-{}-{stamp}.tmp", std::process::id()));
-        move_no_replace(&file, &tmp)?;
+        let tmp = it.path.with_file_name(format!(".orq-renomear-{}-{stamp}.tmp", std::process::id()));
+        move_no_replace(&it.path, &tmp)?;
         if let Err(e) = move_no_replace(&tmp, &dest) {
-            let _ = move_no_replace(&tmp, &file);
+            let _ = move_no_replace(&tmp, &it.path);
             return Err(e);
         }
     } else {
-        move_no_replace(&file, &dest)?;
+        move_no_replace(&it.path, &dest)?;
     }
     Ok(next)
 }
 
-/// Muda o nome sem sobrescrever: `MoveFileExW` sem `MOVEFILE_REPLACE_EXISTING` falha se o destino existir (inclusive um link).
-/// O `std::fs::rename` do Windows sobrescreve, por isso não é usado aqui.
+/// Muda o nome (ou move) sem sobrescrever: `MoveFileExW` sem `MOVEFILE_REPLACE_EXISTING` falha se o destino existir (inclusive
+/// um link). O `std::fs::rename` do Windows sobrescreve, por isso não é usado aqui.
 fn move_no_replace(from: &Path, to: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     let wide = |p: &Path| p.as_os_str().encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>();
@@ -226,17 +319,163 @@ fn move_no_replace(from: &Path, to: &Path) -> Result<(), String> {
     }
     let err = std::io::Error::last_os_error();
     match err.raw_os_error().map(|c| c as u32) {
-        Some(ERROR_ALREADY_EXISTS) | Some(ERROR_FILE_EXISTS) => Err("Já existe um arquivo com este nome nesta pasta.".into()),
-        _ => Err(format!("Não foi possível renomear o arquivo: {err}")),
+        Some(ERROR_ALREADY_EXISTS) | Some(ERROR_FILE_EXISTS) => Err("Já existe um item com este nome na pasta de destino. Nada foi movido.".into()),
+        _ => Err(format!("Não foi possível concluir a operação: {err}")),
     }
 }
 
-/// Manda o arquivo `rel` para a Lixeira do Windows, pelo `IFileOperation` com `FOFX_RECYCLEONDELETE`: a operação pede
+/// Um item do projeto pronto para uma ação: o caminho para o sistema, se é pasta, o `rel` sem barras sobrando e o nome.
+struct Item {
+    path: PathBuf,
+    dir: bool,
+    rel: String,
+    name: String,
+}
+
+/// Um item que foi de `from` para `to` (caminhos relativos ao projeto). Em pasta, o que está dentro acompanha: quem atualiza
+/// as abas troca o prefixo `from/` por `to/`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Moved {
+    pub from: String,
+    pub to: String,
+}
+
+/// Falha de uma operação em lote. `done` lista o que já foi feito antes da falha (não é desfeito aqui); `error` diz o motivo.
+/// Quando a checagem prévia recusa o lote, `done` vem vazio e nada foi mexido.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Partial<T> {
+    pub done: Vec<T>,
+    pub error: String,
+}
+
+/// O item `rel` do projeto, pronto para uma ação. Recusa a raiz, `.git`, link em qualquer parte do caminho, o que sai do
+/// projeto, e pasta com `.git` ou link dentro (a ação pegaria esse conteúdo junto). Arquivo ou pasta, sem seguir link.
+fn item(project: &Path, rel: &str) -> Result<Item, String> {
+    let rel = rel.split('/').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/");
+    if rel.is_empty() {
+        return Err("A raiz do projeto não pode ser alterada aqui.".into());
+    }
+    no_git(&rel)?;
+    no_links(project, &rel)?;
+    let dir = std::fs::metadata(project.join(&rel)).is_ok_and(|m| m.is_dir());
+    let path = plain(project, &rel, dir)?;
+    let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
+    if dir {
+        check_tree(&path, &name)?;
+    }
+    Ok(Item { path, dir, rel, name })
+}
+
+/// Os itens de `rels`, checados antes de qualquer mudança: lista não vazia, sem repetido, sem um item dentro de outro e cada
+/// um passando por `item`. Qualquer recusa aborta o lote inteiro.
+fn selection(project: &Path, rels: &[String]) -> Result<Vec<Item>, String> {
+    if rels.is_empty() {
+        return Err("Nenhum item selecionado.".into());
+    }
+    let items = rels.iter().map(|rel| item(project, rel)).collect::<Result<Vec<Item>, String>>()?;
+    let keys: Vec<String> = items.iter().map(|it| it.rel.to_lowercase()).collect();
+    for (i, it) in items.iter().enumerate() {
+        for (j, key) in keys.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            if i < j && *key == keys[i] {
+                return Err(format!("“{}” está repetido na seleção.", it.name));
+            }
+            if key.starts_with(&format!("{}/", keys[i])) {
+                return Err(format!("“{}” está dentro de “{}”, que também está na seleção. Escolha só um dos dois.", items[j].name, it.name));
+            }
+        }
+    }
+    Ok(items)
+}
+
+/// Texto do erro de um lote: se alguns itens já foram feitos, diz quantos e que não são desfeitos aqui.
+fn partial_text(done: usize, total: usize, msg: &str) -> String {
+    if done == 0 {
+        msg.to_string()
+    } else {
+        format!("Feitos {done} de {total} antes da falha; os primeiros não são desfeitos aqui. {msg}")
+    }
+}
+
+/// Confere o plano de mover `rels` para a pasta `dest`, antes de mexer em qualquer coisa. Recusa pasta dentro dela mesma ou
+/// de um descendente, item já na pasta de destino, nome que já existe no destino (inclusive dentro do próprio lote).
+/// Devolve, por item, o caminho de destino e o `rel` novo.
+fn move_plan(project: &Path, rels: &[String], dest: &str) -> Result<Vec<(Item, PathBuf, String)>, String> {
+    let items = selection(project, rels)?;
+    let dest_path = plain(project, dest, true)?;
+    let dest_canon = dest_path.canonicalize().map_err(|e| format!("Não foi possível abrir a pasta de destino: {e}"))?;
+    let dest_rel = dest.split('/').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/");
+    let mut taken = HashSet::new();
+    let mut plan = Vec::with_capacity(items.len());
+    for it in items {
+        let src_canon = it.path.canonicalize().map_err(|e| format!("Não foi possível abrir “{}”: {e}", it.name))?;
+        if it.dir && dest_canon.starts_with(&src_canon) {
+            return Err(format!("Não é possível mover “{}” para dentro dela mesma ou de uma pasta dentro dela. Nada foi movido.", it.name));
+        }
+        if it.path.parent().and_then(|p| p.canonicalize().ok()).as_deref() == Some(dest_canon.as_path()) {
+            return Err(format!("“{}” já está nesta pasta. Nada foi movido.", it.name));
+        }
+        let clash = !taken.insert(it.name.to_lowercase());
+        let to = dest_path.join(&it.name);
+        if clash || std::fs::symlink_metadata(&to).is_ok() {
+            return Err(format!("Já existe um item chamado “{}” na pasta de destino. Nada foi movido.", it.name));
+        }
+        let to_rel = if dest_rel.is_empty() { it.name.clone() } else { format!("{dest_rel}/{}", it.name) };
+        plan.push((it, to, to_rel));
+    }
+    Ok(plan)
+}
+
+/// Move os itens `rels` para a pasta `dest` do projeto (vazio é a raiz), como o arrastar e soltar. Tudo é checado antes
+/// (ver `move_plan`); colisão não ganha nome novo, recusa. Se um movimento falha depois de outros, os que já saíram vêm em
+/// `done` e não voltam sozinhos.
+pub fn move_items(project: &Path, rels: &[String], dest: &str) -> Result<Vec<Moved>, Partial<Moved>> {
+    let plan = move_plan(project, rels, dest).map_err(|error| Partial { done: Vec::new(), error })?;
+    let total = plan.len();
+    let mut done = Vec::with_capacity(total);
+    for (it, to, to_rel) in plan {
+        if let Err(msg) = move_no_replace(&it.path, &to) {
+            return Err(Partial { error: partial_text(done.len(), total, &msg), done });
+        }
+        done.push(Moved { from: it.rel, to: to_rel });
+    }
+    Ok(done)
+}
+
+/// Põe os itens `rels` no clipboard como copiados ou recortados, com a mesma checagem de `selection`. Nada é movido ou
+/// apagado aqui: o movimento do recorte acontece quando alguém cola.
+pub fn copy_items(project: &Path, rels: &[String], cut: bool) -> Result<(), String> {
+    let paths: Vec<PathBuf> = selection(project, rels)?.into_iter().map(|it| it.path).collect();
+    crate::clipboard::set_files(&paths, cut)
+}
+
+/// Manda os itens `rels` para a Lixeira do Windows (pasta inteira ou arquivo), com a checagem de `selection` antes. Se um
+/// falha depois de outros, os que já foram ficam na Lixeira e vêm em `done`.
+pub fn recycle_many(project: &Path, rels: &[String]) -> Result<Vec<String>, Partial<String>> {
+    let items = selection(project, rels).map_err(|error| Partial { done: Vec::new(), error })?;
+    let total = items.len();
+    let mut done = Vec::with_capacity(total);
+    for it in items {
+        if let Err(msg) = recycle_path(&it.path) {
+            return Err(Partial { error: partial_text(done.len(), total, &msg), done });
+        }
+        done.push(it.rel);
+    }
+    Ok(done)
+}
+
+/// Manda o arquivo ou a pasta `rel` para a Lixeira do Windows, pelo `IFileOperation` com `FOFX_RECYCLEONDELETE`: a operação pede
 /// reciclagem e não tem o caminho de apagar de vez. Não dá para mudar isso com `SHFileOperationW`, que aceita a exclusão
 /// definitiva por diálogo. Só conta como feito se a operação não foi abortada e o arquivo saiu do lugar; senão é erro.
 pub fn recycle(project: &Path, rel: &str) -> Result<(), String> {
+    recycle_path(&item(project, rel)?.path)
+}
+
+/// Manda `file` (arquivo ou pasta já validada) para a Lixeira e confere que saiu do lugar.
+fn recycle_path(file: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
-    let file = plain_file(project, rel)?;
     let wide: Vec<u16> = file.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
     let started = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
     if started < 0 {
@@ -246,7 +485,7 @@ pub fn recycle(project: &Path, rel: &str) -> Result<(), String> {
     // `S_OK` e `S_FALSE` (já estava inicializado) pedem o `CoUninitialize` de volta.
     unsafe { CoUninitialize() };
     result?;
-    if std::fs::symlink_metadata(&file).is_ok() {
+    if std::fs::symlink_metadata(file).is_ok() {
         return Err("A Lixeira não recebeu o arquivo. Nada foi excluído.".into());
     }
     Ok(())
@@ -413,26 +652,66 @@ pub fn reveal_dir(project: &Path, rel: &str) -> Result<(), String> {
 /// "nome (2).ext", "nome (3).ext"...; nada existente é sobrescrito. A cópia e o movimento são do IFileOperation do Windows,
 /// que copia pasta inteira e move entre volumes. Se um item falha depois de outros, o erro diz quantos já foram colados.
 pub fn paste(project: &Path, dest: &str, snap: &Snapshot) -> Result<Vec<String>, String> {
+    paste_detailed(project, dest, snap).map(|pasted| pasted.into_iter().map(|p| p.to).collect()).map_err(|p| p.error)
+}
+
+/// Uma colagem feita. `from` é o caminho absoluto que estava no clipboard, como o Windows o deu; `to` é o caminho
+/// relativo ao projeto do que foi criado (com o nome que ganhou, se houve conflito).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Pasted {
+    pub from: String,
+    pub to: String,
+}
+
+/// O mesmo que `paste`, mas com o que foi feito: `Ok` com cada item colado, ou `Err` com os que já foram antes da falha em
+/// `done` (não são desfeitos aqui) e a mensagem de `error`, a mesma que `paste` devolve. Recusa antes de mexer se um item
+/// está dentro de outro da mesma colagem, ou se um aparece duas vezes: a cópia ou o recorte falharia no meio sem motivo.
+pub fn paste_detailed(project: &Path, dest: &str, snap: &Snapshot) -> Result<Vec<Pasted>, Partial<Pasted>> {
+    let fail = |error: String| Partial { done: Vec::new(), error };
     if snap.paths.is_empty() {
-        return Err("Não há arquivo ou pasta copiado para colar.".into());
+        return Err(fail("Não há arquivo ou pasta copiado para colar.".into()));
     }
-    let parent = plain(project, dest, true)?;
-    let parent_canon = parent.canonicalize().map_err(|e| format!("Não foi possível abrir a pasta de destino: {e}"))?;
+    check_overlap(&snap.paths).map_err(fail)?;
+    let parent = plain(project, dest, true).map_err(fail)?;
+    let parent_canon = parent.canonicalize().map_err(|e| fail(format!("Não foi possível abrir a pasta de destino: {e}")))?;
     let mut taken = HashSet::new();
     let mut plan = Vec::with_capacity(snap.paths.len());
     for src in &snap.paths {
-        plan.push(check_source(src, &parent, &parent_canon, snap.cut, &mut taken)?);
+        plan.push(check_source(src, &parent, &parent_canon, snap.cut, &mut taken).map_err(fail)?);
     }
     let base = dest.trim_end_matches('/');
     let total = plan.len();
-    let mut created = Vec::with_capacity(total);
+    let mut done = Vec::with_capacity(total);
     for (i, (src, name)) in plan.iter().enumerate() {
         if let Err(msg) = transfer(src, &parent, name, snap.cut) {
-            return Err(if i == 0 { msg } else { format!("Colados {i} de {total}; os primeiros já estão na pasta de destino. {msg}") });
+            let error = if i == 0 { msg } else { format!("Colados {i} de {total}; os primeiros já estão na pasta de destino. {msg}") };
+            return Err(Partial { done, error });
         }
-        created.push(if base.is_empty() { name.clone() } else { format!("{base}/{name}") });
+        let to = if base.is_empty() { name.clone() } else { format!("{base}/{name}") };
+        done.push(Pasted { from: src.display().to_string(), to });
     }
-    Ok(created)
+    Ok(done)
+}
+
+/// Recusa a colagem em que um item aparece de novo ou está dentro de outro item. Compara o caminho do clipboard sem caixa.
+fn check_overlap(paths: &[PathBuf]) -> Result<(), String> {
+    let keys: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_lowercase().replace('/', "\\")).collect();
+    for (i, key) in keys.iter().enumerate() {
+        let name = paths[i].file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        for (j, other) in keys.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            if i < j && other == key {
+                return Err(format!("“{name}” está repetido na colagem. Nada foi colado."));
+            }
+            if key.starts_with(&format!("{other}\\")) {
+                let outer = paths[j].file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                return Err(format!("“{name}” está dentro de “{outer}”, que também está na colagem. Escolha só um dos dois. Nada foi colado."));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Checa um item copiado antes de colar: ainda existe, não é link, não tem `.git` no caminho nem dentro, não cai dentro de si
@@ -691,14 +970,14 @@ mod tests {
     fn texto_com_acento_e_crlf_volta_igual_e_sem_bom() {
         let root = fixture("texto");
         std::fs::write(root.join("sub/nota.md"), "\u{feff}Olá\r\nmundo\r\n").unwrap();
-        assert_eq!(read(&root, "sub/nota.md").unwrap(), Content { binary: false, too_large: false, read_only: false, text: "Olá\r\nmundo\r\n".into() });
+        assert_eq!(read(&root, "sub/nota.md").unwrap(), Content { binary: false, too_large: false, read_only: false, bom: true, text: "Olá\r\nmundo\r\n".into() });
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn arquivo_vazio_devolve_texto_vazio() {
         let root = fixture("vazio");
-        assert_eq!(read(&root, "A.txt").unwrap(), Content { binary: false, too_large: false, read_only: false, text: String::new() });
+        assert_eq!(read(&root, "A.txt").unwrap(), Content { binary: false, too_large: false, read_only: false, bom: false, text: String::new() });
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -706,7 +985,7 @@ mod tests {
     fn arquivo_com_byte_nulo_e_binario() {
         let root = fixture("binario");
         std::fs::write(root.join("img.bin"), [0x89, b'P', 0, b'N', b'G']).unwrap();
-        assert_eq!(read(&root, "img.bin").unwrap(), Content { binary: true, too_large: false, read_only: false, text: String::new() });
+        assert_eq!(read(&root, "img.bin").unwrap(), Content { binary: true, too_large: false, read_only: false, bom: false, text: String::new() });
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -714,7 +993,7 @@ mod tests {
     fn arquivo_com_mais_de_1_mib_volta_too_large() {
         let root = fixture("grande");
         std::fs::write(root.join("grande.txt"), vec![b'a'; 1_048_577]).unwrap();
-        assert_eq!(read(&root, "grande.txt").unwrap(), Content { binary: false, too_large: true, read_only: false, text: String::new() });
+        assert_eq!(read(&root, "grande.txt").unwrap(), Content { binary: false, too_large: true, read_only: false, bom: false, text: String::new() });
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -825,7 +1104,7 @@ mod tests {
         let root = fixture("colisao");
         std::fs::write(root.join("A.txt"), "primeiro").unwrap();
         std::fs::write(root.join("b.txt"), "segundo").unwrap();
-        assert_eq!(rename(&root, "b.txt", "A.txt").unwrap_err(), "Já existe um arquivo chamado “A.txt” nesta pasta.");
+        assert_eq!(rename(&root, "b.txt", "A.txt").unwrap_err(), "Já existe um item chamado “A.txt” nesta pasta.");
         assert_eq!(std::fs::read_to_string(root.join("A.txt")).unwrap(), "primeiro");
         assert_eq!(std::fs::read_to_string(root.join("b.txt")).unwrap(), "segundo");
         let _ = std::fs::remove_dir_all(&root);
@@ -866,7 +1145,8 @@ mod tests {
             assert!(recycle(&root, rel).is_err(), "{rel}");
             assert!(plain_file(&root, rel).is_err(), "{rel}");
         }
-        assert!(recycle(&root, "sub").unwrap_err().contains("Não é um arquivo"));
+        // Pasta com `.git` dentro não vai para a Lixeira, nem como pasta.
+        assert!(recycle(&root, "sub").unwrap_err().contains(".git"));
         assert!(recycle(&root, "../x").is_err());
         assert!(plain(&root, "sub/dentro", true).is_ok());
         assert!(plain(&root, "b.txt", true).is_err());
@@ -1172,5 +1452,255 @@ mod tests {
         let _ = std::fs::remove_dir(&atalho);
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&ext);
+    }
+
+    #[test]
+    fn paste_detailed_devolve_origem_absoluta_e_destino_relativo() {
+        let root = fixture("detalhe-ok");
+        let ext = outside("detalhe-ok");
+        std::fs::write(ext.join("A.txt"), "a").unwrap();
+        std::fs::write(root.join("A.txt"), "ja existe").unwrap();
+        let sources = [ext.join("A.txt")];
+        let done = paste_detailed(&root, "sub", &snap(&sources, false)).unwrap();
+        assert_eq!(done, vec![Pasted { from: ext.join("A.txt").display().to_string(), to: "sub/A.txt".into() }]);
+        // A API antiga continua dando só os destinos, com o mesmo nome.
+        assert_eq!(paste(&root, "", &snap(&sources, false)).unwrap(), vec!["A (2).txt"]);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&ext);
+    }
+
+    #[test]
+    fn paste_detailed_recusa_pasta_com_o_proprio_filho_antes_de_mexer() {
+        let root = fixture("detalhe-filho");
+        let ext = outside("detalhe-filho");
+        std::fs::create_dir_all(ext.join("pasta")).unwrap();
+        std::fs::write(ext.join("pasta/f.txt"), "f").unwrap();
+        let sources = [ext.join("pasta"), ext.join("pasta/f.txt")];
+        let err = paste_detailed(&root, "", &snap(&sources, true)).unwrap_err();
+        assert!(err.done.is_empty());
+        assert!(err.error.contains("dentro de “pasta”"), "{}", err.error);
+        assert!(ext.join("pasta/f.txt").exists(), "nada foi movido");
+        let twice = [ext.join("pasta/f.txt"), ext.join("pasta/f.txt")];
+        assert!(paste_detailed(&root, "", &snap(&twice, false)).unwrap_err().error.contains("repetido"));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&ext);
+    }
+
+    /// Uma pasta limpa, sem `.git`, com um arquivo dentro e outro ao lado: `origem/interna/f.txt` e `origem/g.txt`.
+    fn pasta(root: &Path) {
+        std::fs::create_dir_all(root.join("origem/interna")).unwrap();
+        std::fs::write(root.join("origem/interna/f.txt"), "f").unwrap();
+        std::fs::write(root.join("origem/g.txt"), "g").unwrap();
+    }
+
+    fn rels(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn renomeia_pasta_e_os_descendentes_seguem() {
+        let root = fixture("renomeia-pasta");
+        pasta(&root);
+        assert_eq!(rename(&root, "origem", "destino").unwrap(), "destino");
+        assert_eq!(std::fs::read_to_string(root.join("destino/interna/f.txt")).unwrap(), "f");
+        assert!(!root.join("origem").exists());
+        assert_eq!(rename(&root, "destino/interna", "dentro").unwrap(), "destino/dentro");
+        assert!(root.join("destino/dentro/f.txt").exists());
+        assert!(rename(&root, "", "x").is_err());
+        assert!(rename(&root, "Zeta", "alfa").unwrap_err().starts_with("Já existe"));
+        assert!(root.join("Zeta").is_dir() && root.join("alfa").is_dir());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn move_arquivo_e_pasta_para_outra_pasta_e_devolve_o_mapeamento() {
+        let root = fixture("move-ok");
+        pasta(&root);
+        let got = move_items(&root, &rels(&["origem", "b.txt"]), "Beta").unwrap();
+        assert_eq!(
+            got,
+            vec![
+                Moved { from: "origem".into(), to: "Beta/origem".into() },
+                Moved { from: "b.txt".into(), to: "Beta/b.txt".into() },
+            ]
+        );
+        assert_eq!(std::fs::read_to_string(root.join("Beta/origem/interna/f.txt")).unwrap(), "f");
+        assert!(!root.join("origem").exists() && !root.join("b.txt").exists());
+        // De volta para a raiz: "" é o destino.
+        assert_eq!(move_items(&root, &rels(&["Beta/b.txt"]), "").unwrap()[0].to, "b.txt");
+        assert!(root.join("b.txt").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Cada caso recusa o lote inteiro, com `done` vazio, e a mensagem diz o motivo. Depois de todos, nada saiu do lugar.
+    #[test]
+    fn move_recusa_o_lote_inteiro_antes_de_mexer() {
+        let root = fixture("move-recusa");
+        pasta(&root);
+        std::fs::create_dir_all(root.join("x")).unwrap();
+        std::fs::write(root.join("x/c.txt"), "x").unwrap();
+        std::fs::write(root.join("c.txt"), "c").unwrap();
+        std::fs::write(root.join("Beta/b.txt"), "já estava").unwrap();
+        let casos: [(&[&str], &str, &str); 14] = [
+            (&["origem"], "origem", "dela mesma"),
+            (&["origem"], "origem/interna", "dela mesma"),
+            (&["b.txt"], "", "já está nesta pasta"),
+            (&["b.txt"], "Beta", "Já existe"),
+            (&["x/c.txt", "c.txt"], "Beta", "Já existe"),
+            (&["origem", "origem/interna"], "Beta", "dentro de"),
+            (&["c.txt", "c.txt"], "Beta", "repetido"),
+            (&["../x"], "Beta", "fora do projeto"),
+            (&["b.txt"], "../fora", "fora do projeto"),
+            (&[".git/config"], "Beta", ".git"),
+            (&["b.txt"], ".git", ".git"),
+            (&[""], "Beta", "raiz"),
+            (&[], "Beta", "Nenhum item"),
+            (&["b.txt", "nao-existe.txt"], "Beta", "não encontrado"),
+        ];
+        for (srcs, dest, quer) in casos {
+            let err = move_items(&root, &rels(srcs), dest).unwrap_err();
+            assert!(err.done.is_empty(), "{srcs:?} -> {dest:?} não deveria mexer em nada");
+            assert!(err.error.contains(quer), "{srcs:?} -> {dest:?}: {}", err.error);
+        }
+        assert!(root.join("origem/interna/f.txt").exists() && root.join("origem/g.txt").exists());
+        assert!(root.join("b.txt").exists() && root.join("c.txt").exists() && root.join("x/c.txt").exists());
+        assert_eq!(std::fs::read_to_string(root.join("Beta/b.txt")).unwrap(), "já estava");
+        assert!(!root.join("Beta/c.txt").exists() && !root.join("Beta/origem").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn move_recusa_link_e_junction_no_item_e_no_destino() {
+        let root = fixture("move-junction");
+        pasta(&root);
+        let junction_ok = junction(&root.join("alias"), &root.join("origem"));
+        if !junction_ok {
+            eprintln!("sem junction: teste pulado");
+        } else {
+            assert!(move_items(&root, &rels(&["alias"]), "Beta").unwrap_err().error.contains("link"));
+            assert!(move_items(&root, &rels(&["alias/g.txt"]), "Beta").unwrap_err().error.contains("link"));
+            assert!(move_items(&root, &rels(&["b.txt"]), "alias").unwrap_err().error.contains("link"));
+            assert!(root.join("origem/g.txt").exists());
+            assert!(!root.join("Beta/g.txt").exists());
+            assert!(!root.join("Beta/b.txt").exists());
+        }
+        let _ = std::fs::remove_dir(root.join("alias"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lixeira_em_lote_recusa_tudo_antes_de_mexer() {
+        let root = fixture("lote-lixeira");
+        pasta(&root);
+        std::fs::write(root.join(".git/config"), "").unwrap();
+        let err = recycle_many(&root, &rels(&["b.txt", ".git/config"])).unwrap_err();
+        assert!(err.done.is_empty() && err.error.contains(".git"), "{}", err.error);
+        assert!(recycle_many(&root, &rels(&["origem", "origem/interna"])).unwrap_err().error.contains("dentro de"));
+        assert!(recycle_many(&root, &rels(&["sub"])).unwrap_err().error.contains(".git"));
+        assert!(recycle_many(&root, &rels(&[""])).is_err());
+        assert!(recycle_many(&root, &[]).is_err());
+        assert!(root.join("b.txt").exists() && root.join(".git/config").exists() && root.join("origem/interna/f.txt").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Vai para a Lixeira só o que foi criado dentro do temporário; a pasta e o arquivo somem da origem.
+    #[test]
+    fn lixeira_leva_pasta_inteira_e_arquivo_em_lote() {
+        let root = fixture("lixeira-pasta");
+        std::fs::create_dir_all(root.join("lixo/dentro")).unwrap();
+        std::fs::write(root.join("lixo/dentro/f.txt"), "f").unwrap();
+        std::fs::write(root.join("descartavel.txt"), "d").unwrap();
+        assert_eq!(recycle_many(&root, &rels(&["lixo", "descartavel.txt"])).unwrap(), rels(&["lixo", "descartavel.txt"]));
+        assert!(std::fs::symlink_metadata(root.join("lixo")).is_err());
+        assert!(std::fs::symlink_metadata(root.join("descartavel.txt")).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gravacao_verificada_recusa_mudanca_externa_e_nao_grava() {
+        let root = fixture("verifica-externa");
+        std::fs::write(root.join("A.txt"), "base").unwrap();
+        let lido = read(&root, "A.txt").unwrap();
+        std::fs::write(root.join("A.txt"), "de outro programa").unwrap();
+        let err = write_checked(&root, "A.txt", "minha versão", &lido.text, lido.bom).unwrap_err();
+        assert!(err.contains("foi alterado"), "{err}");
+        assert_eq!(std::fs::read_to_string(root.join("A.txt")).unwrap(), "de outro programa");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gravacao_verificada_preserva_bom_e_fim_de_linha() {
+        let root = fixture("verifica-bom");
+        std::fs::write(root.join("A.txt"), b"\xEF\xBB\xBFa\r\nb\r\n").unwrap();
+        let lido = read(&root, "A.txt").unwrap();
+        // O textarea devolve só LF: o CRLF do arquivo volta, e o BOM continua.
+        write_checked(&root, "A.txt", "c\nd\n", &lido.text, lido.bom).unwrap();
+        assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), b"\xEF\xBB\xBFc\r\nd\r\n");
+        // Arquivo sem BOM e com LF continua assim.
+        std::fs::write(root.join("b.txt"), "x\ny\n").unwrap();
+        let lido = read(&root, "b.txt").unwrap();
+        write_checked(&root, "b.txt", "z\nw\n", &lido.text, lido.bom).unwrap();
+        assert_eq!(std::fs::read(root.join("b.txt")).unwrap(), b"z\nw\n");
+        // Gravar de novo a partir da leitura nova funciona.
+        let lido = read(&root, "b.txt").unwrap();
+        write_checked(&root, "b.txt", "fim", &lido.text, lido.bom).unwrap();
+        assert_eq!(std::fs::read(root.join("b.txt")).unwrap(), b"fim");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gravacao_verificada_recusa_bom_trocado_e_arquivo_apagado() {
+        let root = fixture("verifica-bom-troca");
+        std::fs::write(root.join("A.txt"), b"\xEF\xBB\xBFantes").unwrap();
+        assert!(write_checked(&root, "A.txt", "depois", "antes", false).unwrap_err().contains("alterado"));
+        assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), b"\xEF\xBB\xBFantes");
+        std::fs::remove_file(root.join("A.txt")).unwrap();
+        assert!(write_checked(&root, "A.txt", "x", "antes", true).is_err());
+        assert!(!root.join("A.txt").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gravacao_verificada_recusa_link_no_lugar_do_arquivo() {
+        let root = fixture("verifica-link");
+        std::fs::write(root.join("sub/x.md"), "alvo").unwrap();
+        // Criar link simbólico exige privilégio no Windows; sem ele, o teste só não roda esta parte.
+        if std::os::windows::fs::symlink_file(root.join("sub/x.md"), root.join("link.md")).is_err() {
+            eprintln!("sem privilégio para link simbólico: teste pulado");
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+        assert!(write_checked(&root, "link.md", "novo", "alvo", false).unwrap_err().contains("é um link"));
+        assert_eq!(std::fs::read_to_string(root.join("sub/x.md")).unwrap(), "alvo");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gravacao_verificada_recusa_utf8_invalido_binario_e_caminhos_ruins() {
+        let root = fixture("verifica-recusas");
+        std::fs::write(root.join("A.txt"), [b'a', 0xFF, b'b']).unwrap();
+        std::fs::write(root.join("bin.dat"), [b'a', 0, b'b']).unwrap();
+        assert!(write_checked(&root, "A.txt", "x", "a", false).unwrap_err().contains("UTF-8"));
+        assert!(write_checked(&root, "bin.dat", "x", "", false).unwrap_err().contains("binário"));
+        for rel in ["../novo.txt", ".git/config", "sub", "nao-existe.txt", "sub\\x.md", ""] {
+            assert!(write_checked(&root, rel, "x", "", false).is_err(), "{rel} deveria ser recusado");
+        }
+        assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), [b'a', 0xFF, b'b']);
+        assert!(!root.join("novo.txt").exists() && !root.join("nao-existe.txt").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Enquanto a gravação segura o arquivo, outro programa que tenta gravar nele leva erro, e a gravação dela própria também.
+    #[test]
+    fn enquanto_a_gravacao_segura_o_arquivo_outro_gravador_nao_entra() {
+        let root = fixture("verifica-trava");
+        std::fs::write(root.join("A.txt"), "base").unwrap();
+        let held = hold(&root, "A.txt").unwrap();
+        assert!(OpenOptions::new().write(true).open(root.join("A.txt")).is_err(), "outro gravador entrou com o arquivo travado");
+        assert!(write_checked(&root, "A.txt", "novo", "base", false).unwrap_err().contains("gravando"));
+        drop(held);
+        write_checked(&root, "A.txt", "novo", "base", false).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("A.txt")).unwrap(), "novo");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

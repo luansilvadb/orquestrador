@@ -1,21 +1,22 @@
-// Um arquivo aberto na área do meio: barra com caminho, avisos e salvar, e editor com releitura enquanto estiver visível.
-// Cada arquivo aberto fica montado; só o ativo recebe `active` e lê o disco. Fechar é pela aba (src/file-tabs.tsx).
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Save, RotateCcw } from 'lucide-react';
-import { ActionIcon, Text } from '@lobehub/ui/base-ui';
-import { Flexbox } from '@lobehub/ui';
+// Editor de texto (CodeMirror com o tema do app), usado pelo editor central (src/editor-workspace.tsx). Não lê nem grava o disco:
+// o texto, o cursor e a rolagem vêm de fora, e o estado do CodeMirror fica guardado por `cacheKey` (o docId).
+import { useEffect, useRef, useState } from 'react';
+import { ContextMenuTrigger, type ContextMenuItem, toast } from '@lobehub/ui/base-ui';
 import { basicSetup } from 'codemirror';
-import { EditorState, Compartment } from '@codemirror/state';
+import { Compartment, EditorSelection, EditorState, Prec, StateEffect } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
-import { indentWithTab } from '@codemirror/commands';
+import { copyLineDown, deleteLine, indentWithTab, moveLineDown, moveLineUp, redo, selectAll, toggleComment, undo } from '@codemirror/commands';
+import { openSearchPanel, selectNextOccurrence } from '@codemirror/search';
 import { LanguageDescription, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
-import { backend, message } from './backend';
-import { usePolled } from './git';
-import type { FileContent } from './types';
+import { message } from './backend';
+import { action, blocked, DIVIDER } from './file-tabs';
+import type { Scroll } from './workspace-store';
 
 // ponytail: acima de 200 mil caracteres, carregar parser e colorir custa mais que a leitura simples.
 const COLOR_LIMIT = 200_000;
+// Quantos ecos de digitação guardar: a renderização atrasada nunca passa de algumas teclas.
+const ECHO_LIMIT = 64;
 const darkTheme = EditorView.theme({
   '&': {
     height: '100%',
@@ -63,17 +64,66 @@ const basicExtensions = [
   syntaxHighlighting(darkHighlight),
 ];
 
-// A descrição do CodeMirror também reconhece nomes de linguagem sem extensão.
-const normalizeNewlines = (text: string) => text.replace(/\r\n|\r/g, '\n');
-const newlineOf = (text: string) => text.includes('\r\n') ? '\r\n' : '\n';
-const toDiskNewlines = (text: string, newline: string) => text.replace(/\n/g, newline);
 
-// Pedido de navegação a uma linha (1-based), vindo de um resultado da pesquisa. `id` é novo a cada clique.
-export type Reveal = { path: string; line: number; id: number };
+// Pedido de navegação a uma linha (1-based) e coluna opcional (1-based, em unidades UTF-16), vindo de um resultado da pesquisa. `id` é novo a cada clique.
+export type Reveal = { path: string; line: number; col?: number; id: number };
 
-function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor }: {
+// Estado do CodeMirror por buffer (`cacheKey`). Ao mover a aba para outro grupo o React desmonta a vista; o estado guardado
+// mantém o histórico de Desfazer e a seleção. Quem fecha a aba ou o buffer chama `forgetEditorState`.
+const savedStates = new Map<string, EditorState>();
+export function forgetEditorState(cacheKey: string) {
+  savedStates.delete(cacheKey);
+}
+// Vistas montadas, pela mesma chave (docId). Mesmo arquivo pode estar em dois grupos: a última focada fica no fim da lista.
+// Só o editor central lê daqui (texto selecionado); cada vista sai da lista ao desmontar.
+const liveViews = new Map<string, EditorView[]>();
+export function liveEditorView(cacheKey: string): EditorView | null {
+  const list = liveViews.get(cacheKey);
+  return list?.[list.length - 1] ?? null;
+}
+function markLive(cacheKey: string, view: EditorView, focused: boolean) {
+  const list = (liveViews.get(cacheKey) ?? []).filter((v) => v !== view);
+  if (focused) list.push(view);
+  else list.unshift(view);
+  liveViews.set(cacheKey, list);
+}
+function unmarkLive(cacheKey: string, view: EditorView) {
+  const list = (liveViews.get(cacheKey) ?? []).filter((v) => v !== view);
+  if (list.length) liveViews.set(cacheKey, list);
+  else liveViews.delete(cacheKey);
+}
+
+// Pedido de cursor inicial (1-based), usado quando o buffer ainda não tem estado guardado (ex.: restaurado da recuperação).
+export type StartCursor = { line: number; col: number };
+
+const readOnlyExt = (readOnly: boolean) => [EditorView.editable.of(!readOnly), EditorState.readOnly.of(readOnly)];
+
+// Posição (offset UTF-16) de linha:coluna 1-based num texto com `\n`. Limita ao documento.
+function offsetOf(text: string, start: StartCursor): number {
+  const lines = text.split('\n');
+  const line = Math.min(Math.max(start.line, 1), lines.length);
+  let at = 0;
+  for (let i = 1; i < line; i++) at += lines[i - 1].length + 1;
+  return at + Math.min(Math.max(start.col - 1, 0), lines[line - 1].length);
+}
+
+// Ir para linha:coluna, com validação (linha dentro do documento e coluna não negativa).
+export function parseGoto(value: string, lines: number, lineLength: (line: number) => number): { line: number; col: number } | string {
+  const match = /^\s*(\d+)(?:\s*:\s*(\d+))?\s*$/.exec(value);
+  if (!match) return 'Digite linha ou linha:coluna, só números.';
+  const line = Number(match[1]);
+  if (line < 1 || line > lines) return `A linha vai de 1 a ${lines}.`;
+  const col = match[2] ? Number(match[2]) : 1;
+  if (col < 1 || col > lineLength(line) + 1) return `A coluna vai de 1 a ${lineLength(line) + 1} nesta linha.`;
+  return { line, col };
+}
+
+// Editor do arquivo (CodeMirror com o tema do app). Exportado para o editor central (src/editor-workspace.tsx) reutilizar.
+export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll }: {
   text: string; readOnly: boolean; path: string; reveal: Reveal | null; onChange: (text: string) => void; onSave: () => void;
-  onCursor: (line: number, col: number) => void;
+  onCursor: (line: number, col: number) => void; onScroll?: (scroll: Scroll) => void; cacheKey?: string; start?: StartCursor | null;
+  /** Rolagem a restaurar ao montar (ex.: a vista foi movida de grupo ou o app foi reaberto). */
+  scroll?: Scroll | null;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -81,8 +131,14 @@ function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor }
   const editable = useRef(new Compartment());
   // Último pedido já atendido: o editor fica montado ao trocar de aba, e um pedido antigo não pode mover o cursor de novo.
   const revealed = useRef(0);
-  const latest = useRef({ onChange, onSave, onCursor });
-  latest.current = { onChange, onSave, onCursor };
+  // Textos que este editor já mandou para cima (um por digitação, em ordem). O pai devolve o texto com atraso: uma renderização
+  // com um texto antigo não pode reverter o documento, senão cada volta gera outra edição e o React estoura o limite de atualizações.
+  const echoes = useRef<string[]>([]);
+  const latest = useRef({ onChange, onSave, onCursor, onScroll });
+  latest.current = { onChange, onSave, onCursor, onScroll };
+  const [gotoOpen, setGotoOpen] = useState(false);
+  const [gotoText, setGotoText] = useState('');
+  const [gotoError, setGotoError] = useState('');
   // Linha e coluna (1-based) do cursor, para o caminho de navegação da aba. Só informa; não mexe no editor.
   const reportCursor = (state: EditorState) => {
     const head = state.selection.main.head;
@@ -90,33 +146,134 @@ function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor }
     latest.current.onCursor(line.number, head - line.from + 1);
   };
 
+  // Comandos da vista atual. Lidam com a vista ausente (desmontada) sem erro.
+  const run = (command: (v: EditorView) => boolean) => {
+    const current = view.current;
+    if (current) command(current);
+  };
+  const clipboardCopy = async (cut: boolean) => {
+    const current = view.current;
+    if (!current) return;
+    const { from, to } = current.state.selection.main;
+    if (from === to) return;
+    try {
+      if (!navigator.clipboard) throw new Error('A área de transferência não está disponível aqui.');
+      await navigator.clipboard.writeText(current.state.sliceDoc(from, to));
+      // Só corta depois que o texto foi para a área de transferência: falha no clipboard não apaga nada.
+      if (cut && !readOnly) current.dispatch({ changes: { from, to }, selection: { anchor: from } });
+    } catch (e) {
+      toast.error({ title: message(e), duration: 5000 });
+    }
+  };
+  const clipboardPaste = async () => {
+    const current = view.current;
+    if (!current || readOnly) return;
+    try {
+      if (!navigator.clipboard) throw new Error('A área de transferência não está disponível aqui.');
+      const text = await navigator.clipboard.readText();
+      current.dispatch(current.state.replaceSelection(text));
+      current.focus();
+    } catch (e) {
+      toast.error({ title: message(e), duration: 5000 });
+    }
+  };
+  const editItems = (): ContextMenuItem[] => {
+    const current = view.current;
+    const hasSelection = !!current && !current.state.selection.main.empty;
+    const edit = (label: string, key: string, fn: () => void, shortcut?: string) => (readOnly
+      ? blocked(key, label, 'O arquivo é somente leitura.')
+      : action(key, label, fn, shortcut));
+    return [
+      edit('Desfazer', 'undo', () => run(undo), 'Ctrl+Z'),
+      edit('Refazer', 'redo', () => run(redo), 'Ctrl+Y'),
+      DIVIDER,
+      readOnly || !hasSelection ? blocked('cut', 'Cortar', readOnly ? 'O arquivo é somente leitura.' : 'Selecione um trecho.')
+        : action('cut', 'Cortar', () => void clipboardCopy(true), 'Ctrl+X'),
+      !hasSelection ? blocked('copy', 'Copiar', 'Selecione um trecho.') : action('copy', 'Copiar', () => void clipboardCopy(false), 'Ctrl+C'),
+      edit('Colar', 'paste', () => void clipboardPaste(), 'Ctrl+V'),
+      action('select-all', 'Selecionar Tudo', () => run(selectAll), 'Ctrl+A'),
+      action('select-next', 'Selecionar Próxima Ocorrência', () => run(selectNextOccurrence), 'Ctrl+D'),
+      DIVIDER,
+      edit('Comentar', 'comment', () => run(toggleComment), 'Ctrl+/'),
+      edit('Mover Linha para Cima', 'move-up', () => run(moveLineUp), 'Alt+↑'),
+      edit('Mover Linha para Baixo', 'move-down', () => run(moveLineDown), 'Alt+↓'),
+      edit('Duplicar Linha', 'duplicate', () => run(copyLineDown), 'Shift+Alt+↓'),
+      edit('Excluir Linha', 'delete-line', () => run(deleteLine), 'Ctrl+Shift+K'),
+      DIVIDER,
+      action('find', 'Localizar', () => run(openSearchPanel), 'Ctrl+F'),
+      edit('Substituir', 'replace', () => run(openSearchPanel), 'Ctrl+H'),
+      action('goto', 'Ir para a Linha', () => setGotoOpen(true), 'Ctrl+G'),
+    ];
+  };
+
   useEffect(() => {
     if (!host.current) return;
-    const state = EditorState.create({
-      doc: text,
-      extensions: [
-        ...basicExtensions,
-        editable.current.of([
-          EditorView.editable.of(!readOnly),
-          EditorState.readOnly.of(readOnly),
-        ]),
-        language.current.of([]),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) latest.current.onChange(update.state.doc.toString());
-          if (update.docChanged || update.selectionSet) reportCursor(update.state);
-        }),
-        keymap.of([{
-          key: 'Mod-s',
-          run: () => {
-            latest.current.onSave();
-            return true;
-          },
-        }]),
-      ],
-    });
+    const cached = cacheKey ? savedStates.get(cacheKey) : undefined;
+    // Extensões são sempre as atuais (listeners apontam para este componente). Estado guardado mantém o histórico de Desfazer.
+    const extensions = [
+      ...basicExtensions,
+      Prec.highest(keymap.of([{
+        key: 'Mod-s',
+        run: () => {
+          latest.current.onSave();
+          return true;
+        },
+      }, {
+        key: 'Mod-g',
+        run: () => {
+          setGotoOpen(true);
+          return true;
+        },
+      }, {
+        key: 'Mod-h',
+        run: (v) => openSearchPanel(v),
+      }])),
+      editable.current.of(readOnlyExt(readOnly)),
+      // Foco nesta vista: ela passa a ser a entrada do arquivo para o texto selecionado.
+      EditorView.domEventHandlers({
+        focus: (_event, v) => {
+          if (cacheKey) markLive(cacheKey, v, true);
+        },
+      }),
+      language.current.of([]),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          const value = update.state.doc.toString();
+          echoes.current.push(value);
+          if (echoes.current.length > ECHO_LIMIT) echoes.current.shift();
+          // Fora da transação do CodeMirror: o estado do pai muda depois dela, e rajadas de teclas não aninham atualizações do React.
+          queueMicrotask(() => latest.current.onChange(value));
+        }
+        if (update.docChanged || update.selectionSet) reportCursor(update.state);
+      }),
+    ];
+    let state: EditorState;
+    if (cached && cached.doc.toString() === text) {
+      state = cached.update({ effects: StateEffect.reconfigure.of(extensions) }).state;
+    } else {
+      const at = start ? offsetOf(text, start) : 0;
+      state = EditorState.create({ doc: text, selection: EditorSelection.cursor(at), extensions });
+    }
     view.current = new EditorView({ state, parent: host.current });
-    reportCursor(state);
+    if (cacheKey) markLive(cacheKey, view.current, false);
+    reportCursor(view.current.state);
+    const dom = view.current.scrollDOM;
+    // A rolagem só é aplicada depois da medição: antes, o CodeMirror ainda não sabe a altura do documento e prende o valor.
+    const restore = scroll;
+    let frame = 0;
+    if (restore) {
+      frame = requestAnimationFrame(() => {
+        dom.scrollTop = restore.top;
+        dom.scrollLeft = restore.left;
+      });
+    }
+    const onDomScroll = () => latest.current.onScroll?.({ top: dom.scrollTop, left: dom.scrollLeft });
+    dom.addEventListener('scroll', onDomScroll, { passive: true });
     return () => {
+      cancelAnimationFrame(frame);
+      dom.removeEventListener('scroll', onDomScroll);
+      if (cacheKey && view.current) savedStates.set(cacheKey, view.current.state);
+      if (cacheKey && view.current) unmarkLive(cacheKey, view.current);
       view.current?.destroy();
       view.current = null;
     };
@@ -147,6 +304,14 @@ function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor }
     if (!current) return;
     const old = current.state.doc.toString();
     if (old === text) return;
+    const echo = echoes.current.lastIndexOf(text);
+    if (echo >= 0) {
+      // Eco de uma digitação já feita aqui: o documento está à frente, então só descarta os ecos já vistos.
+      echoes.current = echoes.current.slice(echo + 1);
+      return;
+    }
+    // Texto de fora (disco, recuperação): a fila de ecos não vale mais.
+    echoes.current = [];
     let from = 0;
     while (from < old.length && from < text.length && old[from] === text[from]) from++;
     let oldEnd = old.length;
@@ -165,8 +330,9 @@ function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor }
     if (!current || !reveal || reveal.id === revealed.current) return;
     revealed.current = reveal.id;
     const { doc } = current.state;
-    const { from } = doc.line(Math.min(Math.max(reveal.line, 1), doc.lines));
-    current.dispatch({ selection: { anchor: from }, effects: EditorView.scrollIntoView(from, { y: 'center' }) });
+    const line = doc.line(Math.min(Math.max(reveal.line, 1), doc.lines));
+    const at = line.from + Math.min(Math.max((reveal.col ?? 1) - 1, 0), line.length);
+    current.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: 'center' }) });
     current.focus();
   }, [reveal]);
 
@@ -182,180 +348,51 @@ function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor }
     }
   }, [readOnly]);
 
-  return <div ref={host} className="h-full min-h-0 overflow-hidden" />;
-}
-
-export function FileView({ path, active, reveal, onDirtyChange, onCursor }: {
-  path: string; active: boolean; reveal: Reveal | null; onDirtyChange: (path: string, dirty: boolean) => void;
-  onCursor: (path: string, line: number, col: number) => void;
-}) {
-  const { data: file, error, refresh } = usePolled<FileContent>(() => backend.readFile(path), active, false);
-  // base e draft ficam em LF; newline guarda o formato do disco para a próxima gravação.
-  const [draft, setDraft] = useState<string | null>(null);
-  const [base, setBase] = useState('');
-  const [newline, setNewline] = useState('\n');
-  const [diskChanged, setDiskChanged] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [saving, setSaving] = useState(false);
-  const dirty = draft !== null && draft !== base;
-  const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
-  // `onDirtyChange` é estável no App: o efeito só roda quando a edição muda de estado.
-  useEffect(() => onDirtyChange(path, dirty), [dirty, path, onDirtyChange]);
-
-  useEffect(() => {
-    if (!file || file.binary || file.tooLarge) return;
-    const diskText = normalizeNewlines(file.text);
-    if (draft === null) {
-      setBase(diskText);
-      setDraft(diskText);
-      setNewline(newlineOf(file.text));
-      setDiskChanged(false);
-    } else if (diskText === base) {
-      setDiskChanged(false);
-    } else if (diskText === draft && !dirtyRef.current) {
-      // A gravação acabou de chegar pelo polling; a releitura só confirma a base.
-      setBase(diskText);
-      setNewline(newlineOf(file.text));
-      setDiskChanged(false);
-    } else if (dirtyRef.current) {
-      // Com edição pendente, não substitui o rascunho: oferece recarregar explicitamente.
-      setDiskChanged(true);
-    } else {
-      setBase(diskText);
-      setDraft(diskText);
-      setNewline(newlineOf(file.text));
-      setDiskChanged(false);
+  const submitGoto = () => {
+    const current = view.current;
+    if (!current) return;
+    const { doc } = current.state;
+    const result = parseGoto(gotoText, doc.lines, (n) => doc.line(n).length);
+    if (typeof result === 'string') {
+      setGotoError(result);
+      return;
     }
-  }, [file]);
-
-  const change = useCallback((value: string) => {
-    setDraft(value);
-    setSaveError('');
-  }, []);
-  const save = useCallback(async () => {
-    if (draft === null || !dirty || file?.readOnly || saving) return;
-    setSaving(true);
-    setSaveError('');
-    try {
-      await backend.writeFile(path, toDiskNewlines(draft, newline));
-      setBase(draft);
-      setDiskChanged(false);
-      await refresh();
-    } catch (e) {
-      setSaveError(message(e));
-    } finally {
-      setSaving(false);
-    }
-  }, [draft, dirty, file?.readOnly, newline, path, refresh, saving]);
-
-  const reload = () => {
-    if (!file || file.binary || file.tooLarge) return;
-    const diskText = normalizeNewlines(file.text);
-    setBase(diskText);
-    setDraft(diskText);
-    setNewline(newlineOf(file.text));
-    setDiskChanged(false);
-    setSaveError('');
+    const line = doc.line(result.line);
+    const at = line.from + Math.min(result.col - 1, line.length);
+    current.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: 'center' }) });
+    setGotoOpen(false);
+    setGotoError('');
+    current.focus();
   };
 
-  const note = (text: string, type: 'danger' | 'secondary' | undefined = 'secondary') => (
-    <Flexbox padding={16}>
-      <Text as="p" role="status" fontSize={14} type={type}>
-        {text}
-      </Text>
-    </Flexbox>
-  );
-  let body;
-  if (!file) body = note(error || 'Lendo o arquivo…', error ? 'danger' : undefined);
-  else if (file.binary) body = note('Arquivo binário: não há texto para mostrar.');
-  else if (file.tooLarge) body = note('Arquivo grande demais para mostrar aqui.');
-  else if (draft === null) body = note(error || 'Lendo o arquivo…', error ? 'danger' : undefined);
-  else {
-    // Quatro pixels de respiro evitam que a rolagem fique sob as alças dos painéis.
-    body = (
-      <Flexbox flex={1} className="min-h-0 pr-1 pb-1">
-        <Flexbox flex={1} className="min-h-0 overflow-hidden">
-          <CodeEditor
-            text={draft}
-            readOnly={file.readOnly}
-            path={path}
-            // Só o arquivo ativo e o pedido dele: um pedido de outro arquivo, ou feito enquanto este está oculto, espera a aba ficar ativa.
-            reveal={active && reveal?.path === path ? reveal : null}
-            onChange={change}
-            onSave={() => void save()}
-            onCursor={(line, col) => onCursor(path, line, col)}
-          />
-        </Flexbox>
-      </Flexbox>
-    );
-  }
-  const name = path.slice(path.lastIndexOf('/') + 1);
-  const notice = saveError || (file?.readOnly
-    ? 'Arquivo não está em UTF-8; somente leitura.'
-    : diskChanged
-      ? 'O arquivo mudou no disco.'
-      : error && file
-        ? error
-        : '');
-
   return (
-    <Flexbox height="100%" className="min-h-0">
-      {/* Barra de 36 px, abaixo da faixa de abas dos arquivos. */}
-      <Flexbox
-        horizontal
-        align="center"
-        gap={8}
-        height={36}
-        flex="none"
-        paddingInline={12}
-        className="border-b bg-card"
-      >
-        <Text as="code" code type="secondary" fontSize={12} ellipsis title={path} className="min-w-0">
-          {path}
-        </Text>
-        {dirty && (
-          <Text as="span" aria-label="Alteração não salva" title="Alteração não salva" className="shrink-0">
-            ●
-          </Text>
-        )}
-        {diskChanged && (
-          <ActionIcon
-            variant="borderless"
-            size="small"
-            icon={RotateCcw}
-            aria-label="Recarregar arquivo do disco"
-            title="Recarregar arquivo do disco"
-            onClick={reload}
+    <div className="relative h-full min-h-0">
+      <ContextMenuTrigger items={editItems}>
+        <div ref={host} className="h-full min-h-0 overflow-hidden" />
+      </ContextMenuTrigger>
+      {gotoOpen && (
+        <form
+          role="search"
+          aria-label="Ir para a linha"
+          className="absolute top-2 right-4 z-10 flex flex-wrap items-center gap-2 rounded-md border bg-card p-2 shadow"
+          onSubmit={(e) => { e.preventDefault(); submitGoto(); }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setGotoOpen(false); setGotoError(''); view.current?.focus(); } }}
+        >
+          <label className="text-xs text-muted-foreground" htmlFor="goto-line">Linha:coluna</label>
+          <input
+            id="goto-line"
+            autoFocus
+            inputMode="numeric"
+            value={gotoText}
+            onChange={(e) => { setGotoText(e.target.value); setGotoError(''); }}
+            className="w-28 rounded border bg-transparent px-2 py-1 text-xs"
+            placeholder="ex.: 42:3"
+            aria-invalid={gotoError !== ''}
           />
-        )}
-        {notice && (
-          <Text
-            as="span"
-            role="status"
-            type={saveError || (error && file) ? 'danger' : 'secondary'}
-            fontSize={12}
-            ellipsis
-            title={notice}
-            className="min-w-0"
-          >
-            {notice}
-          </Text>
-        )}
-        <ActionIcon
-          variant="borderless"
-          size="small"
-          icon={Save}
-          className="ml-auto shrink-0"
-          aria-label={`Salvar o arquivo ${name}`}
-          title={`Salvar o arquivo ${name}`}
-          disabled={!dirty || !!file?.readOnly || saving}
-          onClick={() => void save()}
-        />
-      </Flexbox>
-      <Flexbox flex={1} className="min-h-0">
-        {body}
-      </Flexbox>
-    </Flexbox>
+          <button type="submit" className="rounded border px-2 py-1 text-xs">Ir</button>
+          {gotoError && <span role="alert" className="basis-full text-xs text-red-500">{gotoError}</span>}
+        </form>
+      )}
+    </div>
   );
 }

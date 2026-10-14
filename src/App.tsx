@@ -1,29 +1,36 @@
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { Block, Center, Flexbox } from '@lobehub/ui';
 import { Alert, Button, DraggablePanel, Modal, Progress, Text, toast } from '@lobehub/ui/base-ui';
 import { backend, connect, host, message } from './backend';
 import { ChoiceForm } from './choice-form';
-import { FileView, type Reveal } from './file-view';
-import { FileTabs } from './file-tabs';
-import { batchTargets, dropFrom, isWithin, type BatchKind, type CopyKind, type OpenFiles, pathText, pinFrom, relativeTo, renamedFiles, settleBatch } from './file-tab-actions';
-import { FilesScreen, Nav, StatusBar, type FileActions, type Route } from './explorer';
-import { GitScreen, usePolled } from './git';
+import { EditorWorkspace, type EditorWorkspaceHandle } from './editor-workspace';
+import { BatchError, FilesScreen, Nav, StatusBar, type FileActions, type Route } from './explorer';
+import { createGitGuard } from './git-guard';
+import { GitSidebar, usePolled } from './git';
+import { type HistoryRequest, nextHistoryId } from './git-history';
+import { QuickOpen } from './quick-open';
 import { SearchScreen } from './search';
-import { ShellPanel } from './shell-panel';
+import { SHELL_HEIGHT, SHELL_MIN, ShellPanel } from './shell-panel';
 import { FINISHED, PANEL_MIN, PANEL_WIDTH, STATES, TerminalsScreen } from './terminal-screen';
 import type { TermView } from './term';
 import { terminals } from './terminals';
 import { TitleBar } from './titlebar';
+import { isWithin, pathText, relativeTo } from './file-tab-actions';
+import type { TabTarget } from './workspace-model';
 import {
-  ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Options, type UpdateStatus,
+  ORCHESTRATOR, type Choice, type ExecutorNode, type Moved, type NodeState, type Options, type UpdateStatus,
 } from './types';
 
 const MB = 1024 * 1024;
-// Larguras da linha principal: o Nav, o mínimo que a coluna central mantém, e a faixa da árvore e da pesquisa (a inicial, que não se guarda entre aberturas, e a mínima).
+// Larguras da linha principal: o Nav, o mínimo que cada grupo do editor mantém (vezes o número de grupos), e a faixa da árvore e da pesquisa (a inicial, que não se guarda entre aberturas, e a mínima).
 const NAV_WIDTH = 44;
 const CENTER_MIN_WIDTH = 240;
 const SIDE_WIDTH = 280;
 const SIDE_MIN = 200;
+// Limites do layout guardado (o JSON que a recuperação do editor leva junto): valor fora deles é corrigido na leitura.
+const SIDE_MAX_SAVED = 960;
+const PANEL_MAX_SAVED = 960;
+const SHELL_MAX_SAVED = 1200;
 // Objeto constante: o duplo clique na alça volta para a largura inicial (o DraggablePanel usa `defaultSize` nesse reset).
 const SIDE_DEFAULT_SIZE = { width: SIDE_WIDTH };
 // Altura que a área do arquivo mantém quando o painel Terminal está aberto no máximo.
@@ -143,6 +150,27 @@ const updateText = (status: UpdateStatus, fatal: boolean) => {
 
 const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
 
+// Layout da janela guardado por projeto (texto opaco na recuperação do editor). Lê com desconfiança: o que não for número vira o padrão,
+// e o número é limitado às faixas aceitas. Texto inválido devolve null, e nada muda.
+type Layout = { sideWidth: number; panelWidth: number; shellHeight: number };
+function readLayout(text: string): Partial<Layout> | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof raw !== 'object' || raw === null) return null;
+  const pick = (value: unknown, min: number, max: number) => (typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, Math.round(value)))
+    : undefined);
+  return {
+    sideWidth: pick((raw as Layout).sideWidth, SIDE_MIN, SIDE_MAX_SAVED),
+    panelWidth: pick((raw as Layout).panelWidth, PANEL_MIN, PANEL_MAX_SAVED),
+    shellHeight: pick((raw as Layout).shellHeight, SHELL_MIN, SHELL_MAX_SAVED),
+  };
+}
+
 // Largura ou altura de um elemento, medida com ResizeObserver. O elemento entra por callback ref: ele só existe em algumas telas,
 // então a medida segue o elemento que está montado agora, e não o primeiro que apareceu.
 function useSize(axis: 'width' | 'height') {
@@ -159,6 +187,10 @@ function useSize(axis: 'width' | 'height') {
   return [setEl, size] as const;
 }
 
+// Resposta do fechamento: cancelar, descartar as alterações, salvar tudo, ou (só com terminais) encerrar mesmo assim.
+type CloseChoice = 'cancel' | 'discard' | 'save' | 'close';
+type CloseAsk = { files: string[]; terminals: boolean };
+
 export function App() {
   const [state, dispatch] = useReducer(reducer, initial);
   const stateRef = useRef(state);
@@ -166,28 +198,32 @@ export function App() {
     stateRef.current = state;
   });
   const [route, setRoute] = useState<Route>('arquivos');
-  // Arquivos abertos na área do meio. Cada um fica montado; só o ativo aparece e interage.
-  const [files, setFiles] = useState<OpenFiles>({ paths: [], active: null, pinned: [] });
-  const openFile = files.active;
-  const filesRef = useRef(files);
-  filesRef.current = files;
-  // Caminhos com alteração não salva, de qualquer arquivo aberto (ativo ou não). Protege o fechamento da janela e o de cada aba.
-  const [dirtyFiles, setDirtyFiles] = useState<ReadonlySet<string>>(() => new Set());
-  const dirtyRef = useRef(dirtyFiles);
-  dirtyRef.current = dirtyFiles;
-  // Linha e coluna do cursor de cada arquivo aberto, informadas pelo editor (sem render: só o menu lê, na hora do clique).
-  const cursors = useRef(new Map<string, { line: number; col: number }>());
-  const reportCursor = useCallback((path: string, line: number, col: number) => {
-    cursors.current.set(path, { line, col });
-  }, []);
-  // Acorde Ctrl+K: vale por 1,5 s; o timer é o único recurso dele, então sai com o componente.
-  const chordPending = useRef(false);
-  const chordTimer = useRef(0);
-  // Pedido de revelar no explorador: o `id` é novo a cada pedido, então o mesmo arquivo revela de novo.
+  // Área do editor central (grupos, abas, rascunhos e recuperação ficam nele). O App só pede coisas por este handle.
+  const editor = useRef<EditorWorkspaceHandle>(null);
+  // Trava das operações Git da UI: a barra lateral e o editor dividem a mesma.
+  const [gitGuard] = useState(createGitGuard);
+  // Alvo da aba ativa do editor: a barra Git marca o diff (ou conflito) que está aberto.
+  const [activeTarget, setActiveTarget] = useState<TabTarget | null>(null);
+  const [activePath, setActivePath] = useState<string | null>(null);
+  // Caminho com a árvore revelada (o Explorer abre as pastas e marca o arquivo). O `id` é novo a cada pedido.
   const [treeReveal, setTreeReveal] = useState<{ path: string; id: number } | null>(null);
   const treeSeq = useRef(0);
+  // Pedido de histórico Git (arquivo ou projeto). Um `id` novo sempre refaz a lista.
+  const [historyRequest, setHistoryRequest] = useState<HistoryRequest>({ path: null, id: 0 });
+  // Pesquisa com pasta: vazio é o projeto inteiro; o `id` novo refaz o escopo mesmo se a pasta é a mesma.
+  const [scope, setScope] = useState<{ path: string; id: number } | null>(null);
+  const scopeSeq = useRef(0);
   // Sobe a cada Ctrl+Shift+F: a pesquisa refoca o campo mesmo se já estiver na tela.
   const [searchFocus, setSearchFocus] = useState(0);
+  // Seleção do editor que vira a consulta da pesquisa (Ctrl+Shift+F com texto selecionado). O `id` é novo a cada pedido.
+  const [seed, setSeed] = useState<{ text: string; id: number } | null>(null);
+  const seedSeq = useRef(0);
+  // Sobe a cada gravação do editor: a pesquisa refaz a busca atual para não mostrar linhas velhas.
+  const [saveTick, setSaveTick] = useState(0);
+  // F4 e Shift+F4: próximo ou anterior resultado da pesquisa. O `id` é novo a cada tecla.
+  const [step, setStep] = useState<{ dir: 1 | -1; id: number } | null>(null);
+  const stepSeq = useRef(0);
+  const [quickOpen, setQuickOpen] = useState(false);
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
   // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
   const git = usePolled(() => backend.gitStatus(), state.update.phase === 'ready' && !!state.project, true);
@@ -195,22 +231,23 @@ export function App() {
   const [fatal, setFatal] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [projectError, setProjectError] = useState('');
-  // A confirmação combina descarte de edição (os caminhos com alteração não salva) e encerramento de terminais conforme a ação pedida.
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmFiles, setConfirmFiles] = useState<string[]>([]);
-  const [confirmTerminals, setConfirmTerminals] = useState(false);
-  const closeAnswer = useRef<((ok: boolean) => void) | null>(null);
+  // Fechamento da janela: alterações não salvas (salvar, descartar ou cancelar) e terminais trabalhando (encerrar ou cancelar).
+  const [closeAsk, setCloseAsk] = useState<CloseAsk | null>(null);
+  const closeAnswer = useRef<((choice: CloseChoice) => void) | null>(null);
   const updateEvents = useRef(0);
   // Contador dos shells do painel Terminal: só cresce, então um id nunca se repete enquanto o app está aberto.
   const shellSeq = useRef(0);
   // Largura da janela (a faixa e o painel do Orquestrador cabem nela) e altura da coluna central (o painel Terminal não come a área do arquivo).
   const [rowRef, rowWidth] = useSize('width');
   const [centerRef, centerHeight] = useSize('height');
-  // Larguras que o usuário deu à faixa e ao painel do Orquestrador. As exibidas são elas limitadas ao que cabe na janela agora.
+  // Larguras e altura que o usuário deu à faixa, ao painel do Orquestrador e ao Terminal. As exibidas são elas limitadas ao que cabe agora.
   const [sideWidth, setSideWidth] = useState(SIDE_WIDTH);
   const [panelWidth, setPanelWidth] = useState(PANEL_WIDTH);
-  // O que a faixa e o painel dividem: a janela menos o Nav e o mínimo da coluna central. Indefinido enquanto a janela não foi medida: os dois nascem na largura inicial, sem limite e sem animação.
-  const sharedWidth = rowWidth ? rowWidth - NAV_WIDTH - CENTER_MIN_WIDTH : undefined;
+  const [shellHeight, setShellHeight] = useState(SHELL_HEIGHT);
+  // Grupos do editor (1 ou 2): cada um precisa da própria largura mínima dentro da coluna central.
+  const [groupCount, setGroupCount] = useState(1);
+  // O que a faixa e o painel dividem: a janela menos o Nav e o mínimo da coluna central (um mínimo por grupo). Indefinido enquanto a janela não foi medida: os dois nascem na largura inicial, sem limite e sem animação.
+  const sharedWidth = rowWidth ? rowWidth - NAV_WIDTH - CENTER_MIN_WIDTH * groupCount : undefined;
   // Janela estreita: o painel cede primeiro, até a mínima dele, e só depois a faixa. Por isso a faixa conta o painel na mínima, e o painel conta a faixa já exibida.
   const shownSideWidth = sharedWidth === undefined
     ? sideWidth
@@ -223,6 +260,8 @@ export function App() {
   const sideMaxWidth = sharedWidth === undefined
     ? undefined
     : Math.max(SIDE_MIN, sharedWidth - shownPanelWidth);
+  // Layout que vai para a recuperação do editor (com o projeto). Mudou, o editor grava de novo.
+  const layoutText = useMemo(() => JSON.stringify({ sideWidth, panelWidth, shellHeight }), [sideWidth, panelWidth, shellHeight]);
 
   // ---------- ações ----------
 
@@ -232,110 +271,82 @@ export function App() {
   };
 
   // Com uma confirmação já na tela, o pedido novo não sobrescreve a resposta pendente: recusa, e a primeira continua valendo.
-  const askClose = (unsaved: string[] = [], running = false) => {
-    if (closeAnswer.current) return Promise.resolve(false);
-    return new Promise<boolean>((resolve) => {
+  const askClose = (files: string[] = [], terminalsRunning = false) => {
+    if (closeAnswer.current) return Promise.resolve<CloseChoice>('cancel');
+    return new Promise<CloseChoice>((resolve) => {
       closeAnswer.current = resolve;
-      setConfirmFiles(unsaved);
-      setConfirmTerminals(running);
-      setConfirmOpen(true);
+      setCloseAsk({ files, terminals: terminalsRunning });
     });
   };
-  const setFileDirty = useCallback((path: string, dirty: boolean) => {
-    setDirtyFiles((prev) => {
-      if (prev.has(path) === dirty) return prev;
-      const next = new Set(prev);
-      if (dirty) next.add(path);
-      else next.delete(path);
-      return next;
-    });
-  }, []);
-  // Pedido de navegação a uma linha de um resultado da pesquisa. Um pedido só vale enquanto o usuário não abre ou ativa outro arquivo pelo caminho normal.
-  const [reveal, setReveal] = useState<Reveal | null>(null);
-  const revealSeq = useRef(0);
-  // Abrir um arquivo que já está aberto só o ativa (sem duplicar a aba). Trocar de aba não pede nada: cada arquivo guarda o próprio rascunho.
-  const openFileAt = (path: string) => {
-    setReveal(null);
-    setFiles((prev) => (prev.paths.includes(path)
-      ? prev.active === path ? prev : { ...prev, active: path }
-      : { ...prev, paths: [...prev.paths, path], active: path }));
+  const settleClose = (choice: CloseChoice) => {
+    setCloseAsk(null);
+    closeAnswer.current?.(choice);
+    closeAnswer.current = null;
   };
-  const selectFile = (path: string) => {
-    setReveal(null);
-    setFiles((prev) => (prev.active === path ? prev : { ...prev, active: path }));
-  };
-  // Clique num resultado da pesquisa: abre ou ativa o arquivo (sem duplicar aba) e pede a linha. Cada clique gera um id novo, então a mesma linha navega de novo.
-  const openResult = (path: string, line: number) => {
-    openFileAt(path);
-    setReveal({ path, line, id: ++revealSeq.current });
-  };
-  // Tira as abas `closing` do estado, com o rascunho, o cursor e o pedido de cada uma. Quem chama já decidiu sobre as alterações não salvas.
-  // A aba ativa que sai passa para a vizinha (direita, ou esquerda se não há à direita entre as que ficam).
-  const dropFiles = (closing: ReadonlySet<string>) => {
-    for (const path of closing) {
-      setFileDirty(path, false);
-      cursors.current.delete(path);
-    }
-    setReveal((prev) => (prev && closing.has(prev.path) ? null : prev));
-    setFiles((prev) => dropFrom(prev, closing));
-  };
-  // Fechar explícito (X, Fechar, Ctrl+F4) pede confirmação só se a própria aba tem alteração não salva. Fecha inclusive fixada.
-  const closeFile = async (path: string) => {
-    if (dirtyRef.current.has(path) && !(await askClose([path]))) return;
-    dropFiles(new Set([path]));
-  };
-  // Fechamento em lote, de uma vez só: uma confirmação para todos os rascunhos que ele descarta. Cancelar não fecha nenhuma aba.
-  // Os alvos são recalculados a cada rodada: uma aba limpa que fica suja durante a confirmação não some, e uma já fechada por outro caminho não entra.
-  const closeFiles = async (kind: BatchKind, from?: string) => {
-    const targets = await settleBatch(
-      kind, from,
-      () => ({ ...filesRef.current, dirty: dirtyRef.current }),
-      (unsaved) => askClose(unsaved),
+
+  // Copia o caminho (ou os caminhos) para o clipboard de texto. Erro do clipboard vira toast; nada é copiado pela metade.
+  const copyText = (texts: string[], done: string) => {
+    if (texts.length === 0) return;
+    navigator.clipboard.writeText(texts.join('\n')).then(
+      () => toast.success({ title: done, duration: 3000 }),
+      (e) => toast.error({ title: 'Não foi possível copiar o caminho', description: message(e), duration: 7000 }),
     );
-    if (targets?.length) dropFiles(new Set(targets));
   };
-  // Fixar alterna (as fixadas vão para o começo da faixa).
-  const togglePin = (path: string) => setFiles((prev) => pinFrom(prev, path));
-  // Copia o caminho da aba clicada. Erro do clipboard vira toast; a navegação sem cursor já vem desabilitada no menu.
-  const copyPath = async (kind: CopyKind, path: string) => {
-    const text = pathText(kind, path, state.project, cursors.current.get(path));
-    if (text === null) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success({ title: 'Caminho copiado', duration: 3000 });
-    } catch (e) {
-      toast.error({ title: 'Não foi possível copiar o caminho', description: message(e), duration: 7000 });
-    }
+  const copyPaths = (kind: 'relative' | 'absolute', paths: string[]) => {
+    const texts = paths.map((p) => pathText(kind, p, stateRef.current.project)).filter((t): t is string => t !== null);
+    copyText(texts, texts.length === 1 ? 'Caminho copiado' : `${texts.length} caminhos copiados`);
   };
-  // Revelar no Explorer: a árvore abre as pastas do arquivo e o marca; a tela vai para Arquivos. Os editores seguem montados.
-  const revealInTree = (path: string) => {
-    setTreeReveal({ path, id: ++treeSeq.current });
-    setRoute('arquivos');
+  // Destino que já tem aba (ou rascunho) aberta: mover ou colar ali criaria dois documentos no mesmo caminho. Recusa antes de mexer no disco.
+  const clashAt = (targets: string[]) => {
+    const open = editor.current?.openPaths() ?? [];
+    const hit = targets.find((t) => open.some((p) => isWithin(p, t)));
+    return hit ? new Error(`Feche a aba aberta em “${hit}” antes de mover ou colar aqui.`) : null;
   };
-  // Renomear um arquivo com alteração não salva é recusado: trocar o caminho de um rascunho exigiria reestruturar as abas, e perder o texto
-  // é pior. Arquivo limpo muda de caminho na aba, na ativa, nos fixados e no cursor; o editor remonta no caminho novo e relê o disco.
-  // Erro do backend sai como exceção, e o modal da árvore mostra; nada do estado muda.
+  const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
+  const targetOf = (dir: string, path: string) => (dir ? `${dir}/${nameOf(path)}` : nameOf(path));
+  // Renomear: o backend troca o nome (arquivo ou pasta) e o editor troca só o caminho das abas e dos rascunhos. Nada é recusado por rascunho.
   async function renameFile(path: string, name: string) {
-    if (dirtyRef.current.has(path)) throw new Error('Salve as alterações deste arquivo antes de renomear.');
     const next = await backend.renameFile(path, name);
-    const cursor = cursors.current.get(path);
-    cursors.current.delete(path);
-    if (cursor) cursors.current.set(next, cursor);
-    setReveal((prev) => (prev?.path === path ? null : prev));
-    setFiles((prev) => renamedFiles(prev, path, next));
+    editor.current?.remap(path, next);
     return next;
   }
-  // Excluir: vai para a Lixeira; só depois de o backend confirmar a aba do arquivo fecha. Se falhar, nada sai do lugar.
-  async function removeFile(path: string) {
-    await backend.deleteFile(path);
-    dropFiles(new Set([path]));
+  // Excluir em lote: o backend manda à Lixeira e devolve o que foi feito. Só o feito sai das abas; uma parada no meio vira BatchError com o feito.
+  async function removeMany(paths: string[]) {
+    const batch = await backend.deleteFiles(paths);
+    editor.current?.remove(batch.done);
+    if (batch.error) throw new BatchError(batch.error, batch.done);
+    return batch.done;
   }
-  // Cola o caminho absoluto no rascunho do Orquestrador, sem Enter. O foco vai para o terminal, para a mensagem continuar dali.
-  function addToChat(path: string) {
-    const view = terminals.get(ORCHESTRATOR);
-    const text = pathText('absolute', path, state.project);
-    if (!view || !text) return report(new Error('O Orquestrador não está aberto.'));
-    void view.pasteFiles([text]).then(() => view.term.focus()).catch(report);
+  // Mover: confere colisão com as abas antes de qualquer mudança; depois troca o caminho só do que o backend moveu.
+  async function moveItems(paths: string[], dest: string): Promise<Moved[]> {
+    const clash = clashAt(paths.map((p) => targetOf(dest, p)));
+    if (clash) throw clash;
+    const batch = await backend.moveFiles(paths, dest);
+    for (const m of batch.done) editor.current?.remap(m.from, m.to);
+    if (batch.error) throw new BatchError(batch.error, batch.done);
+    return batch.done;
+  }
+  // Colar na pasta `dir`. O clipboard é lido aqui, e essa mesma lista vai para o backend. Recorte troca o caminho do que foi movido
+  // (inclusive numa parada no meio); cópia não mexe nas abas. Devolve as origens que o recorte tirou do projeto.
+  async function pasteInto(dir: string): Promise<string[]> {
+    const snap = await backend.clipboardSnapshot();
+    if (snap.paths.length === 0) throw new Error('Não há arquivo ou pasta copiado para colar.');
+    if (snap.cut) {
+      const sources = snap.paths.map((p) => relativeTo(stateRef.current.project, p)).filter((p): p is string => p !== null);
+      const clash = clashAt(sources.map((s) => targetOf(dir, s)));
+      if (clash) throw clash;
+    }
+    const batch = await backend.pasteFilesDetailed(dir, snap);
+    const moved: string[] = [];
+    for (const item of batch.done) {
+      if (!snap.cut) continue;
+      const from = relativeTo(stateRef.current.project, item.from);
+      if (from === null) continue;
+      editor.current?.remap(from, item.to);
+      moved.push(from);
+    }
+    if (batch.error) throw new BatchError(batch.error, moved);
+    return moved;
   }
   // Copiar e recortar põem o arquivo no clipboard do Windows: colar é no Explorer. Recortar não move nada agora.
   function copyFile(path: string, cut: boolean) {
@@ -344,106 +355,13 @@ export function App() {
       report,
     );
   }
-  // Caminhos (relativos) que não estão mais no disco. Pasta sumida leva junto os arquivos de dentro: a listagem da pasta falha.
-  async function missing(paths: string[]) {
-    const gone: string[] = [];
-    for (const path of paths) {
-      const cut = path.lastIndexOf('/');
-      const here = await backend.listDir(cut < 0 ? '' : path.slice(0, cut))
-        .then((list) => list.some((e) => e.name === path.slice(cut + 1)), () => false);
-      if (!here) gone.push(path);
-    }
-    return gone;
+  // Cola o caminho absoluto no rascunho do Orquestrador, sem Enter. O foco vai para o terminal, para a mensagem continuar dali.
+  function addToChat(path: string) {
+    const view = terminals.get(ORCHESTRATOR);
+    const text = pathText('absolute', path, stateRef.current.project);
+    if (!view || !text) return report(new Error('O Orquestrador não está aberto.'));
+    void view.pasteFiles([text]).then(() => view.term.focus()).catch(report);
   }
-  // Colar na raiz. O clipboard é lido aqui, e essa mesma lista vale para a checagem de alterações não salvas e para o backend.
-  // Recorte recusa mover qualquer origem que tenha arquivo sujo. Depois de mover, fecha as abas limpas cujo arquivo sumiu;
-  // uma aba que ficou (colagem recusada, ou suja durante a operação) continua aberta. Devolve as origens que o recorte tirou; vazio na cópia.
-  async function pasteInto(dir: string): Promise<string[]> {
-    const snap = await backend.clipboardSnapshot();
-    if (snap.paths.length === 0) throw new Error('Não há arquivo ou pasta copiado para colar.');
-    const sources = snap.cut
-      ? snap.paths.map((p) => relativeTo(stateRef.current.project, p)).filter((p): p is string => p !== null)
-      : [];
-    const under = (path: string) => sources.some((s) => isWithin(path, s));
-    const unsaved = [...dirtyRef.current].filter(under);
-    if (unsaved.length > 0) throw new Error(`Há alterações não salvas em ${unsaved.join(', ')}. Salve ou descarte antes de recortar.`);
-    const candidates = filesRef.current.paths.filter(under);
-    let failure: unknown = null;
-    try {
-      await backend.pasteFiles(dir, snap);
-    } catch (e) {
-      failure = e;
-    }
-    // Recortado, mesmo com falha no meio: o que sumiu do disco é fechado; o resto segue como estava.
-    if (snap.cut) dropFiles(new Set((await missing(candidates)).filter((p) => !dirtyRef.current.has(p))));
-    if (failure) throw failure;
-    return sources;
-  }
-
-  // Atalhos da área do arquivo (o XTerm e os campos ficam fora dela). Só o que o app faz: Ctrl+F4 fecha a ativa; Ctrl+K W
-  // fecha todas; Ctrl+K Ctrl+Shift+C copia o relativo; Shift+Alt+C o absoluto; Ctrl+K Shift+Enter fixa. Os outros acordes não fazem nada.
-  const beginChord = () => {
-    chordPending.current = true;
-    window.clearTimeout(chordTimer.current);
-    chordTimer.current = window.setTimeout(() => { chordPending.current = false; }, 1500);
-  };
-  const endChord = () => {
-    chordPending.current = false;
-    window.clearTimeout(chordTimer.current);
-  };
-  useEffect(() => () => window.clearTimeout(chordTimer.current), []);
-  // Há alvo para o fechamento em lote agora? Usa os refs, então vale no instante da tecla.
-  const hasTargets = (kind: BatchKind) =>
-    batchTargets(filesRef.current.paths, filesRef.current.pinned, dirtyRef.current, kind).length > 0;
-  // Captura (não bubbling): o keymap do CodeMirror trata Ctrl+K (apagar até o fim da linha) na fase de bolha, então este handler
-  // vê a tecla antes do editor e pode parar a propagação. Só alcança o que está dentro da área do arquivo; o xterm fica fora dela.
-  const onFileKey = (e: ReactKeyboardEvent<HTMLElement>) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('input, textarea, [role="menu"], [role="listbox"], [role="dialog"]')) return;
-    if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
-    const active = filesRef.current.active;
-    const ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
-    const plain = !e.altKey && !e.metaKey && !e.shiftKey;
-    if (chordPending.current) {
-      // Ctrl+K de novo reinicia o acorde, sem chegar ao editor.
-      if (ctrl && !e.shiftKey && e.code === 'KeyK') {
-        e.preventDefault();
-        e.stopPropagation();
-        beginChord();
-        return;
-      }
-      endChord();
-      // Atalho desabilitado (sem alvo ou sem arquivo) não é capturado: a tecla segue para o editor, como qualquer outra.
-      let run: (() => void) | null = null;
-      if (plain && e.code === 'KeyW' && hasTargets('all')) run = () => void closeFiles('all');
-      else if (ctrl && e.shiftKey && e.code === 'KeyC' && active) run = () => void copyPath('relative', active);
-      // Shift+Enter basta: o rótulo é Ctrl+K, soltar Ctrl, Shift+Enter. Ctrl mantido também vale.
-      else if (!e.altKey && !e.metaKey && e.shiftKey && e.code === 'Enter' && active) run = () => togglePin(active);
-      if (!run) return;
-      e.preventDefault();
-      e.stopPropagation();
-      run();
-      return;
-    }
-    if (ctrl && !e.shiftKey && e.code === 'KeyK') {
-      e.preventDefault();
-      e.stopPropagation();
-      beginChord();
-    } else if (ctrl && !e.shiftKey && e.code === 'F4' && active) {
-      e.preventDefault();
-      e.stopPropagation();
-      void closeFile(active);
-    } else if (e.shiftKey && e.altKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyC' && active) {
-      e.preventDefault();
-      e.stopPropagation();
-      void copyPath('absolute', active);
-    }
-  };
-  const settleClose = (ok: boolean) => {
-    setConfirmOpen(false);
-    closeAnswer.current?.(ok);
-    closeAnswer.current = null;
-  };
 
   async function boot() {
     try {
@@ -471,9 +389,25 @@ export function App() {
         host().onCloseRequested(async () => {
           try {
             const running = await backend.hasRunning();
-            // Qualquer arquivo com rascunho protege a janela, ativo ou não.
-            const unsaved = [...dirtyRef.current];
-            if ((running || unsaved.length > 0) && !(await askClose(unsaved, running))) return false;
+            const unsaved = editor.current?.unsaved() ?? [];
+            if (unsaved.length > 0) {
+              // Três respostas: salvar tudo (só fecha se tudo gravou e nada novo ficou sujo), descartar (a recuperação é gravada
+              // antes do encerramento), ou cancelar, que mantém a janela e tudo como está.
+              const choice = await askClose(unsaved, running);
+              if (choice === 'cancel') return false;
+              if (choice === 'save') {
+                const saved = await editor.current!.saveAll();
+                if (!saved || editor.current!.unsaved().length > 0) {
+                  report(new Error('Não foi possível salvar tudo. Nada foi fechado.'));
+                  return false;
+                }
+              } else {
+                editor.current!.discardAll();
+              }
+              editor.current?.flushRecovery();
+            } else if (running && (await askClose([], true)) !== 'close') {
+              return false;
+            }
             await backend.shutdown();
           } catch { /* sem backend para responder não há o que proteger: deixa fechar */ }
           return true;
@@ -647,14 +581,48 @@ export function App() {
   }, []);
 
   // Ctrl+Shift+F abre a pesquisa e foca o campo, de qualquer lugar (com projeto aberto). Mesma captura no window do Ctrl+`.
+  // Com texto selecionado no editor, esse texto vira a consulta e a busca roda na hora.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyF') return;
       if (!stateRef.current.project || stateRef.current.update.phase !== 'ready') return;
       e.preventDefault();
       e.stopPropagation();
+      const text = editor.current?.selectedText() ?? '';
+      if (text) setSeed({ text, id: ++seedSeq.current });
       setRoute('pesquisa');
       setSearchFocus((n) => n + 1);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
+  // F4 vai ao próximo resultado da pesquisa e Shift+F4 ao anterior (com volta). Dentro do terminal (xterm) a tecla segue como antes.
+  // Sem resultados a pesquisa não faz nada; a tecla é consumida mesmo assim, pois o App não sabe se há resultados.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'F4' || e.ctrlKey || e.altKey || e.metaKey) return;
+      if (!stateRef.current.project || stateRef.current.update.phase !== 'ready') return;
+      if ((e.target as HTMLElement | null)?.closest?.('.xterm')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setRoute('pesquisa');
+      setStep({ dir: e.shiftKey ? -1 : 1, id: ++stepSeq.current });
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
+  // Ctrl+P abre o arquivo rápido. Não consome o atalho dentro do terminal (xterm) nem dos campos de texto: ali a tecla segue como antes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyP') return;
+      if (!stateRef.current.project || stateRef.current.update.phase !== 'ready') return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('.xterm') || target?.closest?.('input, textarea')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setQuickOpen(true);
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
@@ -667,10 +635,6 @@ export function App() {
   // Título da aba: nome da pasta do projeto (último segmento do caminho) e, depois que o backend responde, o programa.
   const folder = state.project.split(/[\\/]/).filter(Boolean).pop() ?? '';
   const shellTabs = state.shells.map((s) => ({ id: s.id, title: s.program ? `${folder} — ${s.program}` : folder, program: s.program }));
-  // Texto do modal: um arquivo pelo caminho; vários, pelo número e pela lista (o caminho desambigua nomes iguais).
-  const unsavedText = confirmFiles.length === 1
-    ? `em ${confirmFiles[0]}`
-    : `em ${confirmFiles.length} arquivos: ${confirmFiles.join(', ')}`;
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
   const busy = executors.some((e) => !FINISHED.includes(e.state));
   const count = (state: NodeState) => executors.filter((e) => e.state === state).length;
@@ -678,22 +642,43 @@ export function App() {
     .map((state) => [count(state), STATES[state].label] as const)
     .filter(([n]) => n);
   const changed = git.data?.files.length ?? 0;
-  // As telas ficam montadas; a rota só escolhe qual aparece. Inativa vai para invisible, nunca para display none.
-  const shown = (...to: Route[]) => `absolute inset-0${to.includes(route) ? '' : ' invisible'}`;
+  // Texto do fechamento: a lista de arquivos (o caminho desambigua nomes iguais) e a menção aos terminais, quando há.
+  const closeFiles = closeAsk?.files ?? [];
+  const closeUnsaved = closeFiles.length === 1
+    ? `em ${closeFiles[0]}`
+    : `em ${closeFiles.length} arquivos: ${closeFiles.join(', ')}`;
   // Ações do menu de arquivo da árvore (src/explorer.tsx). Ação sem resposta do backend avisa por toast; o que pede confirmação fica no modal.
+  const hasDraft = (path: string) => editor.current?.hasDraft(path) ?? false;
   const fileActions: FileActions = {
-    dirty: (path) => dirtyRef.current.has(path),
-    copyPath: (kind, path) => void copyPath(kind, path),
+    dirty: hasDraft,
+    dirtyOf: (paths) => paths.filter(hasDraft),
+    copyPath: (kind, path) => copyPaths(kind, [path]),
+    copyPaths,
     reveal: (path) => void backend.revealFile(path).catch(report),
     openWith: (path) => void backend.openWith(path).catch(report),
     openInTerminal: (dir) => openShellAt(dir),
     addToChat: orchestrator?.started ? addToChat : null,
     copy: copyFile,
+    copyMany: (paths, cut) => {
+      backend.copyFiles(paths, cut).then(
+        () => toast.success({ title: cut ? `${paths.length} itens recortados. Cole no Explorer para mover.` : `${paths.length} itens copiados. Cole no Explorer.`, duration: 4000 }),
+        report,
+      );
+    },
     rename: renameFile,
-    remove: removeFile,
+    remove: async (path) => {
+      await removeMany([path]);
+    },
+    removeMany,
+    move: moveItems,
     revealDir: (dir) => void backend.revealDir(dir).catch(report),
-    // Localizar na pasta: a pesquisa de todo o projeto, com o campo focado (mesmo efeito do Ctrl+Shift+F).
-    search: () => {
+    history: (path) => {
+      setHistoryRequest({ path, id: nextHistoryId() });
+      setRoute('git');
+    },
+    // Localizar na pasta: a pesquisa com o escopo da pasta (vazio é o projeto inteiro), com o campo focado.
+    search: (dir = '') => {
+      setScope({ path: dir, id: ++scopeSeq.current });
       setRoute('pesquisa');
       setSearchFocus((n) => n + 1);
     },
@@ -744,6 +729,9 @@ export function App() {
     );
   }
 
+  // Este é o layout de uma tela só: a faixa da esquerda muda de conteúdo (Arquivos, Pesquisa, Git) e a área central fica montada.
+  // A faixa é a mesma nas três rotas: a largura é uma só.
+  const shown = (to: Route) => `absolute inset-0${route === to ? '' : ' invisible'}`;
   return (
     <Flexbox height="100dvh">
       <TitleBar connected={connected} project={state.project}>
@@ -757,67 +745,64 @@ export function App() {
       <Flexbox ref={rowRef} horizontal flex={1} className="min-h-0">
         <Nav route={route} changed={changed} onGo={setRoute} />
         <main className="relative min-h-0 min-w-0 flex-1">
-          <div className={shown('arquivos', 'pesquisa')}>
-            <Flexbox horizontal height="100%">
-              {/* Árvore e pesquisa ocupam a mesma faixa: as duas montadas, a inativa só invisível (a coluna central não muda de tamanho na troca). A borda direita da faixa arrasta para mudar a largura. */}
-              <DraggablePanel
-                placement="left" expandable={false} showHandleWideArea={false}
-                size={{ width: shownSideWidth }} defaultSize={SIDE_DEFAULT_SIZE}
-                onSizeChange={(_, size) => typeof size?.width === 'number' && setSideWidth(size.width)}
-                minWidth={SIDE_MIN} maxWidth={sideMaxWidth}
-                backgroundColor="var(--ant-color-bg-layout)"
-              >
-                <div className="relative h-full">
-                  <div className={shown('arquivos')}>
-                    <FilesScreen openPath={openFile} onOpen={openFileAt} reveal={treeReveal} actions={fileActions} />
-                  </div>
-                  <div className={shown('pesquisa')}>
-                    <SearchScreen active={route === 'pesquisa'} focusKey={searchFocus} onOpen={openResult} />
-                  </div>
+          <Flexbox horizontal height="100%">
+            {/* Faixa da esquerda: árvore, pesquisa ou Git, todas montadas; só a da rota aparece. A borda direita arrasta a largura. */}
+            <DraggablePanel
+              placement="left" expandable={false} showHandleWideArea={false}
+              size={{ width: shownSideWidth }} defaultSize={SIDE_DEFAULT_SIZE}
+              onSizeChange={(_, size) => typeof size?.width === 'number' && setSideWidth(size.width)}
+              minWidth={SIDE_MIN} maxWidth={sideMaxWidth}
+              backgroundColor="var(--ant-color-bg-layout)"
+            >
+              <div className="relative h-full">
+                <div className={shown('arquivos')}>
+                  <FilesScreen openPath={activePath} onOpen={(path, options) => (options?.side ? editor.current?.openBeside(path, { permanent: options.permanent }) : editor.current?.openFile(path, { permanent: options?.permanent }))} reveal={treeReveal} actions={fileActions} />
                 </div>
-              </DraggablePanel>
-              {/* Coluna central: a área do arquivo em cima e o painel Terminal embaixo. */}
-              <Flexbox ref={centerRef} height="100%" flex={1} allowShrink>
-                {/* Saiu da área (foco em terminal, formulário ou fora do app): o acorde Ctrl+K pendente é cancelado, para não disparar depois. */}
-                <Flexbox
-                  height="100%" flex={1} className="min-h-0" onKeyDownCapture={onFileKey}
-                  onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) endChord(); }}
-                >
-                  {files.paths.length > 0 && (
-                    <FileTabs
-                      paths={files.paths} active={openFile} dirty={dirtyFiles} pinned={files.pinned}
-                      hasCursor={(path) => cursors.current.has(path)}
-                      onSelect={selectFile} onClose={(path) => void closeFile(path)}
-                      onBatch={(kind: BatchKind, path) => void closeFiles(kind, path)}
-                      onTogglePin={togglePin} onCopy={(kind: CopyKind, path) => void copyPath(kind, path)}
-                      onReveal={revealInTree}
-                    />
-                  )}
-                  {/* Todos os arquivos abertos ficam montados, em camadas: o ativo aparece e recebe o teclado; os outros ficam invisíveis, com a edição e a rolagem. */}
-                  <Flexbox flex={1} className="relative min-h-0">
-                    {files.paths.map((path) => (
-                      <div key={path} className={`absolute inset-0${path === openFile ? '' : ' invisible'}`}>
-                        <FileView path={path} active={path === openFile && route !== 'git'} reveal={reveal} onDirtyChange={setFileDirty} onCursor={reportCursor} />
-                      </div>
-                    ))}
-                  </Flexbox>
-                </Flexbox>
-                <ShellPanel
-                  open={state.shellOpen} maxHeight={centerHeight - FILE_MIN_HEIGHT}
-                  tabs={shellTabs} active={state.shellActive}
-                  onSelect={(id) => dispatch({ type: 'shellSelect', id })} onAdd={addShell}
-                  onHide={() => dispatch({ type: 'shellOpen', open: false })} onClose={closeShell} onReady={startShell}
+                <div className={shown('pesquisa')}>
+                  <SearchScreen
+                    active={route === 'pesquisa'} focusKey={searchFocus} folder={scope} seed={seed} refreshKey={saveTick} step={step} hasDraft={hasDraft}
+                    onOpen={(path, line, col, options) => editor.current?.openFile(path, { permanent: options?.permanent, line, col })}
+                    onChanged={() => { git.refresh(); editor.current?.refresh(); }}
+                  />
+                </div>
+                <div className={shown('git')}>
+                  <GitSidebar
+                    git={git} locked={busy} guard={gitGuard} active={route === 'git'} selected={activeTarget} historyRequest={historyRequest}
+                    onOpenTarget={(target, options) => editor.current?.openTarget(target, { permanent: options?.permanent })}
+                    onOpenFile={(path, options) => editor.current?.openFile(path, { permanent: options?.permanent, line: options?.line, col: options?.col })}
+                  />
+                </div>
+              </div>
+            </DraggablePanel>
+            {/* Coluna central: o editor (grupos, abas, diffs e conflitos) em cima e o painel Terminal embaixo. Sempre montada. */}
+            <Flexbox ref={centerRef} height="100%" flex={1} allowShrink>
+              <Flexbox height="100%" flex={1} className="min-h-0">
+                {/* key por projeto: outro projeto remonta o editor (lê a recuperação dele); o anterior grava a sua ao sair. */}
+                <EditorWorkspace
+                  key={state.project} ref={editor} project={state.project} active locked={busy} guard={gitGuard}
+                  refreshGit={() => git.refresh()} onSaved={() => setSaveTick((n) => n + 1)}
+                  onActivePath={setActivePath} onActiveTarget={setActiveTarget}
+                  onGroupCount={setGroupCount}
+                  layout={layoutText}
+                  onRestoreLayout={(text) => {
+                    const saved = readLayout(text);
+                    if (!saved) return;
+                    if (saved.sideWidth !== undefined) setSideWidth(saved.sideWidth);
+                    if (saved.panelWidth !== undefined) setPanelWidth(saved.panelWidth);
+                    if (saved.shellHeight !== undefined) setShellHeight(saved.shellHeight);
+                  }}
+                  onReveal={(path) => { setTreeReveal({ path, id: ++treeSeq.current }); setRoute('arquivos'); }}
                 />
               </Flexbox>
+              <ShellPanel
+                open={state.shellOpen} maxHeight={centerHeight - FILE_MIN_HEIGHT}
+                height={shellHeight} onHeightChange={setShellHeight}
+                tabs={shellTabs} active={state.shellActive}
+                onSelect={(id) => dispatch({ type: 'shellSelect', id })} onAdd={addShell}
+                onHide={() => dispatch({ type: 'shellOpen', open: false })} onClose={closeShell} onReady={startShell}
+              />
             </Flexbox>
-          </div>
-          <div className={shown('git')}>
-            <GitScreen
-              git={git} locked={busy} active={route === 'git'}
-              width={shownSideWidth} minWidth={SIDE_MIN} maxWidth={sideMaxWidth} onWidthChange={setSideWidth}
-              onOpenFile={(path) => { openFileAt(path); setRoute('arquivos'); }}
-            />
-          </div>
+          </Flexbox>
         </main>
         {/* Painel do Orquestrador, à direita de tudo e em todas as telas: nenhuma rota o desmonta nem muda o tamanho dele. */}
         <TerminalsScreen
@@ -857,18 +842,26 @@ export function App() {
           />
         </>
       )}
+      {quickOpen && (
+        <QuickOpen
+          onClose={() => setQuickOpen(false)}
+          onOpen={(path, choice) => {
+            setQuickOpen(false);
+            if (choice.side) editor.current?.openBeside(path, { permanent: choice.permanent });
+            else editor.current?.openFile(path, { permanent: choice.permanent });
+          }}
+        />
+      )}
       {/* Esc, clique fora e Cancelar recusam o fechamento; só o botão de confirmação fecha. */}
       {/* Borda e sombra neutras do tema. */}
       <Modal
-        open={confirmOpen}
-        title={confirmFiles.length > 0 && !confirmTerminals
-          ? 'Descartar alterações?'
-          : 'Fechar o Orquestrador?'}
+        open={closeAsk !== null}
+        title={closeFiles.length > 0 ? 'Fechar com alterações não salvas?' : 'Fechar o Orquestrador?'}
         width={480}
         closable={false}
         keyboard
         maskClosable
-        onCancel={() => settleClose(false)}
+        onCancel={() => settleClose('cancel')}
         style={{ border: '1px solid var(--ant-color-border)', boxShadow: 'var(--ant-box-shadow-secondary)' }}
         styles={{
           header: { padding: '24px 24px 0', minHeight: 0 },
@@ -878,23 +871,26 @@ export function App() {
         }}
         footer={(
           <Flexbox horizontal wrap="wrap" justify="flex-end" gap={8} width="100%">
-            <Button size="large" onClick={() => settleClose(false)}>Cancelar</Button>
-            <Button size="large" type="fill" onClick={() => settleClose(true)}>
-              {confirmFiles.length > 0 && confirmTerminals
-                ? 'Descartar e encerrar todos'
-                : confirmFiles.length > 0
-                  ? 'Descartar'
-                  : 'Fechar e encerrar todos'}
-            </Button>
+            <Button size="large" onClick={() => settleClose('cancel')}>Cancelar</Button>
+            {closeFiles.length > 0 ? (
+              <>
+                <Button size="large" danger onClick={() => settleClose('discard')}>
+                  {closeAsk?.terminals ? 'Descartar e encerrar todos' : 'Descartar'}
+                </Button>
+                <Button size="large" type="fill" onClick={() => settleClose('save')}>
+                  {closeAsk?.terminals ? 'Salvar e encerrar todos' : 'Salvar'}
+                </Button>
+              </>
+            ) : (
+              <Button size="large" type="fill" onClick={() => settleClose('close')}>Fechar e encerrar todos</Button>
+            )}
           </Flexbox>
         )}
       >
         <Text as="p" type="secondary" fontSize={14} lineHeight={1.6} style={{ margin: 0, overflowWrap: 'anywhere' }}>
-          {confirmFiles.length > 0 && confirmTerminals
-            ? `Há alterações não salvas ${unsavedText} e terminais trabalhando; fechar descarta a edição e encerra os terminais.`
-            : confirmFiles.length > 0
-              ? `Há alterações não salvas ${unsavedText}; descartá-las?`
-              : 'Há terminais trabalhando; fechar encerra todos.'}
+          {closeFiles.length > 0
+            ? `Há alterações não salvas ${closeUnsaved}. Salvar grava tudo antes de fechar; descartar joga a edição fora.${closeAsk?.terminals ? ' Os terminais trabalhando também serão encerrados.' : ''}`
+            : 'Há terminais trabalhando; fechar encerra todos.'}
         </Text>
       </Modal>
     </Flexbox>
