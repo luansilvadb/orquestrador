@@ -23,8 +23,6 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-use windows_sys::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
 
 /// O nome do programa: fica ao lado de `orquestrador.exe`, instalado ou em desenvolvimento.
 pub const PROGRAM: &str = "orquestrador-delegar.exe";
@@ -45,12 +43,6 @@ const DEAD: &str = "A sessão do orquestrador terminou antes do fim do lote.";
 /// Ponto de entrada do programa: `args` são os argumentos depois do nome dele, que devem vir vazios, porque o
 /// lote vem pela entrada padrão. Devolve o código de saída.
 pub fn run(args: &[OsString]) -> i32 {
-    if !has_stdout() {
-        // Em modo janela o stdout herdado pode não existir. Sem ele ninguém receberia o resultado,
-        // então o lote nem chega a ser publicado.
-        let _ = writeln!(std::io::stderr(), "wrapper_error: não há saída padrão para devolver o resultado.");
-        return WRAPPER_ERROR;
-    }
     let (code, text, marker) = match execute(args, std::io::stdin().lock()) {
         Ok(done) => (done.code, done.text, done.marker),
         Err(why) => (WRAPPER_ERROR, format!("wrapper_error: {why}\n--- FIM ---\n"), None),
@@ -95,19 +87,13 @@ fn execute(args: &[OsString], input: impl Read) -> Result<Done, String> {
         }
         _ => publish(&session, rest)?,
     };
-    match wait(&session, &id)? {
-        Waited::Done(code, text) => Ok(Done { code, text, marker: Some(session.join("results").join(format!("{id}.delivered"))) }),
-        Waited::Asking(text) => Ok(Done { code: ASKING, text, marker: None }),
-    }
+    wait(&session, &id)
 }
 
 /// A linha que o adaptador manda: a pasta da sessão e as tarefas, cada texto em base64 do UTF-8, separados por
 /// `;`. Base64 não tem espaço nem aspas, então nada se perde no transporte; e um texto vazio continua sendo um
 /// pedaço, porque o separador o segura.
 pub fn decode(line: &str) -> Result<Vec<String>, String> {
-    if line.is_empty() {
-        return Ok(Vec::new());
-    }
     line.split(';')
         .map(|part| {
             let bytes = B64.decode(part).map_err(|_| "entrada ilegível: um texto não está em base64.")?;
@@ -166,31 +152,26 @@ fn resume(session: &Path) -> Result<String, String> {
     pending.pop().ok_or_else(|| "Nenhum lote aguardando entrega.".to_string())
 }
 
-/// O que a espera de um lote dá: o resultado, ou as perguntas que um executor do lote deixou sem resposta.
-#[derive(Debug)]
-enum Waited {
-    Done(i32, String),
-    Asking(String),
-}
-
 /// Espera o resultado do lote e separa o código de saída, que é a primeira linha. Se a sessão
 /// morrer antes, falha em vez de esperar para sempre. Uma pergunta pendente de um executor do lote
-/// interrompe a espera na hora: o resultado só sai quando nenhum executor espera o orquestrador.
-fn wait(session: &Path, id: &str) -> Result<Waited, String> {
+/// interrompe a espera na hora, com código `ASKING` e sem marca de entregue: o resultado só sai quando
+/// nenhum executor espera o orquestrador.
+fn wait(session: &Path, id: &str) -> Result<Done, String> {
     let result = session.join("results").join(format!("{id}.txt"));
     loop {
         if result.is_file() {
             let text = std::fs::read_to_string(&result).map_err(|e| format!("Não foi possível ler {}: {e}", result.display()))?;
             let (code, body) = text.split_once('\n').ok_or("o resultado do lote não traz o código de saída.")?;
             let code: i32 = code.trim().parse().map_err(|_| format!("código de saída ilegível no resultado do lote: {code:?}"))?;
-            return Ok(Waited::Done(code, body.to_string()));
+            let marker = session.join("results").join(format!("{id}.delivered"));
+            return Ok(Done { code, text: body.to_string(), marker: Some(marker) });
         }
         if !owner_alive(session) {
             return Err(DEAD.into());
         }
         let asks: Vec<Ask> = pending_asks(session).into_iter().filter(|a| a.batch == id).collect();
         if !asks.is_empty() {
-            return Ok(Waited::Asking(questions(session, &asks)));
+            return Ok(Done { code: ASKING, text: questions(session, &asks), marker: None });
         }
         std::thread::sleep(POLL);
     }
@@ -274,7 +255,7 @@ fn describe(payload: &str) -> (String, String) {
 }
 
 /// `--responder <executor> aceitar` ou `--responder <executor> recusar <motivo>`: grava a decisão da pergunta
-/// mais antiga desse executor. O app entrega a decisão ao `--ask` que espera, e o executor segue. Erro sem nada
+/// mais antiga desse executor como `<id>.reply`, que o `--ask` que espera lê, e o executor segue. Erro sem nada
 /// gravado se a resposta não existe, se falta o motivo ou se o executor não tem pergunta pendente.
 fn respond(session: &Path, args: &[String]) -> Result<(), String> {
     let [node, choice, reason @ ..] = args else { return Err(RESPOND_USAGE.into()) };
@@ -289,14 +270,8 @@ fn respond(session: &Path, args: &[String]) -> Result<(), String> {
         .into_iter()
         .find(|a| a.node == *node)
         .ok_or_else(|| format!("O executor {node} não tem pergunta pendente."))?;
-    hook::put(&ask.dir, &format!("{}.answer.json", ask.id), decision.to_string().as_bytes())
+    hook::put(&ask.dir, &format!("{}.reply", ask.id), decision.to_string().as_bytes())
         .map_err(|e| format!("Não foi possível gravar a resposta em {}: {e}", ask.dir.display()))
-}
-
-/// Se há um stdout para devolver o resultado. Processo de janela pode não ter um.
-fn has_stdout() -> bool {
-    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-    !handle.is_null() && handle != INVALID_HANDLE_VALUE
 }
 
 /// O adaptador `.ps1` da sessão. Só transporta: cada texto vai ao programa como base64 do UTF-8, numa linha
@@ -408,8 +383,9 @@ mod tests {
     fn espera_separa_o_codigo_de_saida_do_texto() {
         let dir = session("espera", true);
         std::fs::write(dir.join("results").join("x.txt"), "1\n--- EXECUTOR 1/1 ---\nok\n").unwrap();
-        let Waited::Done(code, text) = wait(&dir, "x").unwrap() else { panic!("o resultado do lote não chegou") };
-        assert_eq!((code, text.as_str()), (1, "--- EXECUTOR 1/1 ---\nok\n"));
+        let done = wait(&dir, "x").unwrap();
+        assert_eq!((done.code, done.text.as_str()), (1, "--- EXECUTOR 1/1 ---\nok\n"));
+        assert!(done.marker.is_some_and(|m| m.ends_with("x.delivered")));
     }
 
     /// Um lote de `size` tarefas, com o executor `node` na tarefa `index` e um pedido sem resposta com `payload`.
@@ -438,7 +414,9 @@ mod tests {
         let dir = session("pergunta", true);
         batch_with_ask(&dir, "B1", "exec-1", 0, 2, BASH);
         batch_with_ask(&dir, "B2", "exec-2", 0, 1, BASH);
-        let Waited::Asking(text) = wait(&dir, "B1").unwrap() else { panic!("a pergunta devia interromper a espera") };
+        let asked = wait(&dir, "B1").unwrap();
+        assert_eq!((asked.code, asked.marker.is_none()), (ASKING, true), "a pergunta devia interromper a espera");
+        let text = asked.text;
         assert!(text.starts_with(
             "--- PERGUNTA exec-1 (1/2) ---\nTarefa 1\nO executor parou num pedido de confirmação e espera a sua resposta.\nBash: rm /d/a.log\nlinha 2\nPara responder: "
         ));
@@ -475,13 +453,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// `--responder` grava a decisão como `<id>.answer.json` do executor, e a pergunta deixa de estar pendente.
+    /// `--responder` grava a decisão como `<id>.reply` do executor, e a pergunta deixa de estar pendente.
     /// Sem pergunta, com resposta inválida ou com `recusar` sem motivo, nada é gravado.
     #[test]
     fn responder_grava_a_decisao_ou_recusa_sem_gravar_nada() {
         let dir = session("responder", true);
         let id = batch_with_ask(&dir, "B1", "exec-1", 0, 1, BASH);
-        let answer = dir.join("exec").join("exec-1").join("ask").join(format!("{id}.answer.json"));
+        let answer = dir.join("exec").join("exec-1").join("ask").join(format!("{id}.reply"));
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
         assert!(respond(&dir, &s(&["exec-7", "aceitar"])).unwrap_err().contains("não tem pergunta pendente"));
         assert!(respond(&dir, &s(&["exec-1", "talvez"])).unwrap_err().contains("resposta desconhecida"));
@@ -512,7 +490,7 @@ mod tests {
         let done = execute(&[], encode(&[dir.to_str().unwrap(), "--responder", "exec-1", "aceitar"]).as_bytes()).unwrap();
         assert_eq!((done.code, done.text.as_str()), (0, "--- EXECUTOR 1/1 ---\naceito\n"));
         assert!(done.marker.is_some());
-        let answer = dir.join("exec").join("exec-1").join("ask").join("00000000000000000001-aaaaaaaa.answer.json");
+        let answer = dir.join("exec").join("exec-1").join("ask").join("00000000000000000001-aaaaaaaa.reply");
         assert_eq!(std::fs::read_to_string(answer).unwrap(), r#"{"behavior":"allow"}"#);
         let _ = std::fs::remove_dir_all(&dir);
     }

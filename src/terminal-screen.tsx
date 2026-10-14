@@ -1,14 +1,14 @@
 // O painel do Orquestrador, à direita da tela principal, em todas as telas: o orquestrador e um executor por aba. Todos os terminais ficam montados; só o da aba ativa aparece.
-// Redimensionável pela borda esquerda; a largura não é guardada entre aberturas do app.
+// Redimensionável pela borda esquerda. Abre em 520 px; a largura que o usuário dá fica guardada por projeto, no layout que o App leva na recuperação do editor.
 import { useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { Check, CircleCheck, CircleHelp, CircleX, Clock, Hourglass, List, LoaderCircle, SlidersHorizontal, Square, SquareTerminal } from 'lucide-react';
 import { Button, colorsPreset, DraggablePanel, DropdownMenu, Tag, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
 import { Center, Flexbox, type PresetColorKey } from '@lobehub/ui';
 import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
-import { attachExecutor, TermHost, terminals } from './terminals';
+import { TermHost, terminals } from './terminals';
 import { revealTab, wheelToScroll } from './tab-strip';
-import { ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Tool } from './types';
+import { ORCHESTRATOR, TOOL_NAME, type Choice, type ExecutorNode, type NodeState, type Tool } from './types';
 
 // Cada estado: rótulo e ícone com texto (regra do design system); a cor é um nome predefinido do Lobe UI, o mesmo para o Tag e para o ícone da aba.
 export const STATES: Record<NodeState, { label: string; icon: typeof Clock; color: PresetColorKey }> = {
@@ -22,7 +22,7 @@ export const STATES: Record<NodeState, { label: string; icon: typeof Clock; colo
 };
 export const FINISHED: NodeState[] = ['done', 'stopped', 'failed'];
 const CANCELLABLE: NodeState[] = ['queued', 'running', 'awaiting-orchestrator'];
-// Largura ao abrir o app (não se guarda entre aberturas); a mínima deixa a barra da aba ativa legível em 320 px.
+// Largura inicial, sem layout guardado do projeto; a mínima deixa a barra da aba ativa legível em 320 px.
 export const PANEL_WIDTH = 520;
 export const PANEL_MIN = 320;
 // Objeto constante: o duplo clique na alça volta para a largura inicial (o DraggablePanel usa `defaultSize` nesse reset).
@@ -41,8 +41,6 @@ const TOOL_ICON: Record<Tool, ComponentType<{ size?: number; className?: string 
 
 // Acha a aba pelo `data-tab` e a revela na faixa (a regra de rolagem está em tab-strip).
 const reveal = (box: HTMLElement, id: string) => revealTab(box, [...box.querySelectorAll<HTMLElement>('[data-tab]')].find((el) => el.dataset.tab === id));
-
-const TOOL_NAME: Record<Tool, string> = { claude: 'Claude', codex: 'Codex' };
 
 /** Texto completo da escolha, para o tooltip e o aria-label. */
 const choiceLabel = (choice: Choice) => [TOOL_NAME[choice.tool], choice.model || 'padrão do CLI', choice.effort].filter(Boolean).join(' · ');
@@ -68,7 +66,7 @@ const Cover = ({ children }: { children: ReactNode }) => (
 );
 
 type TerminalsProps = {
-  orchestrator: { choice: Choice | null; started: boolean } | null;
+  orchestrator: { choice: Choice | null } | null;
   executors: ExecutorNode[];
   executorChoice: Choice | null;
   notice: string;
@@ -223,7 +221,7 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
               ) : (
                 <>
                   {orchestrator.choice && <ChoiceText choice={orchestrator.choice} />}
-                  {orchestrator.started && (
+                  {orchestrator.choice && (
                     <Button
                       type="default" size="small" className="ml-auto shrink-0"
                       icon={<SlidersHorizontal className="size-3.5" />}
@@ -263,9 +261,9 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
             {orchestrator && executors.map((e) => (
               <div
                 key={e.id}
-                className={`absolute inset-0${active !== e.id ? ' invisible' : ''}${FINISHED.includes(e.state) ? ' [&_.term]:opacity-60' : ''}`}
+                className={`absolute inset-0${active !== e.id ? ' invisible' : ''}`}
               >
-                <TermHost id={e.id} writable={false} onReady={attachExecutor} />
+                <TermHost id={e.id} writable={false} onReady={(view) => { view.setLive(); void view.attach(); }} />
                 {COVER_TEXT[e.state] && (
                   <Cover>
                     <Text as="p" type="secondary" fontSize={14} align="center" className="max-w-[300px]">{COVER_TEXT[e.state]}</Text>

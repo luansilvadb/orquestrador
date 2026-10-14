@@ -917,7 +917,6 @@ const commands: Record<string, (args: any) => unknown> = {
   set_executor_choice: ({ choice }: { choice: Choice }) => {
     if (choice.model.includes(' ')) throw `executor: modelo '${choice.model}' inválido (sem espaço, aspas nem iniciar com '-')`;
     options.last.executor = executorChoice = choice;
-    emit('executor-choice', choice);
     for (const job of jobs.values()) if (job.state === 'awaiting-choice') setState(job, 'queued');
     schedule();
   },
@@ -1004,7 +1003,6 @@ const commands: Record<string, (args: any) => unknown> = {
     if (id === ORCHESTRATOR && alive) typed(text);
     if (shells.has(id)) shellTyped(id, text);
   },
-  clipboard_files: () => clip.paths.slice(),
   list_dir: ({ path }: { path: string }) => {
     const dir = folderAt(path);
     if (!dir) throw `Pasta não encontrada: ${path}`;
@@ -1055,11 +1053,6 @@ const commands: Record<string, (args: any) => unknown> = {
   stop_executor: ({ id }: { id: string }) => {
     const job = jobs.get(id);
     if (job && (job.state === 'queued' || live(job.state))) finish(job, 'stopped');
-  },
-  clear_done: () => {
-    const ids = [...jobs.values()].filter((j) => ['done', 'stopped', 'failed'].includes(j.state)).map((j) => j.id);
-    ids.forEach((id) => { jobs.delete(id); terms.delete(id); });
-    return ids;
   },
   has_running: () => alive || [...jobs.values()].some((j) => live(j.state)),
   shutdown: () => killAll(),

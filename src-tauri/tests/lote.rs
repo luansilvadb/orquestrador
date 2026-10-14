@@ -179,17 +179,45 @@ impl Bench {
             .unwrap()
     }
 
+    /// A linha de delegação com cada tarefa numa here-string de aspas simples, como o orquestrador Claude a escreve:
+    /// ` @'`, quebra de linha, o texto como está, quebra de linha e `'@` no começo da linha. Entre duas tarefas é
+    /// `'@ @'` na mesma linha. Nada é escapado.
+    fn here_line(&self, tasks: &[&str]) -> String {
+        let mut line = self.core.delegate_command().expect("a sessão do orquestrador está aberta");
+        for task in tasks {
+            line += " @'\n";
+            line += task;
+            line += "\n'@";
+        }
+        line
+    }
+
     /// Com `-EncodedCommand` a linha vai em base64, então o quoting do teste não mexe nela. Nada é acrescentado
     /// depois dela: o código de saída é o que o próprio adaptador deixa no processo.
-    fn delegate(&self, shell: &str, tasks: &[&str]) -> Child {
-        let utf16: Vec<u8> = self.line(tasks).encode_utf16().flat_map(u16::to_le_bytes).collect();
+    fn encoded(&self, shell: &str, line: &str) -> Child {
+        let utf16: Vec<u8> = line.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
         self.spawn_shell(shell, &["-EncodedCommand", &encoded])
+    }
+
+    fn delegate(&self, shell: &str, tasks: &[&str]) -> Child {
+        self.encoded(shell, &self.line(tasks))
     }
 
     /// O caminho real: `-Command` com a linha, como o shell do orquestrador a roda, sem `exit` acrescentado.
     fn delegate_cmd(&self, shell: &str, tasks: &[&str]) -> Child {
         let line = self.line(tasks);
+        self.spawn_shell(shell, &["-Command", &line])
+    }
+
+    /// `delegate` com a linha em here-strings (`here_line`).
+    fn delegate_here(&self, shell: &str, tasks: &[&str]) -> Child {
+        self.encoded(shell, &self.here_line(tasks))
+    }
+
+    /// `delegate_cmd` com a linha em here-strings: o caminho real do orquestrador Claude.
+    fn delegate_cmd_here(&self, shell: &str, tasks: &[&str]) -> Child {
+        let line = self.here_line(tasks);
         self.spawn_shell(shell, &["-Command", &line])
     }
 
@@ -280,7 +308,6 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     // Teto 2 (das CPUs): A e B abrem, C fica na fila; quando A termina, C abre e falha sem sinal de fim.
     assert!(b.core.set_executor_choice(Choice::new("codex", "", "enorme")).is_err());
     b.core.set_executor_choice(Choice::new("codex", "gpt-x", "low")).unwrap();
-    assert_eq!(b.wait("executor-choice", |e, _| e == "executor-choice")["tool"], "codex");
     assert_eq!(b.state(&a, "running")["choice"]["model"], "gpt-x");
     b.state(&bb, "running");
     b.state(&c, "queued");
@@ -305,8 +332,8 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
         --- GIT ---\ngit status (tudo o que está alterado agora, inclusive o que já estava pendente antes desta delegação):\n\
         ?? novo.txt\n--- FIM ---\n";
     assert_eq!(out, expected);
-    // A tela do executor concluído continua guardada depois de o processo ser encerrado.
-    assert!(b.screen(&a).contains("feito: linha 2"));
+    // O executor concluído já saiu: o slot foi tirado junto com o estado final, e a tela não fica guardada.
+    assert_eq!(b.core.term_snapshot(&a).seq, 0, "o slot do executor concluído saiu");
 
     // Com a escolha feita, o próximo lote abre sozinho; agora pelo pwsh e com executor Claude.
     b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
@@ -344,13 +371,6 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     }
     assert_eq!(b.requests(), before, "tarefa vazia não chega a publicar lote");
 
-    let mut cleared = b.core.clear_done();
-    cleared.sort();
-    let mut all = vec![a.clone(), bb, c, id(node), d];
-    all.sort();
-    assert_eq!(cleared, all);
-    assert_eq!(b.core.term_snapshot(&a).seq, 0);
-
     assert!(b.core.has_running());
     let session = b.core.session_dir().unwrap();
     b.core.shutdown();
@@ -375,6 +395,37 @@ fn texto_original_chega_igual_ao_pedido_publicado_nos_dois_shells() {
             assert_eq!(nodes[n]["title"], title(task), "{shell}: título da tarefa {}", n + 1);
         }
         assert!(out.contains(&format!("--- EXECUTOR {}/{} ---\n", TASKS.len(), TASKS.len())), "{shell}: {out}");
+    }
+}
+
+/// Tarefas na here-string de aspas simples: apóstrofo sem dobrar, várias linhas, e `; ( ) < > * @ $`, crase, aspas
+/// duplas e barra no fim.
+const AQUI: [&str; 3] = [
+    "Ação: d'água, it's ''ok''",
+    "Linha 1; (x) <y> *z* @ $HOME\nLinha 2 `crase` \"aspas\" e barra no fim\\",
+    "C:\\Users\\Maria Silva\\ ; $(calc) && não",
+];
+
+/// O caminho da here-string nos dois shells, por `-EncodedCommand` e por `-Command`: cada texto publicado é o
+/// pedido, byte a byte, e o lote termina com código 0.
+#[test]
+fn here_string_chega_igual_ao_pedido_nos_dois_shells_e_nos_dois_jeitos() {
+    let b = bench("aqui");
+    b.pronto();
+    for shell in ["powershell", "pwsh"] {
+        for jeito in ["encoded", "command"] {
+            let run = if jeito == "encoded" { b.delegate_here(shell, &AQUI) } else { b.delegate_cmd_here(shell, &AQUI) };
+            let nodes = b.added(AQUI.len());
+            let (code, out) = finish(run);
+            assert_eq!(code, 0, "{shell} {jeito}: {out}");
+            let batch = b.last_batch();
+            for (n, task) in AQUI.iter().enumerate() {
+                let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
+                assert_eq!(published, *task, "{shell} {jeito}: a tarefa {} chegou diferente do pedido", n + 1);
+                assert_eq!(nodes[n]["title"], title(task), "{shell} {jeito}: título da tarefa {}", n + 1);
+            }
+            assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", AQUI.len())), "{shell} {jeito}: {out}");
+        }
     }
 }
 
@@ -444,7 +495,6 @@ fn saida_do_orquestrador_mata_os_executores_e_limpa_sessao_e_regra() {
     assert_eq!(b.wait("orchestrator-exit", |e, _| e == "orchestrator-exit")["code"], 7);
     assert!(!b.core.has_running());
     assert!(!session.exists() && !rule.exists());
-    assert!(b.core.clear_done().is_empty());
     // O comando que esperava percebe que a sessão acabou em vez de esperar para sempre.
     let (code, out) = finish(run);
     assert_eq!(code, 4, "{out}");

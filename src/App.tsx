@@ -22,7 +22,7 @@ import {
 } from './types';
 
 const MB = 1024 * 1024;
-// Larguras da linha principal: o Nav, o mínimo que cada grupo do editor mantém (vezes o número de grupos), e a faixa da árvore e da pesquisa (a inicial, que não se guarda entre aberturas, e a mínima).
+// Larguras da linha principal: o Nav, o mínimo que cada grupo do editor mantém (vezes o número de grupos), e a faixa da árvore e da pesquisa (a inicial, que só vale sem layout guardado: a largura que o usuário dá fica guardada por projeto, no layout que a recuperação do editor leva; e a mínima).
 const NAV_WIDTH = 44;
 const CENTER_MIN_WIDTH = 240;
 const SIDE_WIDTH = 280;
@@ -45,7 +45,7 @@ type State = {
   project: string;
   projectBusy: boolean;
   options: Options | null;
-  orchestrator: { choice: Choice | null; started: boolean; overlay: Overlay } | null;
+  orchestrator: { choice: Choice | null; overlay: Overlay } | null;
   executorChoice: Choice | null;
   executors: ExecutorNode[];
   notice: string;
@@ -87,10 +87,10 @@ function reducer(state: State, action: Action): State {
     case 'open':
       return {
         ...state, options: action.options, notice: '',
-        orchestrator: { choice: null, started: false, overlay: 'start' },
+        orchestrator: { choice: null, overlay: 'start' },
       };
     case 'started':
-      return { ...state, orchestrator: state.orchestrator && { ...state.orchestrator, choice: action.choice, started: true, overlay: null } };
+      return { ...state, orchestrator: state.orchestrator && { ...state.orchestrator, choice: action.choice, overlay: null } };
     case 'overlay':
       return { ...state, orchestrator: state.orchestrator && { ...state.orchestrator, overlay: action.overlay } };
     case 'executorChoice':
@@ -385,9 +385,11 @@ export function App() {
           // Os dois estados vivos: o PTY já existe, então setLive só reenvia o tamanho. Não recria nem zera o terminal.
           if (next === 'running' || next === 'awaiting-orchestrator') terminals.get(id)?.setLive();
           // Executor que terminou fecha a própria aba; a resposta dele já seguiu para o orquestrador.
-          if (FINISHED.includes(next)) void clearDone();
+          if (FINISHED.includes(next)) {
+            terminals.forget(id);
+            dispatch({ type: 'removed', ids: [id] });
+          }
         }),
-        host().listen('executor-choice', (choice) => dispatch({ type: 'executorChoice', choice })),
         host().listen('orchestrator-exit', ({ code }) =>
           resetOrchestrator(`O orquestrador terminou (${code === null ? 'sem código de saída' : `código de saída ${code}`}).`)),
         // `exit` num shell: o backend já o encerrou, então só a aba dele sai (a última fecha o painel).
@@ -494,22 +496,13 @@ export function App() {
 
   async function saveExecutorChoice(choice: Choice) {
     await backend.setExecutorChoice(choice);
+    dispatch({ type: 'executorChoice', choice });
     dispatch({ type: 'overlay', overlay: null });
   }
 
   // Foco das janelas de escolha: ao fechar, a janela não devolve o foco ao botão que as abriu.
   function focusOrchestrator() {
     terminals.get(ORCHESTRATOR)?.term.focus();
-  }
-
-  async function clearDone() {
-    try {
-      const ids = await backend.clearDone();
-      ids.forEach((id) => terminals.forget(id));
-      dispatch({ type: 'removed', ids });
-    } catch (e) {
-      report(e);
-    }
   }
 
   // Tira a aba do estado e descarta o terminal dela. Não fala com o backend: quem chama decide se o shell morre.
@@ -647,7 +640,7 @@ export function App() {
     reveal: (path) => void backend.revealFile(path).catch(report),
     openWith: (path) => void backend.openWith(path).catch(report),
     openInTerminal: (dir) => openShellAt(dir),
-    addToChat: orchestrator?.started ? addToChat : null,
+    addToChat: orchestrator?.choice ? addToChat : null,
     // Copiar e recortar põem os itens no clipboard do Windows: colar é no Explorer. Recortar não move nada agora.
     copyMany: (paths, cut) => {
       backend.copyFiles(paths, cut).then(

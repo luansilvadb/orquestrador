@@ -346,7 +346,6 @@ impl Core {
         cfg.executor = choice.clone();
         config::save(&inner.cfg_path, &cfg)?;
         inner.choice = Some(choice.clone());
-        (self.emit)("executor-choice", json!(choice));
         self.schedule(&mut inner);
         Ok(())
     }
@@ -388,16 +387,6 @@ impl Core {
             let outcome = Outcome { text: "interrompido pelo usuário".into(), exit: "interrompido".into(), ok: false };
             self.finish(&mut inner, i, NodeState::Stopped, outcome);
         }
-    }
-
-    pub fn clear_done(&self) -> Vec<String> {
-        let mut inner = self.inner.lock().unwrap();
-        let ids: Vec<String> = inner.nodes.iter().filter(|n| n.info.state.is_final()).map(|n| n.info.id.clone()).collect();
-        inner.nodes.retain(|n| !n.info.state.is_final());
-        for id in &ids {
-            inner.slots.remove(id);
-        }
-        ids
     }
 
     pub fn has_running(&self) -> bool {
@@ -502,6 +491,8 @@ impl Core {
                     }
                 }
             }
+            // Só aqui, fora do laço por índice: o resultado do nó final já está no lote, então ele pode sair da lista.
+            inner.nodes.retain(|n| !n.info.state.is_final());
             turns = turns.wrapping_add(1);
             let queued = inner.nodes.iter().any(|n| n.info.state == NodeState::Queued);
             if turns % 5 == 0 && queued && inner.choice.is_some() && !inner.git_exclusive {
@@ -514,7 +505,6 @@ impl Core {
     /// `AwaitingOrchestrator` enquanto houver pedido sem resposta, de volta a `Running` quando não houver.
     fn watch_asks(&self, inner: &mut Inner, i: usize) {
         let dir = inner.nodes[i].dir.join("ask");
-        hook::deliver_answers(&dir);
         let waiting = !hook::pending_asks(&dir).is_empty();
         let state = match (inner.nodes[i].info.state, waiting) {
             (NodeState::Running, true) => NodeState::AwaitingOrchestrator,
@@ -648,8 +638,9 @@ impl Core {
         self.schedule(inner);
     }
 
-    /// Estado final de um nó: avisa o frontend, encerra o processo, guarda o resultado no lote
-    /// e, se era o último, entrega o lote. Não mexe na fila (quem chama decide).
+    /// Estado final de um nó: avisa o frontend, tira o slot (o processo morre com ele e a tela some), guarda
+    /// o resultado no lote e, se era o último, entrega o lote. Não mexe na fila (quem chama decide), nem tira o
+    /// nó de `inner.nodes`: quem percorre os nós por índice é o laço do `pump`, que faz essa limpeza depois.
     fn finish_quiet(&self, inner: &mut Inner, i: usize, state: NodeState, outcome: Outcome) {
         let node = &mut inner.nodes[i].info;
         node.state = state;
@@ -657,21 +648,7 @@ impl Core {
         self.announce(&inner.nodes[i].info, false);
         // O pedido sem resposta morre com o nó: quem lista as perguntas para o orquestrador deixa de vê-lo.
         hook::clear_asks(&inner.nodes[i].dir.join("ask"));
-        if state == NodeState::Done {
-            // O sinal de fim chega antes do último quadro da tela: o processo ganha um instante
-            // para desenhá-lo, e o que fica guardado no bloco é a tela final.
-            let (core, gen) = (self.clone(), inner.slots.get(&id).map_or(0, |s| s.gen));
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(1500));
-                if let Some(slot) = core.inner.lock().unwrap().slots.get_mut(&id) {
-                    if slot.gen == gen {
-                        slot.term = None;
-                    }
-                }
-            });
-        } else if let Some(slot) = inner.slots.get_mut(&id) {
-            slot.term = None;
-        }
+        inner.slots.remove(&id);
         if let Some(b) = inner.batches.iter_mut().find(|b| b.id == batch) {
             b.outcomes[index] = Some(outcome);
         }

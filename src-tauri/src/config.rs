@@ -46,8 +46,8 @@ impl Choice {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Config {
     pub orchestrator: Choice,
     pub executor: Choice,
@@ -101,26 +101,18 @@ pub fn config_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(base).join("orquestrador").join("config.json"))
 }
 
-/// Os padrões com o que o arquivo define por cima, validado. Sem arquivo, os padrões. Arquivo
-/// ilegível ou resultado inválido é erro, com o motivo: não há fallback. Uma chave `maxParallel` de versões
+/// O arquivo é lido como `Config` (ver o derive): chave que falta vale o padrão do que ela cobre. Forma errada é
+/// erro, sem cair no padrão: papel sem `tool`, valor `null` ou arquivo que não é objeto. Sem arquivo, os padrões.
+/// Arquivo ilegível ou resultado inválido é erro, com o motivo: não há fallback. Uma chave `maxParallel` de versões
 /// antigas é ignorada: o teto de executores é automático (ver `capacity`).
 pub fn read(path: &Path) -> Result<Config, String> {
-    let mut cfg = Config::default();
-    if path.is_file() {
+    let cfg = if path.is_file() {
         let unreadable = |e: String| format!("Configuração inválida (JSON ilegível) em {}: {e}", path.display());
         let text = std::fs::read_to_string(path).map_err(|e| unreadable(e.to_string()))?;
-        let file: serde_json::Value =
-            serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| unreadable(e.to_string()))?;
-        for (role, choice) in [("orchestrator", &mut cfg.orchestrator), ("executor", &mut cfg.executor)] {
-            for (key, slot) in [("tool", &mut choice.tool), ("model", &mut choice.model), ("effort", &mut choice.effort)] {
-                match &file[role][key] {
-                    serde_json::Value::String(s) if !s.is_empty() => *slot = s.clone(),
-                    serde_json::Value::Null | serde_json::Value::String(_) => {}
-                    other => *slot = other.to_string(),
-                }
-            }
-        }
-    }
+        serde_json::from_str::<Config>(text.trim_start_matches('\u{feff}')).map_err(|e| unreadable(e.to_string()))?
+    } else {
+        Config::default()
+    };
     let errors: Vec<String> =
         [check_role("orchestrator", &cfg.orchestrator), check_role("executor", &cfg.executor)].concat();
     if errors.is_empty() { Ok(cfg) } else { Err(invalid(path, &errors.join("; "))) }
@@ -152,16 +144,10 @@ pub struct ToolOption {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct Last {
-    pub orchestrator: Choice,
-    pub executor: Choice,
-}
-
-#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Options {
     pub tools: Vec<ToolOption>,
-    pub last: Last,
+    pub last: Config,
 }
 
 /// A saída de `codex debug models` -> modelos visíveis, cada um com os esforços que aceita.
@@ -211,7 +197,7 @@ pub fn options(cfg: &Config, codex_exe: &str) -> Options {
                 models: models(t, codex_exe),
             })
             .collect(),
-        last: Last { orchestrator: cfg.orchestrator.clone(), executor: cfg.executor.clone() },
+        last: cfg.clone(),
     }
 }
 
@@ -271,6 +257,17 @@ mod tests {
         let path = temp("bad");
         std::fs::write(&path, "{ isto nao e json").unwrap();
         assert!(read(&path).unwrap_err().contains("JSON ilegível"));
+        drop_dir(&path);
+    }
+
+    /// A forma errada não cai no padrão: papel sem `tool`, valor `null` e arquivo que não é objeto são erro.
+    #[test]
+    fn forma_errada_e_erro_e_nao_cai_no_padrao() {
+        let path = temp("forma");
+        for json in [r#"{"executor":{"model":"opus"}}"#, r#"{"executor":{"tool":"claude","model":null}}"#, r#"["claude"]"#] {
+            std::fs::write(&path, json).unwrap();
+            assert!(read(&path).unwrap_err().contains("JSON ilegível"), "{json}");
+        }
         drop_dir(&path);
     }
 

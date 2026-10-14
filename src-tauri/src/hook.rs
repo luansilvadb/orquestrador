@@ -73,8 +73,8 @@ fn ask_within(dir: &Path, payload: &str, deadline: Duration) -> Value {
     let reply = dir.join(format!("{id}.reply"));
     let started = Instant::now();
     let decision = loop {
-        // A resposta é lida antes do prazo: quem chega no instante do prazo vale, ou é apagada abaixo junto com o
-        // pedido e não tem efeito. O app só grava resposta para pedido que existe (`deliver_answers`).
+        // A resposta é lida antes do prazo: quem chega no instante do prazo vale. Uma gravada depois que este
+        // `--ask` saiu fica órfã na pasta, sem leitor, até o nó terminar e `clear_asks` a levar.
         if let Ok(text) = std::fs::read_to_string(&reply) {
             break serde_json::from_str(&text).unwrap_or_else(|_| deny("A resposta do orquestrador não é JSON válido."));
         }
@@ -103,37 +103,17 @@ fn deny(message: &str) -> Value {
 }
 
 /// Os pedidos de confirmação de `dir` que ainda esperam decisão, pelo id, na ordem em que chegaram. Um
-/// pedido já tem resposta quando há `<id>.reply` (o `--ask` ainda não a leu) ou `<id>.answer.json` (o
-/// orquestrador respondeu e o app ainda não a entregou).
+/// pedido está pendente quando tem `<id>.json` e não tem `<id>.reply`, que é onde o orquestrador grava a decisão.
 pub fn pending_asks(dir: &Path) -> Vec<String> {
     let mut ids: Vec<String> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
-        .filter_map(|e| e.file_name().to_str()?.strip_suffix(".json").filter(|id| !id.ends_with(".answer")).map(String::from))
-        .filter(|id| !dir.join(format!("{id}.reply")).exists() && !dir.join(format!("{id}.answer.json")).exists())
+        .filter_map(|e| e.file_name().to_str()?.strip_suffix(".json").map(String::from))
+        .filter(|id| !dir.join(format!("{id}.reply")).exists())
         .collect();
     ids.sort();
     ids
-}
-
-/// O app entrega as respostas: cada `<id>.answer.json` vira `<id>.reply`, que o `--ask` espera. Um
-/// answer cujo pedido já não existe (o nó terminou, ou o `--ask` saiu no prazo) só some.
-pub fn deliver_answers(dir: &Path) {
-    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(id) = name.strip_suffix(".answer.json") else { continue };
-        if dir.join(format!("{id}.json")).is_file() {
-            if let Ok(decision) = std::fs::read(entry.path()) {
-                let _ = put(dir, &format!("{id}.reply"), &decision);
-                // O `--ask` pode ter saído entre a checagem e a gravação: a resposta sem pedido não fica na pasta.
-                if !dir.join(format!("{id}.json")).is_file() {
-                    let _ = std::fs::remove_file(dir.join(format!("{id}.reply")));
-                }
-            }
-        }
-        let _ = std::fs::remove_file(entry.path());
-    }
 }
 
 /// Tira tudo o que a pasta tem. Um nó que termina leva consigo os pedidos sem resposta: o `--ask` que
@@ -247,19 +227,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Uma resposta dada pelo orquestrador (`answer.json`) passa a `reply` pelo app e é lida pelo `--ask`,
-    /// com o motivo de recusa inteiro.
+    /// Uma resposta gravada pelo orquestrador como `<id>.reply` é lida pelo `--ask`, com o motivo de recusa inteiro.
     #[test]
-    fn resposta_do_orquestrador_passa_pelo_app_e_chega_ao_ask_com_o_motivo() {
+    fn resposta_do_orquestrador_chega_ao_ask_com_o_motivo() {
         let dir = fresh("ask-recusa");
         let app_dir = dir.clone();
         let app = std::thread::spawn(move || {
             let id = first_request(&app_dir);
-            put(&app_dir, &format!("{id}.answer.json"), br#"{"behavior":"deny","message":"use o caminho do projeto"}"#).unwrap();
-            while !app_dir.join(format!("{id}.reply")).is_file() {
-                deliver_answers(&app_dir);
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            put(&app_dir, &format!("{id}.reply"), br#"{"behavior":"deny","message":"use o caminho do projeto"}"#).unwrap();
         });
         let decision = ask_within(&dir, r#"{"tool_name":"Bash"}"#, ASK_DEADLINE);
         app.join().unwrap();
@@ -282,28 +257,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Pedido sem resposta e pedido já respondido não contam como pendentes; o `.tmp` de uma publicação em
-    /// curso também não.
+    /// Pedido sem resposta é pendente; pedido com `.reply` não é. O `.tmp` de uma publicação em curso também não.
     #[test]
     fn pendentes_sao_os_pedidos_sem_decisao() {
         let dir = fresh("pendentes");
-        for name in ["a.json", "b.json", "c.json", "c.reply", "d.json", "d.answer.json", "e.json.tmp", "f.answer.json"] {
+        for name in ["a.json", "b.json", "c.json", "c.reply", "d.json", "e.json.tmp"] {
             std::fs::write(dir.join(name), "{}").unwrap();
         }
-        assert_eq!(pending_asks(&dir), ["a", "b"]);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn entregar_resposta_gera_reply_e_some_com_o_answer() {
-        let dir = fresh("entrega");
-        std::fs::write(dir.join("a.json"), "{}").unwrap();
-        std::fs::write(dir.join("a.answer.json"), r#"{"behavior":"allow"}"#).unwrap();
-        std::fs::write(dir.join("orfa.answer.json"), r#"{"behavior":"allow"}"#).unwrap();
-        deliver_answers(&dir);
-        assert_eq!(std::fs::read_to_string(dir.join("a.reply")).unwrap(), r#"{"behavior":"allow"}"#);
-        assert!(!dir.join("a.answer.json").exists() && !dir.join("orfa.answer.json").exists() && !dir.join("orfa.reply").exists());
-        assert!(pending_asks(&dir).is_empty());
+        assert_eq!(pending_asks(&dir), ["a", "b", "d"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -323,8 +284,7 @@ mod tests {
         let app_dir = dir.clone();
         let app = std::thread::spawn(move || {
             let id = first_request(&app_dir);
-            put(&app_dir, &format!("{id}.answer.json"), br#"{"behavior":"allow"}"#).unwrap();
-            deliver_answers(&app_dir);
+            put(&app_dir, &format!("{id}.reply"), br#"{"behavior":"allow"}"#).unwrap();
         });
         assert_eq!(ask_within(&dir, "{}", Duration::from_secs(10)), json!({ "behavior": "allow" }));
         app.join().unwrap();
@@ -332,19 +292,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Resposta que chega depois do prazo não tem efeito: o `--ask` já saiu com a negativa, e a entrega que vier
-    /// depois não grava `reply` nem deixa nada na pasta.
+    /// Resposta gravada depois do prazo não tem efeito: o `--ask` já saiu com a negativa, e a resposta fica órfã
+    /// na pasta, sem leitor, até `clear_asks` a levar quando o nó termina.
     #[test]
     fn resposta_que_chega_depois_do_prazo_nao_tem_efeito() {
         let dir = fresh("ask-tarde");
         let asker_dir = dir.clone();
         let asker = std::thread::spawn(move || ask_within(&asker_dir, "{}", Duration::from_millis(200)));
         let id = first_request(&dir);
-        put(&dir, &format!("{id}.answer.json"), br#"{"behavior":"allow"}"#).unwrap();
         assert_eq!(asker.join().unwrap(), deny(NO_ANSWER));
-        deliver_answers(&dir);
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nada sobra na pasta");
+        put(&dir, &format!("{id}.reply"), br#"{"behavior":"allow"}"#).unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "a resposta órfã fica na pasta, sem leitor");
         assert!(pending_asks(&dir).is_empty());
+        clear_asks(&dir);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "o nó que termina leva a resposta órfã");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

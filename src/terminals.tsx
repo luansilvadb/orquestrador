@@ -19,12 +19,6 @@ export const terminals = {
   },
 };
 
-/** Executor: liga o PTY e puxa o que já saiu, assim que o terminal existe. */
-export const attachExecutor = (view: TermView) => {
-  view.setLive();
-  void view.attach();
-};
-
 export function TermHost({ id, writable, onReady }: { id: string; writable: boolean; onReady?: (view: TermView) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const ready = useRef(onReady);

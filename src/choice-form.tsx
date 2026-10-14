@@ -3,13 +3,12 @@ import { useId, useState, type FormEvent } from 'react';
 import { Flexbox } from '@lobehub/ui';
 import { Alert, Button, Modal, Segmented, Select, Text } from '@lobehub/ui/base-ui';
 import { message } from './backend';
-import type { Choice, Options, Tool, ToolOption } from './types';
+import { TOOL_NAME, type Choice, type Options, type Tool, type ToolOption } from './types';
 
 // Valores sentinela: as opções do Select precisam de um valor não vazio. '' no Choice = padrão do CLI.
 const DEFAULT = '__default__';
 
 // Rótulos legíveis; o valor técnico (o que vai ao backend) continua o mesmo.
-const TOOL_LABEL: Record<Tool, string> = { claude: 'Claude', codex: 'Codex' };
 const EFFORT_LABEL: Record<string, string> = { low: 'Baixo', medium: 'Médio', high: 'Alto', xhigh: 'Muito alto', max: 'Máximo' };
 
 // Só os esforços que o modelo aceita; modelo fora da lista (ou padrão) recebe todos os da ferramenta.
@@ -113,7 +112,7 @@ function ChoiceFields({ hint, options, initial, confirmLabel, onConfirm, onCance
             block
             value={choice.tool}
             onChange={(v) => pickTool(v as Tool)}
-            options={options.tools.map((t) => ({ value: t.name, label: TOOL_LABEL[t.name] ?? t.name }))}
+            options={options.tools.map((t) => ({ value: t.name, label: TOOL_NAME[t.name] ?? t.name }))}
           />
         </Flexbox>
       </Flexbox>

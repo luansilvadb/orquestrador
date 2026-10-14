@@ -64,9 +64,7 @@ export const backend = {
   termWrite: (id: string, data: string) => call<void>('term_write', { id, data }),
   termResize: (id: string, cols: number, rows: number) => call<void>('term_resize', { id, cols, rows }),
   termSnapshot: (id: string) => call<Snapshot>('term_snapshot', { id }),
-  clipboardFiles: () => call<string[]>('clipboard_files'),
   stopExecutor: (id: string) => call<void>('stop_executor', { id }),
-  clearDone: () => call<string[]>('clear_done'),
   hasRunning: () => call<boolean>('has_running'),
   shutdown: () => call<void>('shutdown'),
   // Caminho relativo à pasta do projeto, com "/"; '' é a raiz.

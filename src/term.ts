@@ -76,7 +76,7 @@ export class TermView {
     const text = e.clipboardData?.getData('text') ?? '';
     e.preventDefault();
     e.stopImmediatePropagation();
-    void backend.clipboardFiles().then((paths) => {
+    void backend.clipboardSnapshot().then(({ paths }) => {
       if (paths.length) return this.pasteFiles(paths);
       else if (image) return backend.termWrite(this.id, this.imagePaste);
       else if (text) this.term.paste(text);

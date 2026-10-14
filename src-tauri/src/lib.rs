@@ -378,24 +378,11 @@ fn term_snapshot(core: State<Core>, gate: State<Gate>, id: String) -> Result<Sna
     Ok(core.term_snapshot(&id))
 }
 
-/// Os arquivos copiados no Explorer que estão no clipboard, para o colar do terminal do orquestrador.
-#[tauri::command(async)]
-fn clipboard_files(gate: State<Gate>) -> Result<Vec<String>, String> {
-    gate.ensure_open()?;
-    Ok(clipboard::snapshot().paths.iter().map(|p| p.to_string_lossy().into_owned()).collect())
-}
-
 #[tauri::command(async)]
 fn stop_executor(core: State<Core>, gate: State<Gate>, id: String) -> Result<(), String> {
     gate.ensure_open()?;
     core.stop_executor(&id);
     Ok(())
-}
-
-#[tauri::command(async)]
-fn clear_done(core: State<Core>, gate: State<Gate>) -> Result<Vec<String>, String> {
-    gate.ensure_open()?;
-    Ok(core.clear_done())
 }
 
 #[tauri::command(async)]
@@ -490,9 +477,7 @@ pub fn run(context: tauri::Context) {
             term_write,
             term_resize,
             term_snapshot,
-            clipboard_files,
             stop_executor,
-            clear_done,
             has_running,
             shutdown,
             update_status,

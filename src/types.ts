@@ -1,5 +1,7 @@
 // Tipos do contrato (JSON, camelCase). '' em modelo ou esforço = padrão do CLI.
 export type Tool = 'claude' | 'codex';
+// Nome de cada ferramenta na tela; o valor técnico (`Tool`) é o que vai ao backend.
+export const TOOL_NAME: Record<Tool, string> = { claude: 'Claude', codex: 'Codex' };
 export type Choice = { tool: Tool; model: string; effort: string };
 export type ModelOption = { name: string; efforts: string[] };
 export type ToolOption = { name: Tool; efforts: string[]; models: ModelOption[] };
@@ -109,7 +111,6 @@ export type Events = {
   'term-data': TermData;
   'node-added': ExecutorNode;
   'node-state': NodeStateEvent;
-  'executor-choice': Choice;
   'orchestrator-exit': { code: number | null };
   'shell-exit': { id: string; code: number | null };
   'update-status': UpdateStatus;
