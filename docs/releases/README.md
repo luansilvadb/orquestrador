@@ -64,7 +64,7 @@ Tabela: área, versão anterior, versão nova. Cite a versão anterior pelo nome
    - roda `npm run build`, `check-file-tabs`, `check-release` e `cargo test`;
    - gera o instalador NSIS assinado e o `latest.json` em rascunho (`tauri-action`);
    - põe as notas completas no corpo da release e no `notes` do `latest.json`, e aponta a URL do instalador para a URL pública da tag;
-   - confere o rascunho: baixa o instalador, o `.sig` e o `latest.json`; verifica a assinatura Minisign do instalador com a pubkey de `tauri.conf.json` (key id, assinatura do arquivo e comentário confiável); confere versão, URL, assinatura e notas do `latest.json`; e confere que o corpo da release é o texto das notas (só diferença de CRLF/LF e espaço final é ignorada; qualquer mudança de conteúdo é recusada);
+   - confere o rascunho: baixa o instalador, o `.sig` e o `latest.json`; verifica a assinatura Minisign do instalador com a pubkey de `tauri.conf.json` (key id, assinatura do arquivo e comentário confiável); confere versão, URL, assinatura e notas do `latest.json`; e confere que o corpo da release é o texto das notas (só diferença de CRLF/LF e espaço final é ignorada; qualquer mudança de conteúdo é recusada; o campo `notes` do `latest.json` segue a mesma regra);
    - só então publica como a última release estável e confere, pela API (`releases/latest`) e pelo `latest.json` público, que a tag é a última.
 
 ## Conferências fora do workflow

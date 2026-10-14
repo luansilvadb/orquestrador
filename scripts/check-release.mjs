@@ -118,6 +118,21 @@ check('Manifesto: URL de rascunho, assinatura trocada ou notes antigas são recu
   assert.throws(() => verifyManifest(fixed, '0.1.8', sig), /anuncia 0\.1\.7, não 0\.1\.8/);
 });
 
+check('Notes do latest.json: CRLF x LF e espaço final são o mesmo texto; conteúdo alterado é recusado', () => {
+  const sig = sigFor('0.1.7');
+  const lf = validNotes();
+  const crlf = lf.replace(/\n/g, '\r\n');
+  // O manifesto publicado da v0.1.7 traz CRLF; as notas locais são LF. Nos dois sentidos, e com espaço final.
+  const crlfManifest = JSON.stringify({ ...JSON.parse(prepareManifest(manifest('0.1.7', sig), '0.1.7', lf)), notes: crlf }, null, 2);
+  assert.doesNotThrow(() => verifyManifest(crlfManifest, '0.1.7', sig, lf));
+  assert.doesNotThrow(() => verifyManifest(prepareManifest(manifest('0.1.7', sig), '0.1.7', crlf), '0.1.7', sig, crlf));
+  assert.doesNotThrow(() => verifyManifest(crlfManifest, '0.1.7', sig, `${crlf}\r\n`));
+  assert.throws(() => verifyManifest(crlfManifest, '0.1.7', sig, lf.replace('Resumo', 'Resumo alterado')), /notes do latest\.json/);
+  assert.throws(() => verifyManifest(crlfManifest, '0.1.7', sig, `${lf}x`), /notes do latest\.json/);
+  // prepareManifest grava a forma canônica (LF) para as próximas versões.
+  assert.equal(JSON.parse(prepareManifest(manifest('0.1.7', sig), '0.1.7', crlf)).notes, lf.trim());
+});
+
 check('prepareManifest põe a URL pública e o texto completo das notas', () => {
   const sig = sigFor('0.1.7');
   const out = JSON.parse(prepareManifest(manifest('0.1.7', sig), '0.1.7', `${validNotes()}\n`));

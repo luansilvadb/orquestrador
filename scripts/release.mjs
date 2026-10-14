@@ -136,7 +136,7 @@ export function prepareManifest(text, version, notes, repo = REPO) {
   const keys = Object.keys(manifest.platforms ?? {}).filter((key) => key.startsWith('windows-x86_64'));
   if (keys.length === 0) throw new Error('latest.json sem plataforma windows-x86_64.');
   for (const key of keys) manifest.platforms[key].url = installerUrl(version, repo);
-  manifest.notes = notes.trim();
+  manifest.notes = canonicalText(notes.trim());
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
@@ -161,7 +161,7 @@ export function verifyManifest(text, version, sigText, notes, repo = REPO) {
   }
   const signed = signedVersion(sigText);
   if (signed !== version) problems.push(`a versão assinada é ${signed ?? 'ausente'}, não ${version}`);
-  if (notes !== undefined && manifest.notes?.trim() !== notes.trim()) problems.push('notes do latest.json não são o texto completo de docs/releases');
+  if (notes !== undefined && canonicalText(manifest.notes ?? '') !== canonicalText(notes)) problems.push('notes do latest.json não são o texto completo de docs/releases');
   if (problems.length > 0) throw new Error(`latest.json recusado:\n  - ${problems.join('\n  - ')}`);
   return `latest.json de ${version}: URL, assinatura, versão assinada e notes conferidos.`;
 }
@@ -225,10 +225,15 @@ export function verifyInstaller(version, fileName, file, sigText, keyB64) {
   return `${fileName}: assinatura Minisign, key id e comentário confiável conferidos (versão ${version}).`;
 }
 
-// O corpo da release tem de ser o texto de docs/releases. Só diferença de representação é ignorada: CRLF x LF (checkout no Windows x armazenamento do GitHub) e espaço final.
+// Só diferença de representação é ignorada: CRLF x LF (checkout no Windows x armazenamento do GitHub) e espaço final.
+// Vale para o corpo da release e para o `notes` do latest.json; o conteúdo continua exato.
+export function canonicalText(s) {
+  return s.replace(/\r\n/g, '\n').replace(/\s+$/, '');
+}
+
+// O corpo da release tem de ser o texto de docs/releases.
 export function verifyBody(body, notes) {
-  const trimEnd = (s) => s.replace(/\r\n/g, '\n').replace(/\s+$/, '');
-  if (trimEnd(body ?? '') !== trimEnd(notes)) throw new Error('o corpo da release não é o texto completo de docs/releases.');
+  if (canonicalText(body ?? '') !== canonicalText(notes)) throw new Error('o corpo da release não é o texto completo de docs/releases.');
   return 'corpo da release igual às notas.';
 }
 
