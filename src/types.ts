@@ -59,7 +59,7 @@ export type GraphCommit = Commit & { parents: string[]; refs: GitRef[] };
 // `revision` é a da pasta: a gravação da resolução manda de volta a que a tela leu.
 export type Conflict = {
   path: string; base: string | null; ours: string | null; theirs: string | null; worktree: string | null;
-  binary: boolean; crlf: boolean; bom: boolean; revision: string;
+  binary: boolean; revision: string;
 };
 
 // Pesquisa de texto (contrato do backend, JSON em camelCase). `path` é relativo à raiz, com "/"; uma entrada por linha que casa.

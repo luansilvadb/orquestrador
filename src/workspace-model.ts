@@ -36,7 +36,6 @@ export type WorkspaceState = {
   version: typeof WORKSPACE_VERSION;
   groups: EditorGroup[]; // ordem = esquerda → direita
   focus: GroupId; // grupo com o foco do teclado
-  recent: string[]; // ids das abas, a usada por último primeiro
   closed: ClosedTab[]; // a última fechada é a última da lista
   nextId: number; // próximo número para `tab-<n>`
 };
@@ -51,7 +50,7 @@ const GROUP_IDS: GroupId[] = ['A', 'B'];
 const NO_DIRTY: ReadonlySet<string> = new Set();
 
 export function createWorkspace(): WorkspaceState {
-  return { version: WORKSPACE_VERSION, groups: [{ id: 'A', tabs: [], active: null }], focus: 'A', recent: [], closed: [], nextId: 1 };
+  return { version: WORKSPACE_VERSION, groups: [{ id: 'A', tabs: [], active: null }], focus: 'A', closed: [], nextId: 1 };
 }
 
 /** Identidade estável da aba: a mesma chave significa o mesmo documento/diff/commit/conflito. Diff e histórico diferenciam lado e hash. Sem diferença de caixa, como no Windows. */
@@ -81,7 +80,6 @@ export function activate(state: WorkspaceState, tabId: string): WorkspaceState {
   return tidy({
     ...setGroup(state, { ...found.group, active: tabId }),
     focus: found.group.id,
-    recent: [tabId, ...state.recent.filter((id) => id !== tabId)],
   });
 }
 
@@ -129,7 +127,6 @@ export function closeTabs(state: WorkspaceState, tabIds: readonly string[]): Wor
     ...state,
     groups,
     closed: [...state.closed, ...closed],
-    recent: state.recent.filter((id) => !closing.has(id)),
   });
 }
 
@@ -150,12 +147,6 @@ export function navigate(state: WorkspaceState, step: 1 | -1): WorkspaceState {
   const at = group.tabs.findIndex((t) => t.id === group.active);
   const from = at < 0 ? (step > 0 ? -1 : n) : at;
   return activate(state, group.tabs[(from + step + n) % n].id);
-}
-
-/** MRU: volta para a aba usada antes da atual (a segunda da lista de recentes). */
-export function activateRecent(state: WorkspaceState): WorkspaceState {
-  const previous = state.recent[1];
-  return previous === undefined ? state : activate(state, previous);
 }
 
 /** Move a aba para outro grupo (mesmo id, mesma identidade) e a torna ativa lá. Cria o grupo se ele ainda não existe e couber. Recusa se a identidade já está no destino. */
@@ -213,21 +204,13 @@ export function joinGroups(state: WorkspaceState): WorkspaceState {
   return tidy({ ...state, groups: [{ ...first, tabs }], focus: first.id });
 }
 
-/** Fecha um grupo vazio. Não fecha grupo com abas (feche ou mova antes) e nunca o último. O foco vai para o grupo que sobra. */
-export function closeGroup(state: WorkspaceState, groupId: GroupId): WorkspaceState {
-  const group = state.groups.find((g) => g.id === groupId);
-  if (!group || group.tabs.length > 0 || state.groups.length < 2) return state;
-  const groups = state.groups.filter((g) => g.id !== groupId);
-  return tidy({ ...state, groups, focus: state.focus === groupId ? groups[0].id : state.focus });
-}
-
 /**
  * Remapeia um prefixo de path (arquivo ou pasta) depois de renomear/mover: vale para abas de arquivo, diff, histórico e conflito,
  * abertas ou fechadas. Compara por pasta inteira e sem diferença de caixa: `src` não pega `src2`, e `SRC/x` vira `novo/x`.
  */
 export function remapPath(state: WorkspaceState, from: string, to: string): WorkspaceState {
   if (!isSafePath(from) || !isSafePath(to)) return state;
-  const move = (path: string) => (within(path, from) ? to + path.slice(from.length) : path);
+  const move = (path: string) => (isWithin(path, from) ? to + path.slice(from.length) : path);
   // Histórico é imutável: o path de um commit é o do próprio commit e não muda. Abrir o arquivo atual sai de outro localizador.
   const retarget = (target: TabTarget): TabTarget => (target.kind === 'commit' ? target : { ...target, path: move(target.path) });
   return tidy({
@@ -268,14 +251,13 @@ export function loadWorkspace(text: string): Loaded {
     }
     groups.push({ id: group.id, tabs, active: typeof group.active === 'string' ? group.active : null });
   }
-  const recent = asArray(raw.recent).filter((id): id is string => typeof id === 'string');
   const closed: ClosedTab[] = [];
   for (const entry of asArray(raw.closed)) {
     if (isRecord(entry) && isGroupId(entry.group) && isSafeTarget(entry.target)) closed.push({ group: entry.group, target: entry.target });
     else notes.push('Aba fechada inválida descartada.');
   }
   const nextId = typeof raw.nextId === 'number' && Number.isSafeInteger(raw.nextId) && raw.nextId >= 1 && raw.nextId < Number.MAX_SAFE_INTEGER ? raw.nextId : 1;
-  const state = tidy({ version: WORKSPACE_VERSION, groups, focus: isGroupId(raw.focus) ? raw.focus : 'A', recent, closed, nextId });
+  const state = tidy({ version: WORKSPACE_VERSION, groups, focus: isGroupId(raw.focus) ? raw.focus : 'A', closed, nextId });
   return { state, notes };
 }
 
@@ -346,7 +328,7 @@ function neighborAfter(tabs: readonly EditorTab[], tabId: string, closing: Reado
   return tabs.slice(0, Math.max(at, 0)).reverse().find((t) => !closing.has(t.id))?.id ?? null;
 }
 
-/** Conserta o estado: grupos únicos (até 2), uma identidade por grupo, uma prévia por grupo, fixadas no começo, ativa válida, recentes existentes. */
+/** Conserta o estado: grupos únicos (até 2), uma identidade por grupo, uma prévia por grupo, fixadas no começo, ativa válida. */
 function tidy(state: WorkspaceState): WorkspaceState {
   const seen = new Set<GroupId>();
   const groups: EditorGroup[] = [];
@@ -362,12 +344,10 @@ function tidy(state: WorkspaceState): WorkspaceState {
     kept = filled.length === 0 ? groups.slice(0, 1) : filled.length === 1 ? filled : groups;
   }
   if (kept.length === 0) kept.push({ id: 'A', tabs: [], active: null });
-  const ids = new Set(kept.flatMap((g) => g.tabs.map((t) => t.id)));
   return {
     version: WORKSPACE_VERSION,
     groups: kept,
     focus: kept.some((g) => g.id === state.focus) ? state.focus : kept[0].id,
-    recent: [...new Set(state.recent.filter((id) => ids.has(id)))],
     closed: state.closed.slice(-MAX_CLOSED),
     nextId: Math.max(1, state.nextId),
   };
@@ -410,7 +390,7 @@ function isSafeTarget(value: unknown): value is TabTarget {
 }
 
 /** `path` é `base` ou está dentro dele (os dois relativos, com "/"). Sem diferença de caixa; a barra final separa `src` de `src2`. */
-function within(path: string, base: string): boolean {
+export function isWithin(path: string, base: string): boolean {
   const p = path.toLowerCase();
   const b = base.toLowerCase();
   return p === b || p.startsWith(`${b}/`);
@@ -418,9 +398,9 @@ function within(path: string, base: string): boolean {
 
 // Sujo: buffer de arquivo com draft (`docId`) ou rascunho de resolução de conflito (`conflict:<path>`, sem diferença de caixa).
 // Quem integra mantém essas chaves no conjunto `dirty`.
-const isDirty = (target: TabTarget, dirty: ReadonlySet<string>) =>
+export const isDirty = (target: TabTarget, dirty: ReadonlySet<string>) =>
   target.kind === 'file' ? dirty.has(target.docId) : target.kind === 'conflict' ? dirty.has(`conflict:${target.path.toLowerCase()}`) : false;
 const isGroupId = (value: unknown): value is GroupId => value === 'A' || value === 'B';
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
-const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+export const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 const clamp = (index: number, max: number) => Math.min(Math.max(Math.trunc(index) || 0, 0), max);

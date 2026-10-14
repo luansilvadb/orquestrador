@@ -80,12 +80,6 @@ pub fn clear_if_same(expected: &Snapshot) -> bool {
     same
 }
 
-/// Os caminhos completos dos arquivos copiados, na ordem do clipboard. Vazio quando não há arquivo ou
-/// quando o clipboard não abre.
-pub fn files() -> Vec<String> {
-    snapshot().paths.iter().map(|p| p.to_string_lossy().into_owned()).collect()
-}
-
 /// Lê o `Preferred DropEffect` do clipboard aberto. Sem o formato, ou sem o bit de mover, é cópia.
 /// Quem chama já abriu o clipboard.
 unsafe fn read_cut() -> bool {
@@ -233,7 +227,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("orq-clip-{}.txt", std::process::id()));
         std::fs::write(&path, "x").unwrap();
         set_files(std::slice::from_ref(&path), true).unwrap();
-        assert_eq!(files(), vec![path.to_string_lossy().into_owned()]);
+        assert_eq!(snapshot().paths.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(), vec![path.to_string_lossy().into_owned()]);
         assert_eq!(snapshot(), Snapshot { paths: vec![path.clone()], cut: true });
         let _ = std::fs::remove_file(&path);
     }

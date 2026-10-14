@@ -38,9 +38,9 @@ async function run(task: () => Promise<unknown>, refresh: () => Promise<void>): 
 
 /**
  * Consulta repetida (usePolling) e a mesma consulta sob demanda (`refresh`). O estado só muda quando a resposta é outra, para não piscar.
- * `enabled` falso não consulta; `clearOnError` zera o dado quando a consulta falha, em vez de manter o anterior.
+ * `enabled` falso não consulta. Consulta que falha zera o dado e guarda a mensagem de erro.
  */
-export function usePolled<T>(read: () => Promise<T>, enabled: boolean, clearOnError: boolean) {
+export function usePolled<T>(read: () => Promise<T>, enabled: boolean) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState('');
   const last = useRef('');
@@ -55,10 +55,8 @@ export function usePolled<T>(read: () => Promise<T>, enabled: boolean, clearOnEr
         setData(next);
       }
     } catch (e) {
-      if (clearOnError) {
-        last.current = '';
-        setData(null);
-      }
+      last.current = '';
+      setData(null);
       setError(message(e));
     }
   };
@@ -163,20 +161,14 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
   const canCommit = !!text.trim() && staged.length > 0 && !busy;
   const hint = !staged.length ? 'Prepare arquivos para commitar' : !text.trim() ? 'Escreva a mensagem do commit' : '';
   // Buscar, Receber e Enviar: o menu do cabeçalho e os botões do gráfico usam o mesmo rótulo e a mesma trava.
-  const remoteLabel: Record<GraphRemote, string> = {
-    fetch: 'Buscar', pull: status.behind > 0 ? `Receber (${commits(status.behind)})` : 'Receber', push: status.ahead > 0 ? `Enviar (${commits(status.ahead)})` : 'Enviar',
+  const remoteActions: Record<GraphRemote, { label: string; disabled: boolean }> = {
+    fetch: { label: 'Buscar', disabled: busy !== null },
+    pull: { label: status.behind > 0 ? `Receber (${commits(status.behind)})` : 'Receber', disabled: busy !== null || locked },
+    push: { label: status.ahead > 0 ? `Enviar (${commits(status.ahead)})` : 'Enviar', disabled: busy !== null },
   };
-  const remoteOff: Record<GraphRemote, boolean> = { fetch: busy !== null, pull: busy !== null || locked, push: busy !== null };
-  const remoteMenu = [
-    { key: 'fetch', label: remoteLabel.fetch, disabled: remoteOff.fetch, onClick: () => void remote('fetch') },
-    { key: 'pull', label: remoteLabel.pull, disabled: remoteOff.pull, onClick: () => void remote('pull') },
-    { key: 'push', label: remoteLabel.push, disabled: remoteOff.push, onClick: () => void remote('push') },
-  ];
-  const remoteActions = {
-    fetch: { label: remoteLabel.fetch, disabled: remoteOff.fetch },
-    pull: { label: remoteLabel.pull, disabled: remoteOff.pull },
-    push: { label: remoteLabel.push, disabled: remoteOff.push },
-  };
+  const remoteMenu = (['fetch', 'pull', 'push'] as const).map((key) => ({
+    key, label: remoteActions[key].label, disabled: remoteActions[key].disabled, onClick: () => void remote(key),
+  }));
   const running = busy === 'fetch' || busy === 'pull' || busy === 'push' ? busy : null;
   // Depois de Buscar, Receber, Enviar ou commit, o gráfico recarrega junto com o status.
   const refreshWithGraph = async () => {

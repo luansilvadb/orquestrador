@@ -8,7 +8,6 @@
 //   openTarget(target, { permanent?, side? })           Abre um TabTarget do modelo (diff, commit, conflito ou arquivo com docId).
 //   remap(from, to)                                     Depois de renomear/mover: troca o caminho de abas e rascunhos. Não remonta buffer.
 //   remove(paths)                                       Depois de excluir: fecha as abas e descarta os buffers. Quem chama já decidiu o descarte.
-//   dirtyPaths(): string[]                              Caminhos com alteração não salva (arquivo ou conflito).
 //   hasDraft(path): boolean                             Há rascunho neste caminho (ou dentro, se for pasta). Bloqueia descarte no Git.
 //   unsaved(): string[]                                 Os mesmos caminhos, para o integrador perguntar antes de fechar a janela.
 //   saveAll(): Promise<boolean>                         Salva arquivos e rascunhos de conflito (conflito é gravado sem marcar resolvido; marcadores podem ficar). false se algo falhou.
@@ -32,9 +31,10 @@ import { CodeEditor, forgetEditorState, liveEditorView, type Reveal, type StartC
 import { action, blocked, DIVIDER, fileName } from './file-tabs';
 import { pathText } from './file-tab-actions';
 import {
-  activate, closeTabs, createWorkspace, joinGroups, loadWorkspace, markEdited, moveTab, navigate, openPermanent, openPreview,
+  activate, closeTabs, createWorkspace, isDirty, isWithin, joinGroups, loadWorkspace, markEdited, moveTab, navigate, openPermanent, openPreview,
   planClose, remapPath, reopenClosed, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
 } from './workspace-model';
+import { revealTab, wheelToScroll } from './tab-strip';
 import {
   blockCount, type Buffer, type Choice, type ConflictDraft, decodeRecovery, dirtyKeys, dropData, encodeRecovery, hasDraftAt,
   hasMarkers, isBufferDirty, isConflictDirty, newlineOf, normalizeNewlines, parseConflict, patchHunks, type PatchHunk, type Recovery,
@@ -51,7 +51,6 @@ export type EditorWorkspaceHandle = {
   openBeside(path: string, options?: Pick<OpenOptions, 'permanent' | 'line' | 'col'>): void;
   remap(from: string, to: string): void;
   remove(paths: string[]): void;
-  dirtyPaths(): string[];
   hasDraft(path: string): boolean;
   unsaved(): string[];
   saveAll(): Promise<boolean>;
@@ -114,19 +113,6 @@ function detailsOf(paths: string[]) {
   for (const path of paths) count.set(fileName(path), (count.get(fileName(path)) ?? 0) + 1);
   return new Map(paths.map((path) => [path, (count.get(fileName(path)) ?? 0) > 1 ? folderOf(path) : '']));
 }
-// Mantém a aba dentro da área visível da faixa, mexendo só no scroll dela. Aba maior que a faixa mostra o começo (o nome).
-function revealTab(box: HTMLElement, tabId: string) {
-  const tab = [...box.querySelectorAll<HTMLElement>('[data-tab]')].find((el) => el.dataset.tab === tabId);
-  if (!tab || box.clientWidth === 0) return;
-  // Medidas com subpixel, sem arredondar: arredondar para cima passava do início da aba em até 1 px.
-  const edge = box.getBoundingClientRect();
-  const rect = tab.getBoundingClientRect();
-  const left = rect.left - edge.left + box.scrollLeft;
-  const right = left + rect.width;
-  const visible = box.clientWidth;
-  if (left < box.scrollLeft || rect.width >= visible) box.scrollLeft = left;
-  else if (right > box.scrollLeft + visible) box.scrollLeft = right - visible;
-}
 const tabPath = (target: TabTarget) => target.path;
 
 // Texto de uma aba para a lista e os avisos: arquivo e pasta, ou o rótulo do diff/commit/conflito.
@@ -140,11 +126,6 @@ function labelOf(target: TabTarget): string {
 }
 
 function emptyData(): EditorData { return { buffers: {}, conflicts: {} }; }
-
-// Sujo de uma aba, pelo conjunto que `dirtyKeys` devolve: arquivo pelo docId, conflito pela chave `conflict:<path>`.
-const isDirtyIn = (target: TabTarget, dirty: ReadonlySet<string>) => (
-  target.kind === 'file' ? dirty.has(target.docId) : target.kind === 'conflict' ? dirty.has(conflictKey(target.path)) : false
-);
 
 export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(props, handle) {
   const { project, active, locked, guard, refreshGit, onActivePath, onActiveTarget, onDirtyPaths, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
@@ -321,7 +302,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const discarded = new Set(decision === 'discard' ? unsavedTabs.map((t) => t.id) : []);
     const pendingNew = again.tabIds
       .map((id) => allTabs().find((t) => t.id === id))
-      .filter((t): t is EditorTab => !!t && isDirtyIn(t.target, dirtyNow) && !discarded.has(t.id) && !stay.has(targetKey(t.target)));
+      .filter((t): t is EditorTab => !!t && isDirty(t.target, dirtyNow) && !discarded.has(t.id) && !stay.has(targetKey(t.target)));
     if (pendingNew.length > 0) {
       setNotice(`Ainda há alterações não salvas em ${pendingNew.map((t) => fileName(tabPath(t.target))).join(', ')}. Nada foi fechado.`);
       return false;
@@ -607,7 +588,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     setStatus({});
   };
   const remove = (paths: string[]) => {
-    const hit = (p: string) => paths.some((base) => p.toLowerCase() === base.toLowerCase() || p.toLowerCase().startsWith(`${base.toLowerCase()}/`));
+    const hit = (p: string) => paths.some((base) => isWithin(p, base));
     // Abas de commit (histórico) leem blobs imutáveis: continuam abertas mesmo quando o arquivo some da pasta.
     const ids = allTabs().filter((t) => t.target.kind !== 'commit' && hit(tabPath(t.target))).map((t) => t.id);
     const next = closeTabs(wsRef.current, ids);
@@ -721,7 +702,6 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     openBeside,
     remap,
     remove,
-    dirtyPaths: () => dirtyList(),
     hasDraft: (path: string) => hasDraftAt(dataRef.current, path),
     unsaved: () => dirtyList(),
     saveAll,
@@ -818,12 +798,12 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const tabMenu = (tab: EditorTab): ContextMenuItem[] => {
     const target = tab.target;
     const dirtySet = dirtyKeys(dataRef.current);
-    const dirty = isDirtyIn(target, dirtySet);
+    const dirty = isDirty(target, dirtySet);
     const buffer = target.kind === 'file' ? dataRef.current.buffers[target.docId] : undefined;
     const groupOf = wsRef.current.groups.find((g) => g.tabs.some((t) => t.id === tab.id));
     const others = groupOf ? groupOf.tabs.filter((t) => t.id !== tab.id && !t.pinned).length : 0;
     const right = groupOf ? groupOf.tabs.slice(groupOf.tabs.findIndex((t) => t.id === tab.id) + 1).filter((t) => !t.pinned).length : 0;
-    const saved = groupOf ? groupOf.tabs.filter((t) => !t.pinned && !isDirtyIn(t.target, dirtySet)).length : 0;
+    const saved = groupOf ? groupOf.tabs.filter((t) => !t.pinned && !isDirty(t.target, dirtySet)).length : 0;
     const all = groupOf ? groupOf.tabs.filter((t) => !t.pinned).length : 0;
     const closeBatch = (scope: CloseScope) => void closeFlow(scope);
     const saveBlock = target.kind === 'diff' || target.kind === 'commit'
@@ -931,7 +911,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (target.kind === 'commit') return `${target.hash.slice(0, 7)} · ${fileName(target.path)}`;
     return `${fileName(target.path)} · conflito`;
   };
-  const isDirtyTab = (target: TabTarget) => isDirtyIn(target, dirty);
+  const isDirtyTab = (target: TabTarget) => isDirty(target, dirty);
 
   // Faixa de cada grupo: a aba ativa entra na área visível quando muda, abre, fica suja/limpa ou a faixa muda de largura.
   // Mexe só no scroll da faixa (sem scrollIntoView, que rola os ancestrais); rolar à mão não é desfeito por re-renderização.
@@ -945,7 +925,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const key = `${active.id}|${group?.tabs.length}|${isDirtyTab(active.target)}|${active.pinned}`;
     if (!force && revealKey.current.get(groupId) === key) return;
     revealKey.current.set(groupId, key);
-    revealTab(strip.el, active.id);
+    revealTab(strip.el, [...strip.el.querySelectorAll<HTMLElement>('[data-tab]')].find((el) => el.dataset.tab === active.id));
   };
   const stripRef = (groupId: GroupId) => (el: HTMLDivElement | null) => {
     strips.current.get(groupId)?.observer.disconnect();
@@ -982,7 +962,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-border" />
         <Flexbox
           ref={stripRefFor(groupId)} horizontal align="stretch" flex={1} className="@container min-w-0 overflow-x-auto [scrollbar-width:none]!"
-          onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; }}
+          onWheel={wheelToScroll}
         >
           <TabsRoot variant="square" value={current?.id ?? ''} onValueChange={(id: string) => activateTab(id)} className="gap-0">
             {/* Sem gap e sem sombra nativa: o indicador de 2 px fica colado no divisor. Grupo sem foco usa cor apagada. */}
@@ -1057,11 +1037,6 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       <Flexbox flex={1} height="100%" className="min-w-0 min-h-0" data-pane={groupId} onMouseDown={() => { if (ws.focus !== groupId) setWs({ ...wsRef.current, focus: groupId }); }}>
         {renderStrip(groupId)}
         <Flexbox flex={1} className="min-h-0 relative">
-          {group.tabs.length === 0 && (
-            <Flexbox padding={16} align="center" justify="center" flex={1}>
-              <Text as="p" type="secondary" fontSize={14}>Abra um arquivo, um diff ou um commit para ver aqui.</Text>
-            </Flexbox>
-          )}
           {group.tabs.map((tab) => (
             <div key={tab.id} className="absolute inset-0 flex flex-col min-h-0" style={{ display: tab.id === current?.id ? 'flex' : 'none' }} data-body={tab.id}>
               {bodyOf(tab, tab.id === current?.id && ws.focus === groupId, tab.id === current?.id)}

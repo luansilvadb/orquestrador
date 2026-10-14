@@ -20,9 +20,22 @@ use windows_sys::Win32::UI::Shell::{
 };
 
 /// Arquivo com mais que isto não é lido: a tela mostra só o aviso.
-const MAX_FILE: u64 = 1_048_576;
+pub(crate) const MAX_FILE: u64 = 1_048_576;
 /// Quantos bytes do começo de um arquivo olhar para decidir se é binário (a mesma regra do Git).
-const BINARY_SNIFF: usize = 8000;
+pub(crate) const BINARY_SNIFF: usize = 8000;
+/// Bytes do BOM UTF-8.
+pub(crate) const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+
+/// Diz se os bytes são binários: NUL nos primeiros `BINARY_SNIFF` bytes, como o Git decide.
+pub(crate) fn is_binary(bytes: &[u8]) -> bool {
+    bytes[..bytes.len().min(BINARY_SNIFF)].contains(&0)
+}
+
+/// Impressão digital (FNV-1a de 64 bits) dos bytes. Serve de revisão: se o conteúdo mudar, a revisão muda.
+pub(crate) fn fingerprint(bytes: &[u8]) -> String {
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
+    format!("{hash:016x}")
+}
 
 /// Uma entrada da pasta listada: só o nome, o caminho é o da pasta pedida mais esse nome.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -73,40 +86,12 @@ pub fn read(project: &Path, rel: &str) -> Result<Content, String> {
         return Ok(Content { binary: false, too_large: true, read_only: false, bom: false, text: String::new() });
     }
     let bytes = std::fs::read(&file).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?;
-    if bytes[..bytes.len().min(BINARY_SNIFF)].contains(&0) {
+    if is_binary(&bytes) {
         return Ok(Content { binary: true, too_large: false, read_only: false, bom: false, text: String::new() });
     }
     let text = bytes.strip_prefix(&BOM).unwrap_or(&bytes[..]);
     Ok(Content { binary: false, too_large: false, read_only: std::str::from_utf8(text).is_err(), bom: text.len() != bytes.len(), text: String::from_utf8_lossy(text).into_owned() })
 }
-
-/// Grava o texto em um arquivo existente do projeto, preservando o BOM UTF-8 quando houver.
-pub fn write(project: &Path, rel: &str, text: &str) -> Result<(), String> {
-    let file = inside(project, rel, false)?;
-    if text.len() as u64 > MAX_FILE {
-        return Err("O arquivo ficaria grande demais para abrir aqui.".into());
-    }
-    let current = std::fs::read(&file).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?;
-    if current.len() as u64 > MAX_FILE || current[..current.len().min(BINARY_SNIFF)].contains(&0) {
-        return Err("Não é possível gravar um arquivo binário.".into());
-    }
-    let (bom, content) = match current.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
-        Some(content) => (true, content),
-        None => (false, current.as_slice()),
-    };
-    if std::str::from_utf8(content).is_err() {
-        return Err("Não é possível gravar um arquivo que não é UTF-8 válido.".into());
-    }
-    let mut bytes = Vec::with_capacity(text.len() + if bom { 3 } else { 0 });
-    if bom {
-        bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-    }
-    bytes.extend_from_slice(text.as_bytes());
-    std::fs::write(&file, bytes).map_err(|e| format!("Não foi possível gravar o arquivo: {e}"))
-}
-
-/// Bytes do BOM UTF-8.
-const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 
 /// Grava `text` em `rel` só se o arquivo ainda é `base` (o texto que a tela leu) e ainda tem o mesmo BOM (`base_bom`).
 /// Se mudou, sumiu, virou link, mudou de lugar, não é UTF-8 ou é binário, recusa e não grava nada. A decisão é deste
@@ -127,7 +112,7 @@ pub fn write_checked(project: &Path, rel: &str, text: &str, base: &str, base_bom
     if current.len() as u64 > MAX_FILE {
         return Err("O arquivo ficou grande demais para gravar aqui. Nada foi gravado.".into());
     }
-    if current[..current.len().min(BINARY_SNIFF)].contains(&0) {
+    if is_binary(&current) {
         return Err("Não é possível gravar um arquivo binário. Nada foi gravado.".into());
     }
     let (bom, content) = match current.strip_prefix(&BOM) {
@@ -157,11 +142,11 @@ fn put(file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// Abre `rel` para ler e gravar, sem deixar outro programa gravar, renomear ou apagar até o `File` ser solto: o
-/// `FILE_SHARE_READ` sozinho recusa quem pede escrita ou exclusão. Antes de abrir, `plain_file` valida o caminho; depois,
+/// `FILE_SHARE_READ` sozinho recusa quem pede escrita ou exclusão. Antes de abrir, `plain` valida o caminho; depois,
 /// confere de novo que o último nível não virou link e que o caminho ainda leva ao mesmo arquivo. Como o arquivo aberto não
 /// pode mais ser renomeado por outro programa, isso fecha a troca por link entre a validação e a abertura.
 fn hold(project: &Path, rel: &str) -> Result<File, String> {
-    let lexical = plain_file(project, rel)?;
+    let lexical = plain(project, rel, false)?;
     let real = inside(project, rel, false)?;
     let file = OpenOptions::new().read(true).write(true).share_mode(FILE_SHARE_READ).open(&lexical).map_err(open_err)?;
     let link = std::fs::symlink_metadata(&lexical).is_ok_and(|m| m.file_type().is_symlink());
@@ -251,27 +236,14 @@ fn no_links(project: &Path, rel: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// O arquivo `rel` que uma ação vai mudar (renomear ou mandar à Lixeira): o caminho real dentro do projeto. Recusa
-/// link em qualquer parte do caminho, porque a operação não pode seguir o link e mexer no destino dele.
-fn own_file(project: &Path, rel: &str) -> Result<PathBuf, String> {
-    no_git(rel)?;
-    no_links(project, rel)?;
-    inside(project, rel, false)
-}
-
-/// O caminho de `rel` para outro programa (Explorer, shell): o da pasta do projeto mais as partes, sem a forma `\\?\`
-/// que o `canonicalize` devolve. `dir` diz se é pasta (o cwd do shell) ou arquivo. Valida tudo antes.
+/// O caminho de `rel` para ação ou outro programa (Explorer, shell, Lixeira): o da pasta do projeto mais as partes, sem a
+/// forma `\\?\` que o `canonicalize` devolve. `dir` diz se é pasta (o cwd do shell) ou arquivo. Recusa `.git`, barra
+/// invertida, link em qualquer parte do caminho (a ação não pode seguir o link e mexer no destino dele) e o que sai do projeto.
 pub fn plain(project: &Path, rel: &str, dir: bool) -> Result<PathBuf, String> {
     no_git(rel)?;
     no_links(project, rel)?;
     inside(project, rel, dir)?;
     Ok(rel.split('/').filter(|p| !p.is_empty()).fold(project.to_path_buf(), |path, part| path.join(part)))
-}
-
-/// Arquivo para outro programa, com as mesmas recusas de `own_file` (sem link no nome).
-pub fn plain_file(project: &Path, rel: &str) -> Result<PathBuf, String> {
-    own_file(project, rel)?;
-    plain(project, rel, false)
 }
 
 /// Renomeia o arquivo `rel` para `name`, na mesma pasta. Não sobrescreve: se o nome já existe (inclusive como link quebrado),
@@ -355,8 +327,6 @@ fn item(project: &Path, rel: &str) -> Result<Item, String> {
     if rel.is_empty() {
         return Err("A raiz do projeto não pode ser alterada aqui.".into());
     }
-    no_git(&rel)?;
-    no_links(project, &rel)?;
     let dir = std::fs::metadata(project.join(&rel)).is_ok_and(|m| m.is_dir());
     let path = plain(project, &rel, dir)?;
     let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
@@ -572,24 +542,22 @@ unsafe fn send_to_recycle_bin(wide: &[u16]) -> Result<(), String> {
     Ok(())
 }
 
-/// Abre o Explorer do Windows com o arquivo selecionado. O Explorer sai com código 1 mesmo quando funciona, então o código não é lido.
+/// Abre `programa` sem janela com `arg` como linha de comando crua. Se não abrir, `falha` vira o começo da mensagem.
+/// O código de saída não é lido: o Explorer sai com 1 mesmo quando funciona.
+fn abrir_programa(programa: &str, arg: String, falha: &str) -> Result<(), String> {
+    quiet(programa).raw_arg(arg).spawn().map(drop).map_err(|e| format!("{falha}: {e}"))
+}
+
+/// Abre o Explorer do Windows com o arquivo selecionado.
 pub fn reveal(project: &Path, rel: &str) -> Result<(), String> {
-    let path = plain_file(project, rel)?;
-    quiet("explorer.exe")
-        .raw_arg(format!("/select,\"{}\"", path.display()))
-        .spawn()
-        .map(drop)
-        .map_err(|e| format!("Não foi possível abrir o Explorer: {e}"))
+    let path = plain(project, rel, false)?;
+    abrir_programa("explorer.exe", format!("/select,\"{}\"", path.display()), "Não foi possível abrir o Explorer")
 }
 
 /// Abre o diálogo "Como você quer abrir este arquivo?" do Windows, o mesmo do Abrir com... do Explorer.
 pub fn open_with(project: &Path, rel: &str) -> Result<(), String> {
-    let path = plain_file(project, rel)?;
-    quiet("rundll32.exe")
-        .raw_arg(format!("shell32.dll,OpenAs_RunDLL \"{}\"", path.display()))
-        .spawn()
-        .map(drop)
-        .map_err(|e| format!("Não foi possível abrir o diálogo do Windows: {e}"))
+    let path = plain(project, rel, false)?;
+    abrir_programa("rundll32.exe", format!("shell32.dll,OpenAs_RunDLL \"{}\"", path.display()), "Não foi possível abrir o diálogo do Windows")
 }
 
 /// Cria um arquivo vazio `name` dentro da pasta `dir` do projeto (vazio é a raiz). Devolve o caminho relativo criado.
@@ -640,19 +608,7 @@ fn check_new_name(name: &str) -> Result<(), String> {
 /// Abre no Explorer a pasta `rel` do projeto (vazio é a raiz). Recusa `.git`, link e o que sai do projeto.
 pub fn reveal_dir(project: &Path, rel: &str) -> Result<(), String> {
     let path = plain(project, rel, true)?;
-    quiet("explorer.exe")
-        .raw_arg(format!("\"{}\"", path.display()))
-        .spawn()
-        .map(drop)
-        .map_err(|e| format!("Não foi possível abrir o Explorer: {e}"))
-}
-
-/// Cola em `dest` (pasta do projeto, vazio é a raiz) os itens de `snap`: copia, ou move se `snap.cut`. Devolve os caminhos
-/// relativos criados. Tudo é checado antes de começar: se um item é recusado, nada é colado. Nome que já existe vira
-/// "nome (2).ext", "nome (3).ext"...; nada existente é sobrescrito. A cópia e o movimento são do IFileOperation do Windows,
-/// que copia pasta inteira e move entre volumes. Se um item falha depois de outros, o erro diz quantos já foram colados.
-pub fn paste(project: &Path, dest: &str, snap: &Snapshot) -> Result<Vec<String>, String> {
-    paste_detailed(project, dest, snap).map(|pasted| pasted.into_iter().map(|p| p.to).collect()).map_err(|p| p.error)
+    abrir_programa("explorer.exe", format!("\"{}\"", path.display()), "Não foi possível abrir o Explorer")
 }
 
 /// Uma colagem feita. `from` é o caminho absoluto que estava no clipboard, como o Windows o deu; `to` é o caminho
@@ -663,9 +619,12 @@ pub struct Pasted {
     pub to: String,
 }
 
-/// O mesmo que `paste`, mas com o que foi feito: `Ok` com cada item colado, ou `Err` com os que já foram antes da falha em
-/// `done` (não são desfeitos aqui) e a mensagem de `error`, a mesma que `paste` devolve. Recusa antes de mexer se um item
-/// está dentro de outro da mesma colagem, ou se um aparece duas vezes: a cópia ou o recorte falharia no meio sem motivo.
+/// Cola em `dest` (pasta do projeto, vazio é a raiz) os itens de `snap`: copia, ou move se `snap.cut`. `Ok` traz cada item
+/// colado; `Err` traz os que já foram antes da falha em `done` (não são desfeitos aqui) e a mensagem de `error`. Tudo é
+/// checado antes de começar: se um item é recusado, nada é colado. Nome que já existe vira "nome (2).ext", "nome (3).ext"...;
+/// nada existente é sobrescrito. A cópia e o movimento são do IFileOperation do Windows, que copia pasta inteira e move
+/// entre volumes. Recusa antes de mexer se um item está dentro de outro da mesma colagem, ou se um aparece duas vezes:
+/// a cópia ou o recorte falharia no meio sem motivo.
 pub fn paste_detailed(project: &Path, dest: &str, snap: &Snapshot) -> Result<Vec<Pasted>, Partial<Pasted>> {
     let fail = |error: String| Partial { done: Vec::new(), error };
     if snap.paths.is_empty() {
@@ -1018,67 +977,6 @@ mod tests {
     }
 
     #[test]
-    fn grava_e_rele_acentos_e_crlf_iguais() {
-        let root = fixture("grava-texto");
-        write(&root, "A.txt", "Olá\r\nmundo\r\n").unwrap();
-        assert_eq!(read(&root, "A.txt").unwrap().text, "Olá\r\nmundo\r\n");
-        assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), "Olá\r\nmundo\r\n".as_bytes());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn preserva_bom_existente_e_nao_adiciona_outro() {
-        let root = fixture("grava-bom");
-        std::fs::write(root.join("A.txt"), b"\xEF\xBB\xBFantes").unwrap();
-        write(&root, "A.txt", "depois").unwrap();
-        assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), b"\xEF\xBB\xBFdepois");
-        write(&root, "b.txt", "depois").unwrap();
-        assert_eq!(std::fs::read(root.join("b.txt")).unwrap(), b"depois");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn utf8_invalido_fica_read_only_e_gravacao_nao_muda_bytes() {
-        let root = fixture("grava-utf8-invalido");
-        let original = [b'a', 0xFF, b'b'];
-        std::fs::write(root.join("A.txt"), original).unwrap();
-        assert_eq!(read(&root, "A.txt").unwrap().read_only, true);
-        assert!(write(&root, "A.txt", "substituto").is_err());
-        assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), original);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn binario_e_recusado_na_gravacao() {
-        let root = fixture("grava-binario");
-        let original = [b'a', 0, b'b'];
-        std::fs::write(root.join("A.txt"), original).unwrap();
-        assert!(write(&root, "A.txt", "texto").is_err());
-        assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), original);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn texto_acima_de_1_mib_e_recusado() {
-        let root = fixture("grava-grande");
-        let erro = write(&root, "A.txt", &"a".repeat(1_048_577)).unwrap_err();
-        assert!(erro.contains("grande demais para abrir aqui"));
-        assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), b"");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn caminho_invalido_arquivo_inexistente_e_pasta_nao_criam_nada() {
-        let root = fixture("grava-caminhos");
-        assert!(write(&root, "../novo.txt", "x").is_err());
-        assert_eq!(write(&root, "nao-existe.txt", "x").unwrap_err(), "Arquivo não encontrado: nao-existe.txt");
-        assert_eq!(write(&root, "sub", "x").unwrap_err(), "Não é um arquivo: sub");
-        assert!(!root.join("novo.txt").exists());
-        assert!(!root.join("nao-existe.txt").exists());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn nome_invalido_no_windows_e_recusado() {
         for name in ["", "   ", ".", "..", "a/b", "a\\b", "a:b", "a*b", "a?b", "a\"b", "a<b", "a|b", "a\u{1}b", " x", "x ", "x.", "CON", "nul.txt", "com1.md", "LPT9.log"] {
             assert!(check_name(name).is_err(), "{name:?} deveria ser recusado");
@@ -1143,7 +1041,7 @@ mod tests {
         for rel in [".git/config", "sub/.git/config"] {
             assert!(rename(&root, rel, "x").is_err(), "{rel}");
             assert!(recycle(&root, rel).is_err(), "{rel}");
-            assert!(plain_file(&root, rel).is_err(), "{rel}");
+            assert!(plain(&root, rel, false).is_err(), "{rel}");
         }
         // Pasta com `.git` dentro não vai para a Lixeira, nem como pasta.
         assert!(recycle(&root, "sub").unwrap_err().contains(".git"));
@@ -1171,7 +1069,7 @@ mod tests {
             assert!(plain(&root, "alias", true).is_err());
             assert!(rename(&root, "git-alias/config", "x").is_err());
             assert!(recycle(&root, "git-alias/config").is_err());
-            assert!(plain_file(&root, "git-alias/config").is_err());
+            assert!(plain(&root, "git-alias/config", false).is_err());
             assert!(root.join("sub/x.md").exists());
             assert!(root.join(".git/config").exists());
             assert_eq!(rename(&root, "sub/x.md", "y.md").unwrap(), "sub/y.md");
@@ -1189,7 +1087,6 @@ mod tests {
             assert!(rename(&root, rel, "x").unwrap_err().starts_with("Caminho inválido"), "{rel}");
             assert!(recycle(&root, rel).unwrap_err().starts_with("Caminho inválido"), "{rel}");
             assert!(plain(&root, rel, false).unwrap_err().starts_with("Caminho inválido"), "{rel}");
-            assert!(plain_file(&root, rel).unwrap_err().starts_with("Caminho inválido"), "{rel}");
         }
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1216,6 +1113,11 @@ mod tests {
     /// Junction de teste (não pede privilégio). Diz se foi criada; sem ela, o teste pula a parte dos links.
     fn junction(link: &Path, target: &Path) -> bool {
         std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().is_ok_and(|o| o.status.success())
+    }
+
+    /// Cola como `paste_detailed`, devolvendo só os caminhos criados ou o erro. Só os testes usam esta forma.
+    fn paste(project: &Path, dest: &str, snap: &Snapshot) -> Result<Vec<String>, String> {
+        paste_detailed(project, dest, snap).map(|pasted| pasted.into_iter().map(|p| p.to).collect()).map_err(|p| p.error)
     }
 
     fn snap(paths: &[PathBuf], cut: bool) -> crate::clipboard::Snapshot {

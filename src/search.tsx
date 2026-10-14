@@ -4,9 +4,10 @@
 // e a revisão da substituição (antes e depois, com caixa por arquivo).
 import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { CaseSensitive, CaseUpper, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eraser, File, ListFilter, type LucideIcon, Regex, RefreshCw, Replace, WholeWord, X } from 'lucide-react';
-import { ActionIcon, Alert, Button, ContextMenuTrigger, Input, Modal, ScrollArea, Text, toast } from '@lobehub/ui/base-ui';
+import { ActionIcon, Alert, Button, ContextMenuTrigger, Input, Modal, ScrollArea, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
+import { copy, splitPath } from './git-history';
 import { action, DIVIDER } from './file-tabs';
 import type { ReplacePreview, ReplaceQuery, SearchMatch, SearchOptions, SearchResults, SkipReason } from './types';
 
@@ -84,12 +85,6 @@ function marked(text: string, pattern: RegExp | null): ReactNode {
   return parts;
 }
 
-// Caminho relativo com "/": nome do arquivo e a pasta dele (vazia na raiz).
-const split = (path: string) => {
-  const slash = path.lastIndexOf('/');
-  return { name: path.slice(slash + 1), dir: slash >= 0 ? path.slice(0, slash) : '' };
-};
-
 // Trechos separados por vírgula, sem espaço nas pontas e sem os vazios.
 const terms = (text: string) => text.split(',').map((t) => t.trim()).filter(Boolean);
 
@@ -139,16 +134,6 @@ const lineKey = (path: string, m: SearchMatch) => JSON.stringify([path, m.line, 
 // Texto de um arquivo para a área de transferência: caminho numa linha e, depois, "  linha: texto" por resultado.
 const blockText = (path: string, matches: SearchMatch[]) =>
   [path, ...matches.map((m) => `  ${m.line}: ${m.text.trimStart()}`)].join('\n');
-
-/** Copia para a área de transferência. Falha vira toast de erro; sucesso, toast curto. */
-async function copy(text: string, done: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success({ title: done, duration: 2000 });
-  } catch (e) {
-    toast.error({ title: message(e), duration: 5000 });
-  }
-}
 
 /** Linhas que mudaram entre o original e o resultado. A substituição não cria nem junta linhas, então o índice serve de pareamento. */
 function changedLines(original: string, result: string) {
@@ -708,7 +693,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
               <Flexbox paddingBlock={4}>
                 {reviewed.map(({ file, pairs }) => {
                   const draft = draftOf(file.path);
-                  const { name, dir } = split(file.path);
+                  const { name, dir } = splitPath(file.path);
                   return (
                     <Flexbox as="section" key={file.path} paddingInline={8} paddingBlock={4} gap={2} className="border-b">
                       <label className={`flex min-w-0 items-center gap-2 ${draft ? 'opacity-60' : ''}`}>
@@ -774,7 +759,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
                 )}
                 {files.map((file) => {
                   const open = !collapsed.includes(file.path);
-                  const { name, dir } = split(file.path);
+                  const { name, dir } = splitPath(file.path);
                   const draft = draftOf(file.path);
                   return (
                     <Flexbox as="section" key={file.path}>

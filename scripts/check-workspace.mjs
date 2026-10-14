@@ -1,14 +1,13 @@
 // Check do modelo do espaço de trabalho (src/workspace-model.ts): grupos, prévias, pins, fechamento por decisão externa, reabertura,
-// remapeamento de pastas, MRU e estado salvo adulterado. Roda sem dependências: `node scripts/check-workspace.mjs`.
+// remapeamento de pastas e estado salvo adulterado. Roda sem dependências: `node scripts/check-workspace.mjs`.
 // Sai com 1 e mostra a falha se alguma regra quebrar.
 import assert from 'node:assert/strict';
+import { test as check } from 'node:test';
 import {
-  activate, activateRecent, closeGroup, closeTabs, createWorkspace, joinGroups, loadWorkspace, markEdited, moveTab, navigate,
+  activate, closeTabs, createWorkspace, joinGroups, loadWorkspace, markEdited, moveTab, navigate,
   openPermanent, openPreview, planClose, remapPath, reopenClosed, reorderTab, splitTab, targetKey, togglePin,
 } from '../src/workspace-model.ts';
 
-const checks = [];
-const check = (name, fn) => checks.push({ name, fn });
 const NONE = new Set();
 const file = (docId, path) => ({ kind: 'file', docId, path });
 const diff = (side, path) => ({ kind: 'diff', side, path });
@@ -33,7 +32,6 @@ function assertConsistent(state) {
     if (g.tabs.length === 0) assert.equal(g.active, null, 'grupo vazio sem ativa');
     else assert.ok(g.tabs.some((t) => t.id === g.active), `ativa do grupo ${g.id} existe nele`);
   }
-  assert.ok(state.recent.every((id) => ids.includes(id)), 'recentes existem');
   assert.ok(state.closed.length <= 20, 'pilha de fechadas limitada');
 }
 
@@ -200,21 +198,17 @@ check('Reabrir a última fechada: volta ao grupo, ativa e permanente; depois a a
   assertConsistent(s);
 });
 
-check('Anterior/próxima dão a volta no grupo focado; MRU volta à aba usada antes', () => {
+check('Anterior/próxima dão a volta no grupo focado', () => {
   let s = openAll(createWorkspace(), 'A', [['da', 'a.ts'], ['db', 'b.ts'], ['dc', 'c.ts']]);
   assert.equal(groupOf(s, 'A').active, idOf(s, 'A', 'c.ts'));
   s = navigate(s, 1);
   assert.equal(groupOf(s, 'A').active, idOf(s, 'A', 'a.ts'), 'próxima dá a volta');
   s = navigate(s, -1);
   assert.equal(groupOf(s, 'A').active, idOf(s, 'A', 'c.ts'), 'anterior dá a volta');
-  s = activateRecent(s);
-  assert.equal(groupOf(s, 'A').active, idOf(s, 'A', 'a.ts'), 'MRU: a aba usada antes');
-  s = activateRecent(s);
-  assert.equal(groupOf(s, 'A').active, idOf(s, 'A', 'c.ts'), 'MRU alterna');
   assertConsistent(s);
 });
 
-check('Fechar grupo vazio volta ao grupo com documentos, sem perder nenhum', () => {
+check('Grupo que fica vazio some sozinho e nenhuma aba se perde', () => {
   let s = openAll(createWorkspace(), 'A', [['da', 'a.ts'], ['db', 'b.ts']]);
   s = splitTab(s, idOf(s, 'A', 'a.ts'));
   const copy = tabsOf(s, 'B')[0].id;
@@ -222,7 +216,6 @@ check('Fechar grupo vazio volta ao grupo com documentos, sem perder nenhum', () 
   s = closeTabs(s, [copy]);
   assert.equal(s.groups.length, 1);
   assert.equal(s.focus, 'A');
-  assert.equal(closeGroup(s, 'A'), s, 'grupo com abas não fecha');
   assert.deepEqual(names(s, 'A'), ['a.ts', 'b.ts']);
   assertConsistent(s);
 });
@@ -333,7 +326,6 @@ check('Estado adulterado: paths fora do projeto são descartados e o resto é co
   // B vazio some (o A tem abas), então sobra um grupo só.
   assert.equal(state.groups.length, 1);
   assert.equal(state.focus, 'A');
-  assert.deepEqual(state.recent, ['t7']);
   assert.deepEqual(state.closed, []);
   assert.equal(state.nextId, 1);
 });
@@ -399,16 +391,3 @@ check('Id no limite do inteiro seguro não trava o mint e não repete aba', () =
   const ids = state.groups.flatMap((g) => g.tabs.map((t) => t.id));
   assert.equal(new Set(ids).size, ids.length);
 });
-
-let failed = 0;
-for (const { name, fn } of checks) {
-  try {
-    await fn();
-    console.log(`ok   ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`FAIL ${name}\n     ${e.message.split('\n').join('\n     ')}`);
-  }
-}
-console.log(`\n${checks.length - failed}/${checks.length} verificações passaram`);
-process.exitCode = failed ? 1 : 0;

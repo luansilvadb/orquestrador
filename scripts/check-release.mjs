@@ -2,13 +2,11 @@
 // Sai com 1 e mostra a falha se alguma regra quebrar. A conferência real do repositório é `node scripts/release.mjs check-versions`.
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
+import { test as check } from 'node:test';
 import {
-  cargoLockVersions, cargoPackageVersion, checkNotes, checkVersions, installerName, installerUrl, isNewer, noteProblems, prepareManifest,
+  cargoLockVersions, cargoPackageVersion, checkNotes, checkVersions, installerName, installerUrl, noteProblems, prepareManifest,
   REQUIRED_SECTIONS, releaseBody, verifyBody, verifyInstaller, verifyManifest,
 } from './release.mjs';
-
-const checks = [];
-const check = (name, fn) => checks.push({ name, fn });
 
 // Notas mínimas que passam: todas as seções, com texto suficiente em cada uma.
 const WORDS = 'Texto concreto sobre a mudança, com o comportamento real do app e o que muda para quem usa. '
@@ -89,13 +87,6 @@ check('Cargo: lê a versão do [package] e as entradas do orquestrador no Cargo.
   const lock = '[[package]]\nname = "serde"\nversion = "1.0.0"\n\n[[package]]\nname = "orquestrador"\nversion = "0.1.7"\ndependencies = []\n';
   assert.deepEqual(cargoLockVersions(lock, 'orquestrador'), ['0.1.7']);
   assert.deepEqual(cargoLockVersions('name = "x"\n', 'orquestrador'), []);
-});
-
-check('Versão mais nova compara como número, não como texto', () => {
-  assert.equal(isNewer('0.1.7', '0.1.6'), true);
-  assert.equal(isNewer('0.1.10', '0.1.9'), true);
-  assert.equal(isNewer('0.1.6', '0.1.6'), false);
-  assert.equal(isNewer('0.1.5', '0.1.6'), false);
 });
 
 check('Assinatura: a versão assinada é o campo version: exato, não um prefixo', () => {
@@ -218,16 +209,3 @@ check('Corpo da release: igual às notas sem o título, só com espaço final ou
   assert.throws(() => verifyBody(body.replace('Resumo', 'Resumo alterado'), validNotes()), /sem o título/);
   assert.throws(() => verifyBody('', validNotes()), /sem o título/);
 });
-
-let failed = 0;
-for (const { name, fn } of checks) {
-  try {
-    fn();
-    console.log(`ok   ${name}`);
-  } catch (error) {
-    failed += 1;
-    console.error(`FALHA ${name}\n${error.message}`);
-  }
-}
-console.log(`${checks.length - failed} de ${checks.length} checks passaram.`);
-if (failed > 0) process.exit(1);

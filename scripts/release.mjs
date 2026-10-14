@@ -75,16 +75,6 @@ export function checkVersions(versions, expected) {
   return expected;
 }
 
-// Compara X.Y.Z numericamente: a nova versão precisa ser maior que a publicada.
-export function isNewer(version, previous) {
-  const a = version.split('.').map(Number);
-  const b = previous.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if (a[i] !== b[i]) return a[i] > b[i];
-  }
-  return false;
-}
-
 // Devolve a lista de problemas; vazia quer dizer que as notas servem.
 export function noteProblems(text, version, previous) {
   const body = text.trim();

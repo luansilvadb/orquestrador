@@ -15,8 +15,8 @@ import { FINISHED, PANEL_MIN, PANEL_WIDTH, STATES, TerminalsScreen } from './ter
 import type { TermView } from './term';
 import { terminals } from './terminals';
 import { TitleBar } from './titlebar';
-import { isWithin, pathText, relativeTo } from './file-tab-actions';
-import type { TabTarget } from './workspace-model';
+import { pathText, relativeTo } from './file-tab-actions';
+import { isWithin, type TabTarget } from './workspace-model';
 import {
   ORCHESTRATOR, type Choice, type ExecutorNode, type Moved, type NodeState, type Options, type UpdateStatus,
 } from './types';
@@ -150,6 +150,19 @@ const updateText = (status: UpdateStatus, fatal: boolean) => {
 
 const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
 
+// Atalho de janela: o listener fica no window em captura (antes do xterm, que não recebe a tecla). Chama sempre o `onKey` da última renderização.
+function useWindowKey(onKey: (e: KeyboardEvent) => void) {
+  const handler = useRef(onKey);
+  useLayoutEffect(() => {
+    handler.current = onKey;
+  });
+  useEffect(() => {
+    const listener = (e: KeyboardEvent) => handler.current(e);
+    window.addEventListener('keydown', listener, true);
+    return () => window.removeEventListener('keydown', listener, true);
+  }, []);
+}
+
 // Layout da janela guardado por projeto (texto opaco na recuperação do editor). Lê com desconfiança: o que não for número vira o padrão,
 // e o número é limitado às faixas aceitas. Texto inválido devolve null, e nada muda.
 type Layout = { sideWidth: number; panelWidth: number; shellHeight: number };
@@ -226,7 +239,7 @@ export function App() {
   const [quickOpen, setQuickOpen] = useState(false);
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
   // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
-  const git = usePolled(() => backend.gitStatus(), state.update.phase === 'ready' && !!state.project, true);
+  const git = usePolled(() => backend.gitStatus(), state.update.phase === 'ready' && !!state.project);
   const [connected, setConnected] = useState(false);
   const [fatal, setFatal] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -347,13 +360,6 @@ export function App() {
     }
     if (batch.error) throw new BatchError(batch.error, moved);
     return moved;
-  }
-  // Copiar e recortar põem o arquivo no clipboard do Windows: colar é no Explorer. Recortar não move nada agora.
-  function copyFile(path: string, cut: boolean) {
-    backend.copyFile(path, cut).then(
-      () => toast.success({ title: cut ? 'Arquivo recortado. Cole no Explorer para mover.' : 'Arquivo copiado. Cole no Explorer.', duration: 4000 }),
-      report,
-    );
   }
   // Cola o caminho absoluto no rascunho do Orquestrador, sem Enter. O foco vai para o terminal, para a mensagem continuar dali.
   function addToChat(path: string) {
@@ -567,66 +573,52 @@ export function App() {
     terminals.get(state.shellActive)?.term.focus();
   }, [state.shellOpen, state.shellActive]);
 
+  // Atalhos de projeto (pesquisa, F4, arquivo rápido) valem só com o projeto aberto e o app pronto.
+  const canShortcut = () => !!stateRef.current.project && stateRef.current.update.phase === 'ready';
+
   // Ctrl+` abre e fecha o painel de qualquer lugar. A captura no window vem antes do xterm, que não recebe a tecla.
-  // Sem dependências: lê o estado pelo stateRef, então o listener nunca usa uma lista de abas antiga.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.altKey || e.metaKey || e.code !== 'Backquote') return;
-      e.preventDefault();
-      e.stopPropagation();
-      toggleShell();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
+  useWindowKey((e) => {
+    if (!e.ctrlKey || e.altKey || e.metaKey || e.code !== 'Backquote') return;
+    e.preventDefault();
+    e.stopPropagation();
+    toggleShell();
+  });
 
   // Ctrl+Shift+F abre a pesquisa e foca o campo, de qualquer lugar (com projeto aberto). Mesma captura no window do Ctrl+`.
   // Com texto selecionado no editor, esse texto vira a consulta e a busca roda na hora.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyF') return;
-      if (!stateRef.current.project || stateRef.current.update.phase !== 'ready') return;
-      e.preventDefault();
-      e.stopPropagation();
-      const text = editor.current?.selectedText() ?? '';
-      if (text) setSeed({ text, id: ++seedSeq.current });
-      setRoute('pesquisa');
-      setSearchFocus((n) => n + 1);
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
+  useWindowKey((e) => {
+    if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyF') return;
+    if (!canShortcut()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const text = editor.current?.selectedText() ?? '';
+    if (text) setSeed({ text, id: ++seedSeq.current });
+    setRoute('pesquisa');
+    setSearchFocus((n) => n + 1);
+  });
 
   // F4 vai ao próximo resultado da pesquisa e Shift+F4 ao anterior (com volta). Dentro do terminal (xterm) a tecla segue como antes.
   // Sem resultados a pesquisa não faz nada; a tecla é consumida mesmo assim, pois o App não sabe se há resultados.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.code !== 'F4' || e.ctrlKey || e.altKey || e.metaKey) return;
-      if (!stateRef.current.project || stateRef.current.update.phase !== 'ready') return;
-      if ((e.target as HTMLElement | null)?.closest?.('.xterm')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      setRoute('pesquisa');
-      setStep({ dir: e.shiftKey ? -1 : 1, id: ++stepSeq.current });
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
+  useWindowKey((e) => {
+    if (e.code !== 'F4' || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (!canShortcut()) return;
+    if ((e.target as HTMLElement | null)?.closest?.('.xterm')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setRoute('pesquisa');
+    setStep({ dir: e.shiftKey ? -1 : 1, id: ++stepSeq.current });
+  });
 
   // Ctrl+P abre o arquivo rápido. Não consome o atalho dentro do terminal (xterm) nem dos campos de texto: ali a tecla segue como antes.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyP') return;
-      if (!stateRef.current.project || stateRef.current.update.phase !== 'ready') return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest?.('.xterm') || target?.closest?.('input, textarea')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      setQuickOpen(true);
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
+  useWindowKey((e) => {
+    if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyP') return;
+    if (!canShortcut()) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.('.xterm') || target?.closest?.('input, textarea')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setQuickOpen(true);
+  });
 
   // ---------- derivados ----------
 
@@ -650,15 +642,13 @@ export function App() {
   // Ações do menu de arquivo da árvore (src/explorer.tsx). Ação sem resposta do backend avisa por toast; o que pede confirmação fica no modal.
   const hasDraft = (path: string) => editor.current?.hasDraft(path) ?? false;
   const fileActions: FileActions = {
-    dirty: hasDraft,
     dirtyOf: (paths) => paths.filter(hasDraft),
-    copyPath: (kind, path) => copyPaths(kind, [path]),
     copyPaths,
     reveal: (path) => void backend.revealFile(path).catch(report),
     openWith: (path) => void backend.openWith(path).catch(report),
     openInTerminal: (dir) => openShellAt(dir),
     addToChat: orchestrator?.started ? addToChat : null,
-    copy: copyFile,
+    // Copiar e recortar põem os itens no clipboard do Windows: colar é no Explorer. Recortar não move nada agora.
     copyMany: (paths, cut) => {
       backend.copyFiles(paths, cut).then(
         () => toast.success({ title: cut ? `${paths.length} itens recortados. Cole no Explorer para mover.` : `${paths.length} itens copiados. Cole no Explorer.`, duration: 4000 }),
@@ -666,9 +656,6 @@ export function App() {
       );
     },
     rename: renameFile,
-    remove: async (path) => {
-      await removeMany([path]);
-    },
     removeMany,
     move: moveItems,
     revealDir: (dir) => void backend.revealDir(dir).catch(report),

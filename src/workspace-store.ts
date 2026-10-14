@@ -3,7 +3,7 @@
 // O texto gravado é `raw` (como veio do disco, sem BOM); `draft` é o que o CodeMirror mostra, com `\n`.
 // Sujo é `draft` diferente do `raw` normalizado. Conflito é sujo quando o texto difere do que foi carregado (`origin`).
 // Só usa sintaxe apagável (sem enum/namespace), para o check rodar direto no Node.
-import { isSafePath } from './workspace-model';
+import { asArray, isRecord, isSafePath, isWithin } from './workspace-model';
 
 export const RECOVERY_VERSION = 1;
 // Limites da recuperação no localStorage: texto de um rascunho e total. Passou disso, rascunho grande fica de fora (com aviso).
@@ -39,19 +39,14 @@ export function dirtyKeys(data: EditorData): Set<string> {
 
 /** Há rascunho (de arquivo aberto ou de conflito) neste caminho, ou dentro dele se for pasta? Bloqueia descarte no Git. */
 export function hasDraftAt(data: EditorData, path: string): boolean {
-  const inside = (p: string) => p.toLowerCase() === path.toLowerCase() || p.toLowerCase().startsWith(`${path.toLowerCase()}/`);
-  return Object.values(data.buffers).some((b) => isBufferDirty(b) && inside(b.path))
-    || Object.values(data.conflicts).some((c) => isConflictDirty(c) && inside(c.path));
+  return Object.values(data.buffers).some((b) => isBufferDirty(b) && isWithin(b.path, path))
+    || Object.values(data.conflicts).some((c) => isConflictDirty(c) && isWithin(c.path, path));
 }
 
 /** Rename ou movimento de pasta: troca o `path` dos buffers e dos conflitos dentro de `from`, sem tocar no texto nem no `docId`. */
 export function remapData(data: EditorData, from: string, to: string): EditorData {
   if (!isSafePath(from) || !isSafePath(to)) return data;
-  const move = (path: string) => {
-    const lower = path.toLowerCase();
-    const base = from.toLowerCase();
-    return lower === base || lower.startsWith(`${base}/`) ? to + path.slice(from.length) : path;
-  };
+  const move = (path: string) => (isWithin(path, from) ? to + path.slice(from.length) : path);
   const buffers: Record<string, Buffer> = {};
   for (const [id, buffer] of Object.entries(data.buffers)) buffers[id] = { ...buffer, path: move(buffer.path) };
   const conflicts: Record<string, ConflictDraft> = {};
@@ -64,7 +59,7 @@ export function remapData(data: EditorData, from: string, to: string): EditorDat
 
 /** Tira buffers e conflitos de `paths` (arquivo ou pasta). Quem chama já decidiu o descarte dos rascunhos. */
 export function dropData(data: EditorData, paths: readonly string[]): EditorData {
-  const hit = (p: string) => paths.some((base) => p.toLowerCase() === base.toLowerCase() || p.toLowerCase().startsWith(`${base.toLowerCase()}/`));
+  const hit = (p: string) => paths.some((base) => isWithin(p, base));
   const buffers: Record<string, Buffer> = {};
   for (const [id, buffer] of Object.entries(data.buffers)) if (!hit(buffer.path)) buffers[id] = buffer;
   const conflicts: Record<string, ConflictDraft> = {};
@@ -301,7 +296,3 @@ export function patchHunks(patch: string): PatchHunk[] {
   flush();
   return hunks;
 }
-
-// ---- helpers ----
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
-const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);

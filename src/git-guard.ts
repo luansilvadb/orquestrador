@@ -8,8 +8,6 @@ export type GitGuard = {
   enter(label: string): boolean;
   /** Termina a operação que `enter` começou. Sempre chamar no `finally`. */
   leave(): void;
-  /** Nome da operação em curso, ou null. */
-  current(): string | null;
 };
 
 export function createGitGuard(): GitGuard {
@@ -26,6 +24,5 @@ export function createGitGuard(): GitGuard {
     leave() {
       owner = null;
     },
-    current: () => owner,
   };
 }

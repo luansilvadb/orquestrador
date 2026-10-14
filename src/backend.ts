@@ -73,20 +73,17 @@ export const backend = {
   listDir: (path: string) => call<DirEntry[]>('list_dir', { path }),
   // Conteúdo de um arquivo, com o mesmo caminho de `listDir`. Erro chega como mensagem em português.
   readFile: (path: string) => call<FileContent>('read_file', { path }),
-  writeFile: (path: string, text: string) => call<void>('write_file', { path, text }),
   // Grava só se o arquivo ainda é `base` (o texto lido, sem BOM) e ainda tem o BOM `bom`; senão rejeita sem gravar.
   writeFileChecked: (path: string, text: string, base: string, bom: boolean) => call<void>('write_file_checked', { path, text, base, bom }),
   // Ações de um arquivo da árvore, com o caminho relativo ao projeto. Erro vem como mensagem em português.
   // Renomear devolve o caminho novo; nunca sobrescreve. Excluir manda à Lixeira do Windows.
   renameFile: (path: string, name: string) => call<string>('rename_file', { path, name }),
-  deleteFile: (path: string) => call<void>('delete_file', { path }),
   // Lote: `done` é o que foi feito e `error` o que parou (null se tudo deu certo). Nada é desfeito em caso de erro.
   deleteFiles: (paths: string[]) => call<Batch<string>>('delete_files', { paths }),
   moveFiles: (paths: string[], dest: string) => call<Batch<Moved>>('move_files', { paths, dest }),
   copyFiles: (paths: string[], cut: boolean) => call<void>('copy_files', { paths, cut }),
   revealFile: (path: string) => call<void>('reveal_file', { path }),
   openWith: (path: string) => call<void>('open_with', { path }),
-  copyFile: (path: string, cut: boolean) => call<void>('copy_file', { path, cut }),
   // Criação na pasta `dir` (relativa, '' é a raiz). Devolve o caminho relativo criado; nunca sobrescreve (nome que existe rejeita com a mensagem).
   createFile: (dir: string, name: string) => call<string>('create_file', { dir, name }),
   createDir: (dir: string, name: string) => call<string>('create_dir', { dir, name }),
@@ -94,12 +91,10 @@ export const backend = {
   revealDir: (path: string) => call<void>('reveal_dir', { path }),
   // Clipboard lido na hora da ação. Colar recebe essa mesma lista: a checagem de alterações e a operação usam o que foi lido aqui.
   clipboardSnapshot: () => call<ClipboardSnapshot>('clipboard_snapshot'),
-  pasteFiles: (dest: string, snap: ClipboardSnapshot) => call<string[]>('paste_files', { dest, snap }),
-  // Mesma colagem, com o detalhe: `from` absoluto como estava no clipboard, `to` relativo ao projeto; `error` diz o que parou.
+  // Colagem, com o detalhe: `from` absoluto como estava no clipboard, `to` relativo ao projeto; `error` diz o que parou.
   pasteFilesDetailed: (dest: string, snap: ClipboardSnapshot) => call<Batch<Pasted>>('paste_files_detailed', { dest, snap }),
   // Painel Git. Caminhos relativos à raiz do projeto, com "/"; lista vazia em stage/unstage vale para tudo.
   gitStatus: () => call<GitStatus>('git_status'),
-  gitDiff: (path: string, staged: boolean) => call<GitDiff>('git_diff', { path, staged }),
   gitStage: (paths: string[]) => call<void>('git_stage', { paths }),
   gitUnstage: (paths: string[]) => call<void>('git_unstage', { paths }),
   gitCommit: (message: string) => call<void>('git_commit', { message }),

@@ -3,6 +3,7 @@
 // processo. Cada cenário ganha um contexto de navegador novo, com clipboard fake (`window.__copied`); o clipboard do usuário não é tocado.
 // Não instala nada: usa o playwright-core e o Chromium já presentes no cache local.
 import { spawn } from 'node:child_process';
+import assert from 'node:assert/strict';
 import { existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -125,3 +126,53 @@ export const primaryCursor = (page) => page.evaluate(() => {
   const b = c.getBoundingClientRect();
   return { x: b.left, y: b.top };
 });
+
+/**
+ * Registro e execução dos cenários de um check de interface. `prefix` nomeia as capturas de falha (`<prefix>-falha-N.png`).
+ * `diagnose(page)`, opcional, devolve linhas extras que entram na saída de cada falha, antes da captura.
+ * `run()` sobe o Vite, roda cada cenário num contexto novo, encerra o Vite e devolve o código de saída (0 ou 1).
+ */
+export function uiSuite(prefix, { diagnose } = {}) {
+  const scenarios = [];
+  const scenario = (name, fn) => scenarios.push({ name, fn });
+  async function run() {
+    const vite = startVite();
+    let exitCode = 1;
+    const results = [];
+    try {
+      await waitForServer();
+      const browser = await launchBrowser();
+      try {
+        for (const { name, fn } of scenarios) {
+          const { context, page, errors } = await session(browser);
+          try {
+            await fn({ page, errors });
+            const bad = errors.filter((e) => !KNOWN.some((k) => k.test(e)));
+            assert.deepEqual(bad, [], 'erros/avisos no console');
+            results.push({ name, ok: true });
+            console.log(`ok    ${name}`);
+          } catch (e) {
+            const shot = join(OUT, `${prefix}-falha-${results.length + 1}.png`);
+            await page.screenshot({ path: shot }).catch(() => {});
+            const extra = diagnose ? await diagnose(page) : [];
+            results.push({ name, ok: false, error: e.message });
+            console.log(`FAIL  ${name}\n      ${e.message.split('\n').join('\n      ')}\n${extra.map((l) => `      ${l}\n`).join('')}      captura da falha: ${shot}`);
+          } finally {
+            await context.close();
+          }
+        }
+      } finally {
+        await browser.close();
+      }
+      exitCode = results.every((r) => r.ok) ? 0 : 1;
+    } catch (e) {
+      console.error(e);
+    } finally {
+      vite.stop();
+      const passed = results.filter((r) => r.ok).length;
+      console.log(`\n${passed}/${results.length} cenários passaram`);
+    }
+    return exitCode;
+  }
+  return { scenario, run };
+}

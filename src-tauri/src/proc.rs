@@ -22,9 +22,10 @@ pub fn quiet(program: &str) -> Command {
 }
 
 /// Roda o Git sem nada que espere digitação: sem entrada, sem pedido de credencial, sem editor. Sucesso
-/// devolve (stdout, stderr); falha devolve o que o Git escreveu (stderr e stdout, aparados), ou o código
-/// de saída quando ele não escreveu nada. Os caminhos são pathspec literal e o nome sai em UTF-8 sem aspas.
-fn run(dir: &Path, args: &[&str]) -> Result<(String, String), String> {
+/// devolve os bytes de (stdout, stderr); falha devolve o que o Git escreveu (stderr e stdout, aparados e em
+/// UTF-8 com troca de byte inválido), ou o código de saída quando ele não escreveu nada. Os caminhos são
+/// pathspec literal e o nome sai em UTF-8 sem aspas.
+fn run(dir: &Path, args: &[&str]) -> Result<(Vec<u8>, Vec<u8>), String> {
     let out = quiet("git")
         .arg("-C")
         .arg(dir)
@@ -36,23 +37,26 @@ fn run(dir: &Path, args: &[&str]) -> Result<(String, String), String> {
         .env("GIT_MERGE_AUTOEDIT", "no")
         .output()
         .map_err(|e| format!("git não pôde ser executado: {e}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if out.status.success() {
-        return Ok((stdout, stderr));
+        return Ok((out.stdout, out.stderr));
     }
-    let why: Vec<&str> = [stderr.trim(), stdout.trim()].into_iter().filter(|s| !s.is_empty()).collect();
+    let why: Vec<String> = [&out.stderr, &out.stdout].into_iter().map(|bytes| String::from_utf8_lossy(bytes).trim().to_string()).filter(|s| !s.is_empty()).collect();
     Err(if why.is_empty() { format!("código {}", out.status.code().unwrap_or(-1)) } else { why.join("\n") })
 }
 
 /// A saída (stdout) do Git sem espera de digitação. Na falha, o erro traz o texto do Git.
 pub fn git_saida(dir: &Path, args: &[&str]) -> Result<String, String> {
-    run(dir, args).map(|(out, _)| out)
+    run(dir, args).map(|(out, _)| String::from_utf8_lossy(&out).into_owned())
 }
 
 /// A saída completa do Git (stdout e stderr juntos), para mostrar na tela. Na falha, o erro traz o texto do Git.
 pub fn git_completa(dir: &Path, args: &[&str]) -> Result<String, String> {
-    run(dir, args).map(|(out, err)| out + &err)
+    run(dir, args).map(|(out, err)| String::from_utf8_lossy(&out).into_owned() + &String::from_utf8_lossy(&err))
+}
+
+/// A saída (stdout) do Git em bytes crus, sem trocar byte inválido: para saber se um conteúdo é UTF-8. Na falha, o erro é o de `run`.
+pub fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    run(dir, args).map(|(out, _)| out)
 }
 
 /// Pasta -> raiz do repositório Git (com barras invertidas), ou `None` fora de um work tree.

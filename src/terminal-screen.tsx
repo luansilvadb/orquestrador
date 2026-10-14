@@ -7,6 +7,7 @@ import { Center, Flexbox, type PresetColorKey } from '@lobehub/ui';
 import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
 import { attachExecutor, TermHost, terminals } from './terminals';
+import { revealTab, wheelToScroll } from './tab-strip';
 import { ORCHESTRATOR, type Choice, type ExecutorNode, type NodeState, type Tool } from './types';
 
 // Cada estado: rótulo e ícone com texto (regra do design system); a cor é um nome predefinido do Lobe UI, o mesmo para o Tag e para o ícone da aba.
@@ -38,19 +39,8 @@ const TOOL_ICON: Record<Tool, ComponentType<{ size?: number; className?: string 
   codex: CodexIcon,
 };
 
-// Mantém a aba dentro da área visível da faixa, mexendo só no scroll dela (não no scrollIntoView, que rola os ancestrais).
-function reveal(box: HTMLElement, id: string) {
-  const tab = [...box.querySelectorAll<HTMLElement>('[data-tab]')].find((el) => el.dataset.tab === id);
-  if (!tab || box.clientWidth === 0) return;
-  // Medidas com subpixel, sem arredondar: arredondar para cima passava do início da aba em até 1 px.
-  const edge = box.getBoundingClientRect();
-  const rect = tab.getBoundingClientRect();
-  const left = rect.left - edge.left + box.scrollLeft;
-  const right = left + rect.width;
-  const visible = box.clientWidth;
-  if (left < box.scrollLeft || rect.width >= visible) box.scrollLeft = left;
-  else if (right > box.scrollLeft + visible) box.scrollLeft = right - visible;
-}
+// Acha a aba pelo `data-tab` e a revela na faixa (a regra de rolagem está em tab-strip).
+const reveal = (box: HTMLElement, id: string) => revealTab(box, [...box.querySelectorAll<HTMLElement>('[data-tab]')].find((el) => el.dataset.tab === id));
 
 const TOOL_NAME: Record<Tool, string> = { claude: 'Claude', codex: 'Codex' };
 
@@ -125,6 +115,14 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
   // Lista de todas as abas, com o Orquestrador; a marca de ativa é o check no rótulo. Só existe com executores.
   const OrchestratorIcon = orchestrator?.choice ? TOOL_ICON[orchestrator.choice.tool] : SquareTerminal;
   const ExecutorToolIcon = executorChoice ? TOOL_ICON[executorChoice.tool] : SquareTerminal;
+  // Rótulo e ícone de cada executor, calculados uma vez: o menu e a faixa usam os mesmos.
+  const rows = executors.map((e) => {
+    const info = STATES[e.state];
+    return {
+      e, Icon: info.icon, color: colorsPreset(info.color), spin: e.state === 'running' ? ' animate-spin' : '',
+      label: `Executor #${e.index + 1}, ${info.label}: ${e.title}`, desc: info.label,
+    };
+  });
   const tabMenu = [
     {
       key: ORCHESTRATOR, title: 'Orquestrador',
@@ -137,13 +135,11 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
       ),
       onClick: () => choose(ORCHESTRATOR),
     },
-    ...executors.map((e) => {
-      const info = STATES[e.state];
-      const Icon = info.icon;
+    ...rows.map(({ e, Icon, color, spin, label: title, desc }) => {
       return {
-        key: e.id, title: `Executor #${e.index + 1}, ${info.label}: ${e.title}`,
-        icon: <Icon className={`size-3.5${e.state === 'running' ? ' animate-spin' : ''}`} style={{ color: colorsPreset(info.color) }} />,
-        desc: info.label,
+        key: e.id, title,
+        icon: <Icon className={`size-3.5${spin}`} style={{ color }} />,
+        desc,
         label: (
           <Flexbox horizontal align="center" gap={6} className="min-w-0">
             <Check className={`size-3.5 shrink-0${active === e.id ? '' : ' invisible'}`} />
@@ -171,7 +167,7 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
           <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-border" />
           <Flexbox
             ref={strip} horizontal align="stretch" flex={1} className="min-w-0 overflow-x-auto [scrollbar-width:none]!"
-            onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; }}
+            onWheel={wheelToScroll}
           >
             {/* `overflow-clip` recorta o indicador sem criar outra área de rolagem. O gap 0 entre abas e a sombra zerada substituem o gap de 16 px e a borda nativa do variant square. */}
             <TabsRoot variant="square" value={active} onValueChange={(key: string) => choose(key)} className="gap-0">
@@ -181,13 +177,10 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
                   <OrchestratorIcon className="size-3.5 shrink-0" />
                   Orquestrador
                 </TabsTab>
-                {orchestrator && executors.map((e) => {
-                  const info = STATES[e.state];
-                  const Icon = info.icon;
-                  const label = `Executor #${e.index + 1}, ${info.label}: ${e.title}`;
+                {orchestrator && rows.map(({ e, Icon, color, spin, label }) => {
                   return (
                     <TabsTab key={e.id} value={e.id} data-tab={e.id} title={label} aria-label={label} className="flex-none gap-1.5 px-3">
-                      <Icon className={`size-3.5 shrink-0${e.state === 'running' ? ' animate-spin' : ''}`} style={{ color: colorsPreset(info.color) }} />
+                      <Icon className={`size-3.5 shrink-0${spin}`} style={{ color }} />
                       <Text as="span" className="tabular-nums">#{e.index + 1}</Text>
                     </TabsTab>
                   );

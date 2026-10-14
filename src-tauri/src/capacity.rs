@@ -34,12 +34,6 @@ impl Resources {
     pub fn real() -> Resources {
         Resources { cpus: thread::available_parallelism().ok().map(|n| n.get()), memory: Arc::new(memory) }
     }
-
-    /// Quantos executores podem estar vivos depois deste passe, dado que `live` já estão. Nunca manda parar os
-    /// vivos: quem chama só deixa de abrir novos enquanto `live` for igual ou maior.
-    pub fn admission(&self, live: usize) -> usize {
-        admission(self.cpus, (self.memory)(), live)
-    }
 }
 
 /// Teto pela CPU: metade das lógicas, de 1 a 16.
@@ -58,7 +52,8 @@ fn free_slots(available: u64) -> usize {
 }
 
 /// O teto de admissão de um passe: `min(CPU, RAM total, vivos + vagas pela RAM livre)`, com pelo menos um quando
-/// nada está vivo, para a fila não parar. Sem a memória, o teto cai para o conservador.
+/// nada está vivo, para a fila não parar. Sem a memória, o teto cai para o conservador. Quem chama passa `live`
+/// como os vivos agora: nunca manda parar ninguém, só deixa de abrir novos enquanto `live` for igual ou maior.
 pub fn admission(cpus: Option<usize>, memory: Option<Memory>, live: usize) -> usize {
     let cpu = cpus.map_or(FALLBACK, cpu_ceiling);
     let Some(memory) = memory else { return cpu.min(FALLBACK) };
@@ -67,7 +62,6 @@ pub fn admission(cpus: Option<usize>, memory: Option<Memory>, live: usize) -> us
     if live == 0 { admitted.max(MIN) } else { admitted }
 }
 
-#[cfg(windows)]
 fn memory() -> Option<Memory> {
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     // SAFETY: MEMORYSTATUSEX é só números; a estrutura é zerada e `dwLength` é o tamanho dela, como a API exige.
@@ -78,11 +72,6 @@ fn memory() -> Option<Memory> {
         return None;
     }
     Some(Memory { total: status.ullTotalPhys, available: status.ullAvailPhys })
-}
-
-#[cfg(not(windows))]
-fn memory() -> Option<Memory> {
-    None
 }
 
 #[cfg(test)]

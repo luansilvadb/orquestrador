@@ -50,10 +50,3 @@ export function relativeTo(project: string, abs: string): string | null {
   if (full.slice(0, root.length).toLowerCase() !== root.toLowerCase() || full[root.length] !== '/') return null;
   return full.slice(root.length + 1);
 }
-
-/** `path` é `base` ou está dentro dele (os dois relativos, com "/"). Sem diferença de caixa, como no Windows; a barra final separa pasta de irmã com prefixo igual (`src` não pega `src2`). */
-export function isWithin(path: string, base: string): boolean {
-  const p = path.toLowerCase();
-  const b = base.toLowerCase();
-  return p === b || p.startsWith(`${b}/`);
-}

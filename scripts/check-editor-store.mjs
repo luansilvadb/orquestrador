@@ -3,6 +3,7 @@
 // O src importa sem extensão (como o resto do app); o resolver abaixo acrescenta `.ts` só para este check.
 import { register } from 'node:module';
 import assert from 'node:assert/strict';
+import { test as check } from 'node:test';
 
 register(`data:text/javascript,${encodeURIComponent(`
 export async function resolve(specifier, context, next) {
@@ -17,9 +18,6 @@ const {
   blockCount, conflictKey, decodeRecovery, dirtyKeys, dropData, encodeRecovery, hasDraftAt, hasMarkers, isBufferDirty, MAX_DRAFT_CHARS,
   MAX_RECOVERY_CHARS, parseConflict, patchHunks, remapData, renderConflict, toDiskNewlines,
 } = store;
-
-const checks = [];
-const check = (name, fn) => checks.push({ name, fn });
 
 const buffer = (over = {}) => ({
   docId: 'doc-1', path: 'src/a.ts', raw: 'a\nb', bom: false, newline: '\n', draft: 'a\nb', readOnly: false, cursor: null, ...over,
@@ -288,16 +286,3 @@ check('Conflito parcial sem marcador restante não tem bloco (resolvido por comp
   assert.equal(blockCount(parseConflict('só texto\nfinal').pieces), 0);
   assert.equal(hasMarkers('só texto\nfinal'), false);
 });
-
-let failed = 0;
-for (const { name, fn } of checks) {
-  try {
-    fn();
-    console.log(`ok   ${name}`);
-  } catch (error) {
-    failed++;
-    console.log(`FAIL ${name}\n     ${error.message.split('\n').join('\n     ')}`);
-  }
-}
-console.log(`\n${checks.length - failed}/${checks.length} checks passaram.`);
-process.exit(failed ? 1 : 0);

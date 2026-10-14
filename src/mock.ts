@@ -5,20 +5,19 @@
 // Na URL: `?mock=nogit` faz a escolha da pasta falhar como "fora de um repositório Git"; `?mock=noshell` faz o shell não abrir.
 // Na URL: `?update=falha` mostra a atualização bloqueada por falta de internet (a nova tentativa libera) e
 // `?update=download` simula o download. Sem parâmetro, o uso já vem liberado, como no build de desenvolvimento.
-// No console: `__mock.close()` simula fechar a janela; `__mock.writes` e `__mock.sizes` registram o que chegou.
+// No console: `__mock.close()` simula fechar a janela.
 // `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto.
 // A árvore (`list_dir`) é em memória: muda só com o executor que termina bem (cria `src/tarefa-<lote>-<n>.ts`) e com `__mock.remove`.
 // O Git tem estado só no que a mock modela: blocos (preparar, tirar do preparo, descartar), arquivo descartado, commit, histórico, gráfico e
 // conflitos (resolver e aceitar remoção). Branches, fetch, pull e push são respostas fixas; as refs são fixas, exceto a `main`, que anda com o commit. Regex da pesquisa e da substituição usa a
 // sintaxe do JavaScript (o backend usa a do Rust); o texto de busca e de substituição é o mesmo nos dois.
 // Na pesquisa (Ctrl+Shift+F), `search` filtra de verdade, mas só os arquivos de `TEXTS` têm linhas; os demais não casam nada.
-// Ao abrir um arquivo, `read_file` devolve o texto de `TEXTS`; `write_file` atualiza esse texto para a releitura. `.png` vem binário, `dados/exportacao.json` vem grande demais, e os demais começam vazios.
-// Menu do arquivo na árvore: `rename_file` e `delete_file` mudam a árvore e `TEXTS` de verdade (com as mesmas recusas do backend); `reveal_file`,
-// `open_with` e `copy_file` só conferem que o arquivo existe, porque o Explorer, o diálogo e a Lixeira são do Windows. `start_shell` aceita `cwd`.
+// Ao abrir um arquivo, `read_file` devolve o texto de `TEXTS`; `write_file_checked` (a gravação do editor) atualiza esse texto. `.png` vem binário, `dados/exportacao.json` vem grande demais, e os demais começam vazios.
+// Menu do arquivo na árvore: `rename_file` e `delete_files` mudam a árvore e `TEXTS` de verdade (com as mesmas recusas do backend); `reveal_file` e
+// `open_with` só conferem que o arquivo existe, porque o Explorer, o diálogo e a Lixeira são do Windows. `start_shell` aceita `cwd`.
 // Área vazia da árvore: `create_file` e `create_dir` criam de verdade na raiz (com as mesmas recusas); `reveal_dir` só confere a pasta.
-// O clipboard do simulado é uma variável em memória, nunca o do Windows: `copy_file` (copiar ou recortar) e `paste_files` mexem nela.
-// `paste_files` move ou copia a árvore e `TEXTS` de verdade, e nome repetido vira "nome (2)". `__mock.setClipboard(['src/App.tsx'], true)` põe itens
-// no clipboard simulado (`[]` esvazia), e `__mock.clipboard()` mostra o que há.
+// O clipboard do simulado é uma variável em memória, nunca o do Windows: `copy_files` (copiar ou recortar) e `paste_files_detailed` mexem nela.
+// `paste_files_detailed` move ou copia a árvore e `TEXTS` de verdade, e nome repetido vira "nome (2)". `__mock.clipboard()` mostra o que há.
 // `rename_file` renomeia pasta também (leva os textos de dentro). `__mock.addFolder('pasta')` cria pasta de teste; `__mock.failOn = ['src/a.ts']`
 // faz colar ou mover falhar de I/O nesse item, no meio do lote: o que já saiu segue como feito (só para o check de arquivos e pesquisa).
 import type { Transport } from './backend';
@@ -105,12 +104,6 @@ const files: GitFile[] = [
   entry('src/conflito.ts', null, 'conflicted'),
   entry('docs/apagado.md', null, 'conflicted'),
 ];
-// Patch de exemplo: o mesmo para todo arquivo de texto (não é o diff real de cada um).
-const PATCH = [
-  'diff --git a/README.md b/README.md', '--- a/README.md', '+++ b/README.md',
-  '@@ -1 +1,3 @@', ' # Orquestrador', '+', '+Painel Git em andamento.', '',
-].join('\n');
-
 // Conteúdo simulado de alguns arquivos da árvore, para a pesquisa. Linhas separadas por "\n".
 const TEXTS: Record<string, string> = {
   'README.md': '# Orquestrador\n\nUm app para Windows que põe CLIs de IA para trabalhar em papéis separados.\nO orquestrador lê o projeto e delega; os executores trabalham em paralelo.\n',
@@ -246,13 +239,12 @@ let alive = false, line = '', batches = 0, executorChoice: Choice | null = null,
 // Cada um guarda a própria linha em edição.
 const shells = new Map<string, { line: string; prompt: string }>();
 const jobs = new Map<string, Job>();
-const debug = { writes: [] as string[], sizes: {} as Record<string, string>, close: async () => {
+const debug = { close: async () => {
   const closed = closeHandler ? await closeHandler() : true;
   if (closed) document.body.innerHTML = '<p style="padding:24px">Janela fechada (simulado).</p>';
   return closed;
 }, remove: (path: string) => removePath(path),
-  // Clipboard simulado: `[]` esvazia; cada caminho é relativo ao projeto. Nunca toca no clipboard do Windows.
-  setClipboard: (rel: string[], cut = false) => { clip = { paths: rel.map(absolute), cut }; },
+  // Clipboard simulado: o que as cópias e recortes do simulado puseram nele. Nunca toca no clipboard do Windows.
   clipboard: () => structuredClone(clip),
   // Edição externa: outro programa gravou o arquivo. Só troca o texto que o disco simulado devolve (o que `read_file` e `write_file_checked` comparam).
   external: (rel: string, text: string) => { TEXTS[rel] = text; },
@@ -427,13 +419,6 @@ function shellTyped(id: string, data: string) {
 }
 
 // ---------- Git simulado: respostas fixas, sem estado ----------
-
-// Diff: .png é binário e o JSON é grande demais; o resto recebe o patch de exemplo.
-function diffOf(path: string): GitDiff {
-  if (path.endsWith('.png')) return { binary: true, tooLarge: false, patch: '' };
-  if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, patch: '' };
-  return { binary: false, tooLarge: false, patch: PATCH };
-}
 
 // ---------- Git com estado (simulado): blocos, descarte, histórico, commit e conflitos ----------
 
@@ -676,7 +661,7 @@ const conflictOf = (path: string): Sides => {
 };
 function conflictState(path: string): Conflict {
   const c = conflictOf(path);
-  return { path, base: c.base, ours: c.ours, theirs: c.theirs, worktree: isFile(path) ? textOf(path) : null, binary: false, crlf: false, bom: false, revision: revOf(path) };
+  return { path, base: c.base, ours: c.ours, theirs: c.theirs, worktree: isFile(path) ? textOf(path) : null, binary: false, revision: revOf(path) };
 }
 // Grava a resolução só se a pasta ainda está na revisão lida. Com `markResolved`, o arquivo sai do conflito e fica preparado.
 function writeResolution(path: string, content: string, revision: string, markResolved: boolean) {
@@ -967,19 +952,8 @@ const commands: Record<string, (args: any) => unknown> = {
     }
     return next;
   },
-  // A Lixeira não existe no simulado: o arquivo some da árvore, como se estivesse lá.
-  delete_file: ({ path }: { path: string }) => {
-    requireFile(path);
-    const { dir, name } = split(path);
-    delete folderAt(dir)!.children[name];
-    delete TEXTS[path];
-  },
   reveal_file: ({ path }: { path: string }) => void requireFile(path),
   open_with: ({ path }: { path: string }) => void requireFile(path),
-  copy_file: ({ path, cut }: { path: string; cut: boolean }) => {
-    requireFile(path);
-    clip = { paths: [absolute(path)], cut };
-  },
   // Área vazia da raiz: cria de verdade na árvore (e a lista relê). Pasta que não existe é recusada antes.
   create_file: ({ dir, name }: { dir: string; name: string }) => create(dir, name, false),
   create_dir: ({ dir, name }: { dir: string; name: string }) => create(dir, name, true),
@@ -987,7 +961,6 @@ const commands: Record<string, (args: any) => unknown> = {
     if (!folderAt(path)) throw `Pasta não encontrada: ${path}`;
   },
   clipboard_snapshot: () => structuredClone(clip),
-  paste_files: ({ dest, snap }: { dest: string; snap: { paths: string[]; cut: boolean } }) => paste(dest, snap).map((p) => p.to),
   // Colagem com o detalhe: o que foi colado (`from` absoluto, `to` relativo) e o erro do que parou. Recusas antes de mexer não deixam nada feito;
   // uma falha de I/O no meio deixa feito o que já saiu, como o backend.
   paste_files_detailed: ({ dest, snap }: { dest: string; snap: { paths: string[]; cut: boolean } }): Batch<Pasted> => {
@@ -1026,7 +999,6 @@ const commands: Record<string, (args: any) => unknown> = {
     terms.delete(id);
   },
   term_write: ({ id, data }: { id: string; data: string }) => {
-    debug.writes.push(id);
     // Marcas de colagem entre aspas (bracketed paste) não são texto: o simulado só põe o conteúdo no rascunho.
     const text = data.replace(/\x1b\[20[01]~/g, '');
     if (id === ORCHESTRATOR && alive) typed(text);
@@ -1046,16 +1018,7 @@ const commands: Record<string, (args: any) => unknown> = {
     if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, readOnly: false, bom: false, text: '' };
     return { binary: false, tooLarge: false, readOnly: false, bom: false, text: TEXTS[path] ?? '' };
   },
-  write_file: ({ path, text }: { path: string; text: string }) => {
-    const parts = path.split('/'), name = parts.pop()!;
-    const entry = folderAt(parts.join('/'))?.children[name];
-    if (!entry || entry.dir) throw `Arquivo não encontrado: ${path}`;
-    if (path.endsWith('.png')) throw 'Arquivo binário não pode ser gravado como texto.';
-    if (path === 'dados/exportacao.json') throw 'Arquivo grande demais para gravar aqui.';
-    TEXTS[path] = text;
-  },
   git_status: () => ({ branch: CURRENT, ...divergence(), head: headHash(), files: [...files].sort(byPath) }),
-  git_diff: ({ path }: { path: string }) => diffOf(path),
   git_stage: ({ paths }: { paths: string[] }) => { stagePaths(paths); return null; },
   git_unstage: ({ paths }: { paths: string[] }) => { unstagePaths(paths); return null; },
   git_commit: ({ message }: { message: string }) => { commitStaged(message); return null; },
@@ -1084,7 +1047,7 @@ const commands: Record<string, (args: any) => unknown> = {
   },
   git_accept_deletion: ({ path, revision }: { path: string; revision: string }) => { acceptDeletion(path, revision); return null; },
   search: ({ query }: { query: ReplaceQuery }): SearchResults => searchText(query),
-  term_resize: ({ id, cols, rows }: { id: string; cols: number; rows: number }) => { debug.sizes[id] = `${cols}x${rows}`; },
+  term_resize: () => undefined,
   term_snapshot: ({ id }: { id: string }) => {
     const term = terms.get(id);
     return { seq: term?.seq ?? 0, data: base64(term?.text ?? '') };

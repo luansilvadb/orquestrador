@@ -6,6 +6,7 @@ import { ActionIcon, Button, DraggablePanel, Popover, TabsIndicator, TabsList, T
 import { Flexbox } from '@lobehub/ui';
 import type { TermView } from './term';
 import { TermHost } from './terminals';
+import { revealTab, wheelToScroll } from './tab-strip';
 
 // Altura ao abrir o app (não se guarda entre aberturas); o mínimo mantém a barra e uma linha de terminal.
 export const SHELL_HEIGHT = 280;
@@ -19,20 +20,8 @@ const DEFAULT_SIZE = { height: SHELL_HEIGHT };
 // `title` é o completo (pasta e programa), para o tooltip; `program` é '' até o backend responder.
 export type ShellTab = { id: string; title: string; program: string };
 
-// Mantém a aba dentro da área visível da faixa, ajustando só o scroll da faixa (sem scrollIntoView, que rola os ancestrais).
-// Faixa escondida (largura 0) não tem o que mostrar; ao reabrir, o efeito roda de novo.
-function reveal(box: HTMLDivElement, id: string) {
-  const tab = box.querySelector<HTMLElement>(`[data-shell="${id}"]`);
-  if (!tab || box.clientWidth === 0) return;
-  // Medidas com subpixel (rect), não offsetWidth/clientWidth: a borda da aba não pode passar da faixa nem por fração de pixel.
-  const edge = box.getBoundingClientRect();
-  const rect = tab.getBoundingClientRect();
-  const left = rect.left - edge.left + box.scrollLeft;
-  const right = left + rect.width;
-  // Aba maior que a faixa: mostra o começo dela (o rótulo), não o fim. Esquerda arredonda para baixo e direita para cima.
-  if (left < box.scrollLeft || rect.width > edge.width) box.scrollLeft = Math.floor(left);
-  else if (right > box.scrollLeft + edge.width) box.scrollLeft = Math.ceil(right - edge.width);
-}
+// Acha a aba pelo `data-shell` e a revela na faixa (a regra de rolagem está em tab-strip).
+const reveal = (box: HTMLDivElement, id: string) => revealTab(box, box.querySelector<HTMLElement>(`[data-shell="${id}"]`));
 
 // O número vem do id `shell-N`, então não muda quando outra aba fecha; o programa é o que corta quando falta espaço.
 function shellNumber(tab: ShellTab) {
@@ -220,7 +209,7 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
                 <Flexbox
                   ref={strip} horizontal align="stretch" flex={1} className="min-w-0 overflow-x-auto [scrollbar-width:none]!"
                   onScroll={measure}
-                  onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; }}
+                  onWheel={wheelToScroll}
                 >
                   {/* Variant square, como no Orquestrador: a faixa tem 36 px e o indicador de 2 px fica colado no divisor. `overflow-clip` recorta o indicador sem criar uma área de rolagem (o `overflow-y-hidden` fazia o X virar `auto` e aparecer uma barra). A sombra zerada e o gap 0 tiram a borda e o espaço do variant. */}
                   <TabsRoot variant="square" value={active} onValueChange={(key: string) => onSelect(key)} className="gap-0">

@@ -2,12 +2,12 @@
 // Um commit abre a lista dos arquivos dele; um arquivo abre a alteração daquele commit no editor central.
 // Os caminhos são os do commit (imutáveis): um arquivo renomeado depois aparece com o nome que tinha ali.
 import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { ActionIcon, Button, Text } from '@lobehub/ui/base-ui';
+import { ActionIcon, Button, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { ArrowLeft, File, RefreshCw } from 'lucide-react';
 import { backend, message } from './backend';
 import type { TabTarget } from './workspace-model';
-import type { Commit, CommitDetail, CommitFile, GitKind } from './types';
+import type { CommitDetail, CommitFile, GitKind } from './types';
 
 /** Pedido de histórico: `path` null é o projeto inteiro. Um `id` novo sempre refaz a lista. */
 export type HistoryRequest = { path: string | null; id: number };
@@ -32,16 +32,127 @@ export function splitPath(path: string) {
   return { name: path.slice(slash + 1), dir: slash >= 0 ? path.slice(0, slash) : '' };
 }
 
-const PAGE = 50;
+/** Commits por página, no histórico e no gráfico. */
+export const PAGE = 50;
 export const when = (iso: string, style: Intl.DateTimeFormatOptions) => {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString('pt-BR', style);
 };
-const note = (text: string, danger = false) => (
+/** Linha de status no lugar da lista (lendo, vazio, erro). */
+export const note = (text: string, danger = false) => (
   <Text as="p" role="status" fontSize={12} type={danger ? 'danger' : 'secondary'} style={{ paddingInline: 12, paddingBlock: 6 }}>{text}</Text>
 );
 
+/** Copia para a área de transferência. Falha vira toast de erro; sucesso, toast curto. */
+export async function copy(text: string, done: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast.success({ title: done, duration: 2000 });
+  } catch (e) {
+    toast.error({ title: message(e), duration: 5000 });
+  }
+}
+
 export type OpenCommitTarget = (target: TabTarget, options?: { permanent?: boolean }) => void;
+
+/**
+ * Lista paginada de commits: a primeira página (`reload`), as seguintes (`loadMore`) e o escopo carregado.
+ * `emptyOnReload` (histórico): recarregar esvazia a lista antes de buscar. Sem ele (gráfico), a lista anterior fica na tela até a nova chegar.
+ * A resposta de um pedido já trocado por outro é descartada.
+ */
+export function usePagedList<T>(fetchPage: (offset: number, scope: string | null) => Promise<T[]>, emptyOnReload: boolean) {
+  const [scope, setScope] = useState<string | null>(null);
+  const [items, setItems] = useState<T[] | null>(null);
+  const [more, setMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  // Cada pedido tem o seu número: a resposta de um pedido já trocado por outro é descartada.
+  const listSeq = useRef(0);
+
+  function reload(next: string | null) {
+    const seq = ++listSeq.current;
+    setScope(next);
+    if (emptyOnReload) {
+      setItems(null);
+      setMore(false);
+      setError('');
+    }
+    setLoading(true);
+    fetchPage(0, next).then(
+      (list) => {
+        if (seq === listSeq.current) {
+          setItems(list);
+          setMore(list.length === PAGE);
+          setError('');
+        }
+      },
+      (e: unknown) => {
+        if (seq === listSeq.current) setError(message(e));
+      },
+    ).finally(() => {
+      if (seq === listSeq.current) setLoading(false);
+    });
+  }
+
+  function loadMore() {
+    if (!items || loading) return;
+    const seq = listSeq.current;
+    setLoading(true);
+    fetchPage(items.length, scope).then(
+      (list) => {
+        if (seq === listSeq.current) {
+          setItems((prev) => [...(prev ?? []), ...list]);
+          setMore(list.length === PAGE);
+        }
+      },
+      (e: unknown) => {
+        if (seq === listSeq.current) setError(message(e));
+      },
+    ).finally(() => {
+      if (seq === listSeq.current) setLoading(false);
+    });
+  }
+
+  return { scope, items, more, loading, error, reload, loadMore };
+}
+
+/**
+ * Detalhe do commit aberto: o hash, os dados e o erro. Abrir outro troca o detalhe; a resposta de um pedido já trocado é descartada.
+ */
+export function useCommitDetail() {
+  const [openHash, setOpenHash] = useState<string | null>(null);
+  const [detail, setDetail] = useState<CommitDetail | null>(null);
+  const [detailError, setDetailError] = useState('');
+  // Mesma regra da lista: só a resposta do pedido mais novo vale.
+  const detailSeq = useRef(0);
+
+  function open(hash: string) {
+    const seq = ++detailSeq.current;
+    setOpenHash(hash);
+    setDetail(null);
+    setDetailError('');
+    backend.gitCommitDetail(hash).then(
+      (next) => {
+        if (seq === detailSeq.current) setDetail(next);
+      },
+      (e: unknown) => {
+        if (seq === detailSeq.current) setDetailError(message(e));
+      },
+    );
+  }
+
+  function close() {
+    ++detailSeq.current;
+    setOpenHash(null);
+    setDetail(null);
+    setDetailError('');
+  }
+
+  return { openHash, detail, detailError, open, close };
+}
+
+// Busca de uma página do histórico: do projeto (`scope` null) ou só dos commits que mexeram no caminho.
+const historyPage = (offset: number, scope: string | null) => backend.gitHistory(PAGE, offset, scope ?? undefined);
 
 /**
  * Arquivos de um commit, uma linha de 24 px cada. Clique prévia, duplo clique abre de vez; o arquivo aberto no editor fica marcado.
@@ -96,45 +207,16 @@ export type HistoryPanelProps = {
 
 /** Lista paginada de commits (do projeto ou do arquivo) e, ao escolher um, os arquivos dele. */
 export function HistoryPanel({ request, active, selected, onOpenTarget, onShowChanges }: HistoryPanelProps) {
-  // Escopo da lista carregada: null é o projeto. Vem do pedido, ou do "Projeto inteiro" da barra.
-  const [scope, setScope] = useState<string | null>(null);
-  const [commits, setCommits] = useState<Commit[] | null>(null);
-  const [more, setMore] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [openHash, setOpenHash] = useState<string | null>(null);
-  const [detail, setDetail] = useState<CommitDetail | null>(null);
-  const [detailError, setDetailError] = useState('');
-  // Cada pedido tem o seu número: a resposta de um pedido já trocado por outro é descartada.
-  const listSeq = useRef(0);
-  const detailSeq = useRef(0);
+  // Lista e detalhe são os mesmos dos gráficos (ver os hooks acima). Aqui recarregar esvazia a lista e fecha o commit aberto.
+  const { scope, items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList(historyPage, true);
+  const { openHash, detail, detailError, open: openCommit, close: closeCommit } = useCommitDetail();
   // Último pedido que já foi carregado: voltar à tela não recarrega a lista à toa.
   const loadedId = useRef<number | null>(null);
 
+  // Escopo da lista carregada: null é o projeto. Vem do pedido, ou do "Projeto inteiro" da barra.
   function reload(path: string | null) {
-    const seq = ++listSeq.current;
-    ++detailSeq.current;
-    setOpenHash(null);
-    setDetail(null);
-    setDetailError('');
-    setScope(path);
-    setCommits(null);
-    setMore(false);
-    setError('');
-    setLoading(true);
-    backend.gitHistory(PAGE, 0, path ?? undefined).then(
-      (list) => {
-        if (seq === listSeq.current) {
-          setCommits(list);
-          setMore(list.length === PAGE);
-        }
-      },
-      (e: unknown) => {
-        if (seq === listSeq.current) setError(message(e));
-      },
-    ).finally(() => {
-      if (seq === listSeq.current) setLoading(false);
-    });
+    closeCommit();
+    reloadList(path);
   }
 
   // Pedido novo (id diferente) ou primeira vez visível: recarrega o escopo pedido.
@@ -144,47 +226,6 @@ export function HistoryPanel({ request, active, selected, onOpenTarget, onShowCh
     reload(request.path);
     // `reload` só lê refs e setters: não precisa estar nas dependências.
   }, [request.id, request.path, active]);
-
-  function loadMore() {
-    if (!commits || loading) return;
-    const seq = listSeq.current;
-    setLoading(true);
-    backend.gitHistory(PAGE, commits.length, scope ?? undefined).then(
-      (list) => {
-        if (seq === listSeq.current) {
-          setCommits((prev) => [...(prev ?? []), ...list]);
-          setMore(list.length === PAGE);
-        }
-      },
-      (e: unknown) => {
-        if (seq === listSeq.current) setError(message(e));
-      },
-    ).finally(() => {
-      if (seq === listSeq.current) setLoading(false);
-    });
-  }
-
-  function openCommit(hash: string) {
-    const seq = ++detailSeq.current;
-    setOpenHash(hash);
-    setDetail(null);
-    setDetailError('');
-    backend.gitCommitDetail(hash).then(
-      (next) => {
-        if (seq === detailSeq.current) setDetail(next);
-      },
-      (e: unknown) => {
-        if (seq === detailSeq.current) setDetailError(message(e));
-      },
-    );
-  }
-
-  function closeCommit() {
-    ++detailSeq.current;
-    setOpenHash(null);
-    setDetail(null);
-    setDetailError('');
-  }
 
   const inDetail = openHash !== null;
 

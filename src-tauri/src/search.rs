@@ -15,12 +15,6 @@ const MAX_LINES: usize = 2000;
 const MAX_TEXT: usize = 400;
 /// Quantos caracteres antes da ocorrência a janela começa, quando a linha é mais longa que a janela.
 const CONTEXT_BEFORE: usize = 40;
-/// Arquivo com mais que isto não é lido (o mesmo limite do explorador de arquivos).
-const MAX_FILE: u64 = 1_048_576;
-/// Quantos bytes do começo de um arquivo olhar para decidir se é binário (a mesma regra do Git).
-const BINARY_SNIFF: usize = 8000;
-/// Bytes do BOM UTF-8.
-const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 /// Arquivos com trechos na prévia; os demais aparecem só na contagem.
 const MAX_PREVIEW_FILES: usize = 100;
 /// Texto (original mais resultado) que a prévia traz de uma vez; passou disso, o arquivo fica só na contagem.
@@ -182,12 +176,6 @@ struct Doc {
     text: String,
 }
 
-/// O texto de substituição, já checado. Literal entra como está; regex usa a sintaxe `$1`, `${nome}` do `regex`.
-enum Rep {
-    Literal(String),
-    Template(String),
-}
-
 /// Busca `query.text` nos arquivos do projeto. Consulta vazia ou só de espaços não roda e devolve vazio. Padrão inválido
 /// ou quebra de linha na consulta são recusados com mensagem.
 pub fn search(dir: &Path, query: &Query) -> Result<Results, String> {
@@ -202,7 +190,7 @@ pub fn search(dir: &Path, query: &Query) -> Result<Results, String> {
         let doc = match load(dir, &path) {
             Ok(doc) => doc,
             Err(reason) => {
-                skip(&mut out, path, reason);
+                skip(&mut out.skipped, &mut out.skipped_omitted, path, reason);
                 continue;
             }
         };
@@ -237,7 +225,7 @@ pub fn quick_open(dir: &Path, term: &str) -> Result<Quick, String> {
         .into_iter()
         .filter(|p| {
             let low = p.to_lowercase();
-            words.iter().all(|w| low.contains(w)) && files::plain_file(dir, p).is_ok()
+            words.iter().all(|w| low.contains(w)) && files::plain(dir, p, false).is_ok()
         })
         .collect();
     let name_of = |p: &str| p.rsplit('/').next().unwrap_or(p).to_lowercase();
@@ -261,7 +249,7 @@ pub fn preview(dir: &Path, query: &Query, replacement: &str) -> Result<Preview, 
         let doc = match load(dir, &path) {
             Ok(doc) => doc,
             Err(reason) => {
-                skip_preview(&mut out, path, reason);
+                skip(&mut out.skipped, &mut out.skipped_omitted, path, reason);
                 continue;
             }
         };
@@ -304,7 +292,7 @@ pub fn apply(dir: &Path, request: &ApplyRequest) -> Result<Applied, String> {
     Ok(out)
 }
 
-fn apply_one(dir: &Path, listed: &[String], re: &Regex, rep: &Rep, preserve: bool, pick: &Pick) -> Result<usize, String> {
+fn apply_one(dir: &Path, listed: &[String], re: &Regex, rep: &str, preserve: bool, pick: &Pick) -> Result<usize, String> {
     if listed.binary_search(&pick.path).is_err() {
         return Err("Este arquivo não está na pesquisa atual (filtro, ignorado ou apagado). Nada foi gravado.".into());
     }
@@ -338,15 +326,16 @@ fn regex_reason(e: &regex::Error) -> String {
     text.lines().rev().find_map(|l| l.strip_prefix("error: ")).map(str::to_string).unwrap_or_else(|| text.lines().next().unwrap_or("").to_string())
 }
 
-/// Checa o texto de substituição. Literal entra como está. Regex aceita só `$$`, `$n` (grupo que existe), `$nome`
-/// (grupo nomeado que existe) e `${...}` com um desses; qualquer outro `$` é recusado, nunca aplicado errado.
-/// Quebra de linha ou CR na substituição também é recusada.
-fn template(query: &Query, re: &Regex, replacement: &str) -> Result<Rep, String> {
+/// Checa o texto de substituição e o devolve no formato que `replace_text` expande. Literal vira template com cada `$`
+/// dobrado (`$$`), então sai como está. Regex aceita só `$$`, `$n` (grupo que existe), `$nome` (grupo nomeado que
+/// existe) e `${...}` com um desses; qualquer outro `$` é recusado, nunca aplicado errado. Quebra de linha ou CR na
+/// substituição também é recusada.
+fn template(query: &Query, re: &Regex, replacement: &str) -> Result<String, String> {
     if replacement.contains(['\n', '\r', '\0']) {
         return Err("A substituição precisa ser de uma linha só.".into());
     }
     if !query.regex {
-        return Ok(Rep::Literal(replacement.to_string()));
+        return Ok(replacement.replace('$', "$$"));
     }
     let bytes = replacement.as_bytes();
     let unsupported = |what: &str| format!("Sintaxe de substituição não suportada ({what}). Use $1, $2 ou ${{nome}} para grupos, e $$ para um $ literal.");
@@ -379,7 +368,7 @@ fn template(query: &Query, re: &Regex, replacement: &str) -> Result<Rep, String>
         }
         i = next;
     }
-    Ok(Rep::Template(replacement.to_string()))
+    Ok(replacement.to_string())
 }
 
 /// Os filtros de caminho de `query`: cada trecho vira um padrão sem diferença de caixa.
@@ -392,14 +381,8 @@ fn filters(query: &Query) -> Result<(Vec<Regex>, Vec<Regex>), String> {
 
 /// Trecho de caminho com `*` e `?`; o resto é literal. Acha o trecho em qualquer lugar do caminho.
 fn glob(term: &str) -> Result<Regex, String> {
-    let mut pattern = String::from("(?i)");
-    for c in term.chars() {
-        match c {
-            '*' => pattern.push_str(".*"),
-            '?' => pattern.push('.'),
-            c => pattern.push_str(&regex::escape(&c.to_string())),
-        }
-    }
+    // `escape` põe `\` antes de `*` e de `?`; trocar esses pares pelo equivalente do `regex` dá o glob.
+    let pattern = format!("(?i){}", regex::escape(term).replace(r"\*", ".*").replace(r"\?", "."));
     Regex::new(&pattern).map_err(|e| format!("Filtro de caminho inválido: {}", regex_reason(&e)))
 }
 
@@ -424,20 +407,20 @@ fn load(dir: &Path, path: &str) -> Result<Doc, SkipReason> {
     if !meta.is_file() {
         return Err(SkipReason::NotFile);
     }
-    files::plain_file(dir, path).map_err(|_| SkipReason::NotFile)?;
-    if meta.len() > MAX_FILE {
+    files::plain(dir, path, false).map_err(|_| SkipReason::NotFile)?;
+    if meta.len() > files::MAX_FILE {
         return Err(SkipReason::TooLarge);
     }
     let bytes = std::fs::read(dir.join(path)).map_err(|_| SkipReason::Unreadable)?;
-    if bytes[..bytes.len().min(BINARY_SNIFF)].contains(&0) {
+    if files::is_binary(&bytes) {
         return Err(SkipReason::Binary);
     }
-    let (bom, body) = match bytes.strip_prefix(&BOM) {
+    let (bom, body) = match bytes.strip_prefix(&files::BOM) {
         Some(body) => (true, body),
         None => (false, bytes.as_slice()),
     };
     let text = std::str::from_utf8(body).map_err(|_| SkipReason::NotUtf8)?.to_string();
-    Ok(Doc { bom, revision: fingerprint(&bytes), text })
+    Ok(Doc { bom, revision: files::fingerprint(&bytes), text })
 }
 
 /// As linhas do texto como a busca as vê: número a partir de 1, sem CR no fim.
@@ -451,8 +434,9 @@ fn first_hit(re: &Regex, body: &str) -> Option<usize> {
 }
 
 /// Substitui em `text`, linha a linha, e conta as ocorrências trocadas. Ocorrência vazia não conta e não muda nada.
-/// Os fins de linha de `text` ficam como estão. Com `preserve`, a caixa do substituto segue a ocorrência (`keep_case`).
-fn replace_text(re: &Regex, text: &str, rep: &Rep, preserve: bool) -> (String, usize) {
+/// `rep` é o template de `template`, expandido em cada ocorrência. Os fins de linha de `text` ficam como estão.
+/// Com `preserve`, a caixa do substituto segue a ocorrência (`keep_case`).
+fn replace_text(re: &Regex, text: &str, rep: &str, preserve: bool) -> (String, usize) {
     let mut count = 0;
     let mut out = String::with_capacity(text.len());
     for piece in text.split_inclusive('\n') {
@@ -469,14 +453,8 @@ fn replace_text(re: &Regex, text: &str, rep: &Rep, preserve: bool) -> (String, u
                 return String::new();
             }
             count += 1;
-            let sub = match rep {
-                Rep::Literal(lit) => lit.clone(),
-                Rep::Template(template) => {
-                    let mut dst = String::new();
-                    caps.expand(template, &mut dst);
-                    dst
-                }
-            };
+            let mut sub = String::new();
+            caps.expand(rep, &mut sub);
             if preserve {
                 keep_case(&caps[0], &sub)
             } else {
@@ -512,21 +490,12 @@ fn keep_case(matched: &str, rep: &str) -> String {
     }
 }
 
-/// Registra um arquivo ignorado na busca, até o limite da lista.
-fn skip(out: &mut Results, path: String, reason: SkipReason) {
-    if out.skipped.len() < MAX_SKIPPED {
-        out.skipped.push(Skipped { path, reason });
+/// Registra um arquivo ignorado na lista da busca ou da prévia, até o limite; o resto só entra na contagem `omitted`.
+fn skip(list: &mut Vec<Skipped>, omitted: &mut usize, path: String, reason: SkipReason) {
+    if list.len() < MAX_SKIPPED {
+        list.push(Skipped { path, reason });
     } else {
-        out.skipped_omitted += 1;
-    }
-}
-
-/// O mesmo para a prévia.
-fn skip_preview(out: &mut Preview, path: String, reason: SkipReason) {
-    if out.skipped.len() < MAX_SKIPPED {
-        out.skipped.push(Skipped { path, reason });
-    } else {
-        out.skipped_omitted += 1;
+        *omitted += 1;
     }
 }
 
@@ -550,12 +519,6 @@ fn window(line: &str, at: usize) -> String {
     let hit = line[..at].chars().count();
     let start = hit.saturating_sub(CONTEXT_BEFORE);
     chars[start..(start + MAX_TEXT).min(chars.len())].iter().collect()
-}
-
-/// Impressão digital (FNV-1a de 64 bits) dos bytes: a revisão que a prévia entrega e a aplicação confere.
-fn fingerprint(bytes: &[u8]) -> String {
-    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
-    format!("{hash:016x}")
 }
 
 #[cfg(test)]
@@ -693,7 +656,7 @@ mod tests {
         write(t.dir(), "texto.txt", "marca\n");
         write(t.dir(), "bin.dat", b"marca\0\0");
         write(t.dir(), "latin.txt", b"marca \xFF\n");
-        write(t.dir(), "grande.txt", vec![b'a'; (MAX_FILE + 1) as usize]);
+        write(t.dir(), "grande.txt", vec![b'a'; (files::MAX_FILE + 1) as usize]);
         commit_all(t.dir());
         let r = buscar(t.dir(), &q("marca"));
         assert_eq!(caminhos(&r), vec!["texto.txt"]);

@@ -2,10 +2,9 @@
 // e nomes recusados no Windows. Roda sem dependências e sem navegador: `node scripts/check-file-tabs.mjs`. Sai com 1 se alguma regra quebrar.
 // As regras de abas (fechamento em lote, vizinha, fixadas, renomear) estão em scripts/check-workspace.mjs, no modelo que o editor usa.
 import assert from 'node:assert/strict';
-import { fileNameError, isWithin, pathText, relativeTo } from '../src/file-tab-actions.ts';
-
-const checks = [];
-const check = (name, fn) => checks.push({ name, fn });
+import { test as check } from 'node:test';
+import { fileNameError, pathText, relativeTo } from '../src/file-tab-actions.ts';
+import { isWithin } from '../src/workspace-model.ts';
 
 check('Texto relativo usa o separador do Windows quando o projeto tem \\', () => {
   assert.equal(pathText('relative', 'src/App.tsx', 'D:\\orquestrador'), 'src\\App.tsx');
@@ -73,15 +72,3 @@ check('Nome recusado traz o motivo em português, com a barra invertida inteira'
   assert.equal(fileNameError('a\\b'), 'O nome tem caractere que o Windows não aceita: < > : " / \\ | ? *');
   assert.equal(fileNameError('CON.txt'), '“CON.txt” é um nome reservado pelo Windows.');
 });
-let failed = 0;
-for (const { name, fn } of checks) {
-  try {
-    await fn();
-    console.log(`ok   ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`FAIL ${name}\n     ${e.message.split('\n').join('\n     ')}`);
-  }
-}
-console.log(`\n${checks.length - failed}/${checks.length} verificações passaram`);
-process.exitCode = failed ? 1 : 0;

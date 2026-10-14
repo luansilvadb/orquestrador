@@ -100,18 +100,14 @@ impl Term {
     pub fn resize(&self, cols: u16, rows: u16) {
         let _ = self.master.resize(size(cols, rows));
     }
+}
 
-    /// Mata a árvore inteira de processos.
-    pub fn kill(&mut self) {
+/// Ao sair de escopo, mata a árvore inteira de processos.
+impl Drop for Term {
+    fn drop(&mut self) {
         match &self.job {
             Some(job) => job.kill(),
             None => drop(self.killer.kill()),
         }
-    }
-}
-
-impl Drop for Term {
-    fn drop(&mut self) {
-        self.kill();
     }
 }

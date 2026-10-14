@@ -2,10 +2,8 @@
 // primeira página com pai não carregado, reaproveitamento de faixa livre, cor estável e lista vazia.
 // Roda sem dependências: `node scripts/check-git-graph.mjs`. Sai com 1 e mostra a falha se alguma regra quebrar.
 import assert from 'node:assert/strict';
+import { test as check } from 'node:test';
 import { layoutGraph } from '../src/git-graph.ts';
-
-const checks = [];
-const check = (name, fn) => checks.push({ name, fn });
 const c = (hash, ...parents) => ({ hash, parents });
 // Segmentos de uma linha em forma comparável e independente da ordem: "top 0>1 c2".
 const segs = (row) => row.lines.map((l) => `${l.half} ${l.from}>${l.to} c${l.color}`).sort();
@@ -103,16 +101,3 @@ check('cor estável: cada faixa mantém a cor de nascimento enquanto existir', (
 check('lista vazia: nenhuma linha', () => {
   assert.deepEqual(layoutGraph([]), []);
 });
-
-let failed = 0;
-for (const { name, fn } of checks) {
-  try {
-    await fn();
-    console.log(`ok   ${name}`);
-  } catch (e) {
-    failed++;
-    console.log(`FAIL ${name}\n     ${e.message.split('\n').join('\n     ')}`);
-  }
-}
-console.log(`\n${checks.length - failed}/${checks.length} verificações passaram`);
-process.exitCode = failed ? 1 : 0;

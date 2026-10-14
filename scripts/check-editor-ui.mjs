@@ -6,7 +6,7 @@
 // Capturas em .playwright-mcp/editor-ui-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { OUT, KNOWN, startVite, waitForServer, launchBrowser, session, expand, treeItem, tabs, tabTitles, editorText, focusEditor, columnPoint, primaryCursor } from './editor-ui-harness.mjs';
+import { OUT, uiSuite, expand, treeItem, tabs, tabTitles, editorText, focusEditor, columnPoint, primaryCursor } from './editor-ui-harness.mjs';
 
 
 // Geometria real da faixa: área visível (scroll), contador, aba ativa e o X dela.
@@ -47,8 +47,7 @@ function assertRevealed(s, label) {
 
 // ---------- cenários (cada um com fixtures próprias; nenhum depende de estado de outro) ----------
 
-const scenarios = [];
-const scenario = (name, fn) => scenarios.push({ name, fn });
+const { scenario, run } = uiSuite('editor-ui');
 
 scenario('faixa de abas em 1040px: aba ativa visível com 1 e 2 grupos, nomes repetidos e longos, X e contador sem sobreposição', async ({ page }) => {
   await page.evaluate(() => {
@@ -357,42 +356,5 @@ scenario('busca: resultado com emoji posiciona o cursor na coluna UTF-16 exata (
 });
 
 
-// ---------- execução ----------
 
-const vite = startVite();
-let exitCode = 1;
-const results = [];
-try {
-  await waitForServer();
-  const browser = await launchBrowser();
-  try {
-    for (const { name, fn } of scenarios) {
-      const { context, page, errors } = await session(browser);
-      try {
-        await fn({ page, errors });
-        const bad = errors.filter((e) => !KNOWN.some((k) => k.test(e)));
-        assert.deepEqual(bad, [], 'erros/avisos no console');
-        results.push({ name, ok: true });
-        console.log(`ok    ${name}`);
-      } catch (e) {
-        const shot = join(OUT, `editor-ui-falha-${results.length + 1}.png`);
-        await page.screenshot({ path: shot }).catch(() => {});
-        results.push({ name, ok: false, error: e.message });
-        console.log(`FAIL  ${name}\n      ${e.message.split('\n').join('\n      ')}\n      captura da falha: ${shot}`);
-      } finally {
-        await context.close();
-      }
-    }
-  } finally {
-    await browser.close();
-  }
-  exitCode = results.every((r) => r.ok) ? 0 : 1;
-} catch (e) {
-  console.error(e);
-} finally {
-  vite.stop();
-  const passed = results.filter((r) => r.ok).length;
-  console.log(`
-${passed}/${results.length} cenários passaram`);
-}
-process.exitCode = exitCode;
+process.exitCode = await run();

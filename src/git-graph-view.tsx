@@ -1,17 +1,16 @@
 // Seção "Gráfico" do controle de versão: os commits do HEAD e do upstream da branch atual, no estilo do Source Control do VS Code.
 // Cada linha tem as faixas desenhadas à esquerda (layoutGraph), o assunto, as etiquetas das refs e o autor. Clique num commit abre
 // os arquivos dele ali mesmo, e clique num arquivo abre a alteração daquele commit. Só consulta com a tela Git visível e a seção aberta.
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActionIcon, Button, ContextMenuTrigger, Text, toast } from '@lobehub/ui/base-ui';
+import { useEffect, useMemo, useRef } from 'react';
+import { ActionIcon, Button, ContextMenuTrigger, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, Cloud, CloudDownload, GitBranch, RefreshCw, Tag } from 'lucide-react';
-import { backend, message } from './backend';
-import { CommitFileList, type OpenCommitTarget, when } from './git-history';
+import { backend } from './backend';
+import { CommitFileList, copy, note, type OpenCommitTarget, PAGE, useCommitDetail, usePagedList, when } from './git-history';
 import { type GraphLine, type GraphRow, layoutGraph } from './git-graph';
 import type { TabTarget } from './workspace-model';
-import type { CommitDetail, GitRef, GraphCommit } from './types';
+import type { GitRef } from './types';
 
-const PAGE = 50;
 // Medidas em px: o passo horizontal de uma faixa, a linha de commit e a linha de arquivo (a mesma do painel).
 const LANE = 12;
 const ROW = 22;
@@ -24,6 +23,8 @@ const KEY_STEP = 16;
 // Cores das faixas: variáveis do tema do antd, então acompanham o tema claro e o escuro.
 const PALETTE = ['--ant-color-primary', '--ant-color-success', '--ant-color-warning', '--ant-color-error', '--ant-color-info'].map((v) => `var(${v})`);
 const colorOf = (n: number) => PALETTE[n % PALETTE.length];
+// Busca de uma página do gráfico: o gráfico é do HEAD e do upstream, sem escopo de arquivo.
+const graphPage = (offset: number) => backend.gitGraph(PAGE, offset);
 
 export type GraphRemote = 'fetch' | 'pull' | 'push';
 export type GraphSectionProps = {
@@ -122,11 +123,6 @@ function DetailNote({ row, text, danger = false }: { row: GraphRow; text: string
   );
 }
 
-const copy = (text: string, title: string) => navigator.clipboard.writeText(text).then(
-  () => toast.success({ title, duration: 2000 }),
-  (e: unknown) => toast.error({ title: message(e), duration: 5000 }),
-);
-
 /**
  * A seção "Gráfico" do painel: cabeçalho com o chevron, o título e as ações (Buscar, Receber, Enviar e atualizar).
  * Aberta, ocupa `height` e tem o divisor acima (arrastar ou setas); fechada, sobra só o cabeçalho. Cada parte rola por conta própria.
@@ -134,39 +130,17 @@ const copy = (text: string, title: string) => navigator.clipboard.writeText(text
 export function GraphSection({
   open, onToggle, height, onHeight, head, stamp, active, selected, onOpenTarget, onRefresh, remote, running, onRemote,
 }: GraphSectionProps) {
-  const [commits, setCommits] = useState<GraphCommit[] | null>(null);
-  const [more, setMore] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [openHash, setOpenHash] = useState<string | null>(null);
-  const [detail, setDetail] = useState<CommitDetail | null>(null);
-  const [detailError, setDetailError] = useState('');
-  // Cada pedido tem o seu número: a resposta de um pedido já trocado por outro é descartada.
-  const listSeq = useRef(0);
-  const detailSeq = useRef(0);
+  // Lista paginada (a anterior fica na tela até a nova chegar) e detalhe do commit aberto: os mesmos hooks do histórico.
+  const { items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList(graphPage, false);
+  const { openHash, detail, detailError, open: openCommit, close: closeCommit } = useCommitDetail();
   // Chave da última carga: enquanto ela não muda, voltar à seção ou à tela não recarrega.
   const loaded = useRef<string | null>(null);
   // Faixas calculadas sobre todas as linhas carregadas, de cima para baixo (a página nova continua as faixas da anterior).
   const rows = useMemo(() => layoutGraph(commits ?? []), [commits]);
 
   function reload(key: string) {
-    const seq = ++listSeq.current;
     loaded.current = key;
-    setLoading(true);
-    backend.gitGraph(PAGE, 0).then(
-      (list) => {
-        if (seq === listSeq.current) {
-          setCommits(list);
-          setMore(list.length === PAGE);
-          setError('');
-        }
-      },
-      (e: unknown) => {
-        if (seq === listSeq.current) setError(message(e));
-      },
-    ).finally(() => {
-      if (seq === listSeq.current) setLoading(false);
-    });
+    reloadList(null);
   }
 
   // Só carrega com a tela visível e a seção aberta, e só quando a chave mudou desde a última carga.
@@ -176,46 +150,10 @@ export function GraphSection({
     // `reload` só lê refs e setters: não precisa estar nas dependências.
   }, [active, open, stamp]);
 
-  function loadMore() {
-    if (!commits || loading) return;
-    const seq = listSeq.current;
-    setLoading(true);
-    backend.gitGraph(PAGE, commits.length).then(
-      (list) => {
-        if (seq === listSeq.current) {
-          setCommits((prev) => [...(prev ?? []), ...list]);
-          setMore(list.length === PAGE);
-        }
-      },
-      (e: unknown) => {
-        if (seq === listSeq.current) setError(message(e));
-      },
-    ).finally(() => {
-      if (seq === listSeq.current) setLoading(false);
-    });
-  }
-
   // Escolher o mesmo commit de novo fecha. Trocar de commit descarta a lista anterior e pede a nova.
   function toggleCommit(hash: string) {
-    if (openHash === hash) {
-      ++detailSeq.current;
-      setOpenHash(null);
-      setDetail(null);
-      setDetailError('');
-      return;
-    }
-    const seq = ++detailSeq.current;
-    setOpenHash(hash);
-    setDetail(null);
-    setDetailError('');
-    backend.gitCommitDetail(hash).then(
-      (next) => {
-        if (seq === detailSeq.current) setDetail(next);
-      },
-      (e: unknown) => {
-        if (seq === detailSeq.current) setDetailError(message(e));
-      },
-    );
+    if (openHash === hash) closeCommit();
+    else openCommit(hash);
   }
 
   // Divisor: arrastar ou setas. O máximo deixa a lista de arquivos no mínimo; o espaço é o da lista (irmã anterior) mais a seção.
@@ -249,10 +187,6 @@ export function GraphSection({
         aria-label="Atualizar o gráfico" title="Atualizar o gráfico" onClick={onRefresh}
       />
     </Flexbox>
-  );
-
-  const note = (text: string, danger = false) => (
-    <Text as="p" role="status" fontSize={12} type={danger ? 'danger' : 'secondary'} style={{ paddingInline: 12, paddingBlock: 6 }}>{text}</Text>
   );
 
   let list;

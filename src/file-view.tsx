@@ -98,6 +98,12 @@ export type StartCursor = { line: number; col: number };
 
 const readOnlyExt = (readOnly: boolean) => [EditorView.editable.of(!readOnly), EditorState.readOnly.of(readOnly)];
 
+// Põe o cursor em `at`, rola até ele no centro e foca a vista (reveal da busca e ir para linha:coluna).
+const goTo = (view: EditorView, at: number) => {
+  view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: 'center' }) });
+  view.focus();
+};
+
 // Posição (offset UTF-16) de linha:coluna 1-based num texto com `\n`. Limita ao documento.
 function offsetOf(text: string, start: StartCursor): number {
   const lines = text.split('\n');
@@ -332,19 +338,13 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
     const { doc } = current.state;
     const line = doc.line(Math.min(Math.max(reveal.line, 1), doc.lines));
     const at = line.from + Math.min(Math.max((reveal.col ?? 1) - 1, 0), line.length);
-    current.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: 'center' }) });
-    current.focus();
+    goTo(current, at);
   }, [reveal]);
 
   useEffect(() => {
     const current = view.current;
     if (current) {
-      current.dispatch({
-        effects: editable.current.reconfigure([
-          EditorView.editable.of(!readOnly),
-          EditorState.readOnly.of(readOnly),
-        ]),
-      });
+      current.dispatch({ effects: editable.current.reconfigure(readOnlyExt(readOnly)) });
     }
   }, [readOnly]);
 
@@ -359,10 +359,9 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
     }
     const line = doc.line(result.line);
     const at = line.from + Math.min(result.col - 1, line.length);
-    current.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: 'center' }) });
+    goTo(current, at);
     setGotoOpen(false);
     setGotoError('');
-    current.focus();
   };
 
   return (

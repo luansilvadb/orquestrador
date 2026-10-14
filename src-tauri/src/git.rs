@@ -10,8 +10,6 @@ use std::process::Stdio;
 
 /// Diff com mais texto que isto não é montado: a tela mostra só o aviso.
 const MAX_DIFF: usize = 1_048_576;
-/// Quantos bytes do começo de um arquivo o Git olha para decidir se ele é binário.
-const BINARY_SNIFF: usize = 8000;
 
 /// O que aconteceu com o arquivo num dos lados (índice ou pasta de trabalho).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -131,7 +129,8 @@ fn kind(letter: char) -> Option<Kind> {
 }
 
 /// O diff de `rel`. `staged` compara o índice com o HEAD; senão, a pasta de trabalho com o índice. Arquivo não
-/// rastreado vira o arquivo inteiro como linhas acrescentadas.
+/// rastreado vira o arquivo inteiro como linhas acrescentadas. Só os testes usam esta forma; a tela usa `review_diff`.
+#[cfg(test)]
 pub fn diff(dir: &Path, rel: &str, staged: bool) -> Result<Diff, String> {
     Ok(snapshot(dir, spec(rel)?, staged)?.diff)
 }
@@ -190,7 +189,7 @@ fn untracked(file: &Path, rel: &str) -> Result<Diff, String> {
         return Ok(Diff { too_large: true, ..empty });
     }
     let bytes = std::fs::read(file).map_err(io)?;
-    if bytes[..bytes.len().min(BINARY_SNIFF)].contains(&0) {
+    if files::is_binary(&bytes) {
         return Ok(Diff { binary: true, ..empty });
     }
     let lines: Vec<String> = String::from_utf8_lossy(&bytes).lines().map(str::to_string).collect();
@@ -347,7 +346,6 @@ fn specs(paths: &[String]) -> Result<Vec<&str>, String> {
 
 /// Quantos commits uma página do histórico pode trazer, no máximo.
 const MAX_HISTORY: usize = 200;
-const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 const LOG_FORMAT: &str = "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1e";
 
 /// Um bloco (hunk) do diff de um arquivo, como a UI o recebeu. `index` é a posição entre os blocos do diff,
@@ -406,10 +404,9 @@ pub struct CommitDetail {
 }
 
 /// Um arquivo em conflito. `base`, `ours` e `theirs` são os estágios 1, 2 e 3 do índice; `None` quando o lado
-/// não existe (ex.: o outro lado apagou o arquivo). `worktree` é o texto atual da pasta, sem BOM e com `\n`;
-/// `crlf` e `bom` dizem como ele estava, para a gravação devolver do mesmo jeito. `binary` vale também para o
-/// texto que não é UTF-8 válido: nesse caso `worktree` vem `None` e a tela não o edita. `revision` é a impressão
-/// digital dos estágios do índice e dos bytes da pasta: quem grava ou remove manda de volta esta revisão.
+/// não existe (ex.: o outro lado apagou o arquivo). `worktree` é o texto atual da pasta, sem BOM e com `\n`. `binary`
+/// vale também para o texto que não é UTF-8 válido: nesse caso `worktree` vem `None` e a tela não o edita. `revision` é a
+/// impressão digital dos estágios do índice e dos bytes da pasta: quem grava ou remove manda de volta esta revisão.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Conflict {
@@ -419,40 +416,7 @@ pub struct Conflict {
     pub theirs: Option<String>,
     pub worktree: Option<String>,
     pub binary: bool,
-    pub crlf: bool,
-    pub bom: bool,
     pub revision: String,
-}
-
-/// Impressão digital (FNV-1a de 64 bits) dos bytes. Serve de revisão: se o conteúdo mudar, a revisão muda.
-fn fingerprint(bytes: &[u8]) -> String {
-    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
-    format!("{hash:016x}")
-}
-
-/// Uma saída que é binária (NUL no começo, como o Git decide).
-fn is_binary(bytes: &[u8]) -> bool {
-    bytes[..bytes.len().min(BINARY_SNIFF)].contains(&0)
-}
-
-/// Roda o Git do mesmo jeito que `proc::git_saida` (caminho literal, sem pedido de senha, sem editor), mas devolve a
-/// saída crua: sem trocar byte inválido, para saber se um conteúdo é UTF-8.
-fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let out = proc::quiet("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["--literal-pathspecs", "-c", "core.quotepath=false"])
-        .args(args)
-        .stdin(Stdio::null())
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", ":")
-        .output()
-        .map_err(|e| format!("git não pôde ser executado: {e}"))?;
-    if out.status.success() {
-        return Ok(out.stdout);
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    Err(if stderr.is_empty() { format!("código {}", out.status.code().unwrap_or(-1)) } else { stderr })
 }
 
 /// Divide um patch em (cabeçalho do arquivo, blocos). Cada bloco começa numa linha `@@`; as linhas do corpo começam
@@ -496,12 +460,12 @@ pub fn review_diff(dir: &Path, rel: &str, staged: bool) -> Result<ReviewDiff, St
             .map(|(index, block)| HunkInfo { index, header: block_header(block).to_string() })
             .collect()
     };
-    Ok(ReviewDiff { revision: fingerprint(lido.raw.as_bytes()), diff: lido.diff, hunks })
+    Ok(ReviewDiff { revision: files::fingerprint(lido.raw.as_bytes()), diff: lido.diff, hunks })
 }
 
 /// Os caminhos do índice, com `-z`: nome com quebra de linha não vira duas linhas. Pathspec literal, como em `proc`.
 fn index_paths(dir: &Path, rel: &str) -> Result<Vec<Vec<u8>>, String> {
-    let out = git_bytes(dir, &["ls-files", "-z", "--", rel])?;
+    let out = proc::git_bytes(dir, &["ls-files", "-z", "--", rel])?;
     Ok(out.split(|b| *b == 0).filter(|p| !p.is_empty()).map(<[u8]>::to_vec).collect())
 }
 
@@ -531,7 +495,7 @@ fn current_block(dir: &Path, hunk: &HunkRef, staged: bool) -> Result<String, Str
     if lido.untracked {
         return Err(format!("{rel} não está rastreado: prepare ou descarte o arquivo inteiro, não por bloco."));
     }
-    if fingerprint(lido.raw.as_bytes()) != hunk.revision {
+    if files::fingerprint(lido.raw.as_bytes()) != hunk.revision {
         return Err(stale(rel));
     }
     if lido.diff.binary {
@@ -603,7 +567,7 @@ pub fn discard_file(dir: &Path, rel: &str, revision_seen: &str) -> Result<(), St
     if !tracked_file(dir, rel)? {
         return Err(format!("{rel} não está rastreado: o Git não o descarta. Mande-o para a Lixeira pela tela."));
     }
-    if fingerprint(raw_diff(dir, rel, false)?.as_bytes()) != revision_seen {
+    if files::fingerprint(raw_diff(dir, rel, false)?.as_bytes()) != revision_seen {
         return Err(stale(rel));
     }
     proc::git_saida(dir, &["restore", "--worktree", "--", rel]).map(|_| ())
@@ -624,11 +588,14 @@ pub fn history(dir: &Path, limit: usize, skip: usize, path: Option<&str>) -> Res
     Ok(parse_commits(&proc::git_saida(dir, &args)?))
 }
 
+/// Os registros de uma saída do Git: separados por 0x1e, sem as quebras de linha do começo e sem os vazios.
+fn records(out: &str) -> impl Iterator<Item = &str> {
+    out.split('\x1e').map(|rec| rec.trim_start_matches('\n')).filter(|rec| !rec.is_empty())
+}
+
 /// Lê a saída de `log`/`show` com `LOG_FORMAT`: cada registro acaba em 0x1e e os campos são separados por 0x1f.
 fn parse_commits(out: &str) -> Vec<Commit> {
-    out.split('\x1e')
-        .map(|rec| rec.trim_start_matches('\n'))
-        .filter(|rec| !rec.is_empty())
+    records(out)
         .filter_map(|rec| {
             let f: Vec<&str> = rec.splitn(5, '\x1f').collect();
             match f.as_slice() {
@@ -701,9 +668,7 @@ pub fn graph(dir: &Path, limit: usize, skip: usize) -> Result<Vec<GraphCommit>, 
 
 /// Lê a saída de `log` com `GRAPH_FORMAT`. Registro que não tem todos os campos é descartado.
 fn parse_graph(out: &str) -> Vec<GraphCommit> {
-    out.split('\x1e')
-        .map(|rec| rec.trim_start_matches('\n'))
-        .filter(|rec| !rec.is_empty())
+    records(out)
         .filter_map(|rec| {
             let f: Vec<&str> = rec.splitn(7, '\x1f').collect();
             match f.as_slice() {
@@ -829,7 +794,7 @@ pub fn commit_diff(dir: &Path, id: &str, path: Option<&str>) -> Result<Diff, Str
 /// Estágios de conflito do caminho exato `rel` (1 base, 2 atual, 3 recebido), com os bytes crus dos registros do
 /// `ls-files -u`. Os registros entram na revisão: um estágio trocado muda a revisão mesmo com a pasta igual.
 fn unmerged(dir: &Path, rel: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let raw = git_bytes(dir, &["ls-files", "-u", "-z", "--", rel])?;
+    let raw = proc::git_bytes(dir, &["ls-files", "-u", "-z", "--", rel])?;
     let mut stages = Vec::new();
     for record in raw.split(|b| *b == 0).filter(|r| !r.is_empty()) {
         // `modo SP hash SP estágio TAB caminho`; o pathspec pode trazer outros caminhos (pasta), que não entram.
@@ -887,7 +852,7 @@ impl Snap {
             }
             None => all.push(0),
         }
-        fingerprint(&all)
+        files::fingerprint(&all)
     }
 
     /// Os três lados como texto. Lado que não é UTF-8 ou grande demais recusa o conflito inteiro: não há como mostrá-lo.
@@ -904,7 +869,7 @@ impl Snap {
         if size > MAX_CONFLITO {
             return Err(grande(rel));
         }
-        let bytes = git_bytes(dir, &["cat-file", "blob", &spec])?;
+        let bytes = proc::git_bytes(dir, &["cat-file", "blob", &spec])?;
         String::from_utf8(bytes)
             .map(Some)
             .map_err(|_| format!("O lado {} de {rel} não é UTF-8 válido. Resolva pelo terminal.", nome_do_lado(n)))
@@ -966,7 +931,7 @@ fn guarded(dir: &Path, rel: &str) -> Result<PathBuf, String> {
 /// BOM e CRLF do arquivo em conflito. O marcador `<<<<<<<` vem antes do conteúdo, então o BOM pode estar no começo
 /// do primeiro lado e não no da pasta: olha a pasta e os lados.
 fn estilo(pasta: Option<&[u8]>, lados: &[&str]) -> (bool, bool) {
-    let bom = pasta.is_some_and(|b| b.starts_with(BOM)) || lados.iter().any(|t| t.starts_with('\u{feff}'));
+    let bom = pasta.is_some_and(|b| b.starts_with(&files::BOM)) || lados.iter().any(|t| t.starts_with('\u{feff}'));
     let crlf = pasta.is_some_and(|b| b.windows(2).any(|w| w == b"\r\n")) || lados.iter().any(|t| t.contains("\r\n"));
     (bom, crlf)
 }
@@ -978,7 +943,7 @@ fn sem_bom(text: &str) -> &str {
 
 /// Os bytes sem o BOM, que é o que a tela mostra.
 fn sem_bom_bytes(bytes: &[u8]) -> &[u8] {
-    bytes.strip_prefix(BOM).unwrap_or(bytes)
+    bytes.strip_prefix(&files::BOM).unwrap_or(bytes)
 }
 
 /// O texto da pasta para a tela: sem BOM e com `\n`. Quem chama já confirmou que é UTF-8.
@@ -992,9 +957,7 @@ pub fn conflict(dir: &Path, rel: &str) -> Result<Conflict, String> {
     let rel = spec(rel)?;
     let snap = Snap::read(dir, rel)?;
     let [base, ours, theirs] = snap.sides(dir, rel)?;
-    let lados: Vec<&str> = [&base, &ours, &theirs].into_iter().flatten().map(String::as_str).collect();
-    let (bom, crlf) = estilo(snap.worktree.as_deref(), &lados);
-    let binary = snap.worktree.as_deref().is_some_and(|b| is_binary(b) || std::str::from_utf8(sem_bom_bytes(b)).is_err());
+    let binary = snap.worktree.as_deref().is_some_and(|b| files::is_binary(b) || std::str::from_utf8(sem_bom_bytes(b)).is_err());
     let worktree = snap.worktree.as_deref().filter(|_| !binary).map(texto_da_tela);
     let sem = |t: Option<String>| t.map(|s| sem_bom(&s).replace("\r\n", "\n"));
     Ok(Conflict {
@@ -1004,8 +967,6 @@ pub fn conflict(dir: &Path, rel: &str) -> Result<Conflict, String> {
         theirs: sem(theirs),
         worktree,
         binary,
-        crlf,
-        bom,
         revision: snap.revision(),
     })
 }
@@ -1043,7 +1004,7 @@ pub fn write_resolution(dir: &Path, rel: &str, content: &str, revision: &str, ma
         return Err(stale(rel));
     }
     let worktree = snap.worktree.as_deref();
-    if worktree.is_some_and(is_binary) {
+    if worktree.is_some_and(files::is_binary) {
         return Err(format!("{rel} é binário: resolva pelo terminal ou escolha um lado."));
     }
     if worktree.is_some_and(|b| std::str::from_utf8(sem_bom_bytes(b)).is_err()) {
@@ -1058,7 +1019,7 @@ pub fn write_resolution(dir: &Path, rel: &str, content: &str, revision: &str, ma
             // Já confirmado como UTF-8 acima, então a conversão não troca nada. O BOM do próprio arquivo volta sozinho na
             // gravação; o BOM que só os lados têm (o arquivo começa pelo marcador) entra no texto.
             let base = String::from_utf8_lossy(sem_bom_bytes(bytes)).into_owned();
-            let file_bom = bytes.starts_with(BOM);
+            let file_bom = bytes.starts_with(&files::BOM);
             let text = if bom && !file_bom { format!("\u{feff}{body}") } else { body };
             files::write_checked(dir, rel, &text, &base, file_bom)?;
         }
@@ -2054,7 +2015,7 @@ mod tests {
         let c = conflict(&dir, "x.txt").unwrap();
         assert_eq!((c.base.as_deref(), c.ours.as_deref(), c.theirs.as_deref()), (Some("base\n"), Some("main\n"), Some("outra\n")));
         assert!(c.worktree.as_deref().unwrap().contains("<<<<<<<"));
-        assert!(!c.binary && !c.bom && !c.crlf);
+        assert!(!c.binary);
         assert!(conflict(&dir, "y.txt").unwrap_err().contains("não está em conflito"));
 
         // Gravar com revisão antiga é recusado; com marcadores e `mark_resolved` nem grava nem prepara.
@@ -2098,18 +2059,18 @@ mod tests {
     #[test]
     fn resolucao_preserva_bom_e_crlf() {
         let tmp = Tmp::new("bom-crlf");
-        let mut base = BOM.to_vec();
+        let mut base = files::BOM.to_vec();
         base.extend_from_slice(b"base\r\n");
-        let mut ours = BOM.to_vec();
+        let mut ours = files::BOM.to_vec();
         ours.extend_from_slice(b"main\r\n");
-        let mut theirs = BOM.to_vec();
+        let mut theirs = files::BOM.to_vec();
         theirs.extend_from_slice(b"outra\r\n");
         let dir = conflito(&tmp, "r", base, ours, theirs);
         let c = conflict(&dir, "x.txt").unwrap();
-        assert!(c.bom && c.crlf && !c.worktree.as_deref().unwrap().contains('\r'));
+        assert!(!c.worktree.as_deref().unwrap().contains('\r'));
         write_resolution(&dir, "x.txt", "um\ndois\n", &c.revision, true).unwrap();
         let bytes = fs::read(dir.join("x.txt")).unwrap();
-        assert!(bytes.starts_with(BOM), "o BOM continua");
+        assert!(bytes.starts_with(&files::BOM), "o BOM continua");
         assert_eq!(String::from_utf8(bytes[3..].to_vec()).unwrap(), "um\r\ndois\r\n");
     }
 

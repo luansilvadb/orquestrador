@@ -7,10 +7,15 @@
 // Capturas em .playwright-mcp/git-ui-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { OUT, KNOWN, startVite, waitForServer, launchBrowser, session, expand, treeItem, tabs, editorText, focusEditor } from './editor-ui-harness.mjs';
+import { OUT, uiSuite, expand, treeItem, tabs, editorText, focusEditor } from './editor-ui-harness.mjs';
 
-const scenarios = [];
-const scenario = (name, fn) => scenarios.push({ name, fn });
+// Diagnóstico extra da falha: as chamadas Git que o simulado recusou explicam uma falha de fluxo melhor que a espera que estourou.
+const { scenario, run } = uiSuite('git-ui', {
+  diagnose: async (page) => {
+    const refused = await page.evaluate(() => (window.__mock?.calls ?? []).filter((c) => c.error).map((c) => `${c.cmd}: ${c.error}`)).catch(() => []);
+    return [`chamadas Git recusadas: ${refused.length ? refused.join(' | ') : 'nenhuma'}`];
+  },
+});
 
 // ---------- helpers ----------
 
@@ -621,43 +626,5 @@ scenario('editor: Ctrl+G vai para a linha e Ctrl+H abre a busca sem mandar a tec
   assert.equal(await editorText(page), textBefore, 'Ctrl+Z restaurou o texto');
 });
 
-// ---------- execução ----------
 
-const vite = startVite();
-let exitCode = 1;
-const results = [];
-try {
-  await waitForServer();
-  const browser = await launchBrowser();
-  try {
-    for (const { name, fn } of scenarios) {
-      const { context, page, errors } = await session(browser);
-      try {
-        await fn({ page, errors });
-        const bad = errors.filter((e) => !KNOWN.some((k) => k.test(e)));
-        assert.deepEqual(bad, [], 'erros/avisos no console');
-        results.push({ name, ok: true });
-        console.log(`ok    ${name}`);
-      } catch (e) {
-        const shot = join(OUT, `git-ui-falha-${results.length + 1}.png`);
-        await page.screenshot({ path: shot }).catch(() => {});
-        // Diagnóstico: as chamadas Git que o simulado recusou explicam uma falha de fluxo melhor que a espera que estourou.
-        const refused = await page.evaluate(() => (window.__mock?.calls ?? []).filter((c) => c.error).map((c) => `${c.cmd}: ${c.error}`)).catch(() => []);
-        results.push({ name, ok: false, error: e.message });
-        console.log(`FAIL  ${name}\n      ${e.message.split('\n').join('\n      ')}\n      chamadas Git recusadas: ${refused.length ? refused.join(' | ') : 'nenhuma'}\n      captura da falha: ${shot}`);
-      } finally {
-        await context.close();
-      }
-    }
-  } finally {
-    await browser.close();
-  }
-  exitCode = results.every((r) => r.ok) ? 0 : 1;
-} catch (e) {
-  console.error(e);
-} finally {
-  vite.stop();
-  const passed = results.filter((r) => r.ok).length;
-  console.log(`\n${passed}/${results.length} cenários passaram`);
-}
-process.exitCode = exitCode;
+process.exitCode = await run();

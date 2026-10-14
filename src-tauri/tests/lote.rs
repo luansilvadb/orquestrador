@@ -216,9 +216,25 @@ impl Bench {
         dir.join(names.pop().expect("um lote publicado"))
     }
 
+    /// Os três passos do começo da maioria dos testes: abre o orquestrador claude, escolhe claude de executor e
+    /// espera o orquestrador falso desenhar.
+    fn pronto(&self) {
+        self.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
+        self.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+        until("o orquestrador falso desenhar", || self.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    }
+
     fn screen(&self, id: &str) -> String {
         let snap = self.core.term_snapshot(id);
         String::from_utf8_lossy(&base64::engine::general_purpose::STANDARD.decode(snap.data).unwrap()).to_string()
+    }
+}
+
+/// Todo teste acaba com a sessão encerrada e a pasta apagada, passe ou falhe.
+impl Drop for Bench {
+    fn drop(&mut self) {
+        self.core.shutdown();
+        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
@@ -340,16 +356,13 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     b.core.shutdown();
     assert!(!b.core.has_running());
     assert!(!session.exists(), "a pasta da sessão tem de sair no shutdown");
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// O pedido publicado é o texto original, byte a byte, nos dois shells; e o executor recebe o mesmo texto.
 #[test]
 fn texto_original_chega_igual_ao_pedido_publicado_nos_dois_shells() {
     let b = bench("texto");
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
     for shell in ["powershell", "pwsh"] {
         let run = b.delegate(shell, &TASKS);
         let nodes = b.added(TASKS.len());
@@ -363,8 +376,6 @@ fn texto_original_chega_igual_ao_pedido_publicado_nos_dois_shells() {
         }
         assert!(out.contains(&format!("--- EXECUTOR {}/{} ---\n", TASKS.len(), TASKS.len())), "{shell}: {out}");
     }
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// Com a pasta da sessão e o programa em caminhos com espaço, acento e apóstrofo, o comando segue sendo um
@@ -372,9 +383,7 @@ fn texto_original_chega_igual_ao_pedido_publicado_nos_dois_shells() {
 #[test]
 fn caminhos_com_espaco_acento_e_apostrofo_funcionam_nos_dois_shells() {
     let b = bench_in("caminhos", "temp com espaço, açaí e it's");
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
     let head = b.core.delegate_command().unwrap();
     assert!(!head.contains(' ') && !head.contains('\'') && !head.contains('\\'), "o comando é um nome só: {head}");
     for shell in ["powershell", "pwsh"] {
@@ -383,8 +392,6 @@ fn caminhos_com_espaco_acento_e_apostrofo_funcionam_nos_dois_shells() {
         let (code, out) = finish(run);
         assert!(code == 0 && out.starts_with("--- EXECUTOR 1/1 ---\nSó uma: coração\nfeito: Só uma: coração\nexecutor_exit: 0\n--- GIT ---\n"), "{shell}: {code} {out}");
     }
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// O orquestrador acha o comando de delegação na primeira pasta do PATH dele, que é a da sessão.
@@ -398,16 +405,12 @@ fn orquestrador_acha_o_comando_de_delegacao_na_frente_do_path() {
     until("o PATH achar o comando na primeira pasta", || b.screen(ORCHESTRATOR).contains("achou:0"));
     b.core.term_write(ORCHESTRATOR, "which:nao-existe.ps1\r");
     until("um nome que não existe não é achado", || b.screen(ORCHESTRATOR).contains("achou:nenhum"));
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 #[test]
 fn tarefa_invalida_e_falta_de_tarefa_fecham_com_erro_e_nao_publicam() {
     let b = bench("invalida");
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
     let cases: [&[&str]; 4] = [&[""], &["  "], &["ok", " \n"], &[]];
     for shell in ["powershell", "pwsh"] {
         for tasks in cases {
@@ -417,8 +420,6 @@ fn tarefa_invalida_e_falta_de_tarefa_fecham_com_erro_e_nao_publicam() {
         }
     }
     assert_eq!(b.requests(), 0, "nenhuma tarefa inválida chega a publicar lote");
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 #[test]
@@ -453,8 +454,6 @@ fn saida_do_orquestrador_mata_os_executores_e_limpa_sessao_e_regra() {
     b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
     let saved: Value = serde_json::from_str(&std::fs::read_to_string(b.root.join("config.json")).unwrap()).unwrap();
     assert_eq!((saved["orchestrator"]["tool"].as_str(), saved["executor"]["tool"].as_str()), (Some("claude"), Some("claude")));
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 #[test]
@@ -462,7 +461,6 @@ fn pasta_fora_de_repositorio_git_e_recusada() {
     let b = bench("fora");
     let outside = PathBuf::from(std::env::var("SystemRoot").unwrap());
     assert!(b.core.set_project(&outside).unwrap_err().contains("não está dentro de um repositório Git"));
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// Tarefa longa, com Unicode, aspas e barra no fim. Cada uma tem menos de 20000 bytes, o limite a partir do qual
@@ -480,9 +478,7 @@ fn tarefa_longa(n: usize) -> String {
 #[test]
 fn lote_que_nao_cabe_na_linha_de_comando_chega_inteiro_nos_dois_shells() {
     let b = bench("longo");
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
     let mut tasks: Vec<String> = (1..=3).map(tarefa_longa).collect();
     tasks.push("Só uma: coração".into());
     let encoded: usize = tasks.iter().map(|t| base64::engine::general_purpose::STANDARD.encode(t).len()).sum();
@@ -501,8 +497,6 @@ fn lote_que_nao_cabe_na_linha_de_comando_chega_inteiro_nos_dois_shells() {
         }
         assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", tasks.len())), "{shell}: {out}");
     }
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// O caminho real, `-Command` sem nenhum `exit` acrescentado: sucesso sai com 0, executor que falha sai com 1 e o
@@ -510,9 +504,7 @@ fn lote_que_nao_cabe_na_linha_de_comando_chega_inteiro_nos_dois_shells() {
 #[test]
 fn chamada_real_com_command_sai_com_0_1_e_4_nos_dois_shells() {
     let b = bench("real");
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
     for shell in ["powershell", "pwsh"] {
         let run = b.delegate_cmd(shell, &["Só uma: coração"]);
         b.added(1);
@@ -534,8 +526,6 @@ fn chamada_real_com_command_sai_com_0_1_e_4_nos_dois_shells() {
     let line = format!("$PSNativeCommandUseErrorActionPreference = $true; {}", b.line(&["--aguardar"]));
     let (code, out) = finish(b.spawn_shell("pwsh", &["-Command", &line]));
     assert!(code == 4 && out.starts_with("wrapper_error: Nenhum lote aguardando entrega."), "pwsh com preferência nativa: {code} {out}");
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// O programa sozinho, sem sessão: entrada vazia, cortada, ilegível ou com argumento fecha com `wrapper_error`,
@@ -561,9 +551,7 @@ fn entrada_do_adaptador_vazia_cortada_ou_ilegivel_fecha_com_wrapper_error() {
 #[test]
 fn pergunta_do_executor_passa_pelo_orquestrador_e_aceita_sem_parar_o_outro() {
     let b = bench("pergunta");
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
 
     let run = b.delegate("powershell", &["PERGUNTA: remover o log", "Tarefa B: coração"]);
     let nodes = b.added(2);
@@ -591,8 +579,6 @@ fn pergunta_do_executor_passa_pelo_orquestrador_e_aceita_sem_parar_o_outro() {
         "{out}"
     );
     assert_eq!(b.requests(), requests, "--responder não publica lote novo");
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// Recusa com motivo: o motivo chega ao executor como a mensagem de erro, e ele segue. Os erros de `--responder`
@@ -600,9 +586,7 @@ fn pergunta_do_executor_passa_pelo_orquestrador_e_aceita_sem_parar_o_outro() {
 #[test]
 fn recusa_leva_o_motivo_ao_executor_e_erros_do_responder_nao_gravam_nada() {
     let b = bench("recusa");
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
 
     let run = b.delegate("powershell", &["PERGUNTA: apagar o banco"]);
     let p = id(&b.added(1)[0]);
@@ -629,8 +613,6 @@ fn recusa_leva_o_motivo_ao_executor_e_erros_do_responder_nao_gravam_nada() {
         out.starts_with("--- EXECUTOR 1/1 ---\nPERGUNTA: apagar o banco\nrecusado: não apague o banco: use o arquivo de teste que você criou\nexecutor_exit: 0\n--- GIT ---\n"),
         "{out}"
     );
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// `parar` num executor que espera resposta: ele termina como interrompido, a pergunta não volta, e o lote fecha
@@ -638,9 +620,7 @@ fn recusa_leva_o_motivo_ao_executor_e_erros_do_responder_nao_gravam_nada() {
 #[test]
 fn parar_num_executor_que_espera_resposta_fecha_o_lote_sem_a_pergunta() {
     let b = bench("parar");
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
 
     let run = b.delegate("powershell", &["PERGUNTA: parar aqui"]);
     let p = id(&b.added(1)[0]);
@@ -660,8 +640,6 @@ fn parar_num_executor_que_espera_resposta_fecha_o_lote_sem_a_pergunta() {
     );
     let (code, out) = finish(b.delegate("powershell", &["--responder", p.as_str(), "aceitar"]));
     assert!(code == 4 && out.contains("não tem pergunta pendente"), "{code} {out}");
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// O pedido que sai da pasta `ask` devolve o nó de `awaiting-orchestrator` a `running`, e a rodada segue até o fim.
@@ -669,9 +647,7 @@ fn parar_num_executor_que_espera_resposta_fecha_o_lote_sem_a_pergunta() {
 #[test]
 fn pedido_que_sai_da_pasta_devolve_o_no_a_rodando() {
     let b = bench("expira");
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
 
     let run = b.delegate("powershell", &["PERGUNTA: remover o log"]);
     let p = id(&b.added(1)[0]);
@@ -686,8 +662,6 @@ fn pedido_que_sai_da_pasta_devolve_o_no_a_rodando() {
     b.state(&p, "running");
     // Sem pedido na pasta, o `--ask` do CLI simulado nega com o motivo de encerramento e a rodada termina.
     b.state(&p, "done");
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// Um executor que espera o orquestrador ocupa a vaga: com teto 1, o próximo da fila não abre enquanto ele espera,
@@ -695,9 +669,7 @@ fn pedido_que_sai_da_pasta_devolve_o_no_a_rodando() {
 #[test]
 fn executor_que_espera_o_orquestrador_ocupa_a_vaga() {
     let b = bench_com("vaga", "temp", Some(2)); // teto 1
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
 
     let run = b.delegate("powershell", &["PERGUNTA: remover o log", "Tarefa B: coração"]);
     let nodes = b.added(2);
@@ -721,8 +693,6 @@ fn executor_que_espera_o_orquestrador_ocupa_a_vaga() {
     let (code, out) = finish(run);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("--- EXECUTOR 2/2 ---\nTarefa B: coração\nfeito: Tarefa B: coração\n"), "{out}");
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// Pouca memória livre deixa um executor só. O resto espera, e a fila só anda quando a memória volta; quem já
@@ -731,9 +701,7 @@ fn executor_que_espera_o_orquestrador_ocupa_a_vaga() {
 fn memoria_baixa_segura_a_fila_e_a_memoria_de_volta_abre_sem_matar_quem_roda() {
     let b = bench_com("memoria", "temp", Some(16)); // teto de CPU 8
     b.memoria(64 * GIB, GIB * 5 / 2); // 2,5 GiB livres: a reserva de 2 GiB deixa 0,5 GiB, nenhuma vaga
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
 
     let _run = b.delegate("powershell", &["DORMIR A", "DORMIR B"]);
     let nodes = b.added(2);
@@ -751,8 +719,6 @@ fn memoria_baixa_segura_a_fila_e_a_memoria_de_volta_abre_sem_matar_quem_roda() {
     b.state(&q, "running");
     b.drain();
     assert!(!b.passou(&a, &["done", "failed", "stopped"]), "A não terminou nem foi parado");
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// A RAM total cai no meio do lote: os vivos seguem até o fim (nenhum é parado ou reiniciado), e só o que chega
@@ -760,9 +726,7 @@ fn memoria_baixa_segura_a_fila_e_a_memoria_de_volta_abre_sem_matar_quem_roda() {
 #[test]
 fn reducao_de_memoria_nao_mata_vivos_e_a_retomada_abre_a_fila() {
     let b = bench_com("reducao", "temp", Some(16)); // teto de CPU 8
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
 
     let _run = b.delegate("powershell", &["DORMIR A", "DORMIR B", "DORMIR C"]);
     let nodes = b.added(3);
@@ -789,8 +753,6 @@ fn reducao_de_memoria_nao_mata_vivos_e_a_retomada_abre_a_fila() {
     for v in &vivos {
         assert!(!b.passou(v, &["done", "failed", "stopped"]), "{v} seguiu vivo depois da retomada");
     }
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }
 
 /// Com um executor por vez (pouca memória), a fila sai na ordem de chegada: cada um abre quando o anterior termina.
@@ -798,9 +760,7 @@ fn reducao_de_memoria_nao_mata_vivos_e_a_retomada_abre_a_fila() {
 fn fila_sai_na_ordem_de_chegada_com_um_executor_por_vez() {
     let b = bench_com("fifo", "temp", Some(16));
     b.memoria(64 * GIB, GIB * 5 / 2); // teto 1
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    b.pronto();
 
     let run = b.delegate("powershell", &["Tarefa A", "Tarefa B", "Tarefa C"]);
     let nodes = b.added(3);
@@ -817,6 +777,4 @@ fn fila_sai_na_ordem_de_chegada_com_um_executor_por_vez() {
     let (code, out) = finish(run);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("--- EXECUTOR 1/3 ---\nTarefa A\nfeito: Tarefa A\nexecutor_exit: 0\n--- EXECUTOR 2/3 ---\nTarefa B\n"), "{out}");
-    b.core.shutdown();
-    let _ = std::fs::remove_dir_all(&b.root);
 }

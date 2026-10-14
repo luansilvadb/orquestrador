@@ -29,37 +29,29 @@ export class BatchError<T> extends Error {
   }
 }
 
-/** O que o menu e os atalhos da árvore pedem ao App. Erros chegam como exceção (Renomear, Excluir, Mover, Colar) ou viram toast no App (o resto).
- * Os opcionais são o contrato novo: sem eles, a ação aparece desabilitada com o motivo, nunca finge sucesso. */
+/** O que o menu e os atalhos da árvore pedem ao App. Erros chegam como exceção (Renomear, Excluir, Mover, Colar) ou viram toast no App (o resto). */
 export type FileActions = {
-  /** Diz se o arquivo tem alteração não salva no editor. Renomear recusa; Excluir avisa antes. */
-  dirty: (path: string) => boolean;
-  /** Opcional. Dos caminhos dados (arquivos ou pastas), os que têm alteração não salva, pastas incluídas. Sem ele, vale `dirty` item a item. */
-  dirtyOf?: (paths: string[]) => string[];
-  copyPath: (kind: 'relative' | 'absolute', path: string) => void;
-  /** Opcional. Copia os caminhos de uma seleção, um por linha, no formato de `copyPath`. */
-  copyPaths?: (kind: 'relative' | 'absolute', paths: string[]) => void;
+  /** Dos caminhos dados (arquivos ou pastas), os que têm alteração não salva, pastas incluídas. Renomear recusa; Excluir avisa antes. */
+  dirtyOf: (paths: string[]) => string[];
+  /** Copia os caminhos de uma lista, um por linha, no formato absoluto ou relativo. Lista com um caminho só copia esse. */
+  copyPaths: (kind: 'relative' | 'absolute', paths: string[]) => void;
   reveal: (path: string) => void;
   openWith: (path: string) => void;
   openInTerminal: (dir: string) => void;
   /** Cola o caminho no rascunho do Orquestrador. `null` quando ele não está rodando (o item fica desabilitado). */
   addToChat: ((path: string) => void) | null;
-  /** Copia (ou recorta) um arquivo ou pasta, por caminho. */
-  copy: (path: string, cut: boolean) => void;
-  /** Opcional. Copia ou recorta vários itens de uma vez, com a mesma regra do `copy`. */
-  copyMany?: (paths: string[], cut: boolean) => void;
+  /** Copia ou recorta um ou vários itens (arquivos ou pastas), por caminho. */
+  copyMany: (paths: string[], cut: boolean) => void;
   /** Renomeia um arquivo ou uma pasta na mesma pasta e devolve o caminho novo. Rejeita com a mensagem do motivo, sem mexer em nada. */
   rename: (path: string, name: string) => Promise<string>;
-  /** Manda um arquivo para a Lixeira e fecha a aba dele. Rejeita com a mensagem, sem fechar nada. */
-  remove: (path: string) => Promise<void>;
-  /** Opcional. Manda vários itens (pastas incluídas, com o que está dentro) para a Lixeira. Resolve com os caminhos feitos; se parar no meio, rejeita com `BatchError` (`done` = feitos). */
-  removeMany?: (paths: string[]) => Promise<string[]>;
-  /** Opcional. Move itens para a pasta `dest` ('' é a raiz), relativos ao projeto. Resolve com `{from, to}` de cada um; parada no meio rejeita com `BatchError<Moved>`. */
-  move?: (paths: string[], dest: string) => Promise<Moved[]>;
+  /** Manda os itens (pastas incluídas, com o que está dentro) para a Lixeira e fecha as abas deles. Resolve com os caminhos feitos; se parar no meio, rejeita com `BatchError` (`done` = feitos). */
+  removeMany: (paths: string[]) => Promise<string[]>;
+  /** Move itens para a pasta `dest` ('' é a raiz), relativos ao projeto. Resolve com `{from, to}` de cada um; parada no meio rejeita com `BatchError<Moved>`. */
+  move: (paths: string[], dest: string) => Promise<Moved[]>;
   /** Abre a pasta (a raiz, '') no Explorer do Windows. */
   revealDir: (path: string) => void;
-  /** Opcional. Abre o histórico Git do arquivo ou da pasta. */
-  history?: (path: string) => void;
+  /** Abre o histórico Git do arquivo ou da pasta. */
+  history: (path: string) => void;
   /** Vai para a pesquisa de todo o projeto (`dir` vazio ou omitido) ou da pasta `dir` (relativa, com "/"), com o campo focado. */
   search: (dir?: string) => void;
   /** Cola o clipboard na pasta `dir` ('' é a raiz). Rejeita com a mensagem. Devolve as origens que o recorte tirou do projeto (vazio na cópia). */
@@ -154,6 +146,41 @@ type Drop = { dest: string; problem: string | null };
 // Quantos itens o diálogo de excluir lista antes de resumir.
 const LIST_MAX = 10;
 
+// Casco dos diálogos de formulário (Renomear, Criar e Excluir): Esc, clique fora e Cancelar não fecham com o pedido rodando, e o botão de confirmar mostra o carregamento.
+function FormDialog({ open, title, busy, confirmLabel, confirmDisabled = false, danger = false, onClose, onConfirm, children }: {
+  open: boolean;
+  title: string;
+  busy: boolean;
+  confirmLabel: string;
+  /** Desabilita o confirmar além de `busy` (ex.: nome inválido). */
+  confirmDisabled?: boolean;
+  danger?: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Modal
+      open={open}
+      title={title}
+      closable={false}
+      keyboard
+      maskClosable
+      onCancel={() => !busy && onClose()}
+      footer={(
+        <Flexbox horizontal justify="flex-end" gap={8}>
+          <Button onClick={onClose} disabled={busy}>Cancelar</Button>
+          <Button type="primary" danger={danger} onClick={onConfirm} disabled={confirmDisabled || busy} loading={busy}>
+            {confirmLabel}
+          </Button>
+        </Flexbox>
+      )}
+    >
+      {children}
+    </Modal>
+  );
+}
+
 /** Árvore de pastas do projeto, na faixa à esquerda da tela principal. Pasta abre e fecha; arquivo abre na área do meio (prévia no clique, permanente no duplo clique e no Enter).
  * `reveal` abre as pastas de um arquivo e o seleciona (`id` novo a cada pedido). */
 export function FilesScreen({ openPath, onOpen, reveal, actions }: {
@@ -193,7 +220,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
     panel.current?.querySelectorAll<HTMLElement>('[role="treeitem"][data-id]').forEach((row) => {
       const key = row.dataset.id ?? '';
       const hit = !!dragOver && !provisional(key) && dragOver.dest === key;
-      row.draggable = !!actions.move && !provisional(key);
+      row.draggable = !provisional(key);
       row.style.boxShadow = hit ? `inset 0 0 0 1px var(--ant-color-${dragOver?.problem ? 'error' : 'primary'})` : '';
     });
   });
@@ -295,7 +322,6 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
 
   // Marcação exibida: a seleção, ou o arquivo aberto quando não há seleção.
   const shown = selection.length ? selection : openPath ? [openPath] : NONE;
-  const draftsOf = (paths: string[]) => (actions.dirtyOf ? actions.dirtyOf(paths) : paths.filter((p) => actions.dirty(p)));
 
   // ---------- menus e atalhos ----------
 
@@ -303,23 +329,8 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
     if (selection.length > 1) return toast.warning({ title: 'Renomeie um item de cada vez.', duration: 3000 });
     setRenaming({ path, name: nameOf(path), error: '', busy: false });
   };
-  const startDelete = (paths: string[]) => {
-    if (paths.length > 1 && !actions.removeMany) return toast.warning({ title: 'Excluir vários itens não está disponível nesta versão.', duration: 4000 });
-    setDeleting({ paths, error: '', busy: false });
-  };
+  const startDelete = (paths: string[]) => setDeleting({ paths, error: '', busy: false });
   const startCreate = (kind: 'file' | 'dir', dir: string) => setCreating({ kind, dir, name: '', error: '', busy: false });
-
-  // Copiar ou recortar. Vários itens exigem `copyMany`; sem ele, avisa em vez de copiar só um.
-  const copyItems = (paths: string[], cut: boolean) => {
-    if (paths.length > 1 && !actions.copyMany) return toast.warning({ title: 'Copie um item de cada vez nesta versão.', duration: 4000 });
-    if (actions.copyMany) actions.copyMany(paths, cut);
-    else actions.copy(paths[0], cut);
-  };
-  const copyPaths = (kind: 'relative' | 'absolute', paths: string[]) => {
-    if (paths.length === 1) return actions.copyPath(kind, paths[0]);
-    if (actions.copyPaths) return actions.copyPaths(kind, paths);
-    toast.warning({ title: 'Copie um caminho de cada vez nesta versão.', duration: 4000 });
-  };
 
   // Item (ou seleção) da árvore: uma ação real por item de menu. Vários itens: as que só servem a um ficam desabilitadas com o motivo.
   const itemMenu = (paths: string[], hasFiles: boolean): ContextMenuItem[] => {
@@ -346,38 +357,28 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
       ]),
       single('reveal', 'Revelar no Explorador', () => (folder ? actions.revealDir(one) : actions.reveal(one)), 'Shift+Alt+R'),
       single('terminal', 'Abrir no Terminal', () => actions.openInTerminal(pasteDir)),
-      ...(actions.history ? [single('history', 'Histórico Git', () => actions.history?.(one))] : [blocked('history', 'Histórico Git', 'Indisponível agora.')]),
+      single('history', 'Histórico Git', () => actions.history(one)),
       ...(folder ? [single('find-in', 'Localizar na Pasta...', () => actions.search(one))] : []),
     ]);
     sections.push([
       chat ? action('chat', chatLabel, () => paths.forEach((p) => chat(p))) : blocked('chat', chatLabel, chatReason),
     ]);
     sections.push([
-      many && !actions.copyMany
-        ? blocked('cut', 'Recortar', 'Indisponível para vários itens nesta versão.')
-        : action('cut', 'Recortar', () => copyItems(paths, true), 'Ctrl+X'),
-      many && !actions.copyMany
-        ? blocked('copy', 'Copiar', 'Indisponível para vários itens nesta versão.')
-        : action('copy', 'Copiar', () => copyItems(paths, false), 'Ctrl+C'),
+      action('cut', 'Recortar', () => actions.copyMany(paths, true), 'Ctrl+X'),
+      action('copy', 'Copiar', () => actions.copyMany(paths, false), 'Ctrl+C'),
       hasFiles
         ? action('paste', 'Colar', () => void pasteInto(pasteDir), 'Ctrl+V')
         : blocked('paste', 'Colar', 'Não há arquivo ou pasta copiado.'),
     ]);
     sections.push([
-      many && !actions.copyPaths
-        ? blocked('copy-path', 'Copiar Caminhos', 'Indisponível para vários itens nesta versão.')
-        : action('copy-path', many ? 'Copiar Caminhos' : 'Copiar Caminho', () => copyPaths('absolute', paths), 'Shift+Alt+C'),
-      many && !actions.copyPaths
-        ? blocked('copy-relative', 'Copiar Caminhos Relativos', 'Indisponível para vários itens nesta versão.')
-        : action('copy-relative', many ? 'Copiar Caminhos Relativos' : 'Copiar Caminho Relativo', () => copyPaths('relative', paths), 'Ctrl+K Ctrl+Shift+C'),
+      action('copy-path', many ? 'Copiar Caminhos' : 'Copiar Caminho', () => actions.copyPaths('absolute', paths), 'Shift+Alt+C'),
+      action('copy-relative', many ? 'Copiar Caminhos Relativos' : 'Copiar Caminho Relativo', () => actions.copyPaths('relative', paths), 'Ctrl+K Ctrl+Shift+C'),
     ]);
     sections.push([
       many
         ? blocked('rename', 'Renomear...', 'Escolha só um item para renomear.')
         : action('rename', 'Renomear...', () => startRename(one), 'F2'),
-      many && !actions.removeMany
-        ? blocked('delete', 'Excluir...', 'Indisponível para vários itens nesta versão.')
-        : action('delete', many ? `Excluir ${paths.length} itens...` : 'Excluir...', () => startDelete(paths), 'Del'),
+      action('delete', many ? `Excluir ${paths.length} itens...` : 'Excluir...', () => startDelete(paths), 'Del'),
     ]);
     return sections.flatMap((items, i) => (i ? [DIVIDER, ...items] : items));
   };
@@ -410,8 +411,8 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
         ? action('root-paste', 'Colar', () => void pasteInto(''), 'Ctrl+V')
         : blocked('root-paste', 'Colar', 'Não há arquivo ou pasta copiado.'),
       DIVIDER,
-      action('root-copy-path', 'Copiar o Caminho', () => actions.copyPath('absolute', ''), 'Shift+Alt+C'),
-      action('root-copy-relative', 'Copiar Caminho Relativo', () => actions.copyPath('relative', ''), 'Ctrl+K Ctrl+Shift+C'),
+      action('root-copy-path', 'Copiar o Caminho', () => actions.copyPaths('absolute', ['']), 'Shift+Alt+C'),
+      action('root-copy-relative', 'Copiar Caminho Relativo', () => actions.copyPaths('relative', ['']), 'Ctrl+K Ctrl+Shift+C'),
     ];
   };
 
@@ -438,15 +439,13 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
 
   // Mover (arrastar ou soltar): só o que passou na checagem vai ao App. Parada no meio mostra o erro e reconcilia com o que foi feito.
   async function moveInto(paths: string[], dest: string) {
-    const move = actions.move;
     const problem = dropProblem(paths, dest);
-    if (!move) return;
     if (problem) return toast.warning({ title: problem, duration: 4000 });
     const moving = paths.filter((p) => dirOf(p) !== dest);
     let done: Moved[] = [];
     let failure = '';
     try {
-      done = await move(moving, dest);
+      done = await actions.move(moving, dest);
     } catch (e) {
       failure = message(e);
       if (e instanceof BatchError) done = e.done as Moved[];
@@ -518,7 +517,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
       if (ctrl && e.shiftKey && e.code === 'KeyC' && targets.length) {
         e.preventDefault();
         e.stopPropagation();
-        copyPaths('relative', targets);
+        actions.copyPaths('relative', targets);
       }
       return;
     }
@@ -527,14 +526,14 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
     let handled = true;
     if (ctrl && !e.shiftKey && e.code === 'KeyK') beginChord();
     else if (ctrl && !e.shiftKey && e.code === 'KeyV') void pasteInto(dirFor);
-    else if (real && ctrl && !e.shiftKey && e.code === 'KeyX') copyItems(targets, true);
-    else if (real && ctrl && !e.shiftKey && e.code === 'KeyC') copyItems(targets, false);
+    else if (real && ctrl && !e.shiftKey && e.code === 'KeyX') actions.copyMany(targets, true);
+    else if (real && ctrl && !e.shiftKey && e.code === 'KeyC') actions.copyMany(targets, false);
     else if (real && plain && e.key === 'F2') startRename(path);
     else if (real && plain && e.key === 'Delete') startDelete(targets);
     else if (real && plain && e.key === 'Enter' && !folder) onOpen(path, { permanent: true });
     else if (altShift && e.code === 'KeyR') (real ? (folder ? actions.revealDir(path) : actions.reveal(path)) : actions.revealDir(''));
     else if (altShift && e.code === 'KeyF') actions.search(dirFor);
-    else if (altShift && e.code === 'KeyC') (real ? copyPaths('absolute', targets) : actions.copyPath('absolute', ''));
+    else if (altShift && e.code === 'KeyC') actions.copyPaths('absolute', real ? targets : ['']);
     else handled = false;
     if (!handled) return;
     if (real && !selection.includes(key)) setSelection([key]);
@@ -574,7 +573,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
   };
   const onDragStart = (e: ReactDragEvent<HTMLElement>) => {
     const key = (e.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]')?.dataset.id ?? '';
-    if (!key || provisional(key) || !actions.move) return e.preventDefault();
+    if (!key || provisional(key)) return e.preventDefault();
     const paths = selection.includes(key) ? selection : [key];
     if (!selection.includes(key)) setSelection([key]);
     dragging.current = paths;
@@ -637,11 +636,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
     let gone: string[] = [];
     let failure = '';
     try {
-      if (actions.removeMany) gone = await actions.removeMany(paths);
-      else {
-        await actions.remove(paths[0]);
-        gone = paths;
-      }
+      gone = await actions.removeMany(paths);
     } catch (e) {
       failure = message(e);
       if (e instanceof BatchError) gone = e.done as string[];
@@ -679,7 +674,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
     });
 
   const renameProblem = renaming && (renaming.error || fileNameError(renaming.name));
-  const deleteDrafts = deleting ? draftsOf(deleting.paths) : [];
+  const deleteDrafts = deleting ? actions.dirtyOf(deleting.paths) : [];
   const deleteFolders = deleting ? deleting.paths.some((p) => !isFile(p)) : false;
   return (
     <>
@@ -740,21 +735,14 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
       </Flexbox>
 
       {/* Renomear: só o nome dentro da pasta. Enter confirma; Cancelar e Esc não mexem em nada. */}
-      <Modal
+      <FormDialog
         open={!!renaming}
         title={renaming && !isFile(renaming.path) ? 'Renomear pasta' : 'Renomear arquivo'}
-        closable={false}
-        keyboard
-        maskClosable
-        onCancel={() => !renaming?.busy && setRenaming(null)}
-        footer={(
-          <Flexbox horizontal justify="flex-end" gap={8}>
-            <Button onClick={() => setRenaming(null)} disabled={renaming?.busy}>Cancelar</Button>
-            <Button type="primary" onClick={submitRename} disabled={!!renameProblem || renaming?.busy} loading={renaming?.busy}>
-              Renomear
-            </Button>
-          </Flexbox>
-        )}
+        busy={!!renaming?.busy}
+        confirmLabel="Renomear"
+        confirmDisabled={!!renameProblem}
+        onClose={() => setRenaming(null)}
+        onConfirm={submitRename}
       >
         {renaming && (
           <Flexbox gap={8}>
@@ -768,24 +756,16 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
             {renameProblem && <Text as="p" type="danger" fontSize={12} role="alert">{renameProblem}</Text>}
           </Flexbox>
         )}
-      </Modal>
+      </FormDialog>
 
       {/* Novo arquivo e Nova pasta, na pasta escolhida (ou na raiz). Enter cria; Cancelar e Esc não criam nada. Nome que existe é recusado pelo backend, sem sobrescrever. */}
-      <Modal
+      <FormDialog
         open={!!creating}
         title={creating?.kind === 'dir' ? 'Nova pasta' : 'Novo arquivo'}
-        closable={false}
-        keyboard
-        maskClosable
-        onCancel={() => !creating?.busy && setCreating(null)}
-        footer={(
-          <Flexbox horizontal justify="flex-end" gap={8}>
-            <Button onClick={() => setCreating(null)} disabled={creating?.busy}>Cancelar</Button>
-            <Button type="primary" onClick={submitCreate} disabled={creating?.busy} loading={creating?.busy}>
-              Criar
-            </Button>
-          </Flexbox>
-        )}
+        busy={!!creating?.busy}
+        confirmLabel="Criar"
+        onClose={() => setCreating(null)}
+        onConfirm={submitCreate}
       >
         {creating && (
           <Flexbox gap={8}>
@@ -799,24 +779,17 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
             {creating.error && <Text as="p" type="danger" fontSize={12} role="alert">{creating.error}</Text>}
           </Flexbox>
         )}
-      </Modal>
+      </FormDialog>
 
       {/* Excluir: vai para a Lixeira do Windows, com a lista do que vai e das alterações não salvas (que se perdem e fecham as abas). */}
-      <Modal
+      <FormDialog
         open={!!deleting}
         title={deleting && deleting.paths.length > 1 ? `Excluir ${deleting.paths.length} itens?` : deleteFolders ? 'Excluir pasta?' : 'Excluir arquivo?'}
-        closable={false}
-        keyboard
-        maskClosable
-        onCancel={() => !deleting?.busy && setDeleting(null)}
-        footer={(
-          <Flexbox horizontal justify="flex-end" gap={8}>
-            <Button onClick={() => setDeleting(null)} disabled={deleting?.busy}>Cancelar</Button>
-            <Button type="primary" danger onClick={submitDelete} disabled={deleting?.busy} loading={deleting?.busy}>
-              Mover para a Lixeira
-            </Button>
-          </Flexbox>
-        )}
+        busy={!!deleting?.busy}
+        confirmLabel="Mover para a Lixeira"
+        danger
+        onClose={() => setDeleting(null)}
+        onConfirm={submitDelete}
       >
         {deleting && (
           <Flexbox gap={8}>
@@ -841,7 +814,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
             {deleting.error && <Alert type="error" role="alert" description={deleting.error} className="select-text" />}
           </Flexbox>
         )}
-      </Modal>
+      </FormDialog>
     </>
   );
 }
