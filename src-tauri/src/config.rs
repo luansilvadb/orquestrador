@@ -51,12 +51,11 @@ impl Choice {
 pub struct Config {
     pub orchestrator: Choice,
     pub executor: Choice,
-    pub max_parallel: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { orchestrator: Choice::new("codex", "", ""), executor: Choice::new("claude", "", ""), max_parallel: 4 }
+        Self { orchestrator: Choice::new("codex", "", ""), executor: Choice::new("claude", "", "") }
     }
 }
 
@@ -95,10 +94,6 @@ pub fn check_choice(role: &str, c: &Choice) -> Result<(), String> {
     if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
 }
 
-pub fn check_max_parallel(value: i64) -> Result<usize, String> {
-    if (1..=16).contains(&value) { Ok(value as usize) } else { Err(format!("maxParallel: {value} fora do intervalo de 1 a 16")) }
-}
-
 pub fn config_path() -> Result<PathBuf, String> {
     let base = std::env::var_os("LOCALAPPDATA")
         .filter(|v| !v.is_empty())
@@ -107,7 +102,8 @@ pub fn config_path() -> Result<PathBuf, String> {
 }
 
 /// Os padrões com o que o arquivo define por cima, validado. Sem arquivo, os padrões. Arquivo
-/// ilegível ou resultado inválido é erro, com o motivo: não há fallback.
+/// ilegível ou resultado inválido é erro, com o motivo: não há fallback. Uma chave `maxParallel` de versões
+/// antigas é ignorada: o teto de executores é automático (ver `capacity`).
 pub fn read(path: &Path) -> Result<Config, String> {
     let mut cfg = Config::default();
     if path.is_file() {
@@ -123,10 +119,6 @@ pub fn read(path: &Path) -> Result<Config, String> {
                     other => *slot = other.to_string(),
                 }
             }
-        }
-        match &file["maxParallel"] {
-            serde_json::Value::Null => {}
-            v => cfg.max_parallel = check_max_parallel(v.as_i64().unwrap_or(-1)).map_err(|e| invalid(path, &e))?,
         }
     }
     let errors: Vec<String> =
@@ -170,7 +162,6 @@ pub struct Last {
 pub struct Options {
     pub tools: Vec<ToolOption>,
     pub last: Last,
-    pub max_parallel: usize,
 }
 
 /// A saída de `codex debug models` -> modelos visíveis, cada um com os esforços que aceita.
@@ -221,7 +212,6 @@ pub fn options(cfg: &Config, codex_exe: &str) -> Options {
             })
             .collect(),
         last: Last { orchestrator: cfg.orchestrator.clone(), executor: cfg.executor.clone() },
-        max_parallel: cfg.max_parallel,
     }
 }
 
@@ -246,20 +236,33 @@ mod tests {
         let cfg = read(&path).unwrap();
         drop_dir(&path);
         assert_eq!(cfg, Config::default());
-        assert_eq!((cfg.orchestrator.tool.as_str(), cfg.executor.tool.as_str(), cfg.max_parallel), ("codex", "claude", 4));
+        assert_eq!((cfg.orchestrator.tool.as_str(), cfg.executor.tool.as_str()), ("codex", "claude"));
     }
 
     #[test]
     fn arquivo_sobrepoe_os_padroes_e_volta_igual_depois_de_salvo() {
         let path = temp("over");
-        std::fs::write(&path, r#"{"orchestrator":{"tool":"claude","model":"opus","effort":"high"},"maxParallel":7}"#).unwrap();
+        std::fs::write(&path, r#"{"orchestrator":{"tool":"claude","model":"opus","effort":"high"}}"#).unwrap();
         let cfg = read(&path).unwrap();
         assert_eq!(cfg.orchestrator, Choice::new("claude", "opus", "high"));
         assert_eq!(cfg.executor, Choice::new("claude", "", ""));
-        assert_eq!(cfg.max_parallel, 7);
         save(&path, &cfg).unwrap();
         assert_eq!(read(&path).unwrap(), cfg);
-        assert!(std::fs::read_to_string(&path).unwrap().contains("\"maxParallel\": 7"));
+        drop_dir(&path);
+    }
+
+    /// Uma chave `maxParallel` de versões antigas não dita teto, seja qual for o valor, e some ao salvar.
+    #[test]
+    fn maxparallel_antigo_e_ignorado_e_nao_e_gravado() {
+        let path = temp("legado");
+        for legacy in ["0", "17", "\"muitos\"", "null", "7"] {
+            let json = format!(r#"{{"executor":{{"tool":"codex","effort":"low"}},"maxParallel":{legacy}}}"#);
+            std::fs::write(&path, json).unwrap();
+            let cfg = read(&path).unwrap_or_else(|e| panic!("maxParallel {legacy}: {e}"));
+            assert_eq!(cfg.executor, Choice::new("codex", "", "low"), "maxParallel {legacy}");
+            save(&path, &cfg).unwrap();
+            assert!(!std::fs::read_to_string(&path).unwrap().contains("maxParallel"), "maxParallel {legacy} saiu do arquivo");
+        }
         drop_dir(&path);
     }
 
@@ -279,8 +282,6 @@ mod tests {
             (r#"{"executor":{"tool":"claude","effort":"ultra"}}"#, "esforço 'ultra' inválido para claude"),
             (r#"{"executor":{"tool":"claude","effort":"High"}}"#, "esforço 'High' inválido"),
             (r#"{"orchestrator":{"tool":"codex","model":"-m x"}}"#, "modelo '-m x' inválido"),
-            (r#"{"maxParallel":0}"#, "fora do intervalo"),
-            (r#"{"maxParallel":"muitos"}"#, "fora do intervalo"),
         ] {
             std::fs::write(&path, json).unwrap();
             let err = read(&path).unwrap_err();

@@ -11,7 +11,14 @@
 // O Git é resposta fixa: status, branches e diffs não mudam, e as ações de escrita só devolvem null ou um texto fixo.
 // Na pesquisa (Ctrl+Shift+F), `search` filtra de verdade, mas só os arquivos de `TEXTS` têm linhas; os demais não casam nada.
 // Ao abrir um arquivo, `read_file` devolve o texto de `TEXTS`; `write_file` atualiza esse texto para a releitura. `.png` vem binário, `dados/exportacao.json` vem grande demais, e os demais começam vazios.
+// Menu do arquivo na árvore: `rename_file` e `delete_file` mudam a árvore e `TEXTS` de verdade (com as mesmas recusas do backend); `reveal_file`,
+// `open_with` e `copy_file` só conferem que o arquivo existe, porque o Explorer, o diálogo e a Lixeira são do Windows. `start_shell` aceita `cwd`.
+// Área vazia da árvore: `create_file` e `create_dir` criam de verdade na raiz (com as mesmas recusas); `reveal_dir` só confere a pasta.
+// O clipboard do simulado é uma variável em memória, nunca o do Windows: `copy_file` (copiar ou recortar) e `paste_files` mexem nela.
+// `paste_files` move ou copia a árvore e `TEXTS` de verdade, e nome repetido vira "nome (2)". `__mock.setClipboard(['src/App.tsx'], true)` põe itens
+// no clipboard simulado (`[]` esvazia), e `__mock.clipboard()` mostra o que há.
 import type { Transport } from './backend';
+import { fileNameError } from './file-tab-actions';
 import {
   ORCHESTRATOR, type Choice, type Events, type ExecutorNode, type GitDiff, type GitFile,
   type GitKind, type NodeState, type Options, type SearchFile, type SearchMatch, type SearchOptions, type SearchResults, type UpdateStatus,
@@ -28,8 +35,10 @@ const options: Options = {
     { name: 'codex', efforts: CODEX, models: [{ name: 'gpt-5.5', efforts: CODEX }, { name: 'gpt-5.5-mini', efforts: ['low', 'medium'] }] },
   ],
   last: { orchestrator: { tool: 'codex', model: '', effort: '' }, executor: { tool: 'claude', model: 'opus', effort: 'high' } },
-  maxParallel: 4,
 };
+// Vagas internas de executores, como o backend escolhe sozinho: metade dos núcleos lógicos, de 1 a 16. Sem valor, assume 4 núcleos (2 vagas).
+// Não é configurável na tela; só existe aqui para a fila simulada.
+const CAPACITY = Math.min(16, Math.max(1, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
 const TASKS = [
   'Extrair a validação de configuração para um módulo próprio',
   'Cobrir o analisador de argumentos com testes',
@@ -125,17 +134,105 @@ function removePath(path: string) {
   const dir = folderAt(parts.join('/'));
   if (dir) delete dir.children[name];
 }
+// Pasta do projeto no simulado (a mesma que `choose_project` devolve) e a conversão de caminho relativo para o do Windows e de volta.
+const MOCK_ROOT = 'C:\\projetos\\exemplo';
+const absolute = (rel: string) => (rel ? `${MOCK_ROOT}\\${rel.split('/').join('\\')}` : MOCK_ROOT);
+const relOf = (abs: string) => {
+  if (!abs.startsWith(`${MOCK_ROOT}\\`)) throw `Fora do projeto simulado: ${abs}`;
+  return abs.slice(MOCK_ROOT.length + 1).split('\\').join('/');
+};
+// Clipboard simulado: caminhos absolutos, como o do Windows. Começa vazio e só o simulado o altera.
+let clip: { paths: string[]; cut: boolean } = { paths: [], cut: false };
+const sameClip = (snap: { paths: string[]; cut: boolean }) =>
+  clip.cut === snap.cut && clip.paths.length === snap.paths.length && clip.paths.every((p, i) => p === snap.paths[i]);
+
+// Chave real de um nome na pasta, sem diferença de caixa (o Windows não diferencia). Undefined se não existe.
+const existingKey = (dir: Folder, name: string) => Object.keys(dir.children).find((k) => k.toLowerCase() === name.toLowerCase());
+// Criação na raiz ou em outra pasta: as mesmas recusas do backend. Nunca sobrescreve.
+function create(dirPath: string, name: string, asFolder: boolean): string {
+  const problem = fileNameError(name);
+  if (problem) throw problem;
+  const dir = folderAt(dirPath);
+  if (!dir) throw `Pasta não encontrada: ${dirPath}`;
+  if (existingKey(dir, name) !== undefined) throw `Já existe um item chamado “${name}” nesta pasta. Nada foi criado.`;
+  dir.children[name] = asFolder ? folder() : file();
+  return dirPath ? `${dirPath}/${name}` : name;
+}
+// Colar como o backend: confere todas as origens antes; nome repetido vira "nome (2)", "nome (3)"...; recorte move a entrada e os textos, cópia duplica.
+function paste(dest: string, snap: { paths: string[]; cut: boolean }): string[] {
+  if (snap.paths.length === 0) throw 'Não há arquivo ou pasta copiado para colar.';
+  const target = folderAt(dest);
+  if (!target) throw `Pasta não encontrada: ${dest}`;
+  const plan = snap.paths.map((abs) => {
+    const rel = relOf(abs);
+    const { dir, name } = split(rel);
+    const entry = folderAt(dir)?.children[name];
+    if (!entry) throw `“${name}” não existe mais. Nada foi colado.`;
+    if (rel.split('/').some((part) => part.toLowerCase() === '.git')) throw `“${name}” está dentro de uma pasta .git. Nada foi colado.`;
+    if (entry.dir && (dest === rel || dest.startsWith(`${rel}/`))) throw `Não é possível colar “${name}” dentro dela mesma.`;
+    if (snap.cut && dir === dest) throw `“${name}” já está nesta pasta. Recortar e colar na mesma pasta não faz nada.`;
+    return { rel, name, dir, entry };
+  });
+  const taken = new Set<string>();
+  const pick = (name: string, asFolder: boolean) => {
+    const cut = name.lastIndexOf('.');
+    const stem = asFolder || cut <= 0 ? name : name.slice(0, cut), ext = asFolder || cut <= 0 ? '' : name.slice(cut);
+    for (let n = 1; ; n++) {
+      const candidate = n === 1 ? name : `${stem} (${n})${ext}`;
+      if (!taken.has(candidate.toLowerCase()) && existingKey(target, candidate) === undefined) {
+        taken.add(candidate.toLowerCase());
+        return candidate;
+      }
+    }
+  };
+  const cloneEntry = (entry: Entry): Entry => (entry.dir
+    ? folder(Object.fromEntries(Object.entries(entry.children).map(([k, v]) => [k, cloneEntry(v)])))
+    : file());
+  const created: string[] = [];
+  for (const { rel, name, dir, entry } of plan) {
+    const newName = pick(name, entry.dir);
+    const newRel = dest ? `${dest}/${newName}` : newName;
+    if (snap.cut) delete folderAt(dir)!.children[name];
+    target.children[newName] = snap.cut ? entry : cloneEntry(entry);
+    // Textos da árvore sob a origem (o próprio arquivo ou os de dentro da pasta) seguem para o destino; cópia deixa os originais.
+    for (const key of Object.keys(TEXTS)) {
+      if (key !== rel && !key.startsWith(`${rel}/`)) continue;
+      const to = newRel + key.slice(rel.length);
+      TEXTS[to] = TEXTS[key];
+      if (snap.cut) delete TEXTS[key];
+    }
+    created.push(newRel);
+  }
+  // Recorte colado esvazia o clipboard, mas só se ele ainda for o mesmo que foi colado (como o backend).
+  if (snap.cut && sameClip(snap)) clip = { paths: [], cut: false };
+  return created;
+}
+// Caminho relativo partido em pasta e nome (pasta '' é a raiz).
+const split = (path: string) => {
+  const cut = path.lastIndexOf('/');
+  return { dir: cut < 0 ? '' : path.slice(0, cut), name: path.slice(cut + 1) };
+};
+// Arquivo que precisa existir para a ação; pasta ou ausente dá a mesma mensagem do backend.
+function requireFile(path: string) {
+  const { dir, name } = split(path);
+  const entry = folderAt(dir)?.children[name];
+  if (!entry || entry.dir) throw `Arquivo não encontrado: ${path}`;
+  return entry;
+}
 
 let alive = false, line = '', batches = 0, executorChoice: Choice | null = null, closeHandler: (() => Promise<boolean>) | null = null;
 // Shells do painel Terminal: vivem à parte do orquestrador (sobrevivem a `sair`), e só `exit` ou `close_shell` os encerram.
 // Cada um guarda a própria linha em edição.
-const shells = new Map<string, { line: string }>();
+const shells = new Map<string, { line: string; prompt: string }>();
 const jobs = new Map<string, Job>();
 const debug = { writes: [] as string[], sizes: {} as Record<string, string>, close: async () => {
   const closed = closeHandler ? await closeHandler() : true;
   if (closed) document.body.innerHTML = '<p style="padding:24px">Janela fechada (simulado).</p>';
   return closed;
-}, remove: (path: string) => removePath(path) };
+}, remove: (path: string) => removePath(path),
+  // Clipboard simulado: `[]` esvazia; cada caminho é relativo ao projeto. Nunca toca no clipboard do Windows.
+  setClipboard: (rel: string[], cut = false) => { clip = { paths: rel.map(absolute), cut }; },
+  clipboard: () => structuredClone(clip) };
 (window as unknown as { __mock: typeof debug }).__mock = debug;
 
 const PROMPT = '\x1b[38;5;105morquestrador>\x1b[0m ';
@@ -165,12 +262,12 @@ function setState(job: Job, state: NodeState) {
   emit('node-state', { id: job.id, state, choice: job.choice });
 }
 
-// Estado vivo que ocupa vaga de simultâneos, como o `running`.
+// Estado vivo que ocupa vaga de executor, como o `running`.
 const live = (state: NodeState) => state === 'running' || state === 'awaiting-orchestrator';
 
 function schedule() {
   const count = () => [...jobs.values()].filter((j) => live(j.state)).length;
-  for (const job of jobs.values()) if (job.state === 'queued' && executorChoice && count() < options.maxParallel) run(job);
+  for (const job of jobs.values()) if (job.state === 'queued' && executorChoice && count() < CAPACITY) run(job);
   for (const batch of new Set([...jobs.values()].map((j) => j.batch))) {
     const all = [...jobs.values()].filter((j) => j.batch === batch);
     if (!alive || !all.length || all.some((j) => !['done', 'stopped', 'failed'].includes(j.state)) || reported.has(batch)) continue;
@@ -222,7 +319,7 @@ function finish(job: Job, state: NodeState) {
 function startBatch() {
   const batch = String(++batches);
   TASKS.forEach((title, index) => {
-    const state: NodeState = executorChoice ? 'queued' : index < options.maxParallel ? 'awaiting-choice' : 'queued';
+    const state: NodeState = executorChoice ? 'queued' : 'awaiting-choice';
     const job: Job = { id: `exec-${batch}-${index}`, batch, index, title: title.slice(0, 80), state, choice: null };
     setTimeout(() => {
       if (!alive) return;
@@ -277,7 +374,7 @@ function shellTyped(id: string, data: string) {
         return;
       }
       if (command) out(id, `eco: ${command}\r\n`);
-      out(id, SHELL_PROMPT);
+      out(id, shell.prompt);
     } else if (char === '\x7f') {
       if (shell.line) { shell.line = shell.line.slice(0, -1); out(id, '\b \b'); }
     } else if (char >= ' ') {
@@ -353,15 +450,55 @@ const commands: Record<string, (args: any) => unknown> = {
     for (const job of jobs.values()) if (job.state === 'awaiting-choice') setState(job, 'queued');
     schedule();
   },
-  set_max_parallel: ({ value }: { value: number }) => { options.maxParallel = value; schedule(); },
-  start_shell: ({ id }: { id: string }) => {
+  start_shell: ({ id, cwd }: { id: string; cwd?: string }) => {
     if (new URLSearchParams(location.search).get('mock') === 'noshell') throw 'Não foi possível abrir o PowerShell: o programa não foi encontrado.';
+    // Pasta do projeto (relativa); sem ela, ou com '', é a raiz, como no backend. Pasta que não existe é recusada antes de abrir.
+    if (cwd && !folderAt(cwd)) throw `Pasta não encontrada: ${cwd}`;
+    const prompt = cwd ? `PS C:\\projetos\\exemplo\\${cwd.split('/').join('\\')}> ` : SHELL_PROMPT;
     // Começa do zero: o terminal antigo (se houver) some, como no backend.
     terms.delete(id);
-    shells.set(id, { line: '' });
-    out(id, SHELL_PROMPT);
+    shells.set(id, { line: '', prompt });
+    out(id, prompt);
     return 'pwsh.exe';
   },
+  rename_file: ({ path, name }: { path: string; name: string }) => {
+    const { dir, name: from } = split(path);
+    requireFile(path);
+    const problem = fileNameError(name);
+    if (problem) throw problem;
+    if (name === from) return path;
+    const parent = folderAt(dir)!;
+    if (parent.children[name] !== undefined) throw `Já existe um arquivo chamado “${name}” nesta pasta.`;
+    parent.children[name] = parent.children[from];
+    delete parent.children[from];
+    const next = dir ? `${dir}/${name}` : name;
+    if (path in TEXTS) {
+      TEXTS[next] = TEXTS[path];
+      delete TEXTS[path];
+    }
+    return next;
+  },
+  // A Lixeira não existe no simulado: o arquivo some da árvore, como se estivesse lá.
+  delete_file: ({ path }: { path: string }) => {
+    requireFile(path);
+    const { dir, name } = split(path);
+    delete folderAt(dir)!.children[name];
+    delete TEXTS[path];
+  },
+  reveal_file: ({ path }: { path: string }) => void requireFile(path),
+  open_with: ({ path }: { path: string }) => void requireFile(path),
+  copy_file: ({ path, cut }: { path: string; cut: boolean }) => {
+    requireFile(path);
+    clip = { paths: [absolute(path)], cut };
+  },
+  // Área vazia da raiz: cria de verdade na árvore (e a lista relê). Pasta que não existe é recusada antes.
+  create_file: ({ dir, name }: { dir: string; name: string }) => create(dir, name, false),
+  create_dir: ({ dir, name }: { dir: string; name: string }) => create(dir, name, true),
+  reveal_dir: ({ path }: { path: string }) => {
+    if (!folderAt(path)) throw `Pasta não encontrada: ${path}`;
+  },
+  clipboard_snapshot: () => structuredClone(clip),
+  paste_files: ({ dest, snap }: { dest: string; snap: { paths: string[]; cut: boolean } }) => paste(dest, snap),
   // Mata o shell sem evento de saída: o terminal some e nenhum `shell-exit` chega.
   close_shell: ({ id }: { id: string }) => {
     shells.delete(id);
@@ -369,10 +506,12 @@ const commands: Record<string, (args: any) => unknown> = {
   },
   term_write: ({ id, data }: { id: string; data: string }) => {
     debug.writes.push(id);
-    if (id === ORCHESTRATOR && alive) typed(data);
-    if (shells.has(id)) shellTyped(id, data);
+    // Marcas de colagem entre aspas (bracketed paste) não são texto: o simulado só põe o conteúdo no rascunho.
+    const text = data.replace(/\x1b\[20[01]~/g, '');
+    if (id === ORCHESTRATOR && alive) typed(text);
+    if (shells.has(id)) shellTyped(id, text);
   },
-  clipboard_files: () => [] as string[],
+  clipboard_files: () => clip.paths.slice(),
   list_dir: ({ path }: { path: string }) => {
     const dir = folderAt(path);
     if (!dir) throw `Pasta não encontrada: ${path}`;

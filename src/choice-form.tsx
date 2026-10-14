@@ -1,13 +1,16 @@
 // O formulário de ferramenta, modelo e esforço numa janela (Modal): o mesmo para o orquestrador e para os executores.
 import { useId, useState, type FormEvent } from 'react';
 import { Flexbox } from '@lobehub/ui';
-import { Alert, Button, Input, Modal, Segmented, Select, Text } from '@lobehub/ui/base-ui';
+import { Alert, Button, Modal, Segmented, Select, Text } from '@lobehub/ui/base-ui';
 import { message } from './backend';
 import type { Choice, Options, Tool, ToolOption } from './types';
 
 // Valores sentinela: as opções do Select precisam de um valor não vazio. '' no Choice = padrão do CLI.
 const DEFAULT = '__default__';
-const CUSTOM = '__custom__';
+
+// Rótulos legíveis; o valor técnico (o que vai ao backend) continua o mesmo.
+const TOOL_LABEL: Record<Tool, string> = { claude: 'Claude', codex: 'Codex' };
+const EFFORT_LABEL: Record<string, string> = { low: 'Baixo', medium: 'Médio', high: 'Alto', xhigh: 'Muito alto', max: 'Máximo' };
 
 // Só os esforços que o modelo aceita; modelo fora da lista (ou padrão) recebe todos os da ferramenta.
 const effortsFor = (tool: ToolOption, model: string) => {
@@ -60,12 +63,10 @@ function ChoiceFields({ hint, options, initial, confirmLabel, onConfirm, onCance
   const ids = { model: useId(), tool: useId(), effort: useId() };
   const [choice, setChoice] = useState<Choice>(() => {
     const picked = options.tools.some((t) => t.name === initial.tool) ? initial : { tool: options.tools[0].name, model: '', effort: '' };
-    return { ...picked, effort: validEffort(options, picked) };
-  });
-  // Modelo digitado à mão (fora da lista): o Select mostra "Outro" e o campo mostra o nome.
-  const [custom, setCustom] = useState(() => {
-    const models = options.tools.find((t) => t.name === choice.tool)?.models ?? [];
-    return !!choice.model && !models.some((m) => m.name === choice.model);
+    // Modelo salvo que a ferramenta não lista abre como Padrão do CLI; o modelo conhecido é preservado.
+    const models = options.tools.find((t) => t.name === picked.tool)!.models;
+    const next = { ...picked, model: models.some((m) => m.name === picked.model) ? picked.model : '' };
+    return { ...next, effort: validEffort(options, next) };
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -74,29 +75,22 @@ function ChoiceFields({ hint, options, initial, confirmLabel, onConfirm, onCance
   // Só os esforços que o modelo escolhido aceita; modelo fora da lista recebe todos os da ferramenta.
   const efforts = effortsFor(tool, choice.model);
 
+  const pickTool = (name: Tool) => {
+    setChoice({ tool: name, model: '', effort: '' });
+  };
   // O esforço é corrigido junto com a troca de modelo: o que o novo modelo não aceita vira padrão do CLI.
   // Se o modelo seguinte aceitar de novo, o padrão continua valendo; o esforço antigo não volta sozinho.
-  const withModel = (model: string, isCustom: boolean) => {
-    setCustom(isCustom);
+  const pickModel = (value: string) => {
+    const model = value === DEFAULT ? '' : value;
     setChoice((c) => {
       const next = { ...c, model };
       return { ...next, effort: validEffort(options, next) };
     });
   };
-  const pickTool = (name: Tool) => {
-    setChoice({ tool: name, model: '', effort: '' });
-    setCustom(false);
-  };
-  const pickModel = (value: string) => {
-    if (value === CUSTOM) withModel('', true);
-    else withModel(value === DEFAULT ? '' : value, false);
-  };
-  const typeModel = (value: string) => withModel(value.trim(), true);
-
-  const modelValue = custom && !tool.models.some((m) => m.name === choice.model) ? CUSTOM : choice.model || DEFAULT;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (busy) return;
     setBusy(true);
     setError('');
     try {
@@ -109,61 +103,56 @@ function ChoiceFields({ hint, options, initial, confirmLabel, onConfirm, onCance
   }
 
   return (
-    <Flexbox as="form" onSubmit={submit} gap={20}>
+    <Flexbox as="form" onSubmit={submit} gap={20} width="100%">
       <Text as="p" type="secondary" fontSize={14}>{hint}</Text>
 
-      <Flexbox gap={8}>
+      <Flexbox gap={8} width="100%">
         <Text as="label" id={ids.tool} fontSize={14} weight={500}>Ferramenta</Text>
-        {/* align="flex-start": o Segmented mantém a largura do próprio conteúdo, como num div de bloco. */}
-        <Flexbox role="group" aria-labelledby={ids.tool} align="flex-start">
+        <Flexbox role="group" aria-labelledby={ids.tool} width="100%">
           <Segmented
+            block
             value={choice.tool}
             onChange={(v) => pickTool(v as Tool)}
-            options={options.tools.map((t) => ({ value: t.name, label: t.name, className: 'font-mono' }))}
+            options={options.tools.map((t) => ({ value: t.name, label: TOOL_LABEL[t.name] ?? t.name }))}
           />
         </Flexbox>
       </Flexbox>
 
-      <Flexbox gap={8}>
+      <Flexbox gap={8} width="100%">
         {/* O tipo do Text não declara htmlFor, mas o componente repassa as props extras ao <label>. */}
         <Text as="label" {...{ htmlFor: ids.model }} fontSize={14} weight={500}>Modelo</Text>
         <Select
           id={ids.model}
-          className="w-full font-mono"
-          value={modelValue}
+          className="w-full"
+          value={choice.model || DEFAULT}
           onChange={(v) => pickModel(v as string)}
           options={[
-            { value: DEFAULT, label: 'padrão do CLI' },
+            { value: DEFAULT, label: 'Padrão do CLI' },
             ...tool.models.map((m) => ({ value: m.name, label: m.name, className: 'font-mono' })),
-            { value: CUSTOM, label: 'Outro (digitado abaixo)' },
           ]}
-        />
-        <Input
-          aria-label="Nome de outro modelo"
-          value={custom ? choice.model : ''}
-          onChange={(e) => typeModel(e.target.value)}
-          placeholder="ou digite o nome de outro modelo"
-          autoComplete="off"
-          spellCheck={false}
-          className="font-mono"
         />
       </Flexbox>
 
-      <Flexbox gap={8}>
+      <Flexbox gap={8} width="100%">
         <Text as="label" id={ids.effort} fontSize={14} weight={500}>Esforço</Text>
-        <Flexbox role="group" aria-labelledby={ids.effort} horizontal wrap="wrap">
-          <Segmented
-            size="small"
+        <Flexbox role="group" aria-labelledby={ids.effort} width="100%">
+          <Select
+            aria-labelledby={ids.effort}
+            className="w-full"
             value={choice.effort || DEFAULT}
-            onChange={(v) => setChoice((c) => ({ ...c, effort: v === DEFAULT ? '' : v }))}
-            options={[DEFAULT, ...efforts].map((e) => ({ value: e, label: e === DEFAULT ? 'padrão' : e, className: 'font-mono' }))}
+            onChange={(v) => setChoice((c) => ({ ...c, effort: v === DEFAULT ? '' : (v as string) }))}
+            options={[
+              { value: DEFAULT, label: 'Padrão do CLI' },
+              ...efforts.map((e) => ({ value: e, label: EFFORT_LABEL[e] ?? e })),
+            ]}
           />
         </Flexbox>
       </Flexbox>
 
       {error && <Alert type="error" description={error} />}
 
-      <Flexbox horizontal justify="flex-end" gap={8}>
+      {/* Separação discreta: uma linha acima dos botões, na largura do formulário. */}
+      <Flexbox horizontal justify="flex-end" wrap="wrap" gap={8} width="100%" paddingBlock={16} className="border-t">
         {onCancel && (
           <Button htmlType="button" onClick={onCancel}>Cancelar</Button>
         )}

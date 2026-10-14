@@ -1,28 +1,37 @@
 // Barra de título própria: a janela não tem mais a barra nativa do Windows. Arrastar e o duplo clique vêm do
 // atributo data-tauri-drag-region, que vale só para o elemento que o tem; por isso botões e campos não o levam.
-import { useEffect, useState, type ReactNode } from 'react';
+import { Children, useEffect, useState, type ReactNode } from 'react';
 import { Copy, Minus, Square, X, type LucideIcon } from 'lucide-react';
 import { Flexbox } from '@lobehub/ui';
-import { Text } from '@lobehub/ui/base-ui';
+import { Text, Tooltip } from '@lobehub/ui/base-ui';
 import { host } from './backend';
 
-function WindowButton({ label, icon: Icon, danger, disabled, onClick }: {
-  label: string; icon: LucideIcon; danger?: boolean; disabled: boolean; onClick: () => void;
+// O Tooltip clona o botão e entrega o ref; bottomRight alinha a dica à borda direita, então ela não corta na janela.
+function WindowButton({ label, icon: Icon, disabled, onClick }: {
+  label: string; icon: LucideIcon; disabled: boolean; onClick: () => void;
 }) {
   return (
-    <button
-      type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick}
-      className={`flex h-full w-[46px] shrink-0 items-center justify-center text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:opacity-40 ${
-        danger ? 'hover:bg-destructive hover:text-white' : 'hover:bg-muted hover:text-foreground'
-      }`}
-    >
-      <Icon className="size-4" />
-    </button>
+    <Tooltip title={label} placement="bottomRight">
+      <button
+        type="button" aria-label={label} disabled={disabled} onClick={onClick}
+        className="flex h-full w-[46px] shrink-0 items-center justify-center text-muted-foreground outline-none transition-colors duration-[120ms] motion-reduce:transition-none hover:bg-muted hover:text-foreground active:bg-muted/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:opacity-40"
+      >
+        <Icon className="size-3.5" strokeWidth={1.5} />
+      </button>
+    </Tooltip>
   );
 }
 
-/** `children` vão depois do nome; os botões da janela ficam colados à borda direita. */
-export function TitleBar({ connected, children }: { connected: boolean; children?: ReactNode }) {
+/** Último segmento do caminho, com \ ou / (o caminho todo fica no title). */
+function folderName(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+/**
+ * Identidade à esquerda; a pasta do projeto no meio (nome em destaque, caminho completo em secundário, copiável);
+ * `children` são os contadores, agrupados à direita; os botões da janela ficam colados à borda direita.
+ */
+export function TitleBar({ connected, project, children }: { connected: boolean; project?: string; children?: ReactNode }) {
   const [maximized, setMaximized] = useState(false);
 
   // Antes de connect() não há janela para consultar: a consulta e a escuta só começam com a conexão pronta.
@@ -45,17 +54,34 @@ export function TitleBar({ connected, children }: { connected: boolean; children
   }, [connected]);
 
   return (
-    // data-tauri-drag-region: o arrasto e o duplo clique valem só para estes três elementos, não para os filhos.
+    // data-tauri-drag-region: o arrasto e o duplo clique valem só nos elementos passivos e nas áreas vazias. O caminho não leva o atributo, para ficar selecionável.
     <Flexbox as="header" data-tauri-drag-region horizontal align="center" height={36} flex="none" className="whitespace-nowrap border-b bg-card">
-      <Text as="span" data-tauri-drag-region className="px-3" fontSize={14} weight={600}>Orquestrador</Text>
-      <Flexbox data-tauri-drag-region horizontal align="center" gap={12} flex={1} allowShrink style={{ paddingRight: 12 }}>{children}</Flexbox>
+      <Flexbox data-tauri-drag-region horizontal align="center" paddingInline={12} flex="none">
+        <Text as="span" data-tauri-drag-region fontSize={13} weight={600}>Orquestrador</Text>
+      </Flexbox>
+      <Flexbox data-tauri-drag-region horizontal align="center" gap={8} flex={1} allowShrink className="min-w-0">
+        {project && (
+          <>
+            <Text as="span" data-tauri-drag-region fontSize={13} weight={500} ellipsis title={project} className="min-w-0 shrink">
+              {folderName(project)}
+            </Text>
+            <Text as="span" type="secondary" fontSize={12} code ellipsis title={project} className="min-w-0 shrink select-text">
+              {project}
+            </Text>
+          </>
+        )}
+      </Flexbox>
+      {/* Sem contadores, o grupo nem existe: não ocupa espaço nem padding. */}
+      {Children.toArray(children).length > 0 && (
+        <Flexbox data-tauri-drag-region horizontal align="center" gap={12} paddingInline={12} flex="0 1 auto" allowShrink className="min-w-0 max-w-1/2">{children}</Flexbox>
+      )}
       <Flexbox horizontal height="100%" flex="none">
         <WindowButton label="Minimizar" icon={Minus} disabled={!connected} onClick={() => host().minimize()} />
         <WindowButton
           label={maximized ? 'Restaurar' : 'Maximizar'} icon={maximized ? Copy : Square}
           disabled={!connected} onClick={() => host().toggleMaximize()}
         />
-        <WindowButton label="Fechar" icon={X} danger disabled={!connected} onClick={() => host().close()} />
+        <WindowButton label="Fechar" icon={X} disabled={!connected} onClick={() => host().close()} />
       </Flexbox>
     </Flexbox>
   );

@@ -2,7 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { Choice, DirEntry, Events, FileContent, GitBranches, GitDiff, GitStatus, Options, SearchOptions, SearchResults, Snapshot, UpdateStatus } from './types';
+import type { Choice, ClipboardSnapshot, DirEntry, Events, FileContent, GitBranches, GitDiff, GitStatus, Options, SearchOptions, SearchResults, Snapshot, UpdateStatus } from './types';
 
 export interface Transport {
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
@@ -53,12 +53,11 @@ export const backend = {
   getOptions: () => call<Options>('get_options'),
   startOrchestrator: (choice: Choice, cols: number, rows: number) =>
     call<void>('start_orchestrator', { choice, cols, rows }),
-  // Shell do usuário na pasta do projeto, no terminal de `id` (gerado pelo frontend, "shell-<n>"). Devolve o nome do programa. Erro vem como mensagem em português.
-  startShell: (id: string, cols: number, rows: number) => call<string>('start_shell', { id, cols, rows }),
+  // Shell do usuário no terminal de `id` (gerado pelo frontend, "shell-<n>"), na pasta do projeto ou em `cwd` (relativa ao projeto, com "/"; '' é a raiz). Devolve o nome do programa. Erro vem como mensagem em português.
+  startShell: (id: string, cols: number, rows: number, cwd?: string) => call<string>('start_shell', { id, cols, rows, cwd }),
   // Mata o shell de `id` sem gerar evento de saída.
   closeShell: (id: string) => call<void>('close_shell', { id }),
   setExecutorChoice: (choice: Choice) => call<void>('set_executor_choice', { choice }),
-  setMaxParallel: (value: number) => call<void>('set_max_parallel', { value }),
   termWrite: (id: string, data: string) => call<void>('term_write', { id, data }),
   termResize: (id: string, cols: number, rows: number) => call<void>('term_resize', { id, cols, rows }),
   termSnapshot: (id: string) => call<Snapshot>('term_snapshot', { id }),
@@ -72,6 +71,21 @@ export const backend = {
   // Conteúdo de um arquivo, com o mesmo caminho de `listDir`. Erro chega como mensagem em português.
   readFile: (path: string) => call<FileContent>('read_file', { path }),
   writeFile: (path: string, text: string) => call<void>('write_file', { path, text }),
+  // Ações de um arquivo da árvore, com o caminho relativo ao projeto. Erro vem como mensagem em português.
+  // Renomear devolve o caminho novo; nunca sobrescreve. Excluir manda à Lixeira do Windows.
+  renameFile: (path: string, name: string) => call<string>('rename_file', { path, name }),
+  deleteFile: (path: string) => call<void>('delete_file', { path }),
+  revealFile: (path: string) => call<void>('reveal_file', { path }),
+  openWith: (path: string) => call<void>('open_with', { path }),
+  copyFile: (path: string, cut: boolean) => call<void>('copy_file', { path, cut }),
+  // Criação na pasta `dir` (relativa, '' é a raiz). Devolve o caminho relativo criado; nunca sobrescreve (nome que existe rejeita com a mensagem).
+  createFile: (dir: string, name: string) => call<string>('create_file', { dir, name }),
+  createDir: (dir: string, name: string) => call<string>('create_dir', { dir, name }),
+  // Abre no Explorer a pasta `path` (relativa, '' é a raiz do projeto).
+  revealDir: (path: string) => call<void>('reveal_dir', { path }),
+  // Clipboard lido na hora da ação. Colar recebe essa mesma lista: a checagem de alterações e a operação usam o que foi lido aqui.
+  clipboardSnapshot: () => call<ClipboardSnapshot>('clipboard_snapshot'),
+  pasteFiles: (dest: string, snap: ClipboardSnapshot) => call<string[]>('paste_files', { dest, snap }),
   // Painel Git. Caminhos relativos à raiz do projeto, com "/"; lista vazia em stage/unstage vale para tudo.
   gitStatus: () => call<GitStatus>('git_status'),
   gitDiff: (path: string, staged: boolean) => call<GitDiff>('git_diff', { path, staged }),

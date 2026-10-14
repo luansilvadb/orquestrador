@@ -6,7 +6,6 @@ export type ToolOption = { name: Tool; efforts: string[]; models: ModelOption[] 
 export type Options = {
   tools: ToolOption[];
   last: { orchestrator: Choice; executor: Choice };
-  maxParallel: number;
 };
 export type NodeState = 'awaiting-choice' | 'queued' | 'running' | 'awaiting-orchestrator' | 'done' | 'stopped' | 'failed';
 export type ExecutorNode = {
@@ -28,6 +27,8 @@ export type UpdateStatus =
 
 // Uma entrada de `list_dir`: um nível só. A ordem é a do backend (pastas primeiro, depois arquivos, alfabética).
 export type DirEntry = { name: string; dir: boolean };
+// Arquivos do clipboard do Windows: caminhos absolutos, na ordem, e se foram recortados (mover) ou copiados.
+export type ClipboardSnapshot = { paths: string[]; cut: boolean };
 
 // Uma leitura de `read_file`: o texto como está no disco, com indicação de UTF-8. Binário e arquivo acima de 1 MiB voltam sem texto.
 export type FileContent = { binary: boolean; tooLarge: boolean; readOnly: boolean; text: string };

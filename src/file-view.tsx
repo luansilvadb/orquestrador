@@ -1,6 +1,7 @@
-// O arquivo aberto na área do meio: barra de ações e editor com releitura enquanto estiver visível.
+// Um arquivo aberto na área do meio: barra com caminho, avisos e salvar, e editor com releitura enquanto estiver visível.
+// Cada arquivo aberto fica montado; só o ativo recebe `active` e lê o disco. Fechar é pela aba (src/file-tabs.tsx).
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { X, Save, RotateCcw } from 'lucide-react';
+import { Save, RotateCcw } from 'lucide-react';
 import { ActionIcon, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { basicSetup } from 'codemirror';
@@ -67,15 +68,27 @@ const normalizeNewlines = (text: string) => text.replace(/\r\n|\r/g, '\n');
 const newlineOf = (text: string) => text.includes('\r\n') ? '\r\n' : '\n';
 const toDiskNewlines = (text: string, newline: string) => text.replace(/\n/g, newline);
 
-function CodeEditor({ text, readOnly, path, onChange, onSave }: {
-  text: string; readOnly: boolean; path: string; onChange: (text: string) => void; onSave: () => void;
+// Pedido de navegação a uma linha (1-based), vindo de um resultado da pesquisa. `id` é novo a cada clique.
+export type Reveal = { path: string; line: number; id: number };
+
+function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor }: {
+  text: string; readOnly: boolean; path: string; reveal: Reveal | null; onChange: (text: string) => void; onSave: () => void;
+  onCursor: (line: number, col: number) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const language = useRef(new Compartment());
   const editable = useRef(new Compartment());
-  const latest = useRef({ onChange, onSave });
-  latest.current = { onChange, onSave };
+  // Último pedido já atendido: o editor fica montado ao trocar de aba, e um pedido antigo não pode mover o cursor de novo.
+  const revealed = useRef(0);
+  const latest = useRef({ onChange, onSave, onCursor });
+  latest.current = { onChange, onSave, onCursor };
+  // Linha e coluna (1-based) do cursor, para o caminho de navegação da aba. Só informa; não mexe no editor.
+  const reportCursor = (state: EditorState) => {
+    const head = state.selection.main.head;
+    const line = state.doc.lineAt(head);
+    latest.current.onCursor(line.number, head - line.from + 1);
+  };
 
   useEffect(() => {
     if (!host.current) return;
@@ -90,6 +103,7 @@ function CodeEditor({ text, readOnly, path, onChange, onSave }: {
         language.current.of([]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) latest.current.onChange(update.state.doc.toString());
+          if (update.docChanged || update.selectionSet) reportCursor(update.state);
         }),
         keymap.of([{
           key: 'Mod-s',
@@ -101,6 +115,7 @@ function CodeEditor({ text, readOnly, path, onChange, onSave }: {
       ],
     });
     view.current = new EditorView({ state, parent: host.current });
+    reportCursor(state);
     return () => {
       view.current?.destroy();
       view.current = null;
@@ -143,6 +158,18 @@ function CodeEditor({ text, readOnly, path, onChange, onSave }: {
     current.dispatch({ changes: { from, to: oldEnd, insert: text.slice(from, newEnd) } });
   }, [text]);
 
+  // Depois da sincronização do texto: um pedido novo usa o documento atualizado. Só roda quando o pedido muda, não a cada digitação.
+  // Põe o cursor na linha, rola até ela e foca o editor. A linha é limitada ao documento atual, que pode ser diferente do que a busca leu.
+  useEffect(() => {
+    const current = view.current;
+    if (!current || !reveal || reveal.id === revealed.current) return;
+    revealed.current = reveal.id;
+    const { doc } = current.state;
+    const { from } = doc.line(Math.min(Math.max(reveal.line, 1), doc.lines));
+    current.dispatch({ selection: { anchor: from }, effects: EditorView.scrollIntoView(from, { y: 'center' }) });
+    current.focus();
+  }, [reveal]);
+
   useEffect(() => {
     const current = view.current;
     if (current) {
@@ -158,8 +185,9 @@ function CodeEditor({ text, readOnly, path, onChange, onSave }: {
   return <div ref={host} className="h-full min-h-0 overflow-hidden" />;
 }
 
-export function FileView({ path, active, onClose, onDirtyChange }: {
-  path: string; active: boolean; onClose: () => void; onDirtyChange: (dirty: boolean) => void;
+export function FileView({ path, active, reveal, onDirtyChange, onCursor }: {
+  path: string; active: boolean; reveal: Reveal | null; onDirtyChange: (path: string, dirty: boolean) => void;
+  onCursor: (path: string, line: number, col: number) => void;
 }) {
   const { data: file, error, refresh } = usePolled<FileContent>(() => backend.readFile(path), active, false);
   // base e draft ficam em LF; newline guarda o formato do disco para a próxima gravação.
@@ -172,7 +200,8 @@ export function FileView({ path, active, onClose, onDirtyChange }: {
   const dirty = draft !== null && draft !== base;
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
-  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+  // `onDirtyChange` é estável no App: o efeito só roda quando a edição muda de estado.
+  useEffect(() => onDirtyChange(path, dirty), [dirty, path, onDirtyChange]);
 
   useEffect(() => {
     if (!file || file.binary || file.tooLarge) return;
@@ -251,8 +280,11 @@ export function FileView({ path, active, onClose, onDirtyChange }: {
             text={draft}
             readOnly={file.readOnly}
             path={path}
+            // Só o arquivo ativo e o pedido dele: um pedido de outro arquivo, ou feito enquanto este está oculto, espera a aba ficar ativa.
+            reveal={active && reveal?.path === path ? reveal : null}
             onChange={change}
             onSave={() => void save()}
+            onCursor={(line, col) => onCursor(path, line, col)}
           />
         </Flexbox>
       </Flexbox>
@@ -269,7 +301,7 @@ export function FileView({ path, active, onClose, onDirtyChange }: {
 
   return (
     <Flexbox height="100%" className="min-h-0">
-      {/* Barra de 36 px alinhada com a faixa de abas do painel Terminal. */}
+      {/* Barra de 36 px, abaixo da faixa de abas dos arquivos. */}
       <Flexbox
         horizontal
         align="center"
@@ -319,15 +351,6 @@ export function FileView({ path, active, onClose, onDirtyChange }: {
           title={`Salvar o arquivo ${name}`}
           disabled={!dirty || !!file?.readOnly || saving}
           onClick={() => void save()}
-        />
-        <ActionIcon
-          variant="borderless"
-          size="small"
-          icon={X}
-          className="shrink-0"
-          aria-label={`Fechar o arquivo ${name}`}
-          title={`Fechar o arquivo ${name}`}
-          onClick={onClose}
         />
       </Flexbox>
       <Flexbox flex={1} className="min-h-0">

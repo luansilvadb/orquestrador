@@ -2,17 +2,22 @@
 //! adaptador `.ps1` que o app escreve na sessão, digitado como o orquestrador o digitaria no Windows
 //! PowerShell 5.1 e no pwsh, e CLIs falsos (examples/fake_cli.rs) no lugar do claude e do codex.
 use base64::Engine;
+use orquestrador_lib::capacity::{Memory, Resources};
 use orquestrador_lib::cli::Exes;
 use orquestrador_lib::config::Choice;
 use orquestrador_lib::core::{title, Core, Emit, ORCHESTRATOR};
 use orquestrador_lib::session::Places;
 use serde_json::Value;
+use std::cell::RefCell;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+const GIB: u64 = 1 << 30;
 
 /// O que o orquestrador escreve numa tarefa e precisa chegar igual ao executor: aspa dupla pura, barra antes
 /// da aspa, JSON com escapes, tarefa com espaço terminada em barra, acentos, apóstrofos e várias linhas.
@@ -31,6 +36,11 @@ struct Bench {
     core: Core,
     events: Receiver<(String, Value)>,
     root: PathBuf,
+    /// A memória física que o teto enxerga; o teste muda os dois números no meio do caminho.
+    total: Arc<AtomicU64>,
+    free: Arc<AtomicU64>,
+    /// Tudo que `wait`, `states` e `drain` já leram dos eventos, para perguntar depois se um nó passou por um estado.
+    seen: RefCell<Vec<(String, Value)>>,
 }
 
 fn bench(tag: &str) -> Bench {
@@ -39,7 +49,13 @@ fn bench(tag: &str) -> Bench {
 
 /// Uma sessão de teste cujo temp fica em `root\<temp>`: o nome dessa pasta é o que o teste quer provar. O programa de
 /// delegação é uma cópia numa pasta com espaço, acento e apóstrofo, porque o caminho dele não pode importar.
+/// Oito CPUs (teto de 4) e 64 GiB livres: o teto por padrão é 4, sem apertar a fila.
 fn bench_in(tag: &str, temp: &str) -> Bench {
+    bench_com(tag, temp, Some(8))
+}
+
+/// `bench_in` com as CPUs que o teste escolhe: `Some(4)` dá teto 2, `Some(2)` dá teto 1.
+fn bench_com(tag: &str, temp: &str, cpus: Option<usize>) -> Bench {
     let root = std::env::temp_dir().join(format!("orq-lote-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let repo = root.join("repo");
@@ -64,18 +80,53 @@ fn bench_in(tag: &str, temp: &str) -> Bench {
     let places = Places { temp: root.join(temp), codex_rules: root.join("rules"), global_dirs: vec![] };
     let (tx, events) = channel();
     let emit: Emit = Arc::new(move |event, payload| drop(tx.send((event.to_string(), payload))));
-    let core = Core::new(exes, places, root.join("config.json"), emit);
+    let total = Arc::new(AtomicU64::new(64 * GIB));
+    let free = Arc::new(AtomicU64::new(64 * GIB));
+    let (t, f) = (total.clone(), free.clone());
+    let memory = move || Some(Memory { total: t.load(Ordering::SeqCst), available: f.load(Ordering::SeqCst) });
+    let resources = Resources { cpus, memory: Arc::new(memory) };
+    let core = Core::new(exes, places, root.join("config.json"), emit).with_resources(resources);
     core.set_project(&repo).unwrap();
-    Bench { core, events, root }
+    Bench { core, events, root, total, free, seen: RefCell::new(Vec::new()) }
 }
 
 impl Bench {
+    /// Põe a memória que o teto enxerga a partir do próximo passe da fila.
+    fn memoria(&self, total: u64, livre: u64) {
+        self.total.store(total, Ordering::SeqCst);
+        self.free.store(livre, Ordering::SeqCst);
+    }
+
+    /// Guarda o evento lido, para `passou` poder perguntar depois.
+    fn lembra(&self, event: &str, payload: &Value) {
+        if event == "node-state" {
+            self.seen.borrow_mut().push((event.to_string(), payload.clone()));
+        }
+    }
+
+    /// Lê os eventos que já chegaram, sem esperar.
+    fn drain(&self) {
+        while let Ok((event, payload)) = self.events.try_recv() {
+            if event != "term-data" {
+                self.lembra(&event, &payload);
+            }
+        }
+    }
+
+    /// Se algum evento de estado já lido diz que o nó `id` esteve em um destes `states`.
+    fn passou(&self, id: &str, states: &[&str]) -> bool {
+        self.seen.borrow().iter().any(|(_, p)| p["id"] == id && states.contains(&p["state"].as_str().unwrap_or("")))
+    }
+
     /// O próximo evento que não seja `term-data` e que satisfaça `want`.
     fn wait(&self, what: &str, want: impl Fn(&str, &Value) -> bool) -> Value {
         let deadline = Instant::now() + Duration::from_secs(30);
         while let Ok((event, payload)) = self.events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            if event != "term-data" && want(&event, &payload) {
-                return payload;
+            if event != "term-data" {
+                self.lembra(&event, &payload);
+                if want(&event, &payload) {
+                    return payload;
+                }
             }
         }
         panic!("o evento esperado não chegou: {what}");
@@ -94,6 +145,7 @@ impl Bench {
             let Ok((event, payload)) = self.events.recv_timeout(deadline.saturating_duration_since(Instant::now())) else {
                 panic!("os estados esperados não chegaram: {left:?}");
             };
+            self.lembra(&event, &payload);
             if event == "node-state" {
                 left.retain(|(id, state)| !(payload["id"] == *id && payload["state"] == *state));
             }
@@ -189,7 +241,8 @@ fn until(what: &str, done: impl Fn() -> bool) {
 
 #[test]
 fn lote_com_escolha_fila_parada_falha_e_aguardar() {
-    let b = bench("lote");
+    // 4 CPUs lógicas dão teto 2; a memória de sobra não aperta.
+    let b = bench_com("lote", "temp", Some(4));
     b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
     until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
 
@@ -208,9 +261,7 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     b.core.term_resize(&a, 90, 25);
     assert_eq!(b.core.term_snapshot("não existe").seq, 0);
 
-    // Teto 2: A e B abrem, C fica na fila; quando A termina, C abre e falha sem sinal de fim.
-    b.core.set_max_parallel(2).unwrap();
-    assert!(b.core.set_max_parallel(17).is_err());
+    // Teto 2 (das CPUs): A e B abrem, C fica na fila; quando A termina, C abre e falha sem sinal de fim.
     assert!(b.core.set_executor_choice(Choice::new("codex", "", "enorme")).is_err());
     b.core.set_executor_choice(Choice::new("codex", "gpt-x", "low")).unwrap();
     assert_eq!(b.wait("executor-choice", |e, _| e == "executor-choice")["tool"], "codex");
@@ -635,6 +686,137 @@ fn pedido_que_sai_da_pasta_devolve_o_no_a_rodando() {
     b.state(&p, "running");
     // Sem pedido na pasta, o `--ask` do CLI simulado nega com o motivo de encerramento e a rodada termina.
     b.state(&p, "done");
+    b.core.shutdown();
+    let _ = std::fs::remove_dir_all(&b.root);
+}
+
+/// Um executor que espera o orquestrador ocupa a vaga: com teto 1, o próximo da fila não abre enquanto ele espera,
+/// e abre quando a resposta termina a rodada dele.
+#[test]
+fn executor_que_espera_o_orquestrador_ocupa_a_vaga() {
+    let b = bench_com("vaga", "temp", Some(2)); // teto 1
+    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
+    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+
+    let run = b.delegate("powershell", &["PERGUNTA: remover o log", "Tarefa B: coração"]);
+    let nodes = b.added(2);
+    let (p, q) = (id(&nodes[0]), id(&nodes[1]));
+    assert_eq!(nodes[1]["state"], "queued", "B espera a vaga de A");
+    b.states(&[(p.as_str(), "awaiting-orchestrator")]);
+    let (code, out) = finish(run);
+    assert_eq!(code, 3, "{out}");
+
+    // A espera a resposta e segue com a vaga: B não abre, nem com a fila andando.
+    std::thread::sleep(Duration::from_millis(1500));
+    b.drain();
+    assert!(!b.passou(&q, &["running", "done"]), "B não abriu enquanto A espera o orquestrador");
+    assert_eq!(b.core.term_snapshot(&q).seq, 0, "B não tem processo");
+
+    // Respondido, A termina a rodada e libera a vaga: B abre e termina.
+    let run = b.delegate("powershell", &["--responder", p.as_str(), "aceitar"]);
+    b.state(&p, "done");
+    b.state(&q, "running");
+    b.state(&q, "done");
+    let (code, out) = finish(run);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("--- EXECUTOR 2/2 ---\nTarefa B: coração\nfeito: Tarefa B: coração\n"), "{out}");
+    b.core.shutdown();
+    let _ = std::fs::remove_dir_all(&b.root);
+}
+
+/// Pouca memória livre deixa um executor só. O resto espera, e a fila só anda quando a memória volta; quem já
+/// rodava segue vivo.
+#[test]
+fn memoria_baixa_segura_a_fila_e_a_memoria_de_volta_abre_sem_matar_quem_roda() {
+    let b = bench_com("memoria", "temp", Some(16)); // teto de CPU 8
+    b.memoria(64 * GIB, GIB * 5 / 2); // 2,5 GiB livres: a reserva de 2 GiB deixa 0,5 GiB, nenhuma vaga
+    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
+    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+
+    let _run = b.delegate("powershell", &["DORMIR A", "DORMIR B"]);
+    let nodes = b.added(2);
+    let (a, q) = (id(&nodes[0]), id(&nodes[1]));
+    assert_eq!((nodes[0]["state"].as_str(), nodes[1]["state"].as_str()), (Some("running"), Some("queued")));
+
+    // Passam-se várias reavaliações da fila e nada abre: sem vaga de memória, B fica parado.
+    std::thread::sleep(Duration::from_millis(2500));
+    b.drain();
+    assert!(!b.passou(&q, &["running"]), "sem memória, B não abre");
+    assert_eq!(b.core.term_snapshot(&q).seq, 0, "B não tem processo");
+
+    // A memória voltou: B abre no próximo passe, e A continua vivo.
+    b.memoria(64 * GIB, 64 * GIB);
+    b.state(&q, "running");
+    b.drain();
+    assert!(!b.passou(&a, &["done", "failed", "stopped"]), "A não terminou nem foi parado");
+    b.core.shutdown();
+    let _ = std::fs::remove_dir_all(&b.root);
+}
+
+/// A RAM total cai no meio do lote: os vivos seguem até o fim (nenhum é parado ou reiniciado), e só o que chega
+/// depois espera. Quando a RAM volta, o que esperava abre.
+#[test]
+fn reducao_de_memoria_nao_mata_vivos_e_a_retomada_abre_a_fila() {
+    let b = bench_com("reducao", "temp", Some(16)); // teto de CPU 8
+    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
+    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+
+    let _run = b.delegate("powershell", &["DORMIR A", "DORMIR B", "DORMIR C"]);
+    let nodes = b.added(3);
+    let vivos: Vec<String> = nodes.iter().map(id).collect();
+    assert!(nodes.iter().all(|n| n["state"] == "running"), "com RAM de sobra, os três abrem: {nodes:?}");
+
+    // RAM total de 4 GiB: teto 2 com três vivos. O quarto espera e nenhum vivo cai.
+    b.memoria(4 * GIB, 4 * GIB);
+    let _run2 = b.delegate("powershell", &["DORMIR D"]);
+    let quarto = b.added(1).remove(0);
+    let d = id(&quarto);
+    assert_eq!(quarto["state"], "queued", "com teto 2 e três vivos, o quarto espera");
+    std::thread::sleep(Duration::from_millis(2500));
+    b.drain();
+    assert!(!b.passou(&d, &["running"]), "com a RAM menor, D espera");
+    for v in &vivos {
+        assert!(!b.passou(v, &["done", "failed", "stopped"]), "{v} seguiu vivo");
+    }
+
+    // A RAM voltou: D abre no próximo passe, e os três seguem vivos.
+    b.memoria(64 * GIB, 64 * GIB);
+    b.state(&d, "running");
+    b.drain();
+    for v in &vivos {
+        assert!(!b.passou(v, &["done", "failed", "stopped"]), "{v} seguiu vivo depois da retomada");
+    }
+    b.core.shutdown();
+    let _ = std::fs::remove_dir_all(&b.root);
+}
+
+/// Com um executor por vez (pouca memória), a fila sai na ordem de chegada: cada um abre quando o anterior termina.
+#[test]
+fn fila_sai_na_ordem_de_chegada_com_um_executor_por_vez() {
+    let b = bench_com("fifo", "temp", Some(16));
+    b.memoria(64 * GIB, GIB * 5 / 2); // teto 1
+    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
+    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+
+    let run = b.delegate("powershell", &["Tarefa A", "Tarefa B", "Tarefa C"]);
+    let nodes = b.added(3);
+    let (a, bb, c) = (id(&nodes[0]), id(&nodes[1]), id(&nodes[2]));
+    assert_eq!((nodes[0]["state"].as_str(), nodes[1]["state"].as_str(), nodes[2]["state"].as_str()), (Some("running"), Some("queued"), Some("queued")));
+
+    b.state(&a, "done");
+    b.state(&bb, "running");
+    b.drain();
+    assert!(!b.passou(&c, &["running"]), "C espera B, que é o próximo da fila");
+    b.state(&bb, "done");
+    b.state(&c, "running");
+    b.state(&c, "done");
+    let (code, out) = finish(run);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("--- EXECUTOR 1/3 ---\nTarefa A\nfeito: Tarefa A\nexecutor_exit: 0\n--- EXECUTOR 2/3 ---\nTarefa B\n"), "{out}");
     b.core.shutdown();
     let _ = std::fs::remove_dir_all(&b.root);
 }

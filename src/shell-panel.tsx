@@ -1,7 +1,8 @@
 // O painel Terminal, embaixo da área do arquivo na coluna central da tela principal: uma aba por shell do usuário, redimensionável pela borda de cima.
 // Fica montado depois da primeira abertura; fechar só esconde (os shells seguem vivos no backend). Todos os TermHost ficam montados; só o da aba ativa aparece.
-import { ChevronDown, Plus, SquareTerminal, X } from 'lucide-react';
-import { ActionIcon, DraggablePanel, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
+import { type KeyboardEvent, useLayoutEffect, useRef, useState } from 'react';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, List, Plus, SquareTerminal, X } from 'lucide-react';
+import { ActionIcon, Button, DraggablePanel, Popover, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import type { TermView } from './term';
 import { TermHost } from './terminals';
@@ -9,10 +10,38 @@ import { TermHost } from './terminals';
 // Altura ao abrir o app (não se guarda entre aberturas); o mínimo mantém a barra e uma linha de terminal.
 const SHELL_HEIGHT = 280;
 const SHELL_MIN = 120;
+// Abaixo dessa largura do painel, a faixa de abas vira um seletor do terminal ativo. Com as setas, a faixa fica ~186 px menor que o cabeçalho;
+// a aba com o rótulo no máximo (número, programa de até 128 px e o X) precisa de ~274 px, então o normal só começa aqui.
+const COMPACT_WIDTH = 460;
 // Objeto constante: o DraggablePanel recalcula o tamanho quando `defaultSize` muda de identidade.
 const DEFAULT_SIZE = { height: SHELL_HEIGHT };
 
-export type ShellTab = { id: string; title: string };
+// `title` é o completo (pasta e programa), para o tooltip; `program` é '' até o backend responder.
+export type ShellTab = { id: string; title: string; program: string };
+
+// Mantém a aba dentro da área visível da faixa, ajustando só o scroll da faixa (sem scrollIntoView, que rola os ancestrais).
+// Faixa escondida (largura 0) não tem o que mostrar; ao reabrir, o efeito roda de novo.
+function reveal(box: HTMLDivElement, id: string) {
+  const tab = box.querySelector<HTMLElement>(`[data-shell="${id}"]`);
+  if (!tab || box.clientWidth === 0) return;
+  // Medidas com subpixel (rect), não offsetWidth/clientWidth: a borda da aba não pode passar da faixa nem por fração de pixel.
+  const edge = box.getBoundingClientRect();
+  const rect = tab.getBoundingClientRect();
+  const left = rect.left - edge.left + box.scrollLeft;
+  const right = left + rect.width;
+  // Aba maior que a faixa: mostra o começo dela (o rótulo), não o fim. Esquerda arredonda para baixo e direita para cima.
+  if (left < box.scrollLeft || rect.width > edge.width) box.scrollLeft = Math.floor(left);
+  else if (right > box.scrollLeft + edge.width) box.scrollLeft = Math.ceil(right - edge.width);
+}
+
+// O número vem do id `shell-N`, então não muda quando outra aba fecha; o programa é o que corta quando falta espaço.
+function shellNumber(tab: ShellTab) {
+  return `Terminal ${tab.id.match(/(\d+)$/)?.[1] ?? ''}`;
+}
+
+function shellLabel(tab: ShellTab) {
+  return `${shellNumber(tab)}${tab.program ? ` · ${tab.program}` : ''}`;
+}
 
 /** Escondido com `hidden` (display none): sai do layout e a área do arquivo cresce. Os TermHost ficam montados. */
 export function ShellPanel({ open, maxHeight, tabs, active, onSelect, onAdd, onHide, onClose, onReady }: {
@@ -26,6 +55,128 @@ export function ShellPanel({ open, maxHeight, tabs, active, onSelect, onAdd, onH
   onClose: (id: string) => void;
   onReady: (id: string, view: TermView) => void;
 }) {
+  const header = useRef<HTMLDivElement>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [listOpen, setListOpen] = useState(false);
+  const [compact, setCompact] = useState(false);
+  // Se há aba escondida para cada lado: decide se as setas aparecem e se cada uma fica habilitada.
+  const [edge, setEdge] = useState({ before: false, after: false });
+  // Se as abas cabem sem as setas: elas só aparecem quando a faixa, sem elas, não comporta tudo.
+  const [overflow, setOverflow] = useState(false);
+  const current = tabs.find((tab) => tab.id === active);
+
+  function measure() {
+    const box = strip.current;
+    if (!box) return;
+    // Com as setas na tela, elas ocupam parte da faixa: o que cabe soma esse espaço de volta; senão as setas nunca saem.
+    const header = box.parentElement!;
+    const gap = parseFloat(getComputedStyle(header).columnGap) || 0;
+    const room = [...header.querySelectorAll<HTMLElement>('button[aria-label^="Abas"]')]
+      .reduce((sum, el) => sum + el.getBoundingClientRect().width + gap, 0);
+    setOverflow(box.scrollWidth > box.clientWidth + room + 1);
+    setEdge({
+      before: box.scrollLeft > 0,
+      after: box.scrollLeft + box.clientWidth < box.scrollWidth - 1,
+    });
+  }
+
+  // Adicionar, selecionar, fechar a ativa, reabrir o painel, trocar de modo e aparecer/sumir as setas (a faixa encolhe ou cresce): a aba ativa entra na área visível.
+  const activeRef = useRef(active);
+  useLayoutEffect(() => {
+    activeRef.current = active;
+    if (strip.current) reveal(strip.current, active);
+    measure();
+  }, [active, tabs, open, compact, overflow]);
+
+  // A largura do cabeçalho é a do painel: decide o modo e, no normal, recalcula o que cabe. A faixa também é observada, pois muda de largura sem o cabeçalho mudar. Escondido (largura 0), mantém o modo de antes.
+  useLayoutEffect(() => {
+    const box = header.current;
+    if (!box) return;
+    const observer = new ResizeObserver(() => {
+      if (box.clientWidth === 0) return;
+      setCompact(box.clientWidth < COMPACT_WIDTH);
+      if (strip.current) {
+        reveal(strip.current, activeRef.current);
+        measure();
+      }
+    });
+    observer.observe(box);
+    // Só existe no modo normal; ao trocar de modo, o efeito roda de novo e observa a faixa montada.
+    if (strip.current) observer.observe(strip.current);
+    return () => observer.disconnect();
+  }, [compact]);
+
+  // Fechar um item pela lista: o foco vai para o item que ocupa o lugar dele (ou o último), em vez de se perder.
+  const focusAfterClose = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const index = focusAfterClose.current;
+    if (index === null) return;
+    focusAfterClose.current = null;
+    const items = listRef.current?.querySelectorAll<HTMLButtonElement>('button[data-shell-item]');
+    if (items?.length) items[Math.min(index, items.length - 1)].focus();
+  }, [tabs]);
+
+  function closeFromList(index: number, id: string) {
+    focusAfterClose.current = index;
+    onClose(id);
+  }
+
+  function changeListOpen(next: boolean) {
+    focusAfterClose.current = null;
+    setListOpen(next);
+  }
+
+  // Setas: rolam a faixa em uma página (80% da largura visível).
+  function page(direction: 1 | -1) {
+    const box = strip.current;
+    if (box) box.scrollBy({ left: direction * box.clientWidth * 0.8, behavior: 'smooth' });
+  }
+
+  // Lista aberta: as setas do teclado andam entre os itens (sem passar pelos X); Escape fecha (o Popover cuida disso) e devolve o foco ao gatilho.
+  function moveFocus(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const items = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button[data-shell-item]'));
+    const index = items.indexOf(document.activeElement as HTMLButtonElement);
+    const step = e.key === 'ArrowDown' ? 1 : -1;
+    // Sem foco nos itens, a primeira seta cai no começo (para baixo) ou no fim (para cima).
+    const from = index < 0 ? (step > 0 ? -1 : items.length) : index;
+    e.preventDefault();
+    items[(from + step + items.length) % items.length]?.focus();
+  }
+
+  // A mesma lista serve aos dois modos: todos os terminais, o ativo com check e um X por item.
+  const list = (
+    <Flexbox ref={listRef} gap={2} padding={8} className="w-56" onKeyDown={moveFocus}>
+      <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 4 }}>
+        {tabs.length} {tabs.length === 1 ? 'terminal' : 'terminais'}
+      </Text>
+      <Flexbox gap={2} className="max-h-72 overflow-y-auto">
+        {tabs.map((tab, index) => {
+          const isCurrent = tab.id === active;
+          return (
+            <Flexbox key={tab.id} horizontal align="center" gap={2}>
+              <Button
+                data-shell-item type="text" size="small" className="min-w-0 flex-1 justify-start! gap-2"
+                icon={<Check className={`shrink-0${isCurrent ? '' : ' invisible'}`} />}
+                aria-current={isCurrent ? 'true' : undefined}
+                title={tab.title}
+                onClick={() => { onSelect(tab.id); setListOpen(false); }}
+              >
+                <Text as="span" ellipsis className="min-w-0">{shellLabel(tab)}</Text>
+              </Button>
+              <ActionIcon
+                variant="borderless" size="small" icon={X} className="shrink-0"
+                aria-label={`Fechar o ${shellLabel(tab)}`} title={`Fechar o terminal ${tab.title}`}
+                onClick={() => closeFromList(index, tab.id)}
+              />
+            </Flexbox>
+          );
+        })}
+      </Flexbox>
+    </Flexbox>
+  );
+
   // `shrink-0`: a área do arquivo é que encolhe; o painel mantém a altura que o usuário deu.
   return (
     <div className={open ? 'shrink-0' : 'hidden'}>
@@ -35,38 +186,88 @@ export function ShellPanel({ open, maxHeight, tabs, active, onSelect, onAdd, onH
         backgroundColor="var(--ant-color-bg-container)"
       >
         <Flexbox height="100%" className="min-h-0 overflow-hidden bg-card">
-          <Flexbox horizontal align="center" gap={4} height={36} flex="none" paddingInline={4} className="border-b">
-            {/* Só as abas e o "+" rolam juntos na horizontal; o botão de esconder fica fora da rolagem. */}
-            <Flexbox
-              horizontal align="center" gap={4} flex={1} className="min-w-0 overflow-x-auto [scrollbar-width:none]!"
-              onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; }}
-            >
-              <TabsRoot value={active} onValueChange={(key: string) => onSelect(key)} className="gap-0">
-                <TabsList className="h-8 flex-nowrap justify-start overflow-y-hidden rounded-full">
-                  <TabsIndicator />
-                  {tabs.map((tab) => (
-                    // Aba e X são irmãos: o X fica por cima da aba, na parte direita, e não aninha um button no outro.
-                    <div key={tab.id} className="relative flex-none">
-                      <TabsTab value={tab.id} title={tab.title} className="flex-none gap-1.5 pr-7! pl-3">
-                        <SquareTerminal className="size-3.5 shrink-0 text-muted-foreground" />
-                        <Text as="span" ellipsis className="max-w-48">{tab.title}</Text>
-                      </TabsTab>
-                      <ActionIcon
-                        variant="borderless" size="small" icon={X}
-                        aria-label={`Fechar o terminal ${tab.title}`} title={`Fechar o terminal ${tab.title}`}
-                        className="absolute! z-10 top-1/2 right-1 -translate-y-1/2!"
-                        onClick={() => onClose(tab.id)}
-                      />
-                    </div>
-                  ))}
-                </TabsList>
-              </TabsRoot>
-              <ActionIcon
-                variant="borderless" size="small" icon={Plus} className="shrink-0"
-                aria-label="Novo terminal" title="Novo terminal"
-                onClick={onAdd}
-              />
-            </Flexbox>
+          <Flexbox ref={header} horizontal align="center" gap={4} height={36} flex="none" paddingInline={4} className="border-b">
+            {compact ? (
+              <>
+                {/* Modo compacto: o terminal ativo, com o número sempre visível; o clique abre a mesma lista. */}
+                <Popover open={listOpen} onOpenChange={changeListOpen} trigger="click" placement="bottomLeft" content={list}>
+                  <Button
+                    type="text" size="small" icon={<SquareTerminal className="size-3.5" />} className="min-w-0 flex-1 justify-start! gap-1.5"
+                    aria-label={`Terminal ativo: ${current ? shellLabel(current) : 'nenhum'}. Abrir a lista de terminais (${tabs.length})`}
+                    title={current?.title}
+                  >
+                    {current && <Text as="span" className="shrink-0">{shellNumber(current)}</Text>}
+                    {current?.program && <Text as="span" ellipsis type="secondary" className="min-w-0">· {current.program}</Text>}
+                    <ChevronsUpDown className="ml-auto size-3.5 shrink-0" />
+                  </Button>
+                </Popover>
+                <ActionIcon
+                  variant="borderless" size="small" icon={X} className="shrink-0" disabled={!current}
+                  aria-label={current ? `Fechar o ${shellLabel(current)}` : 'Fechar o terminal ativo'}
+                  title={current ? `Fechar o terminal ${current.title}` : 'Fechar o terminal ativo'}
+                  onClick={() => current && onClose(current.id)}
+                />
+              </>
+            ) : (
+              <>
+                {/* Só as abas rolam na horizontal; as setas, a lista, o "+" e o botão de esconder ficam fora da rolagem. */}
+                <Flexbox
+                  ref={strip} horizontal align="center" gap={4} flex={1} className="min-w-0 overflow-x-auto [scrollbar-width:none]!"
+                  onScroll={measure}
+                  onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; }}
+                >
+                  <TabsRoot value={active} onValueChange={(key: string) => onSelect(key)} className="gap-0">
+                    {/* `overflow-clip` recorta o indicador animado sem criar uma área de rolagem (o `overflow-y-hidden` fazia o X virar `auto` e aparecer uma barra). */}
+                    <TabsList className="h-8 flex-nowrap justify-start overflow-clip rounded-full">
+                      <TabsIndicator />
+                      {tabs.map((tab) => (
+                        // Aba e X são irmãos: o X fica por cima da aba, na parte direita, e não aninha um button no outro.
+                        <div key={tab.id} data-shell={tab.id} className="relative flex-none">
+                          <TabsTab value={tab.id} title={tab.title} className="flex-none gap-1.5 pr-7! pl-3">
+                            <SquareTerminal className="size-3.5 shrink-0 text-muted-foreground" />
+                            <Text as="span" className="shrink-0">{shellNumber(tab)}</Text>
+                            {tab.program && <Text as="span" ellipsis type="secondary" className="max-w-32">· {tab.program}</Text>}
+                          </TabsTab>
+                          <ActionIcon
+                            variant="borderless" size="small" icon={X}
+                            aria-label={`Fechar o ${shellLabel(tab)}`} title={`Fechar o terminal ${tab.title}`}
+                            className="absolute! z-10 top-1/2 right-1 -translate-y-1/2!"
+                            onClick={() => onClose(tab.id)}
+                          />
+                        </div>
+                      ))}
+                    </TabsList>
+                  </TabsRoot>
+                </Flexbox>
+                {overflow && (
+                  <ActionIcon
+                    variant="borderless" size="small" icon={ChevronLeft} className="shrink-0"
+                    aria-label="Abas anteriores" title="Mostra as abas anteriores" disabled={!edge.before}
+                    onClick={() => page(-1)}
+                  />
+                )}
+                {overflow && (
+                  <ActionIcon
+                    variant="borderless" size="small" icon={ChevronRight} className="shrink-0"
+                    aria-label="Abas seguintes" title="Mostra as abas seguintes" disabled={!edge.after}
+                    onClick={() => page(1)}
+                  />
+                )}
+                <Popover open={listOpen} onOpenChange={changeListOpen} trigger="click" placement="bottomRight" content={list}>
+                  <Button
+                    type="text" size="small" icon={<List className="size-3.5" />} className="shrink-0"
+                    aria-label={`Lista dos terminais: ${tabs.length}`} title={`Todos os terminais (${tabs.length})`}
+                  >
+                    {tabs.length}
+                  </Button>
+                </Popover>
+              </>
+            )}
+            <ActionIcon
+              variant="borderless" size="small" icon={Plus} className="shrink-0"
+              aria-label="Novo terminal" title="Novo terminal"
+              onClick={onAdd}
+            />
             <ActionIcon
               variant="borderless" size="small" icon={ChevronDown} className="shrink-0"
               aria-label="Esconder o painel Terminal" title="Esconde o painel; os shells continuam rodando"

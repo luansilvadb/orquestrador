@@ -1,4 +1,5 @@
 //! Backend do app Orquestrador: terminais em que um CLI orquestra e outros executam.
+pub mod capacity;
 pub mod cli;
 pub mod clipboard;
 pub mod config;
@@ -151,12 +152,89 @@ fn start_orchestrator(core: State<Core>, gate: State<Gate>, choice: Choice, cols
     core.start_orchestrator(choice, cols, rows)
 }
 
-/// Abre um shell do usuário, no slot `id` (`shell-<n>`), na pasta do projeto. Recusado se esse id já tiver um aberto.
-/// Devolve o programa que abriu.
+/// Abre um shell do usuário, no slot `id` (`shell-<n>`), na pasta do projeto ou, com `cwd` (relativo ao projeto), na
+/// pasta dele. Recusado se esse id já tiver um aberto. Devolve o programa que abriu.
 #[tauri::command(async)]
-fn start_shell(core: State<Core>, gate: State<Gate>, id: String, cols: u16, rows: u16) -> Result<String, String> {
+fn start_shell(core: State<Core>, gate: State<Gate>, id: String, cols: u16, rows: u16, cwd: Option<String>) -> Result<String, String> {
     gate.ensure_open()?;
-    core.start_shell(&id, cols, rows)
+    core.start_shell_in(&id, cols, rows, cwd.as_deref())
+}
+
+/// Renomeia o arquivo `path` para `name`, na mesma pasta. Devolve o caminho novo. Nunca sobrescreve.
+#[tauri::command(async)]
+fn rename_file(core: State<Core>, gate: State<Gate>, path: String, name: String) -> Result<String, String> {
+    gate.ensure_open()?;
+    files::rename(&core.repo()?, &path, &name)
+}
+
+/// Manda o arquivo `path` para a Lixeira do Windows. Sem fallback para apagar de vez.
+#[tauri::command(async)]
+fn delete_file(core: State<Core>, gate: State<Gate>, path: String) -> Result<(), String> {
+    gate.ensure_open()?;
+    files::recycle(&core.repo()?, &path)
+}
+
+/// Mostra o arquivo `path` selecionado no Explorer do Windows.
+#[tauri::command(async)]
+fn reveal_file(core: State<Core>, gate: State<Gate>, path: String) -> Result<(), String> {
+    gate.ensure_open()?;
+    files::reveal(&core.repo()?, &path)
+}
+
+/// Abre o diálogo "Abrir com..." do Windows para o arquivo `path`.
+#[tauri::command(async)]
+fn open_with(core: State<Core>, gate: State<Gate>, path: String) -> Result<(), String> {
+    gate.ensure_open()?;
+    files::open_with(&core.repo()?, &path)
+}
+
+/// Põe o arquivo `path` no clipboard como arquivo copiado ou recortado no Explorer. Recortar só marca o movimento.
+#[tauri::command(async)]
+fn copy_file(core: State<Core>, gate: State<Gate>, path: String, cut: bool) -> Result<(), String> {
+    gate.ensure_open()?;
+    let file = files::plain_file(&core.repo()?, &path)?;
+    clipboard::set_files(&[file], cut)
+}
+
+/// Cria o arquivo `name` dentro da pasta `dir` do projeto (vazio é a raiz). Devolve o caminho relativo. Nunca sobrescreve.
+#[tauri::command(async)]
+fn create_file(core: State<Core>, gate: State<Gate>, dir: String, name: String) -> Result<String, String> {
+    gate.ensure_open()?;
+    files::create_file(&core.repo()?, &dir, &name)
+}
+
+/// Cria a pasta `name` dentro da pasta `dir` do projeto (vazio é a raiz). Devolve o caminho relativo. Nunca sobrescreve.
+#[tauri::command(async)]
+fn create_dir(core: State<Core>, gate: State<Gate>, dir: String, name: String) -> Result<String, String> {
+    gate.ensure_open()?;
+    files::create_dir(&core.repo()?, &dir, &name)
+}
+
+/// Abre no Explorer do Windows a pasta `path` do projeto (vazio é a raiz).
+#[tauri::command(async)]
+fn reveal_dir(core: State<Core>, gate: State<Gate>, path: String) -> Result<(), String> {
+    gate.ensure_open()?;
+    files::reveal_dir(&core.repo()?, &path)
+}
+
+/// Os arquivos e o efeito (copiar ou recortar) do clipboard agora. Lido na hora de cada ação; sem arquivo, `paths` vem vazio.
+#[tauri::command(async)]
+fn clipboard_snapshot(gate: State<Gate>) -> Result<clipboard::Snapshot, String> {
+    gate.ensure_open()?;
+    Ok(clipboard::snapshot())
+}
+
+/// Cola `snap` na pasta `dest` do projeto (vazio é a raiz). `snap` é a lista lida na ação, a mesma que o frontend
+/// usou para checar alterações não salvas. Recorte que já tirou algo das origens esvazia o clipboard, se ele ainda
+/// for `snap`; um clipboard trocado no meio fica como está.
+#[tauri::command(async)]
+fn paste_files(core: State<Core>, gate: State<Gate>, dest: String, snap: clipboard::Snapshot) -> Result<Vec<String>, String> {
+    gate.ensure_open()?;
+    let created = files::paste(&core.repo()?, &dest, &snap);
+    if snap.cut && snap.paths.iter().any(|p| !p.exists()) {
+        clipboard::clear_if_same(&snap);
+    }
+    created
 }
 
 /// Fecha o shell `id` e mata o processo dele.
@@ -171,12 +249,6 @@ fn close_shell(core: State<Core>, gate: State<Gate>, id: String) -> Result<(), S
 fn set_executor_choice(core: State<Core>, gate: State<Gate>, choice: Choice) -> Result<(), String> {
     gate.ensure_open()?;
     core.set_executor_choice(choice)
-}
-
-#[tauri::command(async)]
-fn set_max_parallel(core: State<Core>, gate: State<Gate>, value: i64) -> Result<(), String> {
-    gate.ensure_open()?;
-    core.set_max_parallel(value)
 }
 
 #[tauri::command(async)]
@@ -267,6 +339,16 @@ pub fn run(context: tauri::Context) {
             list_dir,
             read_file,
             write_file,
+            rename_file,
+            delete_file,
+            reveal_file,
+            reveal_dir,
+            open_with,
+            copy_file,
+            create_file,
+            create_dir,
+            clipboard_snapshot,
+            paste_files,
             search,
             git_status,
             git_diff,
@@ -283,7 +365,6 @@ pub fn run(context: tauri::Context) {
             start_shell,
             close_shell,
             set_executor_choice,
-            set_max_parallel,
             term_write,
             term_resize,
             term_snapshot,

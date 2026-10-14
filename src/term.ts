@@ -83,8 +83,8 @@ export class TermView {
     }).catch(() => {});
   };
 
-  /** Os caminhos vão direto ao PTY, sem o paste do xterm, que trocaria `\n` por `\r`. */
-  private async pasteFiles(paths: string[]) {
+  /** Os caminhos vão direto ao PTY, sem o paste do xterm, que trocaria `\n` por `\r`. Não manda Enter: fica no rascunho do CLI. */
+  async pasteFiles(paths: string[]) {
     const quoted = paths.map((p) => (p.includes(' ') ? `"${p}"` : p));
     if (!this.term.modes.bracketedPasteMode) return backend.termWrite(this.id, quoted.join(' '));
     const bracketed = (text: string) => `\x1b[200~${text}\x1b[201~`;

@@ -1,10 +1,10 @@
-// A tela Git: à esquerda o painel (branch, commit, arquivos preparados e alterados); à direita as alterações
-// do arquivo selecionado. Tudo roda na pasta do projeto e só por clique do usuário. O status atualiza sozinho
-// (usePolled, no App); cada ação atualiza na hora.
+// A tela Git: à esquerda o painel de controle de versão (cabeçalho, branch, mensagem com o commit e as seções Preparadas
+// e Alterações); à direita as alterações do arquivo selecionado. Tudo roda na pasta do projeto e só por clique do usuário.
+// O status atualiza sozinho (usePolled, no App); cada ação atualiza na hora.
 import { useEffect, useRef, useState } from 'react';
-import { ActionIcon, Button, DraggablePanel, Input, Popover, Text, TextArea, toast } from '@lobehub/ui/base-ui';
+import { ActionIcon, Button, DraggablePanel, DropdownMenu, Input, Popover, Text, TextArea, toast } from '@lobehub/ui/base-ui';
 import { Flexbox, PatchDiff } from '@lobehub/ui';
-import { ArrowDown, ArrowUp, Check, GitBranch, Minus, Plus, RefreshCw } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, File, GitBranch, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
 import { backend, message } from './backend';
 import { usePolling } from './polling';
 import type { GitBranches, GitDiff, GitFile, GitKind, GitStatus } from './types';
@@ -68,28 +68,42 @@ export function usePolled<T>(read: () => Promise<T>, enabled: boolean, clearOnEr
   return { data, error, refresh };
 }
 
-type Op = 'fetch' | 'pull' | 'push';
-const REMOTE: Record<Op, { run: () => Promise<string>; done: string }> = {
+type Remote = 'fetch' | 'pull' | 'push';
+// Operação em curso. O commit com push passa por 'commit' e depois por 'push'.
+// stage e branch entram na mesma trava: enquanto uma roda, nada mexe no índice nem na branch.
+type Busy = Remote | 'commit' | 'stage' | 'branch';
+type CommitMode = 'commit' | 'commit-push';
+type WithBusy = <T>(kind: Busy, task: () => Promise<T>) => Promise<T | undefined>;
+const REMOTE: Record<Remote, { run: () => Promise<string>; done: string }> = {
   fetch: { run: () => backend.gitFetch(), done: 'Busca concluída' },
   pull: { run: () => backend.gitPull(), done: 'Commits recebidos' },
   push: { run: () => backend.gitPush(), done: 'Enviado' },
 };
+const BUSY_TEXT: Record<Busy, string> = {
+  fetch: 'Buscando…', pull: 'Recebendo…', push: 'Enviando…', commit: 'Commitando…', stage: 'Atualizando o preparo…', branch: 'Mudando de branch…',
+};
+const MODE_LABEL: Record<CommitMode, string> = { commit: 'Commit', 'commit-push': 'Commit e Push' };
 
 /** Arquivo selecionado na tela Git: o caminho e o lado (preparado ou não) da seção clicada. */
 type Selection = { path: string; staged: boolean };
 
-/** Painel do Git: de cima para baixo, a linha da branch, o commit e as seções Preparadas e Alterações. */
-function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
+/** Painel do Git: cabeçalho com atualizar e o menu de Buscar, Receber e Enviar; a branch; o commit; e as duas seções. */
+function GitPanel({ status, error, refresh, locked, selected, onSelect, onOpenFile }: {
   status: GitStatus | null;
   error: string;
   refresh: () => Promise<void>;
   locked: boolean;
   selected: Selection | null;
   onSelect: (path: string, staged: boolean) => void;
+  onOpenFile: (path: string) => void;
 }) {
-  const [op, setOp] = useState<Op | null>(null);
+  const [busy, setBusy] = useState<Busy | null>(null);
+  // O segundo clique chega antes de o estado (busy) mudar: a trava que vale é a do ref.
+  const busyRef = useRef(false);
   const [text, setText] = useState('');
-  const [committing, setCommitting] = useState(false);
+  const [mode, setMode] = useState<CommitMode>('commit');
+  // Recolhido fica aqui, no painel, e não na seção: a seção some quando a lista esvazia, e o estado não pode sumir junto.
+  const [collapsed, setCollapsed] = useState({ staged: false, unstaged: false });
 
   if (!status) {
     return (
@@ -103,89 +117,148 @@ function GitPanel({ status, error, refresh, locked, selected, onSelect }: {
 
   const staged = status.files.filter((f) => f.staged);
   const unstaged = status.files.filter((f) => f.unstaged);
-  const canCommit = !!text.trim() && staged.length > 0 && !committing;
+  const canCommit = !!text.trim() && staged.length > 0 && !busy;
+  const hint = !staged.length ? 'Prepare arquivos para commitar' : !text.trim() ? 'Escreva a mensagem do commit' : '';
+  const remoteMenu = [
+    { key: 'fetch', label: 'Buscar', disabled: busy !== null, onClick: () => void remote('fetch') },
+    { key: 'pull', label: status.behind > 0 ? `Receber (${commits(status.behind)})` : 'Receber', disabled: busy !== null || locked, onClick: () => void remote('pull') },
+    { key: 'push', label: status.ahead > 0 ? `Enviar (${commits(status.ahead)})` : 'Enviar', disabled: busy !== null, onClick: () => void remote('push') },
+  ];
+  // A escolha só muda o modo do botão e do Ctrl+Enter: nada roda aqui.
+  const modeMenu = (['commit', 'commit-push'] as const).map((key) => ({
+    key, label: MODE_LABEL[key], icon: mode === key ? <Check /> : undefined, onClick: () => setMode(key),
+  }));
 
-  async function remote(kind: Op) {
-    setOp(kind);
-    await run(async () => {
-      const out = await REMOTE[kind].run();
-      toast.success({ title: REMOTE[kind].done, description: lastLine(out), duration: 3000 });
-    }, refresh);
-    setOp(null);
-  }
+  // Uma operação por vez, com a mesma trava do ref. Libera no finally: sucesso ou erro, a tela volta a aceitar ações.
+  const withBusy: WithBusy = async (kind, task) => {
+    if (busyRef.current) return undefined;
+    busyRef.current = true;
+    setBusy(kind);
+    try {
+      return await task();
+    } finally {
+      busyRef.current = false;
+      setBusy(null);
+    }
+  };
 
-  async function commit() {
+  const remote = (kind: Remote) => withBusy(kind, () => run(async () => {
+    const out = await REMOTE[kind].run();
+    toast.success({ title: REMOTE[kind].done, description: lastLine(out), duration: 3000 });
+  }, refresh));
+
+  // Commit, e depois o push. O push só sai se o commit deu certo: commit com erro mantém a mensagem e não envia.
+  // Commit feito limpa a mensagem mesmo se o envio falhar, para ninguém commitar o mesmo texto de novo; Enviar no menu tenta só o envio.
+  // A limpeza só vale se o texto ainda é o enviado: o que foi digitado durante o commit fica.
+  async function commit(then: CommitMode) {
     if (!canCommit) return;
-    setCommitting(true);
-    if (await run(() => backend.gitCommit(text.trim()), refresh)) setText('');
-    setCommitting(false);
+    const sent = text;
+    const msg = sent.trim();
+    await withBusy('commit', async () => {
+      if (await run(() => backend.gitCommit(msg), refresh)) {
+        setText((now) => (now === sent ? '' : now));
+        if (then === 'commit-push') {
+          setBusy('push');
+          const pushed = await run(async () => {
+            const out = await backend.gitPush();
+            toast.success({ title: REMOTE.push.done, description: lastLine(out), duration: 3000 });
+          }, refresh);
+          if (!pushed) toast.warning({ title: 'Commit criado, mas o envio falhou', description: 'Use Enviar no menu para tentar de novo. Não precisa commitar outra vez.', duration: 7000 });
+        } else {
+          toast.success({ title: 'Commit criado', duration: 3000 });
+        }
+      }
+    });
   }
 
-  const busy = op !== null;
-  const commitHint = !staged.length ? 'Prepare arquivos para commitar' : !text.trim() ? 'Escreva a mensagem do commit' : 'Commita o que está preparado';
+  // Preparar ou tirar do preparo: lista vazia vale para tudo.
+  const stage = (paths: string[], unstage: boolean) => withBusy('stage', () => run(() => (unstage ? backend.gitUnstage(paths) : backend.gitStage(paths)), refresh));
+  const toggle = (key: keyof typeof collapsed) => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
 
   return (
     <Flexbox className="min-h-0" flex={1}>
-      <Flexbox gap={4} paddingInline={12} paddingBlock={8}>
-        <Flexbox horizontal align="center" gap={4}>
-          <BranchPicker branch={status.branch} locked={locked} refresh={refresh} />
+      <Flexbox horizontal align="center" gap={2} paddingInline={12} paddingBlock={6}>
+        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">Controle de versão</Text>
+        <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar status" title="Atualizar status do Git" onClick={() => void refresh()} />
+        <DropdownMenu items={remoteMenu} placement="bottomRight">
           <ActionIcon
-            variant="outlined" size="small" icon={RefreshCw} spin={op === 'fetch'} aria-label="Buscar" disabled={busy}
-            title="Buscar (fetch): traz as informações do remoto, sem mexer nos arquivos"
-            onClick={() => remote('fetch')}
+            size="small" variant="borderless" icon={Ellipsis} loading={busy === 'fetch' || busy === 'pull' || busy === 'push'}
+            aria-label="Mais opções: buscar, receber e enviar" title="Buscar, receber e enviar"
           />
-          <Button
-            size="small" className="px-2 font-mono" icon={ArrowDown} loading={op === 'pull'} disabled={busy || locked}
-            aria-label={status.behind > 0 ? `Receber, ${commits(status.behind)}` : 'Receber'}
-            title={locked ? LOCKED_TITLE : `Receber (pull): traz os commits do remoto${status.behind > 0 ? ` (${commits(status.behind)} a receber)` : ''}`}
-            onClick={() => remote('pull')}
-          >
-            {status.behind > 0 && status.behind}
-          </Button>
-          <Button
-            size="small" className="px-2 font-mono" icon={ArrowUp} loading={op === 'push'} disabled={busy}
-            aria-label={status.ahead > 0 ? `Enviar, ${commits(status.ahead)}` : 'Enviar'}
-            title={`Enviar (push): envia os commits locais${status.ahead > 0 ? ` (${commits(status.ahead)} a enviar)` : ''}`}
-            onClick={() => remote('push')}
-          >
-            {status.ahead > 0 && status.ahead}
-          </Button>
-        </Flexbox>
-        {locked && <Text as="p" fontSize={12} type="secondary">{LOCKED_TITLE}</Text>}
+        </DropdownMenu>
       </Flexbox>
 
-      <Flexbox className="border-y" gap={8} paddingInline={12} paddingBlock={8}>
+      <Flexbox paddingInline={12} gap={2}>
+        <Flexbox horizontal align="center" gap={6}>
+          <BranchPicker branch={status.branch} locked={locked} busy={busy} withBusy={withBusy} refresh={refresh} />
+          <Text
+            as="span" fontSize={12} type="secondary" noWrap className="shrink-0 tabular-nums"
+            title={`${commits(status.ahead)} a enviar, ${commits(status.behind)} a receber`}
+          >
+            <ArrowUp className="inline size-3 align-[-1px]" aria-hidden />{status.ahead}{' '}
+            <ArrowDown className="inline size-3 align-[-1px]" aria-hidden />{status.behind}
+          </Text>
+        </Flexbox>
+        {(busy || locked) && (
+          <Text as="p" role="status" fontSize={12} type="secondary">{busy ? BUSY_TEXT[busy] : LOCKED_TITLE}</Text>
+        )}
+      </Flexbox>
+
+      <Flexbox className="border-y" gap={6} paddingInline={12} paddingBlock={8}>
         <TextArea
-          rows={3} resize value={text} aria-label="Mensagem do commit"
-          placeholder="Mensagem do commit (Ctrl+Enter commita)"
+          autoSize={{ minRows: 1, maxRows: 4 }} value={text} aria-label={`Mensagem do commit (Ctrl+Enter: ${MODE_LABEL[mode]})`}
+          title={`Ctrl+Enter: ${MODE_LABEL[mode]}`} placeholder="Mensagem (Ctrl+Enter)"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.ctrlKey && e.key === 'Enter') {
               e.preventDefault();
-              void commit();
+              void commit(mode);
             }
           }}
           classNames={{ input: 'text-sm select-text' }}
         />
-        <Button
-          type="primary" size="small" style={{ alignSelf: 'flex-start' }} disabled={!canCommit} loading={committing}
-          title={commitHint} onClick={commit}
-        >
-          Commit
-        </Button>
+        <Flexbox horizontal align="center" gap={2}>
+          <Button
+            type="primary" size="small" className="min-w-0 flex-1!" disabled={!canCommit} loading={busy === 'commit'}
+            title={hint || MODE_LABEL[mode]} onClick={() => void commit(mode)}
+          >
+            {MODE_LABEL[mode]}
+          </Button>
+          <DropdownMenu items={modeMenu} placement="bottomRight">
+            <ActionIcon size="small" variant="outlined" icon={ChevronDown} aria-label={`Escolher a ação do commit (atual: ${MODE_LABEL[mode]})`} title="Escolher a ação do commit" />
+          </DropdownMenu>
+        </Flexbox>
+        {/* Sem nada preparado, a dica fica embaixo; com arquivos, a falta da mensagem já está no placeholder e na ação. */}
+        {!staged.length && <Text as="p" fontSize={12} type="secondary">{hint}</Text>}
       </Flexbox>
 
-      <Flexbox className="min-h-0 overflow-y-auto" flex={1} paddingBlock={4} style={{ paddingRight: 12 }}>
-        <FileSection title="Preparadas" files={staged} staged onStage={(paths) => run(() => backend.gitUnstage(paths), refresh)} selected={selected} onSelect={onSelect} />
-        <FileSection title="Alterações" files={unstaged} staged={false} onStage={(paths) => run(() => backend.gitStage(paths), refresh)} selected={selected} onSelect={onSelect} />
-        {!staged.length && !unstaged.length && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 12, paddingBlock: 8 }}>Nenhuma alteração.</Text>}
+      <Flexbox className="min-h-0 overflow-y-auto overflow-x-hidden" flex={1} paddingBlock={4} style={{ paddingRight: 12 }}>
+        {/* Sem arquivos preparados, a seção some (como no VS Code); o estado de recolhido continua no GitPanel. */}
+        {staged.length > 0 && (
+          <FileSection
+            title="Preparadas" files={staged} staged collapsed={collapsed.staged} onToggle={() => toggle('staged')}
+            busy={busy !== null} onStage={(paths) => stage(paths, true)} selected={selected} onSelect={onSelect} onOpenFile={onOpenFile}
+          />
+        )}
+        <FileSection
+          title="Alterações" files={unstaged} staged={false} collapsed={collapsed.unstaged} onToggle={() => toggle('unstaged')}
+          busy={busy !== null} onStage={(paths) => stage(paths, false)} selected={selected} onSelect={onSelect} onOpenFile={onOpenFile}
+        />
       </Flexbox>
     </Flexbox>
   );
 }
 
 /** Botão da branch atual e a escolha: lista das locais (a atual marcada) e um campo para criar e trocar. */
-function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boolean; refresh: () => Promise<void> }) {
+function BranchPicker({ branch, locked, busy, withBusy, refresh }: {
+  branch: string;
+  locked: boolean;
+  busy: Busy | null;
+  withBusy: WithBusy;
+  refresh: () => Promise<void>;
+}) {
+  // Trocar e criar também param com qualquer operação em curso (commit, envio, preparo); o executor segue o `locked` de sempre.
+  const off = locked || busy !== null;
   const [open, setOpen] = useState(false);
   const [branches, setBranches] = useState<GitBranches | null>(null);
   const [branchError, setBranchError] = useState('');
@@ -215,14 +288,14 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
 
   // Trocar ou criar: o popover fecha só se deu certo.
   async function choose(target: string) {
-    if (target === branches?.current) return;
-    if (await run(() => backend.gitSwitch(target), refresh)) setOpen(false);
+    if (target === branches?.current || off) return;
+    if (await withBusy('branch', () => run(() => backend.gitSwitch(target), refresh))) setOpen(false);
   }
 
   async function create() {
     const target = name.trim();
-    if (!target || locked) return;
-    if (await run(() => backend.gitCreateBranch(target), refresh)) setOpen(false);
+    if (!target || off) return;
+    if (await withBusy('branch', () => run(() => backend.gitCreateBranch(target), refresh))) setOpen(false);
   }
 
   // trigger="click": o padrão do Popover do Lobe UI é abrir com o mouse em cima.
@@ -233,6 +306,7 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
       content={
         <Flexbox gap={8} padding={8}>
           {locked && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 4 }}>{LOCKED_TITLE}</Text>}
+          {!locked && busy && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 4 }}>{BUSY_TEXT[busy]}</Text>}
           {branchError && <Text as="p" role="status" fontSize={12} type="danger" style={{ paddingInline: 4 }}>{branchError}</Text>}
           {!branches && !branchError && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 4 }}>Lendo as branches…</Text>}
           {branches && (
@@ -243,8 +317,8 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
                   <Button
                     key={item} type="text" size="small" className="w-full justify-start! gap-2 font-mono"
                     icon={<Check className={`shrink-0${current ? '' : ' invisible'}`} />}
-                    disabled={locked} aria-current={current ? 'true' : undefined}
-                    title={locked ? LOCKED_TITLE : current ? 'Branch atual' : `Trocar para ${item}`}
+                    disabled={off} aria-current={current ? 'true' : undefined}
+                    title={locked ? LOCKED_TITLE : busy ? BUSY_TEXT[busy] : current ? 'Branch atual' : `Trocar para ${item}`}
                     onClick={() => choose(item)}
                   >
                     <Text as="span" ellipsis className="min-w-0">{item}</Text>
@@ -255,11 +329,11 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
           )}
           <Flexbox as="form" horizontal gap={4} onSubmit={(e) => { e.preventDefault(); void create(); }}>
             <Input
-              size="small" value={name} onChange={(e) => setName(e.target.value)} disabled={locked}
+              size="small" value={name} onChange={(e) => setName(e.target.value)} disabled={off}
               placeholder="Nova branch" aria-label="Nome da nova branch"
               className="min-w-0 flex-1 font-mono"
             />
-            <Button type="primary" htmlType="submit" size="small" disabled={locked || !name.trim()} title={locked ? LOCKED_TITLE : 'Cria a branch e troca para ela'}>
+            <Button type="primary" htmlType="submit" size="small" disabled={off || !name.trim()} title={locked ? LOCKED_TITLE : 'Cria a branch e troca para ela'}>
               Criar
             </Button>
           </Flexbox>
@@ -273,61 +347,111 @@ function BranchPicker({ branch, locked, refresh }: { branch: string; locked: boo
   );
 }
 
-/** Uma seção do painel: cabeçalho com a contagem e o botão de tudo, e uma linha por arquivo. Vazia some. */
-function FileSection({ title, files, staged, onStage, selected, onSelect }: {
+/**
+ * Uma seção do painel: cabeçalho com o chevron, o título e a contagem à direita, e ao lado as ações de tudo (irmãs, não aninhadas).
+ * Recolhida, mostra só o cabeçalho. Vazia, mostra o aviso no lugar da lista.
+ */
+function FileSection({ title, files, staged, collapsed, onToggle, busy, onStage, selected, onSelect, onOpenFile }: {
   title: string;
   files: GitFile[];
   staged: boolean;
+  collapsed: boolean;
+  onToggle: () => void;
+  busy: boolean;
   onStage: (paths: string[]) => void;
   selected: Selection | null;
   onSelect: (path: string, staged: boolean) => void;
+  onOpenFile: (path: string) => void;
 }) {
-  if (!files.length) return null;
+  const allLabel = staged ? 'Tirar todas do preparo' : 'Preparar todas';
   return (
-    <Flexbox as="section" gap={2} paddingInline={4} paddingBlock="0 4px">
-      <Flexbox horizontal align="center" gap={8} paddingInline={8} paddingBlock={4}>
-        <Text as="h3" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">{title} ({files.length})</Text>
-        <Button type="text" size="small" onClick={() => onStage([])}>
-          {staged ? 'tirar tudo' : 'preparar tudo'}
-        </Button>
+    <Flexbox as="section" gap={0}>
+      <Flexbox horizontal align="center" gap={2} paddingInline={4}>
+        <button
+          type="button" onClick={onToggle} aria-expanded={!collapsed}
+          className="flex min-w-0 flex-1 items-center gap-1 rounded-sm py-1 pl-1 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          {collapsed
+            ? <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+            : <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+          <Text as="span" ellipsis weight={600} fontSize={12} className="min-w-0 shrink">{title}</Text>
+          <Text as="span" fontSize={11} type="secondary" className="ml-auto shrink-0 rounded-full bg-muted px-1.5 tabular-nums">{files.length}</Text>
+        </button>
+        <ActionIcon
+          size="small" variant="borderless" icon={staged ? Minus : Plus} disabled={busy || !files.length}
+          aria-label={allLabel} title={allLabel} onClick={() => onStage([])}
+        />
       </Flexbox>
-      {/* A coluna não pode crescer com o nome: sem o minmax(0,1fr), o texto nowrap empurra a lista para fora da seção. */}
-      <ul className="grid grid-cols-[minmax(0,1fr)]">
-        {files.map((f) => {
-          const kind = (staged ? f.staged : f.unstaged) as GitKind;
-          const { letter, title: word } = KIND[kind];
-          const slash = f.path.lastIndexOf('/');
-          const name = f.path.slice(slash + 1);
-          const dir = slash >= 0 ? f.path.slice(0, slash) : '';
-          const full = f.origPath ? `${f.path} (renomeado de ${f.origPath})` : f.path;
-          const isSelected = selected?.path === f.path && selected.staged === staged;
-          return (
-            <li key={f.path} className={`flex items-center gap-1 rounded-sm hover:bg-muted${isSelected ? ' bg-muted' : ''}`}>
-              <button
-                type="button" onClick={() => onSelect(f.path, staged)} aria-current={isSelected ? 'true' : undefined}
-                title={`${full}: ${word}. Ver alterações`}
-                className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      {!collapsed && (files.length ? (
+        // A coluna não pode crescer com o nome: sem o minmax(0,1fr), o texto nowrap empurra a lista para fora da seção.
+        <ul className="grid grid-cols-[minmax(0,1fr)]">
+          {files.map((f) => {
+            const kind = (staged ? f.staged : f.unstaged) as GitKind;
+            const { letter, title: word } = KIND[kind];
+            const slash = f.path.lastIndexOf('/');
+            const name = f.path.slice(slash + 1);
+            const dir = slash >= 0 ? f.path.slice(0, slash) : '';
+            const full = f.origPath ? `${f.path} (renomeado de ${f.origPath})` : f.path;
+            const isSelected = selected?.path === f.path && selected.staged === staged;
+            return (
+              // Linha em três partes, sem nada por cima: a área de texto, o slot das ações (sempre reservado, só aparece no hover ou foco) e a letra do estado, à direita.
+              <li
+                key={f.path}
+                className={`group flex h-6 items-center rounded-sm hover:bg-muted${isSelected ? ' bg-muted shadow-[inset_2px_0_0_var(--ant-color-primary)]' : ''}`}
               >
-                <Text as="span" code strong fontSize={12} title={word} className="w-3 shrink-0 text-center">{letter}</Text>
-                <Text as="span" fontSize={14} ellipsis className="min-w-0 shrink">{name}</Text>
-                {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 shrink-2">{dir}</Text>}
-              </button>
-              <ActionIcon
-                variant="borderless" size="small" icon={staged ? Minus : Plus}
-                aria-label={`${staged ? 'Tirar do preparo' : 'Preparar'} ${f.path}`}
-                title={staged ? 'Tirar do preparo' : 'Preparar'}
-                onClick={() => onStage(pathsOf(f))}
-              />
-            </li>
-          );
-        })}
-      </ul>
+                <button
+                  type="button" onClick={() => onSelect(f.path, staged)} aria-current={isSelected ? 'true' : undefined}
+                  title={`${full}: ${word}. Ver alterações`}
+                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm pl-6 pr-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                >
+                  <File className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                  <Text as="span" fontSize={13} ellipsis className="max-w-[70%] shrink-0">{name}</Text>
+                  {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 flex-1">{dir}</Text>}
+                </button>
+                {/* Largura fixa: o nome não salta no hover, e as ações nunca cobrem a letra. Sem pointer-events fora do hover, o clique passa; com opacity, o Tab alcança as ações. */}
+                <Flexbox
+                  horizontal align="center" justify="flex-end" className="w-12 shrink-0 pointer-events-none opacity-0 transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+                >
+                  {kind !== 'deleted' && (
+                    <ActionIcon
+                      size="small" variant="borderless" icon={SquareArrowOutUpRight}
+                      aria-label={`Abrir ${f.path} no editor`} title="Abrir no editor"
+                      onClick={() => onOpenFile(f.path)}
+                    />
+                  )}
+                  <ActionIcon
+                    size="small" variant="borderless" icon={staged ? Minus : Plus} disabled={busy}
+                    aria-label={`${staged ? 'Tirar do preparo' : 'Preparar'} ${f.path}`}
+                    title={staged ? 'Tirar do preparo' : 'Preparar'}
+                    onClick={() => onStage(pathsOf(f))}
+                  />
+                </Flexbox>
+                <Text as="span" title={word} fontSize={12} weight={600} type="secondary" className="w-5 shrink-0 pr-1 text-center font-mono">{letter}</Text>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 24, paddingBlock: 4 }}>Nenhuma alteração.</Text>
+      ))}
     </Flexbox>
   );
 }
 
-/** Tela Git: o painel à esquerda, com a borda direita arrastável, e à direita as alterações do arquivo selecionado. */
-export function GitScreen({ git, locked, active }: { git: ReturnType<typeof usePolled<GitStatus>>; locked: boolean; active: boolean }) {
+/**
+ * Tela Git: o painel à esquerda, com a borda direita arrastável, na mesma largura da faixa de arquivos (o App guarda a largura);
+ * à direita, as alterações do arquivo selecionado.
+ */
+export function GitScreen({ git, locked, active, width, minWidth, maxWidth, onWidthChange, onOpenFile }: {
+  git: ReturnType<typeof usePolled<GitStatus>>;
+  locked: boolean;
+  active: boolean;
+  width: number;
+  minWidth: number;
+  maxWidth?: number;
+  onWidthChange: (width: number) => void;
+  onOpenFile: (path: string) => void;
+}) {
   const [selected, setSelected] = useState<Selection | null>(null);
   const { data, error, refresh } = git;
 
@@ -341,13 +465,14 @@ export function GitScreen({ git, locked, active }: { git: ReturnType<typeof useP
   return (
     <Flexbox horizontal height="100%" className="min-h-0">
       <DraggablePanel
-        placement="left" minWidth={160} maxWidth={600} defaultSize={{ width: 240 }} expandable={false}
-        backgroundColor="var(--ant-color-bg-container)"
+        placement="left" minWidth={minWidth} maxWidth={maxWidth} size={{ width }} expandable={false} showHandleWideArea={false}
+        onSizeChange={(_, size) => typeof size?.width === 'number' && onWidthChange(size.width)}
+        backgroundColor="var(--ant-color-bg-layout)"
       >
         <Flexbox height="100%">
           <GitPanel
             status={data} error={error} refresh={refresh} locked={locked}
-            selected={selected} onSelect={(path, staged) => setSelected({ path, staged })}
+            selected={selected} onSelect={(path, staged) => setSelected({ path, staged })} onOpenFile={onOpenFile}
           />
         </Flexbox>
       </DraggablePanel>

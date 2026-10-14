@@ -1,7 +1,7 @@
 // A pesquisa de texto nos arquivos do projeto, na coluna da árvore de pastas. A busca roda no backend (comando `search`);
-// aqui ficam o campo com as três opções, as ações, o resumo e a lista de resultados agrupada por arquivo.
+// aqui ficam o cabeçalho com as ações, o campo com as três opções, o resumo e a lista de resultados agrupada por arquivo.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { CaseSensitive, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eraser, type LucideIcon, Regex, RefreshCw, WholeWord } from 'lucide-react';
+import { CaseSensitive, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eraser, File, type LucideIcon, Regex, RefreshCw, WholeWord } from 'lucide-react';
 import { ActionIcon, Input, ScrollArea, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
@@ -10,6 +10,7 @@ import type { SearchOptions, SearchResults } from './types';
 const DELAY_MS = 300;
 // Mesmo limite do backend: com mais linhas casadas, só as primeiras aparecem e a lista avisa.
 const LIMIT = 2000;
+const HINT = 'Digite para pesquisar nos arquivos do projeto.';
 const NO_OPTIONS: SearchOptions = { caseSensitive: false, wholeWord: false, regex: false };
 const TOGGLES: { key: keyof SearchOptions; icon: LucideIcon; label: string }[] = [
   { key: 'caseSensitive', icon: CaseSensitive, label: 'Diferenciar maiúsculas de minúsculas' },
@@ -39,7 +40,10 @@ function marked(text: string, pattern: RegExp | null): ReactNode {
   for (const m of text.matchAll(pattern)) {
     if (!m[0]) continue; // casamento vazio não tem o que destacar
     const at = m.index;
-    parts.push(text.slice(last, at), <mark key={at} className="rounded-sm bg-foreground/20 text-foreground">{m[0]}</mark>);
+    parts.push(
+      text.slice(last, at),
+      <mark key={at} className="rounded-sm bg-[var(--ant-color-primary-bg)] text-foreground shadow-[inset_0_0_0_1px_var(--ant-color-primary-border)]">{m[0]}</mark>,
+    );
     last = at + m[0].length;
   }
   parts.push(text.slice(last));
@@ -61,11 +65,15 @@ function summary(results: SearchResults): string {
   return results.truncated ? `${text}. Só os ${LIMIT} primeiros aparecem.` : text;
 }
 
-/** Pesquisa de texto: o campo com as três opções, as ações, o resumo e a lista de resultados por arquivo. */
-export function SearchScreen({ active, focusKey }: { active: boolean; focusKey: number }) {
+/** Pesquisa de texto: o cabeçalho com as ações, o campo com as três opções, o resumo e a lista de resultados por arquivo. */
+export function SearchScreen({ active, focusKey, onOpen }: {
+  active: boolean; focusKey: number; onOpen: (path: string, line: number) => void;
+}) {
   const [query, setQuery] = useState('');
   const [options, setOptions] = useState<SearchOptions>(NO_OPTIONS);
   const [results, setResults] = useState<SearchResults | null>(null);
+  // Consulta e opções da resposta que está na tela: o destaque usa estas, não as do campo, para não marcar um texto novo em resultado antigo.
+  const [shown, setShown] = useState({ query: '', options: NO_OPTIONS });
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
   // Arquivos recolhidos. Começam todos abertos a cada busca nova.
@@ -96,6 +104,7 @@ export function SearchScreen({ active, focusKey }: { active: boolean; focusKey: 
       const found = await backend.search(text, next);
       if (id !== latest.current) return;
       setResults(found);
+      setShown({ query: text, options: next });
       setCollapsed([]);
     } catch (e) {
       if (id !== latest.current) return;
@@ -134,13 +143,35 @@ export function SearchScreen({ active, focusKey }: { active: boolean; focusKey: 
   const toggleAll = () => setCollapsed(allCollapsed ? [] : files.map((f) => f.path));
   const toggleFile = (path: string) =>
     setCollapsed((prev) => (prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]));
-  const pattern = highlighter(query, options);
+  const pattern = highlighter(shown.query, shown.options);
+  // Campo preenchido sem resposta ainda (o debounce espera) mostra "Pesquisando…", não a dica.
+  const status = error || (pending ? 'Pesquisando…' : results ? summary(results) : query ? 'Pesquisando…' : HINT);
 
   return (
     <Flexbox height="100%" className="min-h-0">
-      <Flexbox gap={6} paddingInline={8} paddingBlock={8}>
+      <Flexbox horizontal align="center" gap={2} height={36} paddingInline={12}>
+        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">Pesquisar</Text>
+        <ActionIcon
+          size="small" variant="borderless" icon={RefreshCw} spin={pending} disabled={!query}
+          aria-label="Atualizar" title="Atualizar: refaz a mesma busca" onClick={() => now()}
+          className="focus-visible:ring-2 focus-visible:ring-ring/50"
+        />
+        <ActionIcon
+          size="small" variant="borderless" icon={Eraser} disabled={!query}
+          aria-label="Limpar" title="Limpar a pesquisa" onClick={clear}
+          className="focus-visible:ring-2 focus-visible:ring-ring/50"
+        />
+        <ActionIcon
+          size="small" variant="borderless" icon={allCollapsed ? ChevronsUpDown : ChevronsDownUp} disabled={!files.length}
+          aria-label={allCollapsed ? 'Expandir tudo' : 'Recolher tudo'}
+          title={allCollapsed ? 'Expandir todos os arquivos' : 'Recolher todos os arquivos'} onClick={toggleAll}
+          className="focus-visible:ring-2 focus-visible:ring-ring/50"
+        />
+      </Flexbox>
+
+      <Flexbox paddingInline={8} paddingBlock={6}>
         <Input
-          ref={field} size="small" value={query} placeholder="Pesquisar" aria-label="Pesquisar nos arquivos do projeto"
+          ref={field} size="small" value={query} placeholder="Pesquisar" aria-label="Pesquisar nos arquivos do projeto" style={{ minHeight: 32 }}
           onChange={(e) => {
             setQuery(e.target.value);
             later(e.target.value);
@@ -149,36 +180,24 @@ export function SearchScreen({ active, focusKey }: { active: boolean; focusKey: 
             if (e.key === 'Enter') now();
           }}
           suffix={(
-            <Flexbox horizontal gap={2}>
+            <Flexbox horizontal align="center" flex="none" gap={2}>
               {TOGGLES.map(({ key, icon, label }) => (
                 <ActionIcon
-                  key={key} icon={icon} size="small" variant="borderless" active={options[key]}
+                  key={key} icon={icon} size={{ size: 18, blockSize: 24, borderRadius: 4 }} variant="borderless" active={options[key]}
                   aria-pressed={options[key]} aria-label={label} title={label}
-                  onClick={() => toggle(key)}
+                  onClick={() => toggle(key)} className="focus-visible:ring-2 focus-visible:ring-ring/50"
                 />
               ))}
             </Flexbox>
           )}
         />
-        <Flexbox horizontal justify="flex-end" gap={2}>
-          <ActionIcon
-            icon={RefreshCw} size="small" variant="borderless" spin={pending} disabled={!query}
-            aria-label="Atualizar" title="Atualizar: refaz a mesma busca" onClick={() => now()}
-          />
-          <ActionIcon
-            icon={Eraser} size="small" variant="borderless" disabled={!query}
-            aria-label="Limpar" title="Limpar a pesquisa" onClick={clear}
-          />
-          <ActionIcon
-            icon={allCollapsed ? ChevronsUpDown : ChevronsDownUp} size="small" variant="borderless" disabled={!files.length}
-            aria-label={allCollapsed ? 'Expandir tudo' : 'Recolher tudo'}
-            title={allCollapsed ? 'Expandir todos os arquivos' : 'Recolher todos os arquivos'} onClick={toggleAll}
-          />
-        </Flexbox>
       </Flexbox>
 
-      <Text as="p" role="status" fontSize={12} type={error ? 'danger' : 'secondary'} className="px-3 pb-2 select-text">
-        {error || (pending ? 'Pesquisando…' : results ? summary(results) : '')}
+      <Text
+        as="p" role="status" fontSize={12} type={error ? 'danger' : 'secondary'} className="select-text"
+        style={{ paddingInline: 12, paddingBottom: 6 }}
+      >
+        {status}
       </Text>
 
       <Flexbox flex={1} className="min-h-0">
@@ -191,26 +210,30 @@ export function SearchScreen({ active, focusKey }: { active: boolean; focusKey: 
                 <Flexbox as="section" key={file.path}>
                   <button
                     type="button" aria-expanded={open} onClick={() => toggleFile(file.path)} title={file.path}
-                    className="flex w-full min-w-0 items-center gap-1 rounded-sm px-2 py-1 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+                    className="flex h-6 w-full min-w-0 items-center gap-1.5 rounded-sm pl-1 pr-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
                   >
                     {open
-                      ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-                      : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
-                    <Text as="span" fontSize={14} ellipsis className="min-w-0 shrink">{name}</Text>
-                    {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 shrink-2">{dir}</Text>}
-                    <Text as="span" type="secondary" fontSize={12} className="ml-auto shrink-0 pl-2">{file.matches.length}</Text>
+                      ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                      : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+                    <File className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                    {/* Nome e pasta dividem o espaço do grupo: o nome tem prioridade, até 70% dele; a pasta é que encolhe primeiro. Sem pasta, o nome usa tudo. */}
+                    <Flexbox horizontal align="center" flex={1} gap={6} className="min-w-0">
+                      <Text as="span" fontSize={13} ellipsis className={dir ? 'max-w-[70%] shrink-0' : 'min-w-0 flex-1'}>{name}</Text>
+                      {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 flex-1">{dir}</Text>}
+                    </Flexbox>
+                    <Text as="span" type="secondary" fontSize={11} className="ml-auto shrink-0 rounded-full bg-muted px-1.5 tabular-nums">{file.matches.length}</Text>
                   </button>
                   {open && file.matches.map((m) => (
-                    // Linha de resultado não é botão: clicar ainda não faz nada (a pesquisa não abre arquivos; só a árvore abre).
-                    <Flexbox
-                      key={m.line} horizontal align="center" gap={8} paddingInline="24px 8px" paddingBlock={1}
-                      title={`${file.path}:${m.line}`} className="min-w-0 select-text"
+                    // Cada linha é um botão: Enter e Espaço funcionam como clique. Abre (ou ativa) o arquivo e leva o cursor à linha.
+                    <button
+                      key={m.line} type="button" title={`${file.path}:${m.line}`} onClick={() => onOpen(file.path, m.line)}
+                      className="flex h-6 w-full min-w-0 items-center gap-2 rounded-sm pl-6 pr-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
                     >
-                      <Text as="span" code type="secondary" fontSize={12} className="w-10 shrink-0 text-right">{m.line}</Text>
-                      <Text as="span" code fontSize={12} ellipsis className="min-w-0 flex-1">
+                      <Text as="span" type="secondary" fontSize={12} className="min-w-8 shrink-0 text-right font-mono tabular-nums">{m.line}</Text>
+                      <Text as="span" fontSize={12} ellipsis className="min-w-0 flex-1 font-mono">
                         {marked(m.text.trimStart(), pattern)}
                       </Text>
-                    </Flexbox>
+                    </button>
                   ))}
                 </Flexbox>
               );

@@ -1,7 +1,9 @@
 //! O estado do app: o orquestrador, os lotes delegados, a fila e os executores. Não conhece o
 //! Tauri: os eventos saem por `Emit`, que os testes trocam por um canal.
+use crate::capacity::Resources;
 use crate::cli::{self, Exes};
 use crate::config::{self, Choice, Options};
+use crate::files;
 use crate::hook;
 use crate::proc;
 use crate::pty::{Buffer, Shared, Term};
@@ -154,7 +156,8 @@ struct Inner {
     project: Option<String>,
     session: Option<Session>,
     choice: Option<Choice>,
-    max_parallel: usize,
+    /// CPU e memória de onde sai o teto de executores vivos (ver `capacity`). Não há ajuste manual.
+    resources: Resources,
     slots: HashMap<String, Slot>,
     nodes: Vec<Node>,
     batches: Vec<Batch>,
@@ -201,7 +204,7 @@ impl Core {
             project: None,
             session: None,
             choice: None,
-            max_parallel: 4,
+            resources: Resources::real(),
             slots: HashMap::new(),
             nodes: Vec::new(),
             batches: Vec::new(),
@@ -211,6 +214,13 @@ impl Core {
             git_exclusive: false,
         };
         Core { inner: Arc::new(Mutex::new(inner)), emit }
+    }
+
+    /// Troca de onde vêm CPU e memória para o teto. O app usa `Resources::real()`, que `new` já põe; os testes
+    /// põem recursos fixos, para o resultado não depender da máquina.
+    pub fn with_resources(self, resources: Resources) -> Core {
+        self.inner.lock().unwrap().resources = resources;
+        self
     }
 
     /// A raiz Git de `folder` passa a ser o projeto. Erro se não for um repositório.
@@ -257,7 +267,6 @@ impl Core {
             (inner.cfg_path.clone(), inner.exes.codex.clone())
         };
         let cfg = config::read(&path)?;
-        self.inner.lock().unwrap().max_parallel = cfg.max_parallel;
         Ok(config::options(&cfg, &codex))
     }
 
@@ -271,7 +280,6 @@ impl Core {
         let mut cfg = config::read(&inner.cfg_path)?;
         cfg.orchestrator = choice.clone();
         config::save(&inner.cfg_path, &cfg)?;
-        inner.max_parallel = cfg.max_parallel;
 
         session::recover_orphans(&inner.places);
         let (session, created) = Session::create(&inner.places, &inner.exes.delegate, &project, &cfg);
@@ -295,6 +303,12 @@ impl Core {
     /// Abre o PowerShell do usuário na pasta do projeto, no slot `id`, e devolve o programa que abriu. Recusado se
     /// esse id já tiver um vivo; outros shells não contam. Cada início tem buffer novo.
     pub fn start_shell(&self, id: &str, cols: u16, rows: u16) -> Result<String, String> {
+        self.start_shell_in(id, cols, rows, None)
+    }
+
+    /// Como `start_shell`, mas na pasta `cwd` do projeto (relativa, com "/"; `Some("")` é a raiz). Pasta que sai do
+    /// projeto, não existe ou é `.git` é recusada antes de o shell abrir.
+    pub fn start_shell_in(&self, id: &str, cols: u16, rows: u16, cwd: Option<&str>) -> Result<String, String> {
         if !is_shell(id) {
             return Err("Id de shell inválido.".into());
         }
@@ -303,10 +317,14 @@ impl Core {
         if inner.slots.get(id).is_some_and(|s| s.term.is_some()) {
             return Err("Já há um shell aberto com este id.".into());
         }
+        let dir = match cwd {
+            Some(rel) => files::plain(Path::new(&project), rel, true)?.to_string_lossy().into_owned(),
+            None => project.clone(),
+        };
         inner.slots.remove(id);
         let mut started = Err(String::new());
         for program in cli::SHELLS {
-            started = self.spawn(&mut inner, id, &cli::shell(program, &project), Some((cols, rows))).map(|_| program);
+            started = self.spawn(&mut inner, id, &cli::shell(program, &dir), Some((cols, rows))).map(|_| program);
             if started.is_ok() {
                 break;
             }
@@ -333,17 +351,6 @@ impl Core {
         config::save(&inner.cfg_path, &cfg)?;
         inner.choice = Some(choice.clone());
         (self.emit)("executor-choice", json!(choice));
-        self.schedule(&mut inner);
-        Ok(())
-    }
-
-    pub fn set_max_parallel(&self, value: i64) -> Result<(), String> {
-        let value = config::check_max_parallel(value)?;
-        let mut inner = self.inner.lock().unwrap();
-        let mut cfg = config::read(&inner.cfg_path)?;
-        cfg.max_parallel = value;
-        config::save(&inner.cfg_path, &cfg)?;
-        inner.max_parallel = value;
         self.schedule(&mut inner);
         Ok(())
     }
@@ -481,6 +488,8 @@ impl Core {
 
     /// Laço da sessão: recebe os lotes pedidos pelo comando de delegação e os sinais de fim de rodada.
     fn pump(&self, epoch: u64) {
+        // A memória livre muda sozinha, então a fila é reavaliada a cada 1 s (cinco voltas), e só quando há nó na fila.
+        let mut turns = 0u32;
         loop {
             std::thread::sleep(Duration::from_millis(200));
             let mut inner = self.inner.lock().unwrap();
@@ -496,6 +505,11 @@ impl Core {
                         self.watch_asks(&mut inner, i);
                     }
                 }
+            }
+            turns = turns.wrapping_add(1);
+            let queued = inner.nodes.iter().any(|n| n.info.state == NodeState::Queued);
+            if turns % 5 == 0 && queued && inner.choice.is_some() && !inner.git_exclusive {
+                self.schedule(&mut inner);
             }
         }
     }
@@ -572,14 +586,17 @@ impl Core {
     /// Abre os executores que cabem no teto, na ordem em que chegaram; o resto fica na fila.
     /// Sem escolha de executor ninguém abre. Os nós a partir de `new_from` são novos (quando
     /// `announce`): saem como `node-added` em vez de `node-state`.
+    /// O teto (`capacity`) é lido uma vez por passe e cada início consome uma vaga dele: os vivos nunca são
+    /// interrompidos, só deixa de abrir novo enquanto não houver vaga.
     fn schedule_from(&self, inner: &mut Inner, new_from: usize, announce: bool) {
         let mut running = inner.nodes.iter().filter(|n| n.info.state.is_live()).count();
+        let admission = inner.resources.admission(running);
         for i in 0..inner.nodes.len() {
             let is_new = announce && i >= new_from;
             let before = inner.nodes[i].info.state;
             if matches!(before, NodeState::AwaitingChoice | NodeState::Queued) {
                 if let Some(choice) = inner.choice.clone() {
-                    if running < inner.max_parallel {
+                    if running < admission {
                         running += 1;
                         inner.nodes[i].info.state = NodeState::Running;
                         inner.nodes[i].info.choice = Some(choice.clone());
@@ -779,6 +796,16 @@ mod tests {
         let core = Core::new(exes, places, root.join("config.json"), emit);
         core.set_project(&repo).unwrap();
         (core, root)
+    }
+
+    #[test]
+    fn shell_em_pasta_fora_do_projeto_e_recusado_antes_de_abrir() {
+        let (core, root) = git_core("shell-cwd");
+        for rel in ["..", "a.txt", "nao-existe", ".git"] {
+            assert!(core.start_shell_in("shell-1", 80, 24, Some(rel)).is_err(), "{rel} deveria ser recusado");
+            assert!(!vivo(&core, "shell-1"), "{rel} não pode deixar shell aberto");
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn set_executor_state(core: &Core, state: NodeState) {

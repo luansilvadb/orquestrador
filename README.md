@@ -25,7 +25,7 @@ npm run tauri build    # gera o instalador assinado em src-tauri\target\release\
 2. No painel do Orquestrador, à direita da tela principal, sem orquestrador aberto, clique em `Abrir terminal` e escolha ferramenta, modelo e esforço do orquestrador; a última escolha já vem marcada. Há um só orquestrador, e é no terminal dele que você conversa com ele; os executores só mostram o que fazem.
 3. Converse com o orquestrador e feche o objetivo.
 4. Na primeira delegação, uma aba de executor aparece e espera a escolha de ferramenta, modelo e esforço; a aba ativa não muda. Os executores seguintes abrem sozinhos com essa escolha. O botão `Executores`, na barra da aba do orquestrador, mostra a escolha e deixa trocá-la; a troca vale para os próximos.
-5. O orquestrador delega um lote e fica ocupado até todos voltarem. Cada executor tem uma aba com a tela completa do CLI, somente leitura, ligada ao orquestrador. Acima do teto de simultâneos (ajustável na barra superior, padrão 4), os excedentes ficam na fila.
+5. O orquestrador delega um lote e fica ocupado até todos voltarem. Cada executor tem uma aba com a tela completa do CLI, somente leitura, ligada ao orquestrador. Acima do teto de simultâneos, os excedentes ficam na fila. O teto não é ajustado à mão: o app o calcula (seção 6), e a fila anda sozinha quando a memória livre volta.
 6. Quando um executor termina a rodada, a resposta dele volta sozinha ao orquestrador e a aba dele fecha sozinha. O botão `parar` interrompe só aquele executor; o orquestrador recebe `interrompido pelo usuário` no lugar da resposta.
 7. Se o CLI de um executor parar num pedido de confirmação, a aba e a barra dela passam a `aguardando orquestrador`, e o executor continua ocupando o seu lugar no teto de simultâneos. Quem responde é o orquestrador, não você: ele recebe a pergunta com a ferramenta e o comando e aceita, ou recusa com um motivo que vai ao executor (seção 5). Você não precisa agir na aba. O botão `parar` continua valendo ali e encerra o executor como interrompido.
 8. Fechar o app com terminais vivos pede confirmação e encerra todos, os shells do painel Terminal inclusive; os shells não contam para a confirmação. Nada é restaurado na próxima abertura; o que já mudou nos arquivos fica no projeto.
@@ -104,15 +104,21 @@ O fim da rodada de um executor é detectado pelo hook `Stop` do Claude Code e pe
 
 ## 6. Configuração
 
-A última escolha de cada papel e o teto de simultâneos ficam em `%LOCALAPPDATA%\orquestrador\config.json`. O projeto não é salvo.
+A última escolha de cada papel fica em `%LOCALAPPDATA%\orquestrador\config.json`. O projeto não é salvo.
 
 ```json
 {
   "orchestrator": { "tool": "codex", "model": "", "effort": "" },
-  "executor": { "tool": "claude", "model": "", "effort": "" },
-  "maxParallel": 4
+  "executor": { "tool": "claude", "model": "", "effort": "" }
 }
 ```
+
+Não há mais ajuste de simultâneos. O teto é automático e vem de duas medidas do computador, calculadas ao abrir o app (`src-tauri/src/capacity.rs`):
+
+- **CPU:** metade das CPUs lógicas, de 1 a 16. Lida uma vez, ao abrir o app.
+- **Memória física:** a RAM total, menos 2 GiB reservados ao sistema e ao app, dá um executor por GiB. A memória livre agora dá as vagas: o que sobra depois da mesma reserva de 2 GiB, um executor por GiB. O teto de cada passe é o menor entre o da CPU, o da RAM total e os executores já vivos mais as vagas da RAM livre. Se nada está vivo, um executor pode começar mesmo sem vaga, para a fila não parar.
+
+Isso é um orçamento aproximado, não uma medida do peso de cada tarefa. Executor que já roda nunca é parado nem reiniciado por falta de memória: o teto só deixa de abrir novos. A fila é reavaliada a cada segundo, enquanto houver nó esperando. Se CPU ou memória não puderem ser lidas, o teto cai para 2, e o app abre do mesmo jeito. Uma chave `maxParallel` de versões antigas é ignorada e some do arquivo no próximo salvamento.
 
 Modelo e esforço vazios deixam o CLI usar seus padrões. Esforços aceitos: Claude `low`, `medium`, `high`, `xhigh`, `max`; Codex os mesmos e `ultra`. O nome do modelo deve corresponder a `^[A-Za-z0-9][A-Za-z0-9._:/@+\[\]-]*$`. Um JSON ilegível ou valor inválido é um erro; não há fallback silencioso para os padrões.
 
@@ -183,11 +189,13 @@ Saída: `src-tauri\target\release\bundle\nsis\Orquestrador_<versão>_x64-setup.e
 
 ### Publicar uma versão
 
-1. Suba a versão nos três arquivos iguais: `package.json`, `src-tauri/tauri.conf.json` e `src-tauri/Cargo.toml`. Ela precisa ser maior que a última publicada.
-2. Faça o commit e crie a tag: `git tag vX.Y.Z` e depois `git push origin vX.Y.Z`.
-3. O workflow `.github/workflows/release.yml` confere se a tag bate com as três versões, gera o instalador NSIS assinado e o `latest.json` e cria a release **em rascunho**.
-4. Ao fim do job, uma verificação confere o instalador, o `.sig` e o manifesto (versão, URL e assinatura). Se ela passar, revise a release e publique o rascunho no GitHub. Só a release publicada vira a `latest` que os apps consultam.
-5. Se o job falhar, o rascunho fica sem publicar: apague o rascunho e a tag, corrija e faça o push da tag de novo.
+O processo completo, com o modelo das notas e a checklist, está em `docs/releases/README.md`. Resumo:
+
+1. Suba a versão em `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` e `src-tauri/tauri.conf.json`. Ela precisa ser maior que a última publicada.
+2. Escreva as notas em `docs/releases/vX.Y.Z.md`. O workflow recusa notas ausentes, vazias ou genéricas.
+3. Faça o commit e crie a tag: `git tag vX.Y.Z` e depois `git push origin vX.Y.Z`.
+4. O workflow `.github/workflows/release.yml` confere as versões e as notas, roda os checks, gera o instalador NSIS assinado e o `latest.json`, põe as notas completas na release e confere tudo. Só então publica a release como a `latest` que os apps consultam.
+5. Se o job falhar antes da publicação, a release fica em rascunho e não chega aos apps. Se falhar durante a publicação, ela pode já estar publicada. Uma release publicada não é alterada por nenhum passo: para corrigir, publique uma versão nova. O detalhe de cada caso está em `docs/releases/README.md`, na seção "Se algo der errado".
 
 ## 9. Arquivos e testes
 
@@ -203,6 +211,7 @@ Saída: `src-tauri\target\release\bundle\nsis\Orquestrador_<versão>_x64-setup.e
 | `src-tauri/src/search.rs` | O comando da pesquisa, `search`: roda `git grep` na pasta do projeto. |
 | `src/git.tsx` | A tela Git: o painel (branch, commit, preparar e tirar) e, à direita, as alterações do arquivo selecionado. Os comandos vêm do backend. |
 | `src-tauri/src/git.rs` | Os comandos do painel Git: status, diff, preparar, commit, fetch, pull, push e branches. |
+| `src-tauri/src/capacity.rs` | A política automática de simultâneos: teto pela CPU e pela memória física (`GlobalMemoryStatusEx`), com a reserva de 2 GiB e 1 GiB por executor. |
 | `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores e configuração. |
 | `src-tauri/src/delegate.rs` | A lógica do programa de delegação: publica o lote na pasta da sessão, espera o resultado e o imprime; e o texto do adaptador `.ps1` da sessão, que só transporta. O ponto de entrada, `orquestrador-delegar.exe`, é `src-tauri/src/bin/orquestrador-delegar.rs`. |
 | `src-tauri/src/hook.rs` | Os modos do executável chamados pelos CLIs dos executores: `--hook` (fim de rodada), `--guard` (comandos barrados) e `--ask` (pedido de confirmação, espera a resposta do orquestrador). |
