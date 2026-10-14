@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import {
   cargoLockVersions, cargoPackageVersion, checkNotes, checkVersions, installerName, installerUrl, isNewer, noteProblems, prepareManifest,
-  verifyBody, verifyInstaller, verifyManifest,
+  REQUIRED_SECTIONS, releaseBody, verifyBody, verifyInstaller, verifyManifest,
 } from './release.mjs';
 
 const checks = [];
@@ -198,12 +198,25 @@ check('Versão ou nome de arquivo assinados diferentes do instalador são recusa
   assert.throws(() => verifyInstaller('0.1.7', 'outro.exe', INSTALLER, signInstaller(key, INSTALLER), key.keyB64), /se chama outro\.exe/);
 });
 
-check('Corpo da release: igual às notas, só com espaço final ou CRLF/LF diferente; mudança interna, texto vazio ou faltando é recusado', () => {
-  assert.equal(verifyBody(`${validNotes()}\n\n`, validNotes()), 'corpo da release igual às notas.');
-  assert.equal(verifyBody(validNotes().replace(/\n/g, '\r\n'), validNotes()), 'corpo da release igual às notas.');
-  assert.throws(() => verifyBody(`${validNotes()}x`, validNotes()), /não é o texto completo/);
-  assert.throws(() => verifyBody(validNotes().replace('Resumo', 'Resumo alterado'), validNotes()), /não é o texto completo/);
-  assert.throws(() => verifyBody('', validNotes()), /não é o texto completo/);
+// O corpo publicado começa em `## Resumo`, sem o H1 da fonte, e tem as sete seções na ordem.
+check('Corpo da release sem o título: começa em ## Resumo, sem H1, com todas as seções na ordem', () => {
+  const body = releaseBody(validNotes());
+  assert.match(body, /^## Resumo\n/);
+  assert.doesNotMatch(body, /^# /m);
+  assert.deepEqual(body.split(/^## /m).slice(1).map((part) => part.split('\n')[0].trim()), REQUIRED_SECTIONS);
+  assert.equal(releaseBody(`\r\n\r\n${validNotes().replace(/\n/g, '\r\n')}\r\n`), body);
+});
+
+check('Corpo da release: igual às notas sem o título, só com espaço final ou CRLF/LF diferente; título repetido, seção perdida, texto alterado ou vazio é recusado', () => {
+  const body = releaseBody(validNotes());
+  assert.equal(verifyBody(`${body}\n\n`, validNotes()), 'corpo da release igual às notas, sem o título.');
+  assert.equal(verifyBody(body.replace(/\n/g, '\r\n'), validNotes()), 'corpo da release igual às notas, sem o título.');
+  assert.throws(() => verifyBody(validNotes(), validNotes()), /sem o título/);
+  assert.throws(() => verifyBody(`# Orquestrador v0.1.7\r\n\r\n${body}`, validNotes()), /sem o título/);
+  assert.throws(() => verifyBody(body.replace(/## Instalação[\s\S]*?(?=## Comparação)/, ''), validNotes()), /sem o título/);
+  assert.throws(() => verifyBody(`${body}x`, validNotes()), /sem o título/);
+  assert.throws(() => verifyBody(body.replace('Resumo', 'Resumo alterado'), validNotes()), /sem o título/);
+  assert.throws(() => verifyBody('', validNotes()), /sem o título/);
 });
 
 let failed = 0;

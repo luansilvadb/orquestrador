@@ -231,10 +231,16 @@ export function canonicalText(s) {
   return s.replace(/\r\n/g, '\n').replace(/\s+$/, '');
 }
 
-// O corpo da release tem de ser o texto de docs/releases.
+// Corpo da release: o GitHub já mostra o nome "Orquestrador vX.Y.Z", então o H1 da fonte não entra. Começa em `## Resumo`.
+// Fonte (docs/releases) continua com H1 para identificar a versão; o `notes` do latest.json também leva o H1 como antes.
+export function releaseBody(notes) {
+  return canonicalText(notes).replace(/^\s*# [^\n]*\n/, '').replace(/^\s+/, '');
+}
+
+// O corpo da release tem de ser o texto de docs/releases sem o título.
 export function verifyBody(body, notes) {
-  if (canonicalText(body ?? '') !== canonicalText(notes)) throw new Error('o corpo da release não é o texto completo de docs/releases.');
-  return 'corpo da release igual às notas.';
+  if (canonicalText(body ?? '') !== releaseBody(notes)) throw new Error('o corpo da release não é o texto completo de docs/releases, sem o título.');
+  return 'corpo da release igual às notas, sem o título.';
 }
 
 function run(argv) {
@@ -268,12 +274,18 @@ function run(argv) {
       const keyB64 = JSON.parse(read(`${root}/src-tauri/tauri.conf.json`)).plugins.updater.pubkey;
       return verifyInstaller(version, basename(exe), readFileSync(exe), read(sigFile), keyB64);
     }
+    case 'release-body': {
+      const [version, out] = args;
+      checkSemver(version);
+      writeFileSync(out, releaseBody(read(`${root}/docs/releases/v${version}.md`)), 'utf8');
+      return `Corpo da release ${version} gravado em ${out}, sem o título.`;
+    }
     case 'verify-body': {
       const [bodyFile, notesFile] = args;
       return verifyBody(read(bodyFile), read(notesFile));
     }
     default:
-      throw new Error('comandos: check-versions [X.Y.Z], check-notes X.Y.Z [anterior], prepare-manifest X.Y.Z latest.json notas.md, verify-manifest X.Y.Z latest.json arquivo.sig [notas.md], verify-installer X.Y.Z instalador.exe arquivo.sig, verify-body corpo.md notas.md');
+      throw new Error('comandos: check-versions [X.Y.Z], check-notes X.Y.Z [anterior], prepare-manifest X.Y.Z latest.json notas.md, verify-manifest X.Y.Z latest.json arquivo.sig [notas.md], verify-installer X.Y.Z instalador.exe arquivo.sig, release-body X.Y.Z corpo.md, verify-body corpo.md notas.md');
   }
 }
 

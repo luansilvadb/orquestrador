@@ -100,7 +100,7 @@ jobs:
           prerelease: false
           uploadUpdaterJson: true
 
-      # Notas completas (docs/releases/vX.Y.Z.md) no corpo da release e no campo notes do latest.json.
+      # Notas completas (docs/releases/vX.Y.Z.md) no latest.json (com o H1) e, sem o título, no corpo da release (o GitHub já mostra o nome).
       # Na URL do instalador, o tauri-action grava a URL da API do asset; o app precisa da URL pública da tag.
       - name: Pôr as notas completas e a URL pública no latest.json
         shell: pwsh
@@ -111,8 +111,12 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP 'release-manifest'
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           $manifest = Join-Path $dir 'latest.json'
+          $body = Join-Path $dir 'body.md'
 
-          & gh release edit $env:TAG --repo $env:REPO --notes-file $notes
+          node scripts/release.mjs release-body $version $body
+          if ($LASTEXITCODE -ne 0) { throw 'Não consegui gerar o corpo da release a partir de docs/releases.' }
+
+          & gh release edit $env:TAG --repo $env:REPO --notes-file $body
           if ($LASTEXITCODE -ne 0) { throw "gh release edit (notas) falhou com código $LASTEXITCODE." }
 
           & gh release download $env:TAG --repo $env:REPO --pattern latest.json --dir $dir --clobber
@@ -154,11 +158,11 @@ jobs:
           node scripts/release.mjs verify-installer $version (Join-Path $dir $exe) (Join-Path $dir "$exe.sig")
           if ($LASTEXITCODE -ne 0) { throw "$exe não confere com a assinatura e a chave pública." }
 
-          # O corpo da release tem de ser o texto completo das notas (só CRLF/LF e espaço final podem diferir).
+          # O corpo da release tem de ser o texto das notas sem o título (começa em ## Resumo; só CRLF/LF e espaço final podem diferir).
           $bodyFile = Join-Path $dir 'body.md'
           [System.IO.File]::WriteAllText($bodyFile, [string]$release.body)
           node scripts/release.mjs verify-body $bodyFile "docs/releases/v$version.md"
-          if ($LASTEXITCODE -ne 0) { throw "O corpo da release $($env:TAG) não é o texto de docs/releases/v$version.md." }
+          if ($LASTEXITCODE -ne 0) { throw "O corpo da release $($env:TAG) não é o texto de docs/releases/v$version.md sem o título." }
 
       # Último passo: a release vira a latest estável, que é o endereço que os apps consultam. Só chega aqui se a conferência passou.
       - name: Publicar como a última release estável
