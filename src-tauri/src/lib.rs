@@ -8,6 +8,7 @@ pub mod delegate;
 pub mod files;
 pub mod git;
 pub mod hook;
+pub mod mcp;
 pub mod proc;
 pub mod pty;
 pub mod roles;

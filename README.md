@@ -54,69 +54,49 @@ No terminal do orquestrador, `Ctrl+V` cola texto normalmente. Se o clipboard tiv
 
 ## 5. Como funciona uma delegação
 
-Além do `git` (seção 7), o orquestrador tem um único comando de delegação por sessão: o nome do adaptador da sessão, `orq-<id>.ps1`, seguido de uma ou mais tarefas, uma por argumento. A forma de citar cada tarefa depende da ferramenta do orquestrador; o app escolhe a forma pelo marcador `{{CITACAO}}` do texto do orquestrador (`src-tauri/src/roles.rs`):
+O orquestrador delega por três ferramentas MCP de um servidor da própria sessão, `orquestrador.exe --mcp <pasta da sessão>` (`src-tauri/src/mcp.rs`), que fala JSON-RPC pela entrada e saída padrão:
 
-- **Claude Code:** cada tarefa vai numa here-string de aspas simples: `@'` no fim da linha, o texto nas linhas seguintes e `'@` no começo de uma linha. Nada tem escape; a única restrição é nenhuma linha da tarefa começar com `'@`. O motivo de `--responder ... recusar` segue a mesma forma.
-- **Codex:** cada tarefa é um argumento entre aspas simples, com o apóstrofo dobrado, como em `d''água`. Here-string não serve no Codex, porque a regra não casa.
+- `delegar { tarefas: [textos] }`: publica o lote e espera o resultado.
+- `aguardar {}`: volta a esperar o lote mais recente ainda não entregue, sem publicar nada.
+- `responder { executor, decisao, motivo }`: responde a uma pergunta de executor (abaixo). `decisao` é `aceitar` ou `recusar`; `motivo` acompanha `recusar`.
 
-Nos dois, o comando tem no máximo 20 mil caracteres; um lote maior vai em lotes seguidos. O adaptador fica na pasta da sessão, e essa pasta entra na frente do `PATH` do orquestrador: o comando não leva caminho nem aspas em volta. A linha de comando deve ser só esse comando: sem `&` antes, sem pipe e sem outro comando junto. O resto da tarefa vai como está: aspas duplas, barras, acentos e os demais caracteres.
+Os argumentos vão em JSON. Cada tarefa chega ao executor como está: aspas duplas, barras, acentos, crases, `$`, apóstrofos e quebras de linha passam sem escape, e o canal não tem limite de tamanho. O canal e o texto do orquestrador (`src-tauri/src/roles.rs`) são os mesmos para o Claude Code e para o Codex.
 
-```powershell
-# Claude Code
-orq-<id>.ps1 @'
-Tarefa A. Escopo: ... Pronto quando: ...
-'@ @'
-Tarefa B. Escopo: ... Pronto quando: ...
-'@
+Cada chamada espera até 5 minutos. A resposta termina de um de três jeitos:
 
-# Codex
-orq-<id>.ps1 'Tarefa A. Escopo: ... Pronto quando: ...' 'Tarefa B. Escopo: ... Pronto quando: ...'
-```
+- `--- FIM ---`: o lote acabou. A saída traz as seções `--- EXECUTOR i/N ---`, `executor_exit` e `--- GIT ---`, como antes.
+- `--- AGUARDANDO RESPOSTA ---`: um executor fez uma pergunta. Ela volta na hora (abaixo).
+- `--- EM ANDAMENTO ---`: a janela passou e os executores continuam. O orquestrador chama `aguardar`.
 
-O mesmo comando aceita `'--aguardar'` (volta a esperar o lote) e `'--responder' '<executor>' 'aceitar'` ou `'--responder' '<executor>' 'recusar' 'motivo'` (responde a uma pergunta de executor, abaixo). O motivo de `recusar` segue a forma de citar de cada ferramenta, como as tarefas.
-
-O programa `orquestrador-delegar.exe` vai junto com o app: no instalador ele é recurso ao lado de `orquestrador.exe`, e em `npm run tauri dev` e no build de release os comandos `dev:tauri` e `build:tauri` (em `package.json`) o compilam antes. No empacotamento, o hook `beforeBundleCommand` (`npm run copy:delegar`) copia o programa de release para `src-tauri\target\delegar`, a pasta que vai para o instalador; se ele não existir, o build para em vez de empacotar uma cópia antiga. Nos outros builds essa pasta sai sem o programa (`build.rs`), porque o `tauri-build` copia o que houver nela para a pasta do perfil, onde o Cargo põe o próprio programa. Ele é de console, de propósito: o PowerShell espera o término de um programa de console e recebe o código de saída dele; um programa de janela, não (medido: `$LASTEXITCODE` fica vazio e a saída chega depois).
-
-O adaptador `orq-<id>.ps1` é escrito pelo app na pasta da sessão (`src-tauri/src/delegate.rs`, função `adapter`) e só transporta: cada texto vai ao programa como base64 do UTF-8, numa linha pela entrada padrão (stdin), e o processo sai com o código que o programa devolve. Quem publica, espera e imprime o lote é o programa em Rust, que lê a entrada até o fim. Nenhum argumento leva o lote: a linha de comando do Windows tem limite de 32767 caracteres, e o base64 cresce um terço (medido: três tarefas de 9000 caracteres falhavam antes de o programa rodar). Entrada vazia, cortada (sem o fim de linha que o PowerShell acrescenta) ou ilegível fecha com `wrapper_error:`, código 4 e `--- FIM ---`, e não publica nada. O Windows PowerShell 5.1 põe um BOM no começo da entrada; o programa o tira. A regra que libera o comando cobre só o adaptador daquela sessão: ele não tem outros modos, e `orquestrador.exe --hook`, `--guard` e `--ask` ficam fora da permissão do orquestrador.
-
-Por que há um adaptador: medido no Windows PowerShell 5.1 com um programa de teste, o PowerShell altera o texto que passa a um programa nativo. A aspa dupla pura some, `\"` vira `"`, `a\\"b` vira `a\b`, e a barra no fim de uma tarefa com espaço vira aspa. O pwsh entrega o texto cru, mas o comando precisa valer nos dois shells, e nenhuma grafia que o orquestrador escreve chega igual nos dois. Argumento de script chega exato nos dois, por isso o adaptador é um `.ps1`.
-
-Por que o código de saída sai por `[Environment]::Exit`: com `-Command`, o `exit` do script não vira o código do processo. Medido nos dois shells, o código 4 do programa saía como 1, e o orquestrador veria uma falha sem o motivo. O adaptador encerra o processo com o código do programa, e o harness de teste não acrescenta `exit` nenhum, para testar o caminho real. A preferência `$PSNativeCommandUseErrorActionPreference` fica desligada no adaptador, para o perfil do pwsh 7.4 em diante não mudar o código.
+Uma chamada interrompida ou que deu erro de tempo também se resolve com `aguardar`, porque os executores não param. Erros do próprio comando (lista vazia, tarefa em branco, nenhum lote aguardando, sessão encerrada, resposta inválida em `responder`) voltam como erro da ferramenta, sem publicar nada. Não há mais códigos de saída de processo (0, 1, 3 e 4) nem a linha `wrapper_error:`.
 
 Cada tarefa abre um executor novo, sem memória das tarefas anteriores. Todos trabalham na mesma pasta; quem garante que as tarefas de um lote não se cruzam é o orquestrador, pelas instruções de `src-tauri/src/roles.rs`.
 
-Quando o lote termina, o comando imprime, em UTF-8:
+Quando o lote termina, a saída traz, em UTF-8:
 
 - Para cada tarefa, na ordem: `--- EXECUTOR i/N ---`, o título, a última resposta do executor e `executor_exit` (`0`, ou o motivo seguido de `(FALHOU)`).
 - `--- GIT ---` com a saída de `git status --porcelain --untracked-files=all`: tudo o que está alterado no repositório naquele momento, de todos os executores e também o que já estava pendente antes.
 - `--- FIM ---`: a linha que fecha toda saída completa.
 
-O código de saída é `0` se todas as tarefas concluíram, `1` se alguma falhou, e `3` quando a espera para por causa de uma pergunta de executor (abaixo).
-
-Se a ferramenta do orquestrador desistir de esperar antes do fim, os executores continuam. `orq-<id>.ps1 '--aguardar'` volta a esperar o lote mais recente ainda não entregue, sem publicar nada. Uma falha do próprio comando imprime `wrapper_error:`, fecha com `--- FIM ---` e sai com `4`; isso vale para tarefa vazia, falta de tarefa, sessão encerrada e uma resposta inválida a `--responder`.
-
-Perguntas de executor. Quando um executor do lote para num pedido de confirmação, a espera volta na hora, com código `3`, sem esperar o resto do lote. A saída tem uma seção por pergunta sem resposta, na ordem das tarefas, e depois a linha de resposta:
+Perguntas de executor. Quando um executor do lote para num pedido de confirmação, a espera volta na hora, sem esperar o resto do lote. A saída tem uma seção por pergunta sem resposta, na ordem das tarefas, e depois a linha de resposta:
 
 ```
 --- PERGUNTA exec-2 (1/3) ---
 <título da tarefa>
 O executor parou num pedido de confirmação e espera a sua resposta.
 Bash: <o comando que o executor quer rodar>
-Para responder: orq-<id>.ps1 '--responder' '<executor>' 'aceitar', ou orq-<id>.ps1 '--responder' '<executor>' 'recusar' 'motivo'. <executor> é o de cada pergunta acima.
+Para responder: chame responder com executor "<executor>" e decisao "aceitar", ou com decisao "recusar" e motivo "<motivo>". <executor> é o de cada pergunta acima.
 --- AGUARDANDO RESPOSTA ---
 ```
 
-`--- AGUARDANDO RESPOSTA ---` é a última linha. A saída não traz `--- FIM ---`, porque o lote não acabou. O número `(i/n)` é a posição da tarefa no lote. `--responder` grava a decisão da pergunta mais antiga desse executor e volta a esperar o lote; a pergunta respondida não volta. A linha de resposta acima mostra a forma do Codex; no Claude Code o motivo vai numa here-string. Uma pergunta que fica sem resposta por cerca de 100 s (seção 7) sai da espera: o executor recebe a negativa, repete o comando, e a pergunta volta como pergunta nova. Sem pergunta pendente desse executor, com resposta desconhecida ou com `recusar` sem motivo, nada é gravado e o comando sai com `4`. `--aguardar` devolve de novo a pergunta enquanto ela não tiver resposta nem tiver expirado. Os outros executores do lote seguem trabalhando nesse meio-tempo.
+`--- AGUARDANDO RESPOSTA ---` é a última linha. A saída não traz `--- FIM ---`, porque o lote não acabou. O número `(i/n)` é a posição da tarefa no lote. `responder` grava a decisão da pergunta mais antiga desse executor; a pergunta respondida não volta. Uma pergunta que fica sem resposta por cerca de 100 s (seção 7) sai da espera: o executor recebe a negativa, repete o comando, e a pergunta volta como pergunta nova. Sem pergunta pendente desse executor, com resposta desconhecida ou com `recusar` sem motivo, nada é gravado e a ferramenta devolve erro. `aguardar` devolve de novo a pergunta enquanto ela não tiver resposta nem tiver expirado. Os outros executores do lote seguem trabalhando nesse meio-tempo.
 
-Limites, testados no Windows PowerShell 5.1 e no pwsh 7.6 (`src-tauri\tests\lote.rs`):
+Limites:
 
-- O texto de cada tarefa chega igual ao pedido publicado nos dois shells: aspas duplas puras, barra antes da aspa, JSON com escapes, barra final, acentos, apóstrofos e várias linhas. Isso vale nas duas formas de citar, aspas simples e here-string, ambas testadas em `src-tauri\tests\lote.rs`. Tarefa vazia ou só de espaços é recusada e não publica nada.
-- O caminho da pasta da sessão e o do programa podem ter espaço, acento e apóstrofo. Não há exigência de nome curto 8.3 nem de ativar nada no volume.
-- O `.ps1` precisa de uma política de execução que deixe rodar scripts locais no shell do orquestrador. Nesta máquina o PowerShell 5.1 está com `RemoteSigned` na `LocalMachine` e o pwsh também. Com `Restricted`, o PowerShell recusa o adaptador e a delegação falha com a mensagem dele. O app não muda a política do usuário.
-- Casamento da linha de comando com a regra, medido em 2026-10-14 nesta máquina:
-  - **Claude Code** (sondas numa sessão real do orquestrador, com `--responder` para um executor inexistente, que não publica nada; regra `PowerShell(orq-<id>.ps1 *)`, modo `dontAsk`): texto bem citado entre aspas simples passa com todos os caracteres testados (`; < > * @`, parênteses, `|`, `&`, `$`, crase, chaves, colchetes, aspas duplas, `#` e quebra de linha), e tudo junto com apóstrofo dobrado. Um único apóstrofo sem dobrar fecha a aspa antes da hora, o resto vira sintaxe, e a regra nega o comando inteiro com uma mensagem genérica, que não diz a causa. Uma here-string com apóstrofo solto e todos esses caracteres passa e chega ao programa byte a byte; duas here-strings no mesmo comando também. Tamanho: um comando de cerca de 22 mil caracteres passa e um de cerca de 36 mil é negado, provavelmente pelo limite de 32767 caracteres da linha de comando do Windows dentro da checagem. Daí o teto de 20 mil.
-  - **Codex 0.162.1** (medido com `codex exec` e um modelo barato, gpt-6-luna; sandbox `read-only`, `approval_policy` `never`, regra `prefix_rule` do `git`; o Codex rodou os comandos como `pwsh.exe -NoProfile -Command`): commits com a mensagem entre aspas simples, com apóstrofo dobrado, com duas linhas e com `; ( ) < > $` dentro, casaram a regra e rodaram fora do sandbox. O mesmo commit com a mensagem numa here-string não casou: rodou dentro do sandbox e falhou com `index.lock: Permission denied`. O Codex passa o script como argumento de `pwsh -Command`, então o limite da linha de comando também vale (inferido, não medido).
-  - `codex execpolicy check` não desembrulha `pwsh -Command`: não acha regra nenhuma nem para `git status` nessa forma. Por isso ele não mede o caso real, e a medição vale com `codex exec`.
+- Tamanho: o canal levou um texto de 31.679 caracteres, byte a byte (medido em 2026-10-14). O limite prático é a saída do modelo, não o canal: o Haiku não conseguiu escrever um argumento de cerca de 32 mil caracteres numa só chamada.- Tarefa vazia ou só de espaços é recusada e não publica nada.
+- Medido em 2026-10-14 com servidores MCP descartáveis:
+  - **Claude Code 2.1.300**, nas condições do orquestrador (`--restricted`, `--strict-mcp-config`, `--tools "Read,Glob,Grep,PowerShell,Skill"`, `--permission-mode dontAsk`): a ferramenta MCP liberada em `permissions.allow` roda sem pedido; sem a liberação, é negada. O `--tools` não esconde ferramentas MCP. Um texto com apóstrofo solto, acentos, crases e `$` chegou byte a byte. Chamadas de 180 s (sem ajuste) e de 400 s (com `MCP_TOOL_TIMEOUT = 900000`) voltaram normalmente.
+  - **Codex 0.162.1**, com `-s read-only` e `approval_policy` `never`: toda chamada MCP é negada (`MCP tool call requires approval, but approval policy is never`), a menos que o servidor tenha `default_tools_approval_mode = "approve"`. Os valores `auto`, `writes` e `prompt` e o `enabled_tools` não liberam. A anotação `readOnlyHint` liberaria, mas `delegar` não é só leitura. Com `approve`, o texto chegou exato e o servidor gravou fora do sandbox. Chamadas de 90 s (sem ajuste) e de 400 s (com `tool_timeout_sec = 900`) voltaram normalmente.
 
 O fim da rodada de um executor é detectado pelo hook `Stop` do Claude Code e pelo `notify` do Codex, que chamam o próprio executável do app.
 
@@ -142,13 +122,13 @@ Modelo e esforço vazios deixam o CLI usar seus padrões. Esforços aceitos: Cla
 
 ## 7. Limites de segurança
 
-**Orquestrador Codex.** Sandbox `read-only`, sem aprovações. Um arquivo de regras `prefix_rule` no diretório de regras do Codex libera, naquela sessão, o adaptador de delegação (um nome só, sorteado por sessão), `git` e `git.exe` com qualquer subcomando, e os programas das skills globais; o arquivo é removido no encerramento. O sandbox ainda pode ler o disco inteiro. Medido no Codex 0.162.1: com o sandbox de leitura, `git add` falha no `.git` (`index.lock: Permission denied`); com a regra `allow` do `git` ele passa, porque a regra autoriza rodar o comando fora do sandbox (é o que o próprio Codex 0.162.1 declara nas instruções de execução); um comando sem regra é recusado pela política (`blocked by policy`), inclusive escrita de arquivo por PowerShell. Também medido no 0.162.1: a regra deixa de valer quando o comando traz o separador `--` solto (`git add -- a.txt`) ou um pipe para outro programa (`git add a.txt | Out-Null`); o comando roda então dentro do sandbox e falha no `.git` com `Permission denied`. Aspas simples ou duplas, `-C` com caminho absoluto, `--all`, `--message=x`, vários `-m` e encadeamento de comandos git com `;` ou `&&` passam. Por isso o texto do orquestrador, em `src-tauri/src/roles.rs`, manda escrever os comandos git sem o `--`.
+**Orquestrador Codex.** Sandbox `read-only`, sem aprovações de comando. O servidor MCP da sessão é a exceção: o app o passa por `-c mcp_servers.orquestrador.command` e `args` (`orquestrador.exe --mcp <pasta da sessão>`), com `default_tools_approval_mode = "approve"` e `tool_timeout_sec = 900`. Sem o `approve`, toda chamada MCP é negada, como medido em 2026-10-14 (seção 5). Um arquivo de regras `prefix_rule` no diretório de regras do Codex libera, naquela sessão, só `git` e `git.exe` com qualquer subcomando e os programas das skills globais; o arquivo começa com a linha de comentário `# orquestrador strategist-<id>` e é removido no encerramento. O sandbox ainda pode ler o disco inteiro. Medido no Codex 0.162.1: com o sandbox de leitura, `git add` falha no `.git` (`index.lock: Permission denied`); com a regra `allow` do `git` ele passa, porque a regra autoriza rodar o comando fora do sandbox (é o que o próprio Codex 0.162.1 declara nas instruções de execução); um comando sem regra é recusado pela política (`blocked by policy`), inclusive escrita de arquivo por PowerShell. Também medido no 0.162.1: a regra deixa de valer quando o comando traz o separador `--` solto (`git add -- a.txt`) ou um pipe para outro programa (`git add a.txt | Out-Null`); o comando roda então dentro do sandbox e falha no `.git` com `Permission denied`. Aspas simples ou duplas, `-C` com caminho absoluto, `--all`, `--message=x`, vários `-m` e encadeamento de comandos git com `;` ou `&&` passam. Por isso o texto do orquestrador, em `src-tauri/src/roles.rs`, manda escrever os comandos git sem o `--`.
 
 **Alcance das regras do Codex.** O arquivo de regras fica no diretório de configuração do Codex (`CODEX_HOME`), e as regras valem para qualquer processo `codex` que use esse diretório, não só para o orquestrador, enquanto a sessão existir. Medido no 0.162.1: um `codex exec` comum, em outra pasta, rodou `git add` com a regra da sessão presente. Com um orquestrador Codex aberto, o `git` liberado alcança, portanto, os outros Codex dessa mesma configuração. As opções do `codex exec` não trazem um arquivo de regras por processo; `--ignore-rules` só desliga o carregamento.
 
-**Orquestrador Claude.** `--restricted`, `--permission-mode dontAsk`, sem servidor MCP. Ferramentas: `Read`, `Glob`, `Grep`, `PowerShell` e `Skill`; o PowerShell só passa o comando de delegação da sessão, `git` e `git.exe`, os programas das skills globais e o que o Claude Code considera somente leitura. Medido no Claude Code 2.1.296 com o `claude-settings.json` gerado pelo app: `git -C`, `git.exe` e `git commit` passam, e sem as regras `PowerShell(git *)` e `PowerShell(git.exe *)` o mesmo `git status` é negado. Também medido no 2.1.296: a regra casa o texto do comando com as aspas, então `node "C:\...\x.mjs" start` é negado por uma regra que traz o caminho sem aspas. Por isso cada programa de skill entra em três grafias (sem aspas, com aspas duplas e com aspas simples), nas duas barras; com elas, outro programa na mesma pasta e um segundo comando encadeado com `;` continuam negados.
+**Orquestrador Claude.** `--restricted`, `--strict-mcp-config`, `--permission-mode dontAsk`, e o único servidor MCP é o da sessão, passado por `--mcp-config <pasta da sessão>\mcp.json`. Ferramentas: `Read`, `Glob`, `Grep`, `PowerShell` e `Skill`, mais `mcp__orquestrador__delegar`, `mcp__orquestrador__aguardar` e `mcp__orquestrador__responder`, que o `claude-settings.json` da sessão libera em `permissions.allow`. Medido em 2026-10-14: a ferramenta MCP liberada roda sem pedido, e sem a liberação é negada; o `--tools` não esconde ferramentas MCP. O bloco `env` desse arquivo traz `MCP_TOOL_TIMEOUT = 900000` (15 minutos), para uma chamada que espera até 5 minutos não ser cortada. O PowerShell só passa `git` e `git.exe`, os programas das skills globais e o que o Claude Code considera somente leitura. Medido no Claude Code 2.1.296 com o `claude-settings.json` gerado pelo app: `git -C`, `git.exe` e `git commit` passam, e sem as regras `PowerShell(git *)` e `PowerShell(git.exe *)` o mesmo `git status` é negado. Também medido no 2.1.296: a regra casa o texto do comando com as aspas, então `node "C:\...\x.mjs" start` é negado por uma regra que traz o caminho sem aspas. Por isso cada programa de skill entra em três grafias (sem aspas, com aspas duplas e com aspas simples), nas duas barras; com elas, outro programa na mesma pasta e um segundo comando encadeado com `;` continuam negados.
 
-A ativação é local à sessão. Nessa versão, no Windows com Git Bash instalado, o PowerShell só entra na lista de ferramentas com `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (medido com um stub local que mostra a lista enviada ao modelo: sem a variável, o PowerShell não aparece). O app põe essa variável no bloco `env` do `claude-settings.json` da sessão, que o orquestrador recebe por `--settings`; o ambiente do usuário e o dos executores não mudam.
+A ativação é local à sessão. Nessa versão, no Windows com Git Bash instalado, o PowerShell só entra na lista de ferramentas com `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` (medido com um stub local que mostra a lista enviada ao modelo: sem a variável, o PowerShell não aparece). O app põe essa variável no bloco `env` do `claude-settings.json` da sessão, que o orquestrador recebe por `--settings`, junto com `MCP_TOOL_TIMEOUT`; o ambiente do usuário e o dos executores não mudam.
 
 **Git do orquestrador.** `git` e `git.exe` com qualquer subcomando, inclusive `push`, `reset --hard` e `clean`, porque o usuário pediu Git completo. A regra casa só o nome do programa, então os argumentos não são limitados: `-C` pode apontar para qualquer repositório. Os executores continuam barrados como antes. O orquestrador faz stage, commit e push só quando o usuário pede, e não desfaz trabalho sem pedido expresso; isso é orientação ao modelo, não uma trava do app.
 
@@ -170,7 +150,7 @@ Essas barreiras comparam o texto do comando: orientam e pegam as grafias óbvias
 
 Para o executor não parar num diálogo que ninguém pode responder, a confiança na pasta do projeto é dada pela sessão: no Codex por configuração da linha de comando, no Claude pela variável `CLAUDE_CODE_SANDBOXED=1`, que não é documentada e pode mudar entre versões do Claude Code. Escolher a pasta no app equivale a confiar nela.
 
-Na inicialização de uma sessão, regras e pastas de sessões mortas são removidas quando o nome, a primeira linha e o dono encerrado comprovam a origem; o que não puder ser verificado é preservado. A primeira linha tem de ser exatamente a regra de delegação atual; qualquer outra, inclusive uma parecida, não é do app. A regra da delegação continua na primeira linha do arquivo; as do Git e as das skills vêm depois, no mesmo arquivo, e saem com ele.
+Na inicialização de uma sessão, regras e pastas de sessões mortas são removidas quando o nome, a primeira linha e o dono encerrado comprovam a origem; o que não puder ser verificado é preservado. A primeira linha tem de ser exatamente o marcador da sessão, `# orquestrador strategist-<id>`; qualquer outra, inclusive uma parecida, não é do app. As regras do Git e das skills vêm depois, no mesmo arquivo, e saem com ele. Transição: até 2027-02-01, também vale a regra de delegação da v0.1.9 daquela sessão, que é o adaptador `orq-<id>.ps1` liberado para um nome só. Ela serve para limpar os arquivos órfãos de quem atualizou com um orquestrador Codex aberto, porque esses arquivos liberam o `git`, fora do sandbox, para qualquer `codex`. Depois dessa data, a forma antiga sai do código.
 
 ## 8. Atualização automática
 
@@ -178,7 +158,7 @@ Em toda abertura do app instalado, antes de liberar a escolha da pasta ou qualqu
 
 Não há downgrade: só instala versão maior que a instalada, e a versão anunciada precisa ser a versão assinada (`requireSignedVersion`). A atualização troca só os arquivos do programa; `%LOCALAPPDATA%\orquestrador\config.json` e os arquivos dos projetos ficam como estão.
 
-Falha na verificação, no download ou na instalação (inclusive sem internet) mostra o motivo e **mantém o uso bloqueado**, com `Tentar novamente`. Não há opção de continuar na versão antiga. Em `npm run tauri dev` (build de debug) o uso fica liberado direto e nada é consultado. Os modos `--hook`, `--guard` e `--ask` do executável, e o programa `orquestrador-delegar.exe`, não abrem janela nem passam pelo updater.
+Falha na verificação, no download ou na instalação (inclusive sem internet) mostra o motivo e **mantém o uso bloqueado**, com `Tentar novamente`. Não há opção de continuar na versão antiga. Em `npm run tauri dev` (build de debug) o uso fica liberado direto e nada é consultado. Os modos `--hook`, `--guard`, `--ask` e `--mcp` do executável não abrem janela nem passam pelo updater.
 
 O repositório é público, então o app baixa a release sem token. Se o repositório virar privado, a atualização automática deixa de funcionar e a distribuição precisa mudar.
 
@@ -243,10 +223,11 @@ O processo completo, com o modelo das notas e a checklist, está em `docs/releas
 | `src-tauri/src/git.rs` | Os comandos do painel Git: status, diff, preparar, commit, fetch, pull, push e branches. |
 | `src-tauri/src/capacity.rs` | A política automática de simultâneos: teto pela CPU e pela memória física (`GlobalMemoryStatusEx`), com a reserva de 2 GiB e 1 GiB por executor. |
 | `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores e configuração. |
-| `src-tauri/src/delegate.rs` | A lógica do programa de delegação: publica o lote na pasta da sessão, espera o resultado e o imprime; e o texto do adaptador `.ps1` da sessão, que só transporta. O ponto de entrada, `orquestrador-delegar.exe`, é `src-tauri/src/bin/orquestrador-delegar.rs`. |
-| `src-tauri/src/hook.rs` | Os modos do executável chamados pelos CLIs dos executores: `--hook` (fim de rodada), `--guard` (comandos barrados) e `--ask` (pedido de confirmação, espera a resposta do orquestrador). |
-| `src-tauri/src/session.rs` | A sessão do orquestrador: pasta, adaptador, regras do Codex (delegação, Git e skills), `claude-settings.json` do Claude e a limpeza das sobras. |
-| `src-tauri/src/roles.rs` | Os textos enviados ao orquestrador (no `AGENTS.md` da sessão) e a cada executor, antes da tarefa. O texto do orquestrador traz a forma de citar de cada ferramenta. |
+| `src-tauri/src/delegate.rs` | A lógica de delegação: publica o lote na pasta da sessão, espera o resultado, imprime o lote e grava as respostas às perguntas de executor. |
+| `src-tauri/src/mcp.rs` | O servidor MCP da sessão, `orquestrador.exe --mcp <pasta da sessão>`: fala JSON-RPC pela entrada e saída padrão e expõe `delegar`, `aguardar` e `responder`. |
+| `src-tauri/src/hook.rs` | Os modos do executável chamados pelos CLIs dos executores: `--hook` (fim de rodada), `--guard` (comandos barrados) e `--ask` (pedido de confirmação, espera a resposta do orquestrador). O modo `--mcp`, do orquestrador, está em `mcp.rs`. |
+| `src-tauri/src/session.rs` | A sessão do orquestrador: pasta, marcador e regras do Codex (Git e skills), os argumentos MCP do Codex, `mcp.json` e `claude-settings.json` do Claude, e a limpeza das sobras. |
+| `src-tauri/src/roles.rs` | Os textos enviados ao orquestrador (no `AGENTS.md` da sessão) e a cada executor, antes da tarefa. O texto do orquestrador é o mesmo para Claude Code e Codex e descreve as três ferramentas MCP. |
 | `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a fonte do plugin oficial e os testes dos cenários. |
 | `.github/workflows/release.yml` | Release por tag: instalador assinado, `latest.json` e conferência, em rascunho. |
 
@@ -257,4 +238,4 @@ cd src-tauri
 cargo test
 ```
 
-Os testes usam CLIs simulados e não chamam nenhum modelo. `tests\lote.rs` roda o programa `orquestrador-delegar.exe` de verdade no Windows PowerShell 5.1 e no pwsh. `tests\real.rs` faz o ciclo com os CLIs reais e fica ignorado por padrão: defina `ORQ_REAL_REPO` e `ORQ_REAL=codex,claude` e rode `cargo test --test real -- --ignored --nocapture`.
+Os testes usam CLIs simulados e não chamam nenhum modelo. `tests\lote.rs` fala com o servidor MCP real (`orquestrador.exe --mcp`) por JSON-RPC, sem PowerShell no caminho. `tests\real.rs` faz o ciclo com os CLIs reais e fica ignorado por padrão: defina `ORQ_REAL_REPO` e `ORQ_REAL=codex,claude` e rode `cargo test --test real -- --ignored --nocapture`.

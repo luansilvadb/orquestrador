@@ -40,7 +40,7 @@ fn abrir_cli(cli: &str, dir: &Path, size: (u16, u16)) -> (Term, Shared) {
     };
     // O diálogo de confiança do Claude pode demorar mais que a espera abaixo; com esta variável ele não aparece (cli.rs).
     let env = if cli == "claude" { vec![("CLAUDE_CODE_SANDBOXED".to_string(), "1".to_string())] } else { Vec::new() };
-    let spawn = Spawn { program: cli.to_string(), args, cwd: dir_s, env, path_first: Vec::new() };
+    let spawn = Spawn { program: cli.to_string(), args, cwd: dir_s, env };
     let buffer: Shared = Arc::new(Mutex::new(Buffer::default()));
     let mut term = Term::spawn(&spawn, size, buffer.clone(), |_, _| {}, |_| {}).expect("não iniciou o CLI");
 

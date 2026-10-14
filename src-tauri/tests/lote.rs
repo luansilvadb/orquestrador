@@ -1,17 +1,17 @@
-//! O ciclo inteiro sem modelo: o app de verdade (Core), o programa `orquestrador-delegar` de verdade, pelo
-//! adaptador `.ps1` que o app escreve na sessão, digitado como o orquestrador o digitaria no Windows
-//! PowerShell 5.1 e no pwsh, e CLIs falsos (examples/fake_cli.rs) no lugar do claude e do codex.
+//! O ciclo inteiro sem modelo: o app de verdade (Core), o servidor MCP dele (`orquestrador --mcp <pasta da sessão>`)
+//! falado por um cliente de teste em JSON-RPC pela entrada e saída padrão, e CLIs falsos (examples/fake_cli.rs) no
+//! lugar do claude e do codex.
 use base64::Engine;
 use orquestrador_lib::capacity::{Memory, Resources};
 use orquestrador_lib::cli::Exes;
 use orquestrador_lib::config::Choice;
 use orquestrador_lib::core::{title, Core, Emit, ORCHESTRATOR};
 use orquestrador_lib::session::Places;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::cell::RefCell;
-use std::io::Write;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
@@ -32,6 +32,106 @@ const TASKS: [&str; 8] = [
     "'começa e termina com apóstrofo'",
 ];
 
+/// Tarefas com apóstrofo sem escape, várias linhas, e `; ( ) < > * @ $`, crase, aspas duplas e barra no fim.
+const AQUI: [&str; 3] = [
+    "Ação: d'água, it's ''ok''",
+    "Linha 1; (x) <y> *z* @ $HOME\nLinha 2 `crase` \"aspas\" e barra no fim\\",
+    "C:\\Users\\Maria Silva\\ ; $(calc) && não",
+];
+
+/// Um cliente do servidor MCP do orquestrador: sobe `orquestrador --mcp <pasta>` e fala com ele por pipe, uma
+/// mensagem JSON por linha. As respostas que chegam fora de ordem ficam guardadas até alguém pedir o id delas.
+/// Ao sair de escopo, o servidor morre: uma chamada que ainda espera o lote deixa de ser respondida, e o lote segue.
+struct Mcp {
+    child: Child,
+    input: ChildStdin,
+    lines: Receiver<Value>,
+    waiting: Vec<Value>,
+    next: u64,
+}
+
+impl Mcp {
+    /// Sobe o servidor da pasta, sem falar com ele ainda.
+    fn spawn(session: &Path) -> Mcp {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_orquestrador")).arg("--mcp").arg(session).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let input = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, lines) = channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Ok(msg) = serde_json::from_str::<Value>(&line) {
+                    if tx.send(msg).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        Mcp { child, input, lines, waiting: Vec::new(), next: 1 }
+    }
+
+    /// Sobe o servidor e faz o `initialize` e a notificação que um cliente manda antes de qualquer chamada.
+    fn open(session: &Path) -> Mcp {
+        let mut mcp = Mcp::spawn(session);
+        let id = mcp.request("initialize", json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "teste", "version": "0" } }));
+        assert_eq!(mcp.reply(id)["result"]["protocolVersion"], "2025-06-18");
+        mcp.write(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+        mcp
+    }
+
+    fn write(&mut self, msg: Value) {
+        writeln!(self.input, "{msg}").unwrap();
+        self.input.flush().unwrap();
+    }
+
+    /// Manda uma requisição e devolve o id dela, sem esperar a resposta.
+    fn request(&mut self, method: &str, params: Value) -> u64 {
+        let id = self.next;
+        self.next += 1;
+        self.write(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
+        id
+    }
+
+    /// Espera a resposta do `id` por até 60 s, para um teste nunca travar. As outras que chegarem ficam guardadas.
+    fn reply(&mut self, id: u64) -> Value {
+        if let Some(i) = self.waiting.iter().position(|m| m["id"] == id) {
+            return self.waiting.remove(i);
+        }
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let msg = self.lines.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap_or_else(|_| panic!("o servidor não respondeu o id {id}"));
+            if msg["id"] == id {
+                return msg;
+            }
+            self.waiting.push(msg);
+        }
+    }
+
+    /// Manda a chamada de uma ferramenta e não espera: para um lote que não vai terminar, ou para um cliente que morre.
+    fn start(&mut self, name: &str, args: Value) -> u64 {
+        self.request("tools/call", json!({ "name": name, "arguments": args }))
+    }
+
+    /// Espera a chamada `id` e devolve o texto dela e se veio com `isError`.
+    fn done(&mut self, id: u64) -> (String, bool) {
+        let reply = self.reply(id);
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("resposta sem texto: {reply}"));
+        (text.to_string(), reply["result"]["isError"].as_bool().unwrap())
+    }
+
+    /// Chama uma ferramenta e espera a resposta: (texto, isError).
+    fn call(&mut self, name: &str, args: Value) -> (String, bool) {
+        let id = self.start(name, args);
+        self.done(id)
+    }
+}
+
+impl Drop for Mcp {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 struct Bench {
     core: Core,
     events: Receiver<(String, Value)>,
@@ -47,8 +147,7 @@ fn bench(tag: &str) -> Bench {
     bench_in(tag, "temp")
 }
 
-/// Uma sessão de teste cujo temp fica em `root\<temp>`: o nome dessa pasta é o que o teste quer provar. O programa de
-/// delegação é uma cópia numa pasta com espaço, acento e apóstrofo, porque o caminho dele não pode importar.
+/// Uma sessão de teste cujo temp fica em `root\<temp>`: o nome dessa pasta é o que o teste quer provar.
 /// Oito CPUs (teto de 4) e 64 GiB livres: o teto por padrão é 4, sem apertar a fila.
 fn bench_in(tag: &str, temp: &str) -> Bench {
     bench_com(tag, temp, Some(8))
@@ -67,16 +166,7 @@ fn bench_com(tag: &str, temp: &str, cpus: Option<usize>) -> Bench {
     let fake = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("examples").join("fake_cli.exe");
     assert!(fake.is_file(), "falta {} (rode `cargo test`, que compila os exemplos)", fake.display());
     let fake = fake.to_string_lossy().to_string();
-    let app_dir = root.join("app ação it's");
-    std::fs::create_dir_all(&app_dir).unwrap();
-    let delegate = app_dir.join("orquestrador-delegar.exe");
-    std::fs::copy(env!("CARGO_BIN_EXE_orquestrador-delegar"), &delegate).unwrap();
-    let exes = Exes {
-        claude: fake.clone(),
-        codex: fake,
-        app: env!("CARGO_BIN_EXE_orquestrador").to_string(),
-        delegate: delegate.to_string_lossy().to_string(),
-    };
+    let exes = Exes { claude: fake.clone(), codex: fake, app: env!("CARGO_BIN_EXE_orquestrador").to_string() };
     let places = Places { temp: root.join(temp), codex_rules: root.join("rules"), global_dirs: vec![] };
     let (tx, events) = channel();
     let emit: Emit = Arc::new(move |event, payload| drop(tx.send((event.to_string(), payload))));
@@ -156,82 +246,12 @@ impl Bench {
         (0..n).map(|_| self.wait("node-added", |e, _| e == "node-added")).collect()
     }
 
-    /// A linha de delegação como o orquestrador a digitaria: o nome da sessão, seguido das tarefas entre aspas
-    /// simples, com o apóstrofo dobrado.
-    fn line(&self, tasks: &[&str]) -> String {
-        let mut line = self.core.delegate_command().expect("a sessão do orquestrador está aberta");
-        for task in tasks {
-            line += &format!(" '{}'", task.replace('\'', "''"));
-        }
-        line
+    /// Um cliente MCP ligado à sessão do orquestrador aberta.
+    fn mcp(&self) -> Mcp {
+        Mcp::open(&self.core.session_dir().expect("a sessão do orquestrador está aberta"))
     }
 
-    /// Roda o shell com a pasta da sessão na frente do PATH, como o orquestrador roda (ver `which` no teste de PATH).
-    fn spawn_shell(&self, shell: &str, args: &[&str]) -> Child {
-        let path = format!("{};{}", self.core.session_dir().unwrap().display(), std::env::var("PATH").unwrap_or_default());
-        Command::new(shell)
-            .args(["-NoProfile", "-NonInteractive"])
-            .args(args)
-            .env("PATH", path)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap()
-    }
-
-    /// A linha de delegação com cada tarefa numa here-string de aspas simples, como o orquestrador Claude a escreve:
-    /// ` @'`, quebra de linha, o texto como está, quebra de linha e `'@` no começo da linha. Entre duas tarefas é
-    /// `'@ @'` na mesma linha. Nada é escapado.
-    fn here_line(&self, tasks: &[&str]) -> String {
-        let mut line = self.core.delegate_command().expect("a sessão do orquestrador está aberta");
-        for task in tasks {
-            line += " @'\n";
-            line += task;
-            line += "\n'@";
-        }
-        line
-    }
-
-    /// Com `-EncodedCommand` a linha vai em base64, então o quoting do teste não mexe nela. Nada é acrescentado
-    /// depois dela: o código de saída é o que o próprio adaptador deixa no processo.
-    fn encoded(&self, shell: &str, line: &str) -> Child {
-        let utf16: Vec<u8> = line.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
-        self.spawn_shell(shell, &["-EncodedCommand", &encoded])
-    }
-
-    fn delegate(&self, shell: &str, tasks: &[&str]) -> Child {
-        self.encoded(shell, &self.line(tasks))
-    }
-
-    /// O caminho real: `-Command` com a linha, como o shell do orquestrador a roda, sem `exit` acrescentado.
-    fn delegate_cmd(&self, shell: &str, tasks: &[&str]) -> Child {
-        let line = self.line(tasks);
-        self.spawn_shell(shell, &["-Command", &line])
-    }
-
-    /// `delegate` com a linha em here-strings (`here_line`).
-    fn delegate_here(&self, shell: &str, tasks: &[&str]) -> Child {
-        self.encoded(shell, &self.here_line(tasks))
-    }
-
-    /// `delegate_cmd` com a linha em here-strings: o caminho real do orquestrador Claude.
-    fn delegate_cmd_here(&self, shell: &str, tasks: &[&str]) -> Child {
-        let line = self.here_line(tasks);
-        self.spawn_shell(shell, &["-Command", &line])
-    }
-
-    /// Para lote que não cabe numa linha de comando (o próprio shell tem o limite de 32767 caracteres): a linha
-    /// vai num script temporário, UTF-8 com BOM, invocado por `-File`.
-    fn delegate_file(&self, shell: &str, tasks: &[&str]) -> Child {
-        let script = self.root.join(format!("lote-{shell}.ps1"));
-        let mut bytes = vec![0xEF, 0xBB, 0xBF];
-        bytes.extend_from_slice(format!("{}\r\n", self.line(tasks)).as_bytes());
-        std::fs::write(&script, bytes).unwrap();
-        self.spawn_shell(shell, &["-File", script.to_str().unwrap()])
-    }
-
-    /// Quantas pastas de lote há na sessão: `--aguardar` não pode acrescentar nenhuma.
+    /// Quantas pastas de lote há na sessão: `aguardar` não pode acrescentar nenhuma.
     fn requests(&self) -> usize {
         std::fs::read_dir(self.core.session_dir().unwrap().join("requests")).unwrap().flatten().count()
     }
@@ -244,7 +264,18 @@ impl Bench {
         dir.join(names.pop().expect("um lote publicado"))
     }
 
-    /// Os três passos do começo da maioria dos testes: abre o orquestrador claude, escolhe claude de executor e
+    /// Espera todo lote publicado ter a marca de entregue, que o servidor grava depois de a resposta sair.
+    fn entregues(&self) {
+        let dir = self.core.session_dir().unwrap();
+        until("os lotes entregues", || {
+            std::fs::read_dir(dir.join("requests")).unwrap().flatten().all(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                name.ends_with(".tmp") || dir.join("results").join(format!("{name}.delivered")).exists()
+            })
+        });
+    }
+
+    /// Os passos do começo da maioria dos testes: abre o orquestrador claude, escolhe claude de executor e
     /// espera o orquestrador falso desenhar.
     fn pronto(&self) {
         self.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
@@ -266,11 +297,6 @@ impl Drop for Bench {
     }
 }
 
-fn finish(child: Child) -> (i32, String) {
-    let out = child.wait_with_output().unwrap();
-    (out.status.code().unwrap(), String::from_utf8(out.stdout).expect("a saída do comando de delegação tem de ser UTF-8"))
-}
-
 fn id(v: &Value) -> String {
     v["id"].as_str().unwrap().to_string()
 }
@@ -289,9 +315,10 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     let b = bench_com("lote", "temp", Some(4));
     b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
     until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+    let mut m = b.mcp();
 
     // Lote de três, ainda sem escolha de executor: todos esperam.
-    let run = b.delegate("powershell", &["Tarefa A: ação\nlinha 2 d'água", "DORMIR B", "FALHAR C"]);
+    let run = m.start("delegar", json!({ "tarefas": ["Tarefa A: ação\nlinha 2 d'água", "DORMIR B", "FALHAR C"] }));
     let nodes = b.added(3);
     let (a, bb, c) = (id(&nodes[0]), id(&nodes[1]), id(&nodes[2]));
     for (i, n) in nodes.iter().enumerate() {
@@ -324,8 +351,8 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
 
     b.core.stop_executor(&bb);
     b.state(&bb, "stopped");
-    let (code, out) = finish(run);
-    assert_eq!(code, 1, "{out}");
+    let (out, is_error) = m.done(run);
+    assert!(!is_error, "{out}");
     let expected = "--- EXECUTOR 1/3 ---\nTarefa A: ação\nfeito: linha 2 d'água\nexecutor_exit: 0\n\
         --- EXECUTOR 2/3 ---\nDORMIR B\ninterrompido pelo usuário\nexecutor_exit: interrompido (FALHOU)\n\
         --- EXECUTOR 3/3 ---\nFALHAR C\nO executor terminou sem sinal de fim de rodada (código de saída 3).\nexecutor_exit: 3 (FALHOU)\n\
@@ -335,40 +362,36 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     // O executor concluído já saiu: o slot foi tirado junto com o estado final, e a tela não fica guardada.
     assert_eq!(b.core.term_snapshot(&a).seq, 0, "o slot do executor concluído saiu");
 
-    // Com a escolha feita, o próximo lote abre sozinho; agora pelo pwsh e com executor Claude.
+    // Com a escolha feita, o próximo lote abre sozinho; agora com executor Claude.
     b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    let run = b.delegate("pwsh", &["Só uma: coração"]);
+    let run = m.start("delegar", json!({ "tarefas": ["Só uma: coração"] }));
     let node = &b.added(1)[0];
     assert_eq!((node["state"].as_str(), node["choice"]["tool"].as_str()), (Some("running"), Some("claude")));
-    let (code, out) = finish(run);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.starts_with("--- EXECUTOR 1/1 ---\nSó uma: coração\nfeito: Só uma: coração\nexecutor_exit: 0\n--- GIT ---\n"), "{out}");
+    let (out, is_error) = m.done(run);
+    assert!(!is_error && out.starts_with("--- EXECUTOR 1/1 ---\nSó uma: coração\nfeito: Só uma: coração\nexecutor_exit: 0\n--- GIT ---\n"), "{out}");
 
-    // O comando morto por tempo de espera: o lote segue, e '--aguardar' volta a esperar por ele,
-    // sem publicar lote novo.
-    let mut run = b.delegate("powershell", &["DORMIR D"]);
+    // O cliente morre no meio da espera: o lote segue, e um `aguardar` de outro cliente o devolve, sem publicar lote novo.
+    let mut dying = b.mcp();
+    dying.start("delegar", json!({ "tarefas": ["DORMIR D"] }));
     let d = id(&b.added(1)[0]);
     let before = b.requests();
-    run.kill().unwrap();
-    run.wait().unwrap();
-    let waiting = b.delegate_cmd("powershell", &["--aguardar"]);
+    drop(dying);
+    let mut m = b.mcp();
+    let waiting = m.start("aguardar", json!({}));
     std::thread::sleep(Duration::from_millis(1500));
     b.core.stop_executor(&d);
-    let (code, out) = finish(waiting);
-    assert_eq!(code, 1, "{out}");
-    assert!(out.starts_with("--- EXECUTOR 1/1 ---\nDORMIR D\ninterrompido pelo usuário\n") && out.ends_with("--- FIM ---\n"), "{out}");
-    assert_eq!(b.requests(), before, "--aguardar não publica lote novo");
+    let (out, is_error) = m.done(waiting);
+    assert!(!is_error && out.starts_with("--- EXECUTOR 1/1 ---\nDORMIR D\ninterrompido pelo usuário\n") && out.ends_with("--- FIM ---\n"), "{out}");
+    assert_eq!(b.requests(), before, "aguardar não publica lote novo");
 
-    // Entregue: não há mais o que aguardar. Erros do comando fecham com a linha final e código 4.
-    for (shell, args, why) in [
-        ("powershell", vec!["--aguardar"], "Nenhum lote aguardando entrega."),
-        ("pwsh", vec!["ok", "  "], "Tarefa vazia."),
-        ("powershell", vec![], "Nenhuma tarefa."),
-    ] {
-        let (code, out) = finish(b.delegate(shell, &args));
-        assert_eq!(code, 4, "{shell}: {out}");
-        assert!(out.starts_with(&format!("wrapper_error: {why}")) && out.ends_with("\n--- FIM ---\n"), "{shell}: {out}");
-    }
+    // Entregue: não há mais o que aguardar. Os erros voltam com isError e o texto do motivo, sem --- FIM ---.
+    b.entregues();
+    let (text, is_error) = m.call("aguardar", json!({}));
+    assert!(is_error && text == "Nenhum lote aguardando entrega.", "{text}");
+    let (text, is_error) = m.call("delegar", json!({ "tarefas": ["ok", "  "] }));
+    assert!(is_error && text == "Tarefa vazia.", "{text}");
+    let (text, is_error) = m.call("delegar", json!({ "tarefas": [] }));
+    assert!(is_error && text.starts_with("Nenhuma tarefa"), "{text}");
     assert_eq!(b.requests(), before, "tarefa vazia não chega a publicar lote");
 
     assert!(b.core.has_running());
@@ -378,99 +401,57 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     assert!(!session.exists(), "a pasta da sessão tem de sair no shutdown");
 }
 
-/// O pedido publicado é o texto original, byte a byte, nos dois shells; e o executor recebe o mesmo texto.
+/// O texto publicado é o pedido, byte a byte, e o título de cada nó é o título dele; o lote termina sem erro.
 #[test]
-fn texto_original_chega_igual_ao_pedido_publicado_nos_dois_shells() {
+fn textos_com_aspas_barra_e_acentos_chegam_iguais_ao_pedido() {
     let b = bench("texto");
     b.pronto();
-    for shell in ["powershell", "pwsh"] {
-        let run = b.delegate(shell, &TASKS);
-        let nodes = b.added(TASKS.len());
-        let (code, out) = finish(run);
-        assert_eq!(code, 0, "{shell}: {out}");
-        let batch = b.last_batch();
-        for (n, task) in TASKS.iter().enumerate() {
-            let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
-            assert_eq!(published, *task, "{shell}: a tarefa {} chegou diferente do pedido", n + 1);
-            assert_eq!(nodes[n]["title"], title(task), "{shell}: título da tarefa {}", n + 1);
-        }
-        assert!(out.contains(&format!("--- EXECUTOR {}/{} ---\n", TASKS.len(), TASKS.len())), "{shell}: {out}");
+    let mut m = b.mcp();
+    let run = m.start("delegar", json!({ "tarefas": &TASKS[..] }));
+    let nodes = b.added(TASKS.len());
+    let (out, is_error) = m.done(run);
+    assert!(!is_error, "{out}");
+    let batch = b.last_batch();
+    for (n, task) in TASKS.iter().enumerate() {
+        let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
+        assert_eq!(published, *task, "a tarefa {} chegou diferente do pedido", n + 1);
+        assert_eq!(nodes[n]["title"], title(task), "título da tarefa {}", n + 1);
     }
+    assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", TASKS.len())), "{out}");
 }
 
-/// Tarefas na here-string de aspas simples: apóstrofo sem dobrar, várias linhas, e `; ( ) < > * @ $`, crase, aspas
-/// duplas e barra no fim.
-const AQUI: [&str; 3] = [
-    "Ação: d'água, it's ''ok''",
-    "Linha 1; (x) <y> *z* @ $HOME\nLinha 2 `crase` \"aspas\" e barra no fim\\",
-    "C:\\Users\\Maria Silva\\ ; $(calc) && não",
-];
-
-/// O caminho da here-string nos dois shells, por `-EncodedCommand` e por `-Command`: cada texto publicado é o
-/// pedido, byte a byte, e o lote termina com código 0.
+/// Tarefas com apóstrofo, várias linhas e caracteres que o shell comeria: cada texto publicado é o pedido, byte a byte.
 #[test]
-fn here_string_chega_igual_ao_pedido_nos_dois_shells_e_nos_dois_jeitos() {
+fn textos_com_apostrofo_e_caracteres_de_shell_chegam_iguais_ao_pedido() {
     let b = bench("aqui");
     b.pronto();
-    for shell in ["powershell", "pwsh"] {
-        for jeito in ["encoded", "command"] {
-            let run = if jeito == "encoded" { b.delegate_here(shell, &AQUI) } else { b.delegate_cmd_here(shell, &AQUI) };
-            let nodes = b.added(AQUI.len());
-            let (code, out) = finish(run);
-            assert_eq!(code, 0, "{shell} {jeito}: {out}");
-            let batch = b.last_batch();
-            for (n, task) in AQUI.iter().enumerate() {
-                let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
-                assert_eq!(published, *task, "{shell} {jeito}: a tarefa {} chegou diferente do pedido", n + 1);
-                assert_eq!(nodes[n]["title"], title(task), "{shell} {jeito}: título da tarefa {}", n + 1);
-            }
-            assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", AQUI.len())), "{shell} {jeito}: {out}");
-        }
+    let mut m = b.mcp();
+    let run = m.start("delegar", json!({ "tarefas": &AQUI[..] }));
+    let nodes = b.added(AQUI.len());
+    let (out, is_error) = m.done(run);
+    assert!(!is_error, "{out}");
+    let batch = b.last_batch();
+    for (n, task) in AQUI.iter().enumerate() {
+        let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
+        assert_eq!(published, *task, "a tarefa {} chegou diferente do pedido", n + 1);
+        assert_eq!(nodes[n]["title"], title(task), "título da tarefa {}", n + 1);
     }
+    assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", AQUI.len())), "{out}");
 }
 
-/// Com a pasta da sessão e o programa em caminhos com espaço, acento e apóstrofo, o comando segue sendo um
-/// nome só, e os dois shells delegam.
+/// Com a pasta da sessão em caminho com espaço, acento e apóstrofo, o servidor sobe e o lote roda.
 #[test]
-fn caminhos_com_espaco_acento_e_apostrofo_funcionam_nos_dois_shells() {
+fn caminhos_com_espaco_acento_e_apostrofo_funcionam() {
     let b = bench_in("caminhos", "temp com espaço, açaí e it's");
     b.pronto();
-    let head = b.core.delegate_command().unwrap();
-    assert!(!head.contains(' ') && !head.contains('\'') && !head.contains('\\'), "o comando é um nome só: {head}");
-    for shell in ["powershell", "pwsh"] {
-        let run = b.delegate(shell, &["Só uma: coração"]);
-        b.added(1);
-        let (code, out) = finish(run);
-        assert!(code == 0 && out.starts_with("--- EXECUTOR 1/1 ---\nSó uma: coração\nfeito: Só uma: coração\nexecutor_exit: 0\n--- GIT ---\n"), "{shell}: {code} {out}");
-    }
-}
-
-/// O orquestrador acha o comando de delegação na primeira pasta do PATH dele, que é a da sessão.
-#[test]
-fn orquestrador_acha_o_comando_de_delegacao_na_frente_do_path() {
-    let b = bench("path");
-    b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-    until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
-    let head = b.core.delegate_command().unwrap();
-    b.core.term_write(ORCHESTRATOR, &format!("which:{head}\r"));
-    until("o PATH achar o comando na primeira pasta", || b.screen(ORCHESTRATOR).contains("achou:0"));
-    b.core.term_write(ORCHESTRATOR, "which:nao-existe.ps1\r");
-    until("um nome que não existe não é achado", || b.screen(ORCHESTRATOR).contains("achou:nenhum"));
-}
-
-#[test]
-fn tarefa_invalida_e_falta_de_tarefa_fecham_com_erro_e_nao_publicam() {
-    let b = bench("invalida");
-    b.pronto();
-    let cases: [&[&str]; 4] = [&[""], &["  "], &["ok", " \n"], &[]];
-    for shell in ["powershell", "pwsh"] {
-        for tasks in cases {
-            let (code, out) = finish(b.delegate(shell, tasks));
-            assert_eq!(code, 4, "{shell} {tasks:?}: {out}");
-            assert!(out.starts_with("wrapper_error: ") && out.ends_with("\n--- FIM ---\n"), "{shell} {tasks:?}: {out}");
-        }
-    }
-    assert_eq!(b.requests(), 0, "nenhuma tarefa inválida chega a publicar lote");
+    let session = b.core.session_dir().unwrap();
+    let text = session.to_string_lossy();
+    assert!(text.contains(' ') && text.contains('ç') && text.contains('\''), "a pasta da sessão tem esses caracteres: {text}");
+    let mut m = b.mcp();
+    let run = m.start("delegar", json!({ "tarefas": ["Só uma: coração"] }));
+    b.added(1);
+    let (out, is_error) = m.done(run);
+    assert!(!is_error && out.starts_with("--- EXECUTOR 1/1 ---\nSó uma: coração\nfeito: Só uma: coração\nexecutor_exit: 0\n--- GIT ---\n"), "{out}");
 }
 
 #[test]
@@ -480,14 +461,16 @@ fn saida_do_orquestrador_mata_os_executores_e_limpa_sessao_e_regra() {
     b.core.start_orchestrator(Choice::new("codex", "", ""), 100, 30).unwrap();
     assert!(b.core.start_orchestrator(Choice::new("codex", "", ""), 100, 30).unwrap_err().contains("Já há um orquestrador"));
     let session = b.core.session_dir().unwrap();
-    let rule = b.root.join("rules").join(format!("{}.rules", session.file_name().unwrap().to_string_lossy()));
+    let name = session.file_name().unwrap().to_string_lossy().into_owned();
+    let rule = b.root.join("rules").join(format!("{name}.rules"));
     assert!(rule.is_file());
-    let head = b.core.delegate_command().unwrap();
-    assert_eq!(std::fs::read_to_string(&rule).unwrap().lines().next().unwrap(), format!("prefix_rule(pattern=[\"{head}\"], decision=\"allow\", justification=\"Delegacao autorizada ao executor\")"));
+    // A primeira linha da regra é o marcador da sessão, que a recuperação de sobras reconhece.
+    assert_eq!(std::fs::read_to_string(&rule).unwrap().lines().next().unwrap(), format!("# orquestrador {name}"));
     until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
 
     b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
-    let run = b.delegate("powershell", &["DORMIR"]);
+    let mut m = b.mcp();
+    let run = m.start("delegar", json!({ "tarefas": ["DORMIR"] }));
     let node = id(&b.added(1)[0]);
     until("o executor desenhar", || b.screen(&node).contains("dormindo"));
 
@@ -495,10 +478,9 @@ fn saida_do_orquestrador_mata_os_executores_e_limpa_sessao_e_regra() {
     assert_eq!(b.wait("orchestrator-exit", |e, _| e == "orchestrator-exit")["code"], 7);
     assert!(!b.core.has_running());
     assert!(!session.exists() && !rule.exists());
-    // O comando que esperava percebe que a sessão acabou em vez de esperar para sempre.
-    let (code, out) = finish(run);
-    assert_eq!(code, 4, "{out}");
-    assert!(out.starts_with("wrapper_error: ") && out.ends_with("--- FIM ---\n"), "{out}");
+    // A chamada que esperava percebe que a sessão acabou em vez de esperar para sempre.
+    let (text, is_error) = m.done(run);
+    assert!(is_error && text == "A sessão do orquestrador terminou antes do fim do lote.", "{text}");
 
     // Reabre vazio, e a última escolha do orquestrador ficou salva.
     b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
@@ -513,8 +495,7 @@ fn pasta_fora_de_repositorio_git_e_recusada() {
     assert!(b.core.set_project(&outside).unwrap_err().contains("não está dentro de um repositório Git"));
 }
 
-/// Tarefa longa, com Unicode, aspas e barra no fim. Cada uma tem menos de 20000 bytes, o limite a partir do qual
-/// o app passa a tarefa por arquivo; as três juntas passam de 32767 caracteres em base64.
+/// Tarefa longa, com Unicode, aspas e barra no fim, de uns 9000 bytes.
 fn tarefa_longa(n: usize) -> String {
     let mut text = format!("Tarefa longa {n}: ação, coração, \"aspas\" e C:\\Users\\Maria Silva\\\n");
     while text.len() < 9000 {
@@ -523,144 +504,136 @@ fn tarefa_longa(n: usize) -> String {
     text + &format!("Fim da tarefa {n}: C:\\pasta\\")
 }
 
-/// Um lote que não cabe na linha de comando do Windows, com tarefas longas, Unicode, aspas e barra no fim: nos
-/// dois shells, cada texto publicado é o original, byte a byte, e o lote termina com código 0.
+/// Um lote com mais de 40 mil caracteres, com tarefas longas, Unicode, aspas e barra no fim: cada texto publicado
+/// é o original, byte a byte, e o lote termina sem erro.
 #[test]
-fn lote_que_nao_cabe_na_linha_de_comando_chega_inteiro_nos_dois_shells() {
+fn lote_com_mais_de_40_mil_caracteres_chega_inteiro() {
     let b = bench("longo");
     b.pronto();
-    let mut tasks: Vec<String> = (1..=3).map(tarefa_longa).collect();
-    tasks.push("Só uma: coração".into());
-    let encoded: usize = tasks.iter().map(|t| base64::engine::general_purpose::STANDARD.encode(t).len()).sum();
-    assert!(encoded > 32767, "o lote tem de passar do limite da linha de comando: {encoded}");
-    let refs: Vec<&str> = tasks.iter().map(String::as_str).collect();
-    for shell in ["powershell", "pwsh"] {
-        let run = b.delegate_file(shell, &refs);
-        let nodes = b.added(tasks.len());
-        let (code, out) = finish(run);
-        assert_eq!(code, 0, "{shell}: {out}");
-        let batch = b.last_batch();
-        for (n, task) in tasks.iter().enumerate() {
-            let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
-            assert!(published == *task, "{shell}: a tarefa {} chegou diferente do pedido", n + 1);
-            assert_eq!(nodes[n]["title"], title(task), "{shell}: título da tarefa {}", n + 1);
-        }
-        assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", tasks.len())), "{shell}: {out}");
+    let tasks: Vec<String> = (1..=5).map(tarefa_longa).collect();
+    let chars: usize = tasks.iter().map(|t| t.chars().count()).sum();
+    assert!(chars > 40_000, "o lote tem de passar de 40 mil caracteres: {chars}");
+    let mut m = b.mcp();
+    let run = m.start("delegar", json!({ "tarefas": tasks }));
+    let nodes = b.added(tasks.len());
+    let (out, is_error) = m.done(run);
+    assert!(!is_error, "{out}");
+    let batch = b.last_batch();
+    for (n, task) in tasks.iter().enumerate() {
+        let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
+        assert!(published == *task, "a tarefa {} chegou diferente do pedido", n + 1);
+        assert_eq!(nodes[n]["title"], title(task), "título da tarefa {}", n + 1);
     }
+    assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", tasks.len())), "{out}");
 }
 
-/// O caminho real, `-Command` sem nenhum `exit` acrescentado: sucesso sai com 0, executor que falha sai com 1 e o
-/// próprio comando que falha sai com 4 (inclusive `--aguardar` sem lote pendente). Nos dois shells.
+/// O protocolo contra o binário de verdade, sem sessão: `initialize` devolve a versão pedida, `tools/list` traz as
+/// três ferramentas com o esquema, e um método que não existe (o Claude manda `server/discover`) é erro -32601.
 #[test]
-fn chamada_real_com_command_sai_com_0_1_e_4_nos_dois_shells() {
-    let b = bench("real");
+fn protocolo_do_binario_initialize_tools_list_e_metodo_desconhecido() {
+    let dir = std::env::temp_dir().join(format!("orq-proto-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut m = Mcp::spawn(&dir);
+
+    let init = m.request("initialize", json!({ "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "teste", "version": "0" } }));
+    let reply = m.reply(init);
+    assert_eq!(reply["result"]["protocolVersion"], "2024-11-05");
+    assert_eq!(reply["result"]["capabilities"], json!({ "tools": {} }));
+
+    let list = m.request("tools/list", json!({}));
+    let reply = m.reply(list);
+    let tools = reply["result"]["tools"].as_array().unwrap();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["delegar", "aguardar", "responder"]);
+    assert_eq!(tools[0]["inputSchema"]["required"], json!(["tarefas"]));
+    assert_eq!(tools[2]["inputSchema"]["required"], json!(["executor", "decisao"]));
+
+    let unknown = m.request("server/discover", json!({}));
+    let reply = m.reply(unknown);
+    assert_eq!(reply["id"], unknown);
+    assert_eq!(reply["error"]["code"], -32601);
+    drop(m);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tarefa_invalida_e_falta_de_tarefa_fecham_com_erro_e_nao_publicam() {
+    let b = bench("invalida");
     b.pronto();
-    for shell in ["powershell", "pwsh"] {
-        let run = b.delegate_cmd(shell, &["Só uma: coração"]);
-        b.added(1);
-        let (code, out) = finish(run);
-        assert!(code == 0 && out.starts_with("--- EXECUTOR 1/1 ---\nSó uma: coração\nfeito: Só uma: coração\nexecutor_exit: 0\n--- GIT ---\n"), "{shell}: {code} {out}");
-
-        let run = b.delegate_cmd(shell, &["FALHAR C"]);
-        b.added(1);
-        let (code, out) = finish(run);
-        assert!(code == 1 && out.contains("executor_exit: 3 (FALHOU)") && out.ends_with("\n--- FIM ---\n"), "{shell}: {code} {out}");
-
-        let (code, out) = finish(b.delegate_cmd(shell, &[""]));
-        assert!(code == 4 && out.starts_with("wrapper_error: Tarefa vazia.") && out.ends_with("\n--- FIM ---\n"), "{shell}: {code} {out}");
-
-        let (code, out) = finish(b.delegate_cmd(shell, &["--aguardar"]));
-        assert!(code == 4 && out.starts_with("wrapper_error: Nenhum lote aguardando entrega.") && out.ends_with("\n--- FIM ---\n"), "{shell}: {code} {out}");
+    let mut m = b.mcp();
+    // Sem lote nenhum, `aguardar` é erro com o texto puro, sem prefixo nem --- FIM ---.
+    let (text, is_error) = m.call("aguardar", json!({}));
+    assert!(is_error && text == "Nenhum lote aguardando entrega.", "{text}");
+    for (tasks, why) in [(vec![""], "Tarefa vazia."), (vec!["  "], "Tarefa vazia."), (vec!["ok", " \n"], "Tarefa vazia."), (vec![], "Nenhuma tarefa")] {
+        let (text, is_error) = m.call("delegar", json!({ "tarefas": tasks }));
+        assert!(is_error && text.starts_with(why) && !text.contains("--- FIM ---") && !text.contains("wrapper_error"), "{why}: {text}");
     }
-    // Perfil do pwsh 7.4 em diante com a preferência de erro de programa nativo ligada: o código continua o do programa.
-    let line = format!("$PSNativeCommandUseErrorActionPreference = $true; {}", b.line(&["--aguardar"]));
-    let (code, out) = finish(b.spawn_shell("pwsh", &["-Command", &line]));
-    assert!(code == 4 && out.starts_with("wrapper_error: Nenhum lote aguardando entrega."), "pwsh com preferência nativa: {code} {out}");
+    assert_eq!(b.requests(), 0, "nenhuma tarefa inválida chega a publicar lote");
 }
 
-/// O programa sozinho, sem sessão: entrada vazia, cortada, ilegível ou com argumento fecha com `wrapper_error`,
-/// código 4 e `--- FIM ---`, sem publicar nada.
-#[test]
-fn entrada_do_adaptador_vazia_cortada_ou_ilegivel_fecha_com_wrapper_error() {
-    let exe = env!("CARGO_BIN_EXE_orquestrador-delegar");
-    let cases: [(&[u8], &str); 4] = [(b"", "veio vazia"), (b"cHJpbWVpcmE=;c2VndW5kYQ==", "incompleta"), (b"!!!\r\n", "não está em base64"), (b"\xFF\xFE\r\n", "não é UTF-8")];
-    for (input, why) in cases {
-        let mut child = Command::new(exe).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-        child.stdin.take().unwrap().write_all(input).unwrap();
-        let (code, out) = finish(child);
-        assert!(code == 4 && out.starts_with("wrapper_error: ") && out.contains(why) && out.ends_with("\n--- FIM ---\n"), "{why}: {code} {out}");
-    }
-    let child = Command::new(exe).arg("x").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-    let (code, out) = finish(child);
-    assert!(code == 4 && out.contains("não recebe argumentos") && out.ends_with("\n--- FIM ---\n"), "{code} {out}");
-}
-
-/// Um executor para num pedido de confirmação: a delegação devolve a pergunta com código 3 sem esperar o lote, o
-/// outro executor do lote termina enquanto isso, `--aguardar` devolve a pergunta de novo, e `--responder aceitar`
-/// faz o executor seguir até o fim do lote, que sai com a resposta dele.
 #[test]
 fn pergunta_do_executor_passa_pelo_orquestrador_e_aceita_sem_parar_o_outro() {
     let b = bench("pergunta");
     b.pronto();
+    let mut m = b.mcp();
 
-    let run = b.delegate("powershell", &["PERGUNTA: remover o log", "Tarefa B: coração"]);
+    let run = m.start("delegar", json!({ "tarefas": ["PERGUNTA: remover o log", "Tarefa B: coração"] }));
     let nodes = b.added(2);
     let (p, q) = (id(&nodes[0]), id(&nodes[1]));
     b.states(&[(p.as_str(), "awaiting-orchestrator"), (q.as_str(), "done")]);
-    let (code, out) = finish(run);
-    assert_eq!(code, 3, "{out}");
+    let (out, is_error) = m.done(run);
+    assert!(!is_error, "{out}");
     let asked = format!("--- PERGUNTA {p} (1/2) ---\nPERGUNTA: remover o log\nO executor parou num pedido de confirmação e espera a sua resposta.\nBash: rm /d/arquivo.log\n");
     assert!(out.starts_with(&asked) && out.ends_with("--- AGUARDANDO RESPOSTA ---\n"), "{out}");
     assert!(!out.contains("--- FIM ---") && !out.contains("Tarefa B"), "{out}");
 
-    // `--aguardar` devolve a mesma pergunta, e não publica lote nenhum.
+    // `aguardar` devolve a mesma pergunta, e não publica lote nenhum.
     let requests = b.requests();
-    let (code, again) = finish(b.delegate("powershell", &["--aguardar"]));
-    assert!(code == 3 && again.starts_with(&asked), "{code} {again}");
+    let (again, is_error) = m.call("aguardar", json!({}));
+    assert!(!is_error && again.starts_with(&asked), "{again}");
     assert_eq!(b.requests(), requests);
 
     // Aceitar: o nó volta a rodar, termina a rodada, e o lote sai com a resposta dele.
-    let run = b.delegate("powershell", &["--responder", p.as_str(), "aceitar"]);
+    let run = m.start("responder", json!({ "executor": p.as_str(), "decisao": "aceitar" }));
     b.states(&[(p.as_str(), "running"), (p.as_str(), "done")]);
-    let (code, out) = finish(run);
-    assert_eq!(code, 0, "{out}");
+    let (out, is_error) = m.done(run);
     assert!(
-        out.starts_with("--- EXECUTOR 1/2 ---\nPERGUNTA: remover o log\naceito\nexecutor_exit: 0\n--- EXECUTOR 2/2 ---\nTarefa B: coração\nfeito: Tarefa B: coração\nexecutor_exit: 0\n--- GIT ---\n"),
+        !is_error && out.starts_with("--- EXECUTOR 1/2 ---\nPERGUNTA: remover o log\naceito\nexecutor_exit: 0\n--- EXECUTOR 2/2 ---\nTarefa B: coração\nfeito: Tarefa B: coração\nexecutor_exit: 0\n--- GIT ---\n"),
         "{out}"
     );
-    assert_eq!(b.requests(), requests, "--responder não publica lote novo");
+    assert_eq!(b.requests(), requests, "responder não publica lote novo");
 }
 
-/// Recusa com motivo: o motivo chega ao executor como a mensagem de erro, e ele segue. Os erros de `--responder`
-/// (sem motivo, resposta desconhecida, executor sem pergunta) fecham com `wrapper_error` e código 4, sem gravar nada.
+/// Recusa com motivo: o motivo chega ao executor como a mensagem de erro, e ele segue. Os erros de `responder`
+/// (sem motivo, resposta desconhecida, executor sem pergunta) voltam com isError e o motivo, sem gravar nada.
 #[test]
 fn recusa_leva_o_motivo_ao_executor_e_erros_do_responder_nao_gravam_nada() {
     let b = bench("recusa");
     b.pronto();
+    let mut m = b.mcp();
 
-    let run = b.delegate("powershell", &["PERGUNTA: apagar o banco"]);
+    let run = m.start("delegar", json!({ "tarefas": ["PERGUNTA: apagar o banco"] }));
     let p = id(&b.added(1)[0]);
-    let (code, out) = finish(run);
-    assert!(code == 3 && out.starts_with(&format!("--- PERGUNTA {p} (1/1) ---\n")), "{code} {out}");
+    let (out, is_error) = m.done(run);
+    assert!(!is_error && out.starts_with(&format!("--- PERGUNTA {p} (1/1) ---\n")), "{out}");
     b.states(&[(p.as_str(), "awaiting-orchestrator")]);
 
     let requests = b.requests();
     for (args, why) in [
-        (vec!["--responder", p.as_str(), "recusar"], "recusar pede um motivo"),
-        (vec!["--responder", p.as_str(), "talvez"], "resposta desconhecida"),
-        (vec!["--responder", "exec-999", "aceitar"], "não tem pergunta pendente"),
+        (json!({ "executor": p.as_str(), "decisao": "recusar" }), "recusar pede um motivo"),
+        (json!({ "executor": p.as_str(), "decisao": "talvez" }), "resposta desconhecida"),
+        (json!({ "executor": "exec-999", "decisao": "aceitar" }), "não tem pergunta pendente"),
     ] {
-        let (code, out) = finish(b.delegate("powershell", &args));
-        assert!(code == 4 && out.starts_with("wrapper_error: ") && out.contains(why) && out.ends_with("\n--- FIM ---\n"), "{why}: {code} {out}");
+        let (text, is_error) = m.call("responder", args);
+        assert!(is_error && text.contains(why), "{why}: {text}");
     }
     assert_eq!(b.requests(), requests);
 
-    let run = b.delegate("powershell", &["--responder", p.as_str(), "recusar", "não apague o banco: use o arquivo de teste que você criou"]);
+    let run = m.start("responder", json!({ "executor": p.as_str(), "decisao": "recusar", "motivo": "não apague o banco: use o arquivo de teste que você criou" }));
     b.states(&[(p.as_str(), "running"), (p.as_str(), "done")]);
-    let (code, out) = finish(run);
-    assert_eq!(code, 0, "{out}");
+    let (out, is_error) = m.done(run);
     assert!(
-        out.starts_with("--- EXECUTOR 1/1 ---\nPERGUNTA: apagar o banco\nrecusado: não apague o banco: use o arquivo de teste que você criou\nexecutor_exit: 0\n--- GIT ---\n"),
+        !is_error && out.starts_with("--- EXECUTOR 1/1 ---\nPERGUNTA: apagar o banco\nrecusado: não apague o banco: use o arquivo de teste que você criou\nexecutor_exit: 0\n--- GIT ---\n"),
         "{out}"
     );
 }
@@ -671,25 +644,26 @@ fn recusa_leva_o_motivo_ao_executor_e_erros_do_responder_nao_gravam_nada() {
 fn parar_num_executor_que_espera_resposta_fecha_o_lote_sem_a_pergunta() {
     let b = bench("parar");
     b.pronto();
+    let mut m = b.mcp();
 
-    let run = b.delegate("powershell", &["PERGUNTA: parar aqui"]);
+    let run = m.start("delegar", json!({ "tarefas": ["PERGUNTA: parar aqui"] }));
     let p = id(&b.added(1)[0]);
-    let (code, out) = finish(run);
-    assert_eq!(code, 3, "{out}");
+    let (out, is_error) = m.done(run);
+    assert!(!is_error && out.ends_with("--- AGUARDANDO RESPOSTA ---\n"), "{out}");
     b.states(&[(p.as_str(), "awaiting-orchestrator")]);
 
     b.core.stop_executor(&p);
     b.state(&p, "stopped");
-    let (code, out) = finish(b.delegate("powershell", &["--aguardar"]));
-    assert_eq!(code, 1, "{out}");
+    let (out, is_error) = m.call("aguardar", json!({}));
     assert!(
-        out.starts_with("--- EXECUTOR 1/1 ---\nPERGUNTA: parar aqui\ninterrompido pelo usuário\nexecutor_exit: interrompido (FALHOU)\n--- GIT ---\n")
+        !is_error
+            && out.starts_with("--- EXECUTOR 1/1 ---\nPERGUNTA: parar aqui\ninterrompido pelo usuário\nexecutor_exit: interrompido (FALHOU)\n--- GIT ---\n")
             && out.ends_with("--- FIM ---\n")
             && !out.contains("AGUARDANDO"),
         "{out}"
     );
-    let (code, out) = finish(b.delegate("powershell", &["--responder", p.as_str(), "aceitar"]));
-    assert!(code == 4 && out.contains("não tem pergunta pendente"), "{code} {out}");
+    let (text, is_error) = m.call("responder", json!({ "executor": p.as_str(), "decisao": "aceitar" }));
+    assert!(is_error && text.contains("não tem pergunta pendente"), "{text}");
 }
 
 /// O pedido que sai da pasta `ask` devolve o nó de `awaiting-orchestrator` a `running`, e a rodada segue até o fim.
@@ -698,11 +672,12 @@ fn parar_num_executor_que_espera_resposta_fecha_o_lote_sem_a_pergunta() {
 fn pedido_que_sai_da_pasta_devolve_o_no_a_rodando() {
     let b = bench("expira");
     b.pronto();
+    let mut m = b.mcp();
 
-    let run = b.delegate("powershell", &["PERGUNTA: remover o log"]);
+    let run = m.start("delegar", json!({ "tarefas": ["PERGUNTA: remover o log"] }));
     let p = id(&b.added(1)[0]);
-    let (code, out) = finish(run);
-    assert_eq!(code, 3, "{out}");
+    let (out, is_error) = m.done(run);
+    assert!(!is_error && out.ends_with("--- AGUARDANDO RESPOSTA ---\n"), "{out}");
     b.states(&[(p.as_str(), "awaiting-orchestrator")]);
 
     let ask = b.core.session_dir().unwrap().join("exec").join(&p).join("ask");
@@ -720,14 +695,15 @@ fn pedido_que_sai_da_pasta_devolve_o_no_a_rodando() {
 fn executor_que_espera_o_orquestrador_ocupa_a_vaga() {
     let b = bench_com("vaga", "temp", Some(2)); // teto 1
     b.pronto();
+    let mut m = b.mcp();
 
-    let run = b.delegate("powershell", &["PERGUNTA: remover o log", "Tarefa B: coração"]);
+    let run = m.start("delegar", json!({ "tarefas": ["PERGUNTA: remover o log", "Tarefa B: coração"] }));
     let nodes = b.added(2);
     let (p, q) = (id(&nodes[0]), id(&nodes[1]));
     assert_eq!(nodes[1]["state"], "queued", "B espera a vaga de A");
     b.states(&[(p.as_str(), "awaiting-orchestrator")]);
-    let (code, out) = finish(run);
-    assert_eq!(code, 3, "{out}");
+    let (out, is_error) = m.done(run);
+    assert!(!is_error && out.ends_with("--- AGUARDANDO RESPOSTA ---\n"), "{out}");
 
     // A espera a resposta e segue com a vaga: B não abre, nem com a fila andando.
     std::thread::sleep(Duration::from_millis(1500));
@@ -736,13 +712,12 @@ fn executor_que_espera_o_orquestrador_ocupa_a_vaga() {
     assert_eq!(b.core.term_snapshot(&q).seq, 0, "B não tem processo");
 
     // Respondido, A termina a rodada e libera a vaga: B abre e termina.
-    let run = b.delegate("powershell", &["--responder", p.as_str(), "aceitar"]);
+    let run = m.start("responder", json!({ "executor": p.as_str(), "decisao": "aceitar" }));
     b.state(&p, "done");
     b.state(&q, "running");
     b.state(&q, "done");
-    let (code, out) = finish(run);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.contains("--- EXECUTOR 2/2 ---\nTarefa B: coração\nfeito: Tarefa B: coração\n"), "{out}");
+    let (out, is_error) = m.done(run);
+    assert!(!is_error && out.contains("--- EXECUTOR 2/2 ---\nTarefa B: coração\nfeito: Tarefa B: coração\n"), "{out}");
 }
 
 /// Pouca memória livre deixa um executor só. O resto espera, e a fila só anda quando a memória volta; quem já
@@ -752,8 +727,9 @@ fn memoria_baixa_segura_a_fila_e_a_memoria_de_volta_abre_sem_matar_quem_roda() {
     let b = bench_com("memoria", "temp", Some(16)); // teto de CPU 8
     b.memoria(64 * GIB, GIB * 5 / 2); // 2,5 GiB livres: a reserva de 2 GiB deixa 0,5 GiB, nenhuma vaga
     b.pronto();
+    let mut m = b.mcp();
 
-    let _run = b.delegate("powershell", &["DORMIR A", "DORMIR B"]);
+    let _run = m.start("delegar", json!({ "tarefas": ["DORMIR A", "DORMIR B"] }));
     let nodes = b.added(2);
     let (a, q) = (id(&nodes[0]), id(&nodes[1]));
     assert_eq!((nodes[0]["state"].as_str(), nodes[1]["state"].as_str()), (Some("running"), Some("queued")));
@@ -777,15 +753,16 @@ fn memoria_baixa_segura_a_fila_e_a_memoria_de_volta_abre_sem_matar_quem_roda() {
 fn reducao_de_memoria_nao_mata_vivos_e_a_retomada_abre_a_fila() {
     let b = bench_com("reducao", "temp", Some(16)); // teto de CPU 8
     b.pronto();
+    let mut m = b.mcp();
 
-    let _run = b.delegate("powershell", &["DORMIR A", "DORMIR B", "DORMIR C"]);
+    let _run = m.start("delegar", json!({ "tarefas": ["DORMIR A", "DORMIR B", "DORMIR C"] }));
     let nodes = b.added(3);
     let vivos: Vec<String> = nodes.iter().map(id).collect();
     assert!(nodes.iter().all(|n| n["state"] == "running"), "com RAM de sobra, os três abrem: {nodes:?}");
 
     // RAM total de 4 GiB: teto 2 com três vivos. O quarto espera e nenhum vivo cai.
     b.memoria(4 * GIB, 4 * GIB);
-    let _run2 = b.delegate("powershell", &["DORMIR D"]);
+    let _run2 = m.start("delegar", json!({ "tarefas": ["DORMIR D"] }));
     let quarto = b.added(1).remove(0);
     let d = id(&quarto);
     assert_eq!(quarto["state"], "queued", "com teto 2 e três vivos, o quarto espera");
@@ -811,8 +788,9 @@ fn fila_sai_na_ordem_de_chegada_com_um_executor_por_vez() {
     let b = bench_com("fifo", "temp", Some(16));
     b.memoria(64 * GIB, GIB * 5 / 2); // teto 1
     b.pronto();
+    let mut m = b.mcp();
 
-    let run = b.delegate("powershell", &["Tarefa A", "Tarefa B", "Tarefa C"]);
+    let run = m.start("delegar", json!({ "tarefas": ["Tarefa A", "Tarefa B", "Tarefa C"] }));
     let nodes = b.added(3);
     let (a, bb, c) = (id(&nodes[0]), id(&nodes[1]), id(&nodes[2]));
     assert_eq!((nodes[0]["state"].as_str(), nodes[1]["state"].as_str(), nodes[2]["state"].as_str()), (Some("running"), Some("queued"), Some("queued")));
@@ -824,7 +802,7 @@ fn fila_sai_na_ordem_de_chegada_com_um_executor_por_vez() {
     b.state(&bb, "done");
     b.state(&c, "running");
     b.state(&c, "done");
-    let (code, out) = finish(run);
-    assert_eq!(code, 0, "{out}");
+    let (out, is_error) = m.done(run);
+    assert!(!is_error, "{out}");
     assert!(out.contains("--- EXECUTOR 1/3 ---\nTarefa A\nfeito: Tarefa A\nexecutor_exit: 0\n--- EXECUTOR 2/3 ---\nTarefa B\n"), "{out}");
 }

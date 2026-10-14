@@ -6,9 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "dev:tauri": "cargo build --manifest-path src-tauri/Cargo.toml --bin orquestrador-delegar && vite",
-    "build:tauri": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin orquestrador-delegar && npm run build",
-    "copy:delegar": "node -e \"require('fs').copyFileSync('src-tauri/target/release/orquestrador-delegar.exe', 'src-tauri/target/delegar/orquestrador-delegar.exe')\"",
     "tauri": "tauri"
   },
   "dependencies": {

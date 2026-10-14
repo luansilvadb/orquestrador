@@ -1,15 +1,16 @@
-//! A pasta temporária de uma sessão do orquestrador (`strategist-<guid>`), o adaptador de delegação que
-//! ela libera (`orq-<guid>.ps1`), o Git que o orquestrador pode rodar, as regras do Codex e as permissões
-//! do Claude, a limpeza e a recuperação das sobras de sessões mortas.
+//! A pasta temporária de uma sessão do orquestrador (`strategist-<guid>`): o `mcp.json` que aponta o servidor MCP
+//! de delegação (Claude), o Git que o orquestrador pode rodar, as regras do Codex e as permissões do Claude, a
+//! limpeza e a recuperação das sobras de sessões mortas.
 use crate::cli::toml;
 use crate::config::Config;
-use crate::delegate;
 use crate::proc::{owner_state, start_time, Owner};
 use crate::roles;
+use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A justificativa que a regra do Codex leva; é o que o Codex mostra ao aprovar a regra.
+/// A justificativa da regra do comando de delegação da forma antiga (`orq-<id>.ps1`, até a v0.1.9). Só
+/// `recover_orphans` a usa, para limpar a sessão de quem atualizou com um Codex aberto.
 const JUSTIFICATION: &str = "Delegacao autorizada ao executor";
 
 /// O Git do orquestrador, com qualquer subcomando. `git.exe` vai junto porque o orquestrador pode digitar
@@ -40,22 +41,24 @@ impl Places {
 
 pub struct Session {
     pub dir: PathBuf,
-    /// O comando de delegação como o orquestrador o digita: só o nome do adaptador. Ele fica na pasta da
-    /// sessão, que é a primeira entrada do PATH do orquestrador, então não precisa de caminho nem aspas.
-    pub command: String,
     pub rule: PathBuf,
     pub global_dirs: Vec<PathBuf>,
 }
 
 /// Uma regra `prefix_rule` do Codex para um único token, que é o programa liberado, com a justificativa que quem
-/// a pede escolhe (`JUSTIFICATION` para o comando de delegação, `GIT_JUSTIFICATION` para o Git).
+/// a pede escolhe (`GIT_JUSTIFICATION` para o Git, `JUSTIFICATION` na forma antiga).
 fn rule(token: &str, justification: &str) -> String {
     format!("prefix_rule(pattern=[{}], decision=\"allow\", justification=\"{justification}\")\n", toml(token))
 }
 
-/// O comando de delegação de uma sessão: `orq-<id>.ps1`, com o id que dá nome à pasta `strategist-<id>`.
-pub fn command_for(name: &str) -> String {
+/// O nome do comando de delegação da forma antiga: `orq-<id>.ps1`, com o id que dá nome à pasta `strategist-<id>`.
+fn command_for(name: &str) -> String {
     format!("orq-{}.ps1", name.strip_prefix("strategist-").unwrap_or(name))
+}
+
+/// A primeira linha da regra do Codex de uma sessão: é por ela que `recover_orphans` a reconhece.
+fn marker(name: &str) -> String {
+    format!("# orquestrador {name}")
 }
 
 /// Os programas das skills globais, por interpretador, nas duas grafias de barra (o orquestrador
@@ -95,32 +98,24 @@ pub fn skill_programs(global_dirs: &[PathBuf], runner: &str) -> Vec<String> {
 const RUNNERS: [&str; 2] = ["node", "python"];
 
 impl Session {
-    /// Cria a pasta e tudo o que a sessão usa. O que falhar no meio é desfeito por quem chamou,
-    /// com `remove`: por isso `dir` e `rule` são devolvidos mesmo no erro.
-    pub fn create(places: &Places, delegate: &str, project: &str, cfg: &Config) -> (Session, Result<(), String>) {
+    /// Cria a pasta e tudo o que a sessão usa. `app` é o caminho do próprio app, que a sessão põe como servidor
+    /// MCP do orquestrador. O que falhar no meio é desfeito por quem chamou, com `remove`: por isso `dir` e `rule`
+    /// são devolvidos mesmo no erro.
+    pub fn create(places: &Places, app: &str, project: &str, cfg: &Config) -> (Session, Result<(), String>) {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         let name = format!("strategist-{nanos:032x}");
         let session = Session {
-            command: command_for(&name),
             rule: places.codex_rules.join(format!("{name}.rules")),
             global_dirs: places.global_dirs.clone(),
             dir: places.temp.join(&name),
         };
-        let result = if Path::new(delegate).is_file() {
-            delegate::adapter(Path::new(delegate), &session.dir).and_then(|script| {
-                session
-                    .fill(&name, project, cfg, &script)
-                    .map_err(|e| format!("Não foi possível criar a sessão em {}: {e}", session.dir.display()))
-            })
-        } else {
-            Err(format!(
-                "O programa de delegação não está em {delegate}. Ele vai junto com o app: em desenvolvimento, ele é compilado por `npm run dev:tauri`."
-            ))
-        };
+        let result = session
+            .fill(&name, app, project, cfg)
+            .map_err(|e| format!("Não foi possível criar a sessão em {}: {e}", session.dir.display()));
         (session, result)
     }
 
-    fn fill(&self, name: &str, project: &str, cfg: &Config, script: &str) -> std::io::Result<()> {
+    fn fill(&self, name: &str, app: &str, project: &str, cfg: &Config) -> std::io::Result<()> {
         let d = &self.dir;
         std::fs::create_dir(d)?;
         for sub in ["requests", "results", "exec"] {
@@ -128,26 +123,24 @@ impl Session {
         }
         let pid = std::process::id();
         std::fs::write(d.join("owner"), format!("{pid} {} {name}", start_time(pid).unwrap_or(0)))?;
-        // Com BOM: o Windows PowerShell 5.1 lê um .ps1 sem BOM como ANSI, e o caminho dele sairia errado.
-        std::fs::write(d.join(&self.command), format!("\u{feff}{script}"))?;
-        // {{CITACAO}} vai primeiro: o texto dele traz {{DELEGATE}}, que é trocado logo depois.
-        let citacao = if cfg.orchestrator.tool == "codex" { roles::CITACAO_CODEX } else { roles::CITACAO_CLAUDE };
-        let agents = roles::ORCHESTRATOR.replace("{{CITACAO}}", citacao).replace("{{DELEGATE}}", &self.command).replace("{{PROJECT}}", project);
-        std::fs::write(d.join("AGENTS.md"), agents)?;
+        std::fs::write(d.join("AGENTS.md"), roles::ORCHESTRATOR.replace("{{PROJECT}}", project))?;
         if cfg.orchestrator.tool == "codex" {
+            // O servidor do Codex vai na linha de comando, em `cli.rs`; a regra só leva o marcador e o Git.
             std::fs::create_dir_all(self.rule.parent().unwrap())?;
-            std::fs::write(&self.rule, self.codex_rules())?;
+            std::fs::write(&self.rule, self.codex_rules(name))?;
         } else {
+            let mcp = json!({ "mcpServers": { "orquestrador": { "command": app, "args": ["--mcp", d.to_string_lossy()] } } });
+            std::fs::write(d.join("mcp.json"), serde_json::to_string_pretty(&mcp).unwrap())?;
             std::fs::write(d.join("claude-settings.json"), self.claude_settings())?;
         }
         Ok(())
     }
 
-    /// A regra do comando de delegação, que tem de ficar na primeira linha (é por ela que `recover_orphans`
-    /// reconhece a sessão). Depois dela, uma regra para cada programa do Git e uma por interpretador com os
-    /// programas das skills.
-    fn codex_rules(&self) -> String {
-        let mut text = rule(&self.command, JUSTIFICATION);
+    /// A primeira linha é o marcador desta sessão, que `recover_orphans` reconhece. Depois dela, uma regra para cada
+    /// programa do Git e uma por interpretador com os programas das skills. O servidor de delegação não tem regra:
+    /// o Codex o chama por MCP, e a aprovação das ferramentas dele vai na linha de comando.
+    fn codex_rules(&self, name: &str) -> String {
+        let mut text = format!("{}\n", marker(name));
         for program in GIT_PROGRAMS {
             text += &rule(program, GIT_JUSTIFICATION);
         }
@@ -164,21 +157,24 @@ impl Session {
     }
 
     fn claude_settings(&self) -> String {
-        let mut allow: Vec<String> = ["Read", "Glob", "Grep", "Skill"].iter().map(|s| s.to_string()).collect();
-        allow.push(format!("PowerShell({} *)", self.command));
+        let mut allow: Vec<String> = ["Read", "Glob", "Grep", "Skill", "mcp__orquestrador__delegar", "mcp__orquestrador__aguardar", "mcp__orquestrador__responder"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         allow.extend(GIT_PROGRAMS.iter().map(|g| format!("PowerShell({g} *)")));
-        // Medido no Claude Code 2.1.296: a regra casa o texto do comando, com as aspas. O orquestrador costuma
-        // pôr o caminho entre aspas (`node "C:\...\x.mjs" start`), e a regra sem aspas nega esse comando. Por
-        // isso cada programa entra nas três grafias: sem aspas, com aspas duplas e com aspas simples.
+        // Medido no Claude Code 2.1.296: a regra casa o texto do comando, com as aspas. O orquestrador costuma pôr o
+        // caminho entre aspas (`node "C:\...\x.mjs" start`), e a regra sem aspas nega esse comando. Por isso cada
+        // programa entra nas três grafias: sem aspas, com aspas duplas e com aspas simples.
         for runner in RUNNERS {
             for file in skill_programs(&self.global_dirs, runner) {
                 allow.extend(["", "\"", "'"].iter().map(|q| format!("PowerShell({runner} {q}{file}{q} *)")));
             }
         }
-        // Sem esta variável, o Claude Code 2.1.296 não expõe o PowerShell no Windows com Git Bash. Ela entra só
-        // por este arquivo, passado com --settings: o ambiente do usuário não muda.
-        serde_json::to_string_pretty(&serde_json::json!({
-            "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1" },
+        // Sem a primeira variável, o Claude Code 2.1.296 não expõe o PowerShell no Windows com Git Bash. A segunda
+        // dá às chamadas ao servidor do orquestrador os 15 minutos da espera de um lote. Elas entram só por este
+        // arquivo, passado com --settings: o ambiente do usuário não muda.
+        serde_json::to_string_pretty(&json!({
+            "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" },
             "permissions": { "allow": allow },
         }))
         .unwrap()
@@ -228,18 +224,27 @@ fn owner_dead(dir: &Path, name: &str) -> bool {
     owner_of(dir).is_some_and(|(pid, started, session)| session == name && owner_state(pid, started) == Owner::Dead)
 }
 
-/// Se a primeira linha é a regra que este app escreveu para a pasta `dir`, a do adaptador da sessão.
-/// Compara com o texto exato que `rule` escreve, sem interpretar o TOML: uma linha parecida, com outro
-/// token ou com mais tokens, não é nossa e fica.
-fn is_delegate_rule(line: &str, dir: &Path) -> bool {
+/// A primeira linha é o marcador que este app escreveu para a pasta `dir`, exato: outro nome ou espaço a mais não é
+/// nosso.
+fn is_marker(line: &str, dir: &Path) -> bool {
+    dir.file_name().and_then(|n| n.to_str()).is_some_and(|name| marker(name) == line)
+}
+
+/// A primeira linha é a regra do comando de delegação da forma antiga, a da v0.1.9, para a pasta `dir`. Compara com
+/// o texto exato que `rule` escreve, sem interpretar o TOML: uma linha parecida, com outro token ou com mais tokens,
+/// não é nossa e fica.
+///
+/// Sai a partir de 2027-02-01. Ela existe só para limpar arquivos órfãos de quem atualizou com um orquestrador Codex
+/// aberto: esses arquivos liberam o git, fora do sandbox, para qualquer codex.
+fn is_legacy_rule(line: &str, dir: &Path) -> bool {
     let Some(name) = dir.file_name().and_then(|n| n.to_str()) else { return false };
     rule(&command_for(name), JUSTIFICATION).trim_end() == line
 }
 
 /// Uma sessão morta à força deixa a regra do Codex valendo enquanto a pasta dela existir, e a
 /// pasta para trás. As duas saem aqui, mas só com prova: a regra é a que este app escreveu para
-/// aquela pasta (`is_delegate_rule`), a pasta se declara aquela sessão (`pid início sessão` em `owner`)
-/// e o dono está comprovadamente morto. Menos que isso fica intocado.
+/// aquela pasta (`is_marker`, ou `is_legacy_rule` na forma antiga), a pasta se declara aquela sessão
+/// (`pid início sessão` em `owner`) e o dono está comprovadamente morto. Menos que isso fica intocado.
 pub fn recover_orphans(places: &Places) {
     let temp = &places.temp;
     for entry in std::fs::read_dir(&places.codex_rules).into_iter().flatten().flatten() {
@@ -250,7 +255,7 @@ pub fn recover_orphans(places: &Places) {
         }
         let old = temp.join(name);
         let first = std::fs::read_to_string(&path).ok().and_then(|t| t.lines().next().map(String::from));
-        if !first.is_some_and(|line| is_delegate_rule(&line, &old)) {
+        if !first.is_some_and(|line| is_marker(&line, &old) || is_legacy_rule(&line, &old)) {
             continue;
         }
         if !old.exists() {
@@ -274,23 +279,20 @@ pub mod tests {
     use super::*;
     use crate::config::Choice;
 
+    /// O caminho do app que as sessões de teste põem no servidor MCP.
+    pub const APP: &str = r"C:\Program Files\Orq\orquestrador.exe";
+
     pub fn places(tag: &str) -> Places {
         let root = std::env::temp_dir().join(format!("orq-ses-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let skills = root.join("home").join(".agents").join("skills");
         std::fs::create_dir_all(skills.join("exemplo").join("node_modules").join("dep")).unwrap();
         std::fs::create_dir_all(root.join("temp")).unwrap();
-        std::fs::write(root.join("orquestrador-delegar.exe"), "").unwrap();
         std::fs::write(skills.join("exemplo").join("canvas.mjs"), "").unwrap();
         std::fs::write(skills.join("exemplo").join("tool.py"), "").unwrap();
         std::fs::write(skills.join("exemplo").join("SKILL.md"), "").unwrap();
         std::fs::write(skills.join("exemplo").join("node_modules").join("dep").join("index.js"), "").unwrap();
         Places { temp: root.join("temp"), codex_rules: root.join("codex").join("rules"), global_dirs: vec![root.join("home").join(".agents")] }
-    }
-
-    /// O programa de delegação de mentira que `places` deixa na raiz do teste.
-    pub fn delegate_of(p: &Places) -> String {
-        p.temp.parent().unwrap().join("orquestrador-delegar.exe").to_string_lossy().into_owned()
     }
 
     pub fn discard(p: &Places) {
@@ -302,35 +304,33 @@ pub mod tests {
     }
 
     #[test]
-    fn sessao_codex_escreve_regra_adaptador_agents_e_owner_e_limpa_tudo() {
+    fn sessao_codex_escreve_marcador_regras_agents_e_owner_e_limpa_tudo() {
         let p = places("codex");
-        let delegate = delegate_of(&p);
-        let (s, r) = Session::create(&p, &delegate, r"C:\proj", &cfg("codex"));
+        let (s, r) = Session::create(&p, APP, r"C:\proj", &cfg("codex"));
         r.unwrap();
         let name = s.dir.file_name().unwrap().to_string_lossy().to_string();
         assert!(is_session_name(&name));
-        assert_eq!(s.command, format!("orq-{}.ps1", &name["strategist-".len()..]));
-        assert!(!s.command.contains(['\\', '/', ' ', '\'']), "o comando é um nome só: {}", s.command);
-        let adapter = std::fs::read_to_string(s.dir.join(&s.command)).unwrap();
-        assert!(adapter.starts_with('\u{feff}') && adapter.contains("$program = '"), "{adapter}");
         let agents = std::fs::read_to_string(s.dir.join("AGENTS.md")).unwrap();
-        assert!(agents.contains(r"C:\proj") && agents.contains(&s.command));
-        assert!(!agents.contains("{{"));
-        assert!(agents.contains("cada apóstrofo é dobrado") && agents.contains("Não use here-string"));
+        assert!(agents.contains(r"C:\proj") && !agents.contains("{{"));
+        for tool in ["`delegar`", "`aguardar`", "`responder`"] {
+            assert!(agents.contains(tool), "{tool}");
+        }
+        assert!(!agents.contains("cada apóstrofo é dobrado") && !agents.contains("Não use here-string"));
         let owner = std::fs::read_to_string(s.dir.join("owner")).unwrap();
         assert_eq!(owner, format!("{} {} {name}", std::process::id(), start_time(std::process::id()).unwrap()));
 
         let rule = std::fs::read_to_string(&s.rule).unwrap();
         let lines: Vec<&str> = rule.lines().collect();
-        assert_eq!(lines[0], format!("prefix_rule(pattern=[\"{}\"], decision=\"allow\", justification=\"Delegacao autorizada ao executor\")", s.command));
-        assert!(is_delegate_rule(lines[0], &s.dir));
+        assert_eq!(lines[0], format!("# orquestrador {name}"));
+        assert!(is_marker(lines[0], &s.dir));
         assert_eq!(lines[1], "prefix_rule(pattern=[\"git\"], decision=\"allow\", justification=\"Git do orquestrador, autorizado pelo usuario\")");
         assert_eq!(lines[2], "prefix_rule(pattern=[\"git.exe\"], decision=\"allow\", justification=\"Git do orquestrador, autorizado pelo usuario\")");
         assert!(lines[3].starts_with("prefix_rule(pattern=[\"node\", [") && lines[3].contains("canvas.mjs") && lines[3].contains("exemplo/canvas.mjs"));
         assert!(lines[4].starts_with("prefix_rule(pattern=[\"python\", [") && lines[4].contains("tool.py"));
-        assert_eq!(lines.len(), 5, "delegação, git, git.exe, node e python, e nada além");
-        assert!(!rule.contains("node_modules") && !rule.contains("SKILL.md") && !rule.contains("orquestrador-delegar"));
-        assert!(!s.dir.join("claude-settings.json").exists());
+        assert_eq!(lines.len(), 5, "marcador, git, git.exe, node e python, e nada além");
+        // O caminho das skills de teste tem `orq-ses-`, então o comando antigo se reconhece pelo `.ps1`.
+        assert!(!rule.contains(".ps1") && !rule.contains("Delegacao") && !rule.contains("node_modules") && !rule.contains("SKILL.md"));
+        assert!(!s.dir.join("claude-settings.json").exists() && !s.dir.join("mcp.json").exists());
 
         // O que o app deixa na pasta durante o uso também sai.
         std::fs::create_dir_all(s.dir.join("requests").join("x")).unwrap();
@@ -341,18 +341,29 @@ pub mod tests {
     }
 
     #[test]
-    fn sessao_claude_escreve_settings_e_nenhuma_regra() {
+    fn sessao_claude_escreve_mcp_settings_e_nenhuma_regra() {
         let p = places("claude");
-        let (s, r) = Session::create(&p, &delegate_of(&p), r"C:\proj", &cfg("claude"));
+        let (s, r) = Session::create(&p, APP, r"C:\proj", &cfg("claude"));
         r.unwrap();
-        // O AGENTS.md do Claude traz a here-string com o comando real da sessão, sem sobra de placeholder.
         let agents = std::fs::read_to_string(s.dir.join("AGENTS.md")).unwrap();
-        assert!(agents.contains(&format!("{} @'", s.command)) && !agents.contains("{{"), "{agents}");
-        assert!(!agents.contains("cada apóstrofo é dobrado") && !agents.contains("Não use here-string"));
+        assert!(!agents.contains("{{") && agents.contains("`delegar`"), "{agents}");
+        let mcp: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("mcp.json")).unwrap()).unwrap();
+        assert_eq!(mcp["mcpServers"]["orquestrador"]["command"], APP);
+        assert_eq!(mcp["mcpServers"]["orquestrador"]["args"], json!(["--mcp", s.dir.to_string_lossy()]));
+        assert_eq!(mcp["mcpServers"].as_object().unwrap().len(), 1, "só o orquestrador");
         let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("claude-settings.json")).unwrap()).unwrap();
         assert_eq!(settings["env"]["CLAUDE_CODE_USE_POWERSHELL_TOOL"], "1", "sem a variável o Claude não expõe o PowerShell");
+        assert_eq!(settings["env"]["MCP_TOOL_TIMEOUT"], "900000", "a espera de um lote cabe no prazo");
         let allow: Vec<&str> = settings["permissions"]["allow"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
-        assert_eq!(&allow[..7], ["Read", "Glob", "Grep", "Skill", &format!("PowerShell({} *)", s.command), "PowerShell(git *)", "PowerShell(git.exe *)"]);
+        assert_eq!(
+            &allow[..9],
+            [
+                "Read", "Glob", "Grep", "Skill",
+                "mcp__orquestrador__delegar", "mcp__orquestrador__aguardar", "mcp__orquestrador__responder",
+                "PowerShell(git *)", "PowerShell(git.exe *)",
+            ]
+        );
+        assert!(allow.iter().all(|a| !a.starts_with("PowerShell(orq-")), "o comando antigo saiu da permissão");
         assert!(allow.iter().any(|a| a.starts_with("PowerShell(node ") && a.ends_with("canvas.mjs *)")));
         assert!(allow.iter().any(|a| a.starts_with("PowerShell(python ") && a.ends_with("tool.py *)")));
         // O caminho entre aspas, como o orquestrador costuma escrever, também passa.
@@ -364,31 +375,19 @@ pub mod tests {
         discard(&p);
     }
 
+    /// Pasta e app com espaço, acento e apóstrofo: o `mcp.json` leva o caminho inteiro, sem nome curto.
     #[test]
-    fn caminho_com_espaco_acento_e_apostrofo_nao_precisa_de_nome_curto() {
-        // Nenhum nome 8.3 nem ativação de volume: a pasta e o programa têm caminhos comuns de usuário.
+    fn caminho_com_espaco_acento_e_apostrofo_vai_inteiro_ao_mcp_json() {
         let mut p = places("caminho");
-        let odd = p.temp.parent().unwrap().join("pasta com ação").join("it's");
-        std::fs::create_dir_all(&odd).unwrap();
-        std::fs::write(odd.join("orquestrador-delegar.exe"), "").unwrap();
         p.temp = p.temp.parent().unwrap().join("temp com espaço e açaí it's");
         std::fs::create_dir_all(&p.temp).unwrap();
-        let delegate = odd.join("orquestrador-delegar.exe").to_string_lossy().into_owned();
-        let (s, r) = Session::create(&p, &delegate, r"C:\proj", &cfg("claude"));
+        let app = r"C:\Users\Maria Silva\it's\ação\orquestrador.exe";
+        let (s, r) = Session::create(&p, app, r"C:\proj", &cfg("claude"));
         r.unwrap();
-        assert!(s.dir.starts_with(&p.temp) && s.dir.join(&s.command).is_file());
-        let adapter = std::fs::read_to_string(s.dir.join(&s.command)).unwrap();
-        assert!(adapter.contains("$program = 'C:\\") && adapter.contains("it''s"), "{adapter}");
+        let mcp: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("mcp.json")).unwrap()).unwrap();
+        assert_eq!(mcp["mcpServers"]["orquestrador"]["command"], app);
+        assert_eq!(mcp["mcpServers"]["orquestrador"]["args"][1], *s.dir.to_string_lossy());
         assert_eq!(s.remove(), None);
-        discard(&p);
-    }
-
-    #[test]
-    fn programa_inexistente_nao_cria_a_sessao() {
-        let p = places("sem-programa");
-        let (s, r) = Session::create(&p, r"C:\não existe\orquestrador-delegar.exe", r"C:\proj", &cfg("claude"));
-        assert!(r.unwrap_err().contains("não está em"));
-        assert!(!s.dir.exists());
         discard(&p);
     }
 
@@ -397,8 +396,8 @@ pub mod tests {
         let p = places("orphans");
         std::fs::create_dir_all(&p.codex_rules).unwrap();
         let temp = p.temp.clone();
-        // `first` escolhe a primeira linha: a regra atual ou uma estrangeira.
-        let make = |id: char, owner: Option<String>, first: &dyn Fn(&Path) -> String| {
+        // `first` escolhe a primeira linha da regra: o marcador atual, a forma antiga ou uma estrangeira.
+        let make = |id: char, owner: Option<String>, first: &dyn Fn(&str) -> String| {
             let name = format!("strategist-{}", id.to_string().repeat(32));
             let dir = temp.join(&name);
             if let Some(owner) = owner {
@@ -406,33 +405,45 @@ pub mod tests {
                 std::fs::write(dir.join("owner"), owner.replace("{name}", &name)).unwrap();
             }
             let rule_file = p.codex_rules.join(format!("{name}.rules"));
-            std::fs::write(&rule_file, first(&dir)).unwrap();
+            std::fs::write(&rule_file, format!("{}\n", first(&name))).unwrap();
             (dir, rule_file)
         };
         let me = std::process::id();
-        let current = |dir: &Path| rule(&command_for(&dir.file_name().unwrap().to_string_lossy()), JUSTIFICATION);
-        let foreign = |_: &Path| "prefix_rule(pattern=[\"outra\"])\n".to_string();
-        // Quase iguais à nossa: um token a mais, e um token com espaço no fim.
-        let two_tokens = |dir: &Path| format!("prefix_rule(pattern=[{}, \"x\"], decision=\"allow\", justification=\"{JUSTIFICATION}\")\n", toml(&command_for(&dir.file_name().unwrap().to_string_lossy())));
-        let wrong_token = |dir: &Path| rule(&format!("{} ", command_for(&dir.file_name().unwrap().to_string_lossy())), JUSTIFICATION);
+        let dead_owner = format!("{me} {} {{name}}", start_time(me).unwrap() + 1);
+        let live_owner = format!("{me} {} {{name}}", start_time(me).unwrap());
+        let marker_line = |name: &str| marker(name);
+        let legacy = |name: &str| rule(&command_for(name), JUSTIFICATION).trim_end().to_string();
+        let foreign = |_: &str| "prefix_rule(pattern=[\"outra\"])".to_string();
+        // Quase iguais ao marcador: dois espaços, um token a mais, e um nome de sessão a mais.
+        let double_space = |name: &str| format!("# orquestrador  {name}");
+        let extra_word = |name: &str| format!("{} extra", marker(name));
+        // Quase iguais à forma antiga: um token a mais, e um token com espaço no fim.
+        let two_tokens = |name: &str| format!("prefix_rule(pattern=[{}, \"x\"], decision=\"allow\", justification=\"{JUSTIFICATION}\")", toml(&command_for(name)));
+        let wrong_token = |name: &str| rule(&format!("{} ", command_for(name)), JUSTIFICATION).trim_end().to_string();
         // Ids só com hexadecimal, como o nome de sessão exige.
-        let alive = make('a', Some(format!("{me} {} {{name}}", start_time(me).unwrap())), &current);
-        let dead = make('b', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &current);
-        let gone = make('c', None, &current);
-        let foreign_dead = make('d', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &foreign);
-        let misnamed = make('e', Some(format!("{me} 1 strategist-outra")), &current);
-        let two_dead = make('2', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &two_tokens);
-        let token_dead = make('3', Some(format!("{me} {} {{name}}", start_time(me).unwrap() + 1)), &wrong_token);
+        let alive = make('a', Some(live_owner.clone()), &marker_line);
+        let dead = make('b', Some(dead_owner.clone()), &marker_line);
+        let gone = make('c', None, &marker_line);
+        let legacy_dead = make('f', Some(dead_owner.clone()), &legacy);
+        let foreign_dead = make('d', Some(dead_owner.clone()), &foreign);
+        let misnamed = make('e', Some(format!("{me} 1 strategist-outra")), &marker_line);
+        let spaced = make('4', Some(dead_owner.clone()), &double_space);
+        let extra = make('5', Some(dead_owner.clone()), &extra_word);
+        let two_dead = make('2', Some(dead_owner.clone()), &two_tokens);
+        let token_dead = make('3', Some(dead_owner.clone()), &wrong_token);
         std::fs::write(p.codex_rules.join("default.rules"), "x").unwrap();
 
         recover_orphans(&p);
 
         assert!(alive.0.exists() && alive.1.exists(), "dono vivo fica");
-        assert!(!dead.0.exists() && !dead.1.exists(), "dono morto: regra e pasta saem");
+        assert!(!dead.0.exists() && !dead.1.exists(), "marcador com dono morto: regra e pasta saem");
         assert!(!gone.1.exists(), "pasta sumida: a regra sai");
+        assert!(!legacy_dead.0.exists() && !legacy_dead.1.exists(), "forma antiga com dono morto: regra e pasta saem");
         assert!(foreign_dead.1.exists() && !foreign_dead.0.exists(), "regra de primeira linha diferente fica; a pasta de dono morto sai");
         assert!(misnamed.0.exists() && misnamed.1.exists(), "owner de outra sessão fica");
-        assert!(two_dead.1.exists() && !two_dead.0.exists(), "regra com dois tokens não é nossa: fica");
+        assert!(spaced.1.exists() && !spaced.0.exists(), "marcador com espaço a mais não é nosso: a regra fica");
+        assert!(extra.1.exists() && !extra.0.exists(), "marcador com palavra a mais não é nosso: a regra fica");
+        assert!(two_dead.1.exists() && !two_dead.0.exists(), "regra antiga com dois tokens não é nossa: fica");
         assert!(token_dead.1.exists() && !token_dead.0.exists(), "token com espaço a mais não é nosso: fica");
         assert!(p.codex_rules.join("default.rules").exists());
         discard(&p);
@@ -440,9 +451,9 @@ pub mod tests {
 
     #[test]
     fn regra_com_git_e_skills_sai_como_orfa_pela_primeira_linha() {
-        // As regras do Git e das skills vêm depois da de delegação: a sessão morta sai inteira, como antes.
+        // As regras do Git e das skills vêm depois do marcador: a sessão morta sai inteira.
         let p = places("orfa-git");
-        let (s, r) = Session::create(&p, &delegate_of(&p), r"C:\proj", &cfg("codex"));
+        let (s, r) = Session::create(&p, APP, r"C:\proj", &cfg("codex"));
         r.unwrap();
         let me = std::process::id();
         let name = s.dir.file_name().unwrap().to_string_lossy().to_string();

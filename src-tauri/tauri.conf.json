@@ -6,9 +6,8 @@
   "build": {
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist",
-    "beforeDevCommand": "npm run dev:tauri",
-    "beforeBuildCommand": "npm run build:tauri",
-    "beforeBundleCommand": "npm run copy:delegar"
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [{ "label": "main", "title": "Orquestrador", "width": 1400, "height": 900, "center": true, "decorations": false }],
@@ -19,7 +18,6 @@
     "targets": ["nsis"],
     "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico"],
-    "resources": { "target/delegar/": "" },
     "windows": { "nsis": { "installMode": "currentUser" } }
   },
   "plugins": {

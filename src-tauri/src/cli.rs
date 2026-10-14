@@ -5,25 +5,19 @@ use crate::roles::EXECUTOR;
 use crate::session::Session;
 use std::path::Path;
 
-/// Os executáveis: os dois CLIs, o próprio app (que serve de manipulador dos hooks) e o programa de
-/// delegação, que vai junto com o app.
+/// Os executáveis: os dois CLIs e o próprio app, que serve de servidor MCP do orquestrador (`--mcp`) e de
+/// manipulador dos hooks.
 #[derive(Clone, Debug)]
 pub struct Exes {
     pub claude: String,
     pub codex: String,
     pub app: String,
-    pub delegate: String,
 }
 
 impl Exes {
     pub fn real() -> Exes {
         let me = std::env::current_exe().unwrap_or_default();
-        Exes {
-            claude: "claude".into(),
-            codex: "codex".into(),
-            app: me.to_string_lossy().to_string(),
-            delegate: me.with_file_name(crate::delegate::PROGRAM).to_string_lossy().to_string(),
-        }
+        Exes { claude: "claude".into(), codex: "codex".into(), app: me.to_string_lossy().to_string() }
     }
 }
 
@@ -33,9 +27,6 @@ pub struct Spawn {
     pub args: Vec<String>,
     pub cwd: String,
     pub env: Vec<(String, String)>,
-    /// Pastas que vão à frente do PATH de base do processo. O orquestrador leva a pasta da sessão, onde
-    /// fica o comando de delegação dele.
-    pub path_first: Vec<String>,
 }
 
 fn strs(items: &[&str]) -> Vec<String> {
@@ -54,25 +45,47 @@ fn codex_trust(dir: &str) -> Vec<String> {
     vec!["-c".into(), format!("projects={{{}={{trust_level=\"trusted\"}}}}", toml(dir))]
 }
 
-/// O orquestrador: lê o projeto, delega, usa as skills globais e o git (stage, commit e push quando o usuário pede).
+/// O servidor MCP do orquestrador pela configuração do Codex, só para este processo: o app em modo `--mcp`, com a
+/// pasta da sessão. `approve` libera as três ferramentas: medido no Codex 0.162.1, sem ele toda chamada MCP é
+/// negada com `approval_policy` `never`, e os outros valores não liberam. O prazo cobre a espera de 5 minutos de
+/// uma chamada, com folga.
+fn codex_mcp(app: &str, dir: &str) -> Vec<String> {
+    let server = "mcp_servers.orquestrador";
+    [
+        format!("{server}.command={}", toml(app)),
+        format!("{server}.args=[{},{}]", toml("--mcp"), toml(dir)),
+        format!("{server}.default_tools_approval_mode={}", toml("approve")),
+        format!("{server}.tool_timeout_sec=900"),
+    ]
+    .into_iter()
+    .flat_map(|setting| ["-c".to_string(), setting])
+    .collect()
+}
+
+/// O orquestrador: lê o projeto, delega pelo servidor MCP do próprio app, usa as skills globais e o git (stage,
+/// commit e push quando o usuário pede).
 pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &str) -> Spawn {
     let dir = session.dir.to_string_lossy().to_string();
     let (program, mut args) = if choice.tool == "codex" {
         // Sandbox só de leitura: o Codex não escreve em lugar nenhum, nem nesta pasta nem na de
         // regras, a não ser pelo que a regra da sessão libera. Ninguém aprova nada: o que a regra não
-        // libera é recusado pela política; o que ela libera (delegação, git, skills) roda fora do sandbox
-        // (medido no Codex 0.162.1).
+        // libera é recusado pela política; o que ela libera (git, skills) roda fora do sandbox, e as
+        // ferramentas do MCP são aprovadas pela configuração (medido no Codex 0.162.1).
         // --no-daemon: o agente roda neste processo, então matar o processo mata o agente.
         let mut args = strs(&["--no-daemon", "-C", &dir, "--sandbox", "read-only", "--ask-for-approval", "never"]);
         args.extend(codex_trust(&dir));
+        args.extend(codex_mcp(&exes.app, &dir));
         (exes.codex.clone(), args)
     } else {
         // Sem sandbox, as ferramentas são a parede: --restricted deixa só as nomeadas, ignora os
         // settings do usuário e confina Read ao projeto e às pastas globais; dontAsk nega todo
-        // comando que não seja o de delegação, o git, um programa de skill ou o que o Claude Code toma
-        // por somente leitura. O modo restrito descarta as skills do usuário, então .agents volta
-        // como plugin (medido: as skills carregam como ".agents:nome").
-        let mut args = strs(&["--restricted", "--strict-mcp-config", "--tools", "Read,Glob,Grep,PowerShell,Skill", "--settings"]);
+        // comando que não seja o git, um programa de skill, uma ferramenta do orquestrador ou o que o
+        // Claude Code toma por somente leitura. O modo restrito descarta as skills do usuário, então .agents
+        // volta como plugin (medido: as skills carregam como ".agents:nome"). --strict-mcp-config faz valer só
+        // o servidor do --mcp-config da sessão.
+        let mut args = strs(&["--restricted", "--strict-mcp-config", "--mcp-config"]);
+        args.push(session.dir.join("mcp.json").to_string_lossy().to_string());
+        args.extend(strs(&["--tools", "Read,Glob,Grep,PowerShell,Skill", "--settings"]));
         args.push(session.dir.join("claude-settings.json").to_string_lossy().to_string());
         args.extend(strs(&["--permission-mode", "dontAsk", "--append-system-prompt-file"]));
         args.push(session.dir.join("AGENTS.md").to_string_lossy().to_string());
@@ -83,15 +96,15 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &s
         (exes.claude.clone(), args)
     };
     args.extend(choice.cli_args());
-    Spawn { program, args, cwd: project.to_string(), env: vec![], path_first: vec![dir] }
+    Spawn { program, args, cwd: project.to_string(), env: vec![] }
 }
 
 /// Os PowerShells que o shell do usuário tenta, nesta ordem: o primeiro que iniciar vale.
 pub const SHELLS: [&str; 2] = ["pwsh.exe", "powershell.exe"];
 
-/// O shell do usuário: um PowerShell interativo na pasta do projeto, sem env nem pasta à frente do PATH.
+/// O shell do usuário: um PowerShell interativo na pasta do projeto, sem env.
 pub fn shell(program: &str, project: &str) -> Spawn {
-    Spawn { program: program.to_string(), args: strs(&["-NoLogo"]), cwd: project.to_string(), env: vec![], path_first: vec![] }
+    Spawn { program: program.to_string(), args: strs(&["-NoLogo"]), cwd: project.to_string(), env: vec![] }
 }
 
 /// O prompt inicial de um executor: o texto de `roles::EXECUTOR` seguido da tarefa.
@@ -113,7 +126,7 @@ pub fn executor_prompt(task: &str) -> String {
 pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, prompt: &str) -> (Spawn, Option<String>) {
     let hook_dir = node_dir.join("hook").to_string_lossy().to_string();
     let ask_dir = node_dir.join("ask").to_string_lossy().to_string();
-    let mut spawn = Spawn { program: String::new(), args: vec![], cwd: project.to_string(), env: vec![], path_first: vec![] };
+    let mut spawn = Spawn { program: String::new(), args: vec![], cwd: project.to_string(), env: vec![] };
     let settings = if choice.tool == "codex" {
         spawn.program = exes.codex.clone();
         spawn.args = strs(&["--no-daemon", "-C", project, "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"]);
@@ -156,21 +169,16 @@ pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, pr
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::session::tests::{delegate_of, discard, places};
+    use crate::session::tests::{discard, places, APP};
 
     fn exes() -> Exes {
-        Exes {
-            claude: "claude".into(),
-            codex: "codex".into(),
-            app: r"C:\Program Files\Orq\o'rq.exe".into(),
-            delegate: r"C:\Program Files\Orq\orquestrador-delegar.exe".into(),
-        }
+        Exes { claude: "claude".into(), codex: "codex".into(), app: r"C:\Program Files\Orq\o'rq.exe".into() }
     }
 
     fn session(tag: &str, tool: &str) -> (Session, crate::session::Places) {
         let cfg = Config { orchestrator: Choice::new(tool, "", ""), ..Config::default() };
         let p = places(tag);
-        let (s, r) = Session::create(&p, &delegate_of(&p), r"C:\proj", &cfg);
+        let (s, r) = Session::create(&p, APP, r"C:\proj", &cfg);
         r.unwrap();
         (s, p)
     }
@@ -182,11 +190,19 @@ mod tests {
         let got = orchestrator(&exes(), &Choice::new("codex", "gpt-5.5", "high"), &s, r"C:\proj");
         assert_eq!(got.program, "codex");
         assert_eq!(got.cwd, r"C:\proj");
-        assert_eq!(got.path_first, [dir.clone()], "o comando de delegação da sessão é achado primeiro no PATH");
         let trust = format!("projects={{{}={{trust_level=\"trusted\"}}}}", serde_json::to_string(&dir).unwrap());
+        let mcp_args = format!("mcp_servers.orquestrador.args=[\"--mcp\",{}]", serde_json::to_string(&dir).unwrap());
         assert_eq!(
             got.args,
-            ["--no-daemon", "-C", &dir, "--sandbox", "read-only", "--ask-for-approval", "never", "-c", &trust, "-m", "gpt-5.5", "-c", "model_reasoning_effort=high"]
+            [
+                "--no-daemon", "-C", &dir, "--sandbox", "read-only", "--ask-for-approval", "never",
+                "-c", &trust,
+                "-c", r#"mcp_servers.orquestrador.command="C:\\Program Files\\Orq\\o'rq.exe""#,
+                "-c", &mcp_args,
+                "-c", r#"mcp_servers.orquestrador.default_tools_approval_mode="approve""#,
+                "-c", "mcp_servers.orquestrador.tool_timeout_sec=900",
+                "-m", "gpt-5.5", "-c", "model_reasoning_effort=high",
+            ]
         );
         s.remove();
         discard(&p);
@@ -198,11 +214,11 @@ mod tests {
         let got = orchestrator(&exes(), &Choice::new("claude", "opus", ""), &s, r"C:\proj");
         let agents = s.global_dirs[0].to_string_lossy().to_string();
         assert_eq!(got.program, "claude");
-        assert_eq!(got.path_first, [s.dir.to_string_lossy().to_string()]);
         assert_eq!(
             got.args,
             [
-                "--restricted", "--strict-mcp-config", "--tools", "Read,Glob,Grep,PowerShell,Skill",
+                "--restricted", "--strict-mcp-config", "--mcp-config", &s.dir.join("mcp.json").to_string_lossy(),
+                "--tools", "Read,Glob,Grep,PowerShell,Skill",
                 "--settings", &s.dir.join("claude-settings.json").to_string_lossy(),
                 "--permission-mode", "dontAsk",
                 "--append-system-prompt-file", &s.dir.join("AGENTS.md").to_string_lossy(),
@@ -210,6 +226,31 @@ mod tests {
                 "--model", "opus",
             ]
         );
+        s.remove();
+        discard(&p);
+    }
+
+    /// Caminho do app e da sessão com espaço, acento e apóstrofo: cada um entra como um argumento só, e no
+    /// `-c` do Codex vai como texto TOML.
+    #[test]
+    fn caminhos_com_espaco_acento_e_apostrofo_passam_inteiros() {
+        let mut p = places("cli-odd");
+        p.temp = p.temp.parent().unwrap().join("temp com espaço, açaí e it's");
+        std::fs::create_dir_all(&p.temp).unwrap();
+        let app = r"C:\Users\Maria Silva\it's\ação\orquestrador.exe";
+        let cfg = Config { orchestrator: Choice::new("codex", "", ""), ..Config::default() };
+        let (s, r) = Session::create(&p, app, r"C:\proj", &cfg);
+        r.unwrap();
+        let dir = s.dir.to_string_lossy().to_string();
+        let exes = Exes { claude: "claude".into(), codex: "codex".into(), app: app.into() };
+        let got = orchestrator(&exes, &Choice::new("codex", "", ""), &s, r"C:\proj");
+        assert!(got.args.contains(&format!("mcp_servers.orquestrador.command={}", toml(app))));
+        assert!(got.args.contains(&format!("mcp_servers.orquestrador.args=[{},{}]", toml("--mcp"), toml(&dir))));
+        assert!(dir.contains("temp com espaço, açaí e it's"));
+        let claude = orchestrator(&exes, &Choice::new("claude", "", ""), &s, r"C:\proj");
+        assert_eq!(claude.args[2], "--mcp-config");
+        assert_eq!(claude.args[3], s.dir.join("mcp.json").to_string_lossy());
+        assert!(claude.args[3].contains("it's"));
         s.remove();
         discard(&p);
     }
@@ -225,7 +266,6 @@ mod tests {
             ["--permission-mode", "bypassPermissions", "--settings", r"C:\tmp\s\exec\exec-1\settings.json", "--model", "sonnet", "--effort", "low", "PROMPT\nlinha 2"]
         );
         assert_eq!(got.env, [("CLAUDE_CODE_SANDBOXED".to_string(), "1".to_string())]);
-        assert!(got.path_first.is_empty(), "o executor não recebe o comando de delegação");
         let v: serde_json::Value = serde_json::from_str(&settings.unwrap()).unwrap();
         assert_eq!(v["skipDangerousModePermissionPrompt"], true);
         let deny: Vec<&str> = v["permissions"]["deny"].as_array().unwrap().iter().map(|d| d.as_str().unwrap()).collect();
@@ -264,14 +304,7 @@ mod tests {
             ]
         );
         assert!(!got.args.iter().any(|a| a.contains("PermissionRequest")), "o Codex não recebe o hook de confirmação");
-    }
-
-    #[test]
-    fn programa_de_delegacao_fica_ao_lado_do_app() {
-        let real = Exes::real();
-        let me = std::env::current_exe().unwrap();
-        assert_eq!(Path::new(&real.app), me);
-        assert_eq!(Path::new(&real.delegate), me.with_file_name(crate::delegate::PROGRAM));
+        assert!(!got.args.iter().any(|a| a.contains("mcp_servers")), "o executor não recebe o servidor do orquestrador");
     }
 
     #[test]

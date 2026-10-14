@@ -44,13 +44,6 @@ impl Term {
         for (key, value) in &cmd.env {
             builder.env(key, value);
         }
-        if !cmd.path_first.is_empty() {
-            // O PATH de base já vem montado do ambiente e do registro; as pastas pedidas entram antes dele, e
-            // não no lugar dele.
-            let base = builder.get_env("PATH").map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-            let path = if base.is_empty() { cmd.path_first.join(";") } else { format!("{};{base}", cmd.path_first.join(";")) };
-            builder.env("PATH", path);
-        }
         let mut child = pair.slave.spawn_command(builder).map_err(|e| fail(e.to_string()))?;
         drop(pair.slave);
         let job = child.process_id().and_then(Job::adopt);

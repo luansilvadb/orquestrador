@@ -85,8 +85,8 @@ pub fn title(task: &str) -> String {
     task.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(80).collect()
 }
 
-/// A saída do comando de delegação (`delegate.rs`) para um lote terminado e o código de saída
-/// dele: 0 se todas as tarefas concluíram.
+/// A saída de um lote terminado (`delegate.rs`, entregue pelo `mcp.rs`) e o código de saída dele: 0 se todas as
+/// tarefas concluíram.
 pub fn format_result(items: &[(String, Outcome)], git: &Result<String, String>) -> (i32, String) {
     let mut out = String::new();
     for (i, (title, outcome)) in items.iter().enumerate() {
@@ -282,7 +282,7 @@ impl Core {
         config::save(&inner.cfg_path, &cfg)?;
 
         session::recover_orphans(&inner.places);
-        let (session, created) = Session::create(&inner.places, &inner.exes.delegate, &project, &cfg);
+        let (session, created) = Session::create(&inner.places, &inner.exes.app, &project, &cfg);
         let started = created.and_then(|_| {
             let spawn = cli::orchestrator(&inner.exes, &choice, &session, &project);
             inner.slots.remove(ORCHESTRATOR);
@@ -404,11 +404,6 @@ impl Core {
     /// A pasta da sessão viva, para os testes e para diagnóstico.
     pub fn session_dir(&self) -> Option<PathBuf> {
         self.inner.lock().unwrap().session.as_ref().map(|s| s.dir.clone())
-    }
-
-    /// O comando de delegação da sessão viva, como o orquestrador o digita.
-    pub fn delegate_command(&self) -> Option<String> {
-        self.inner.lock().unwrap().session.as_ref().map(|s| s.command.clone())
     }
 
     fn teardown(&self, inner: &mut Inner) {
@@ -764,7 +759,7 @@ mod tests {
         git(&["commit", "-q", "-m", "a"]);
         git(&["branch", "outra"]);
         let fake = String::from("fake");
-        let exes = Exes { claude: fake.clone(), codex: fake.clone(), app: fake.clone(), delegate: fake };
+        let exes = Exes { claude: fake.clone(), codex: fake.clone(), app: fake };
         let places = session::Places { temp: root.join("temp"), codex_rules: root.join("rules"), global_dirs: vec![] };
         let core = Core::new(exes, places, root.join("config.json"), emit);
         core.set_project(&repo).unwrap();
@@ -1001,7 +996,7 @@ mod tests {
         std::fs::create_dir_all(&pedido).unwrap();
         std::fs::write(pedido.join("1.txt"), "Tarefa X\n").unwrap();
         let mut inner = core.inner.lock().unwrap();
-        inner.session = Some(Session { dir: session.clone(), command: String::new(), rule: PathBuf::new(), global_dirs: vec![] });
+        inner.session = Some(Session { dir: session.clone(), rule: PathBuf::new(), global_dirs: vec![] });
         inner.git_exclusive = true;
         core.accept_batches(&mut inner);
         assert!(inner.nodes.is_empty(), "com o git em curso, o lote não é aceito");

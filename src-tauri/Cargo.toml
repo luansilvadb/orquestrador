@@ -2,7 +2,6 @@
 name = "orquestrador"
 version = "0.1.9"
 edition = "2021"
-default-run = "orquestrador"
 
 [lib]
 name = "orquestrador_lib"
@@ -11,11 +10,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "orquestrador"
 path = "src/main.rs"
-
-# Programa de console (sem `windows_subsystem`): o PowerShell espera por ele e recebe o código de saída.
-[[bin]]
-name = "orquestrador-delegar"
-path = "src/bin/orquestrador-delegar.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

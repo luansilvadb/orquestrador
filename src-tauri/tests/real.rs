@@ -31,11 +31,7 @@ fn lote_real() {
     let pair = std::env::var("ORQ_REAL").unwrap_or("codex,claude".into());
     let (orchestrator, executor) = pair.split_once(',').unwrap();
     let cheap = |tool: &str| if tool == "claude" { Choice::new("claude", "haiku", "") } else { Choice::new("codex", "", "low") };
-    let exes = Exes {
-        app: env!("CARGO_BIN_EXE_orquestrador").to_string(),
-        delegate: env!("CARGO_BIN_EXE_orquestrador-delegar").to_string(),
-        ..Exes::real()
-    };
+    let exes = Exes { app: env!("CARGO_BIN_EXE_orquestrador").to_string(), ..Exes::real() };
     let (tx, events) = channel();
     let emit: Emit = Arc::new(move |event, payload| drop(tx.send((event.to_string(), payload))));
     let core = Core::new(exes, Places::real(), std::env::temp_dir().join("orq-real-config.json"), emit);
@@ -55,7 +51,7 @@ fn lote_real() {
         core.term_write(ORCHESTRATOR, "\r");
         std::thread::sleep(Duration::from_secs(6));
     }
-    core.term_write(ORCHESTRATOR, "Sem perguntas e sem skills: delegue agora, num unico comando, um lote com duas tarefas: (1) Crie o arquivo e2e-a.txt contendo a palavra maçã. (2) Rode exatamente git push --dry-run e relate o que aconteceu, sem tentar alternativas. Quando o comando voltar, responda so RECEBIDO e o executor_exit de cada uma.");
+    core.term_write(ORCHESTRATOR, "Sem perguntas e sem skills: use a ferramenta delegar agora, numa única chamada, com um lote de duas tarefas: (1) Crie o arquivo e2e-a.txt contendo a palavra maçã. (2) Conte os arquivos versionados do repositório com git ls-files e responda só o número, sem tentar alternativas. Quando a ferramenta voltar, responda so RECEBIDO e o executor_exit de cada uma.");
     std::thread::sleep(Duration::from_millis(800));
     core.term_write(ORCHESTRATOR, "\r");
 
