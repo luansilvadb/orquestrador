@@ -10,6 +10,7 @@
 // A árvore (`list_dir`) é em memória: muda só com o executor que termina bem (cria `src/tarefa-<lote>-<n>.ts`) e com `__mock.remove`.
 // O Git é resposta fixa: status, branches e diffs não mudam, e as ações de escrita só devolvem null ou um texto fixo.
 // Na pesquisa (Ctrl+Shift+F), `search` filtra de verdade, mas só os arquivos de `TEXTS` têm linhas; os demais não casam nada.
+// Ao abrir um arquivo, `read_file` devolve o texto de `TEXTS`; `write_file` atualiza esse texto para a releitura. `.png` vem binário, `dados/exportacao.json` vem grande demais, e os demais começam vazios.
 import type { Transport } from './backend';
 import {
   ORCHESTRATOR, type Choice, type Events, type ExecutorNode, type GitDiff, type GitFile,
@@ -68,7 +69,7 @@ const tree = folder({
   dados: folder({ 'exportacao.json': file() }),
   docs: folder({ 'design-system.md': file(), 'rascunho-painel.md': file() }),
   src: folder({
-    'App.tsx': file(), 'index.css': file(), 'main.tsx': file(),
+    'App.tsx': file(), 'index.css': file(), 'longo.ts': file(), 'main.tsx': file(),
     components: folder({ ui: folder({ 'button.tsx': file(), 'card.tsx': file() }) }),
     lib: folder({ 'utils.ts': file() }),
   }),
@@ -98,6 +99,8 @@ const TEXTS: Record<string, string> = {
   'docs/design-system.md': '# Design system\n\nA interface usa o Lobe UI, com Tailwind CSS v4. Tema escuro fixo.\nMonoespaçado só em terminal e valores técnicos.\n',
   'src/App.tsx': 'import { useState } from \'react\';\n\nexport function App() {\n  const [route, setRoute] = useState(\'arquivos\');\n  return <main>Orquestrador {route}</main>;\n}\n',
   'src/main.tsx': 'import { createRoot } from \'react-dom/client\';\nimport { App } from \'./App\';\n\ncreateRoot(document.getElementById(\'root\')!).render(<App />);\n',
+  // Arquivo longo para conferir a rolagem: 300 linhas, linha em branco a cada 7 e uma linha bem comprida.
+  'src/longo.ts': Array.from({ length: 300 }, (_, i) => (i % 7 === 6 ? '' : i === 150 ? `export const longa = '${'x'.repeat(400)}';` : `export const linha${i} = ${i * 3};`)).join('\n'),
   'src/lib/utils.ts': '// Caminho relativo com "/": a raiz é vazia.\nexport const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);\n',
 };
 
@@ -374,6 +377,22 @@ const commands: Record<string, (args: any) => unknown> = {
     const dir = folderAt(path);
     if (!dir) throw `Pasta não encontrada: ${path}`;
     return listing(dir);
+  },
+  read_file: ({ path }: { path: string }) => {
+    const parts = path.split('/'), name = parts.pop()!;
+    const entry = folderAt(parts.join('/'))?.children[name];
+    if (!entry || entry.dir) throw `Arquivo não encontrado: ${path}`;
+    if (path.endsWith('.png')) return { binary: true, tooLarge: false, readOnly: false, text: '' };
+    if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, readOnly: false, text: '' };
+    return { binary: false, tooLarge: false, readOnly: false, text: TEXTS[path] ?? '' };
+  },
+  write_file: ({ path, text }: { path: string; text: string }) => {
+    const parts = path.split('/'), name = parts.pop()!;
+    const entry = folderAt(parts.join('/'))?.children[name];
+    if (!entry || entry.dir) throw `Arquivo não encontrado: ${path}`;
+    if (path.endsWith('.png')) throw 'Arquivo binário não pode ser gravado como texto.';
+    if (path === 'dados/exportacao.json') throw 'Arquivo grande demais para gravar aqui.';
+    TEXTS[path] = text;
   },
   git_status: () => ({ branch: 'main', ahead: 1, behind: 0, files: [...files].sort(byPath) }),
   git_diff: ({ path }: { path: string }) => diffOf(path),

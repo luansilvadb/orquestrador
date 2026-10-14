@@ -2,7 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import type { Choice, DirEntry, Events, GitBranches, GitDiff, GitStatus, Options, SearchOptions, SearchResults, Snapshot, UpdateStatus } from './types';
+import type { Choice, DirEntry, Events, FileContent, GitBranches, GitDiff, GitStatus, Options, SearchOptions, SearchResults, Snapshot, UpdateStatus } from './types';
 
 export interface Transport {
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
@@ -69,6 +69,9 @@ export const backend = {
   shutdown: () => call<void>('shutdown'),
   // Caminho relativo à pasta do projeto, com "/"; '' é a raiz.
   listDir: (path: string) => call<DirEntry[]>('list_dir', { path }),
+  // Conteúdo de um arquivo, com o mesmo caminho de `listDir`. Erro chega como mensagem em português.
+  readFile: (path: string) => call<FileContent>('read_file', { path }),
+  writeFile: (path: string, text: string) => call<void>('write_file', { path, text }),
   // Painel Git. Caminhos relativos à raiz do projeto, com "/"; lista vazia em stage/unstage vale para tudo.
   gitStatus: () => call<GitStatus>('git_status'),
   gitDiff: (path: string, staged: boolean) => call<GitDiff>('git_diff', { path, staged }),

@@ -48,6 +48,20 @@ fn list_dir(core: State<Core>, gate: State<Gate>, path: String) -> Result<Vec<fi
     files::list(&core.repo()?, &path)
 }
 
+/// O conteúdo de um arquivo do projeto para a tela. `path` é relativo ao projeto.
+#[tauri::command(async)]
+fn read_file(core: State<Core>, gate: State<Gate>, path: String) -> Result<files::Content, String> {
+    gate.ensure_open()?;
+    files::read(&core.repo()?, &path)
+}
+
+/// Grava o conteúdo de um arquivo do projeto. `path` é relativo ao projeto.
+#[tauri::command(async)]
+fn write_file(core: State<Core>, gate: State<Gate>, path: String, text: String) -> Result<(), String> {
+    gate.ensure_open()?;
+    files::write(&core.repo()?, &path, &text)
+}
+
 /// Busca `query` nos arquivos do projeto (rastreados e não rastreados, sem o ignorado e sem binário). Consulta
 /// vazia não busca nada.
 #[tauri::command(async)]
@@ -251,6 +265,8 @@ pub fn run(context: tauri::Context) {
             choose_project,
             get_options,
             list_dir,
+            read_file,
+            write_file,
             search,
             git_status,
             git_diff,

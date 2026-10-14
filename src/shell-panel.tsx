@@ -1,4 +1,4 @@
-// O painel Terminal, embaixo dos terminais da tela principal: uma aba por shell do usuário, redimensionável pela borda de cima.
+// O painel Terminal, embaixo da área do arquivo na coluna central da tela principal: uma aba por shell do usuário, redimensionável pela borda de cima.
 // Fica montado depois da primeira abertura; fechar só esconde (os shells seguem vivos no backend). Todos os TermHost ficam montados; só o da aba ativa aparece.
 import { ChevronDown, Plus, SquareTerminal, X } from 'lucide-react';
 import { ActionIcon, DraggablePanel, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
@@ -14,7 +14,7 @@ const DEFAULT_SIZE = { height: SHELL_HEIGHT };
 
 export type ShellTab = { id: string; title: string };
 
-/** Escondido com `hidden` (display none): sai do layout e o cartão de cima cresce. Os TermHost ficam montados. */
+/** Escondido com `hidden` (display none): sai do layout e a área do arquivo cresce. Os TermHost ficam montados. */
 export function ShellPanel({ open, maxHeight, tabs, active, onSelect, onAdd, onHide, onClose, onReady }: {
   open: boolean;
   maxHeight: number;
@@ -26,18 +26,21 @@ export function ShellPanel({ open, maxHeight, tabs, active, onSelect, onAdd, onH
   onClose: (id: string) => void;
   onReady: (id: string, view: TermView) => void;
 }) {
-  // `shrink-0`: o cartão de cima é que encolhe; o painel mantém a altura que o usuário deu.
+  // `shrink-0`: a área do arquivo é que encolhe; o painel mantém a altura que o usuário deu.
   return (
     <div className={open ? 'shrink-0' : 'hidden'}>
       <DraggablePanel
-        placement="bottom" expandable={false} showBorder={false}
+        placement="bottom" expandable={false} showHandleWideArea={false}
         defaultSize={DEFAULT_SIZE} minHeight={SHELL_MIN} maxHeight={Math.max(maxHeight, SHELL_MIN)}
         backgroundColor="var(--ant-color-bg-container)"
       >
-        <Flexbox height="100%" className="min-h-0 overflow-hidden rounded-xl border bg-card">
+        <Flexbox height="100%" className="min-h-0 overflow-hidden bg-card">
           <Flexbox horizontal align="center" gap={4} height={36} flex="none" paddingInline={4} className="border-b">
             {/* Só as abas e o "+" rolam juntos na horizontal; o botão de esconder fica fora da rolagem. */}
-            <Flexbox horizontal align="center" gap={4} flex={1} className="min-w-0 overflow-x-auto [scrollbar-width:none]">
+            <Flexbox
+              horizontal align="center" gap={4} flex={1} className="min-w-0 overflow-x-auto [scrollbar-width:none]!"
+              onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; }}
+            >
               <TabsRoot value={active} onValueChange={(key: string) => onSelect(key)} className="gap-0">
                 <TabsList className="h-8 flex-nowrap justify-start overflow-y-hidden rounded-full">
                   <TabsIndicator />
@@ -70,7 +73,7 @@ export function ShellPanel({ open, maxHeight, tabs, active, onSelect, onAdd, onH
               onClick={onHide}
             />
           </Flexbox>
-          <div className="relative mx-1.5 mb-1.5 min-h-0 flex-1 overflow-hidden rounded-lg bg-terminal">
+          <div className="relative min-h-0 flex-1 overflow-hidden bg-terminal">
             {tabs.map((tab) => (
               <div key={tab.id} className={`absolute inset-0${tab.id !== active ? ' invisible' : ''}`}>
                 <TermHost id={tab.id} writable onReady={(view) => onReady(tab.id, view)} />

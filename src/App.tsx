@@ -1,12 +1,14 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { Block, Center, Flexbox } from '@lobehub/ui';
-import { Alert, Button, InputNumber, Modal, Progress, Text, toast } from '@lobehub/ui/base-ui';
+import { Alert, Button, DraggablePanel, InputNumber, Modal, Progress, Text, toast } from '@lobehub/ui/base-ui';
 import { backend, connect, host, message } from './backend';
 import { ChoiceForm } from './choice-form';
+import { FileView } from './file-view';
 import { FilesScreen, Nav, StatusBar, type Route } from './explorer';
 import { GitScreen, usePolled } from './git';
 import { SearchScreen } from './search';
-import { FINISHED, STATES, TerminalsScreen } from './terminal-screen';
+import { ShellPanel } from './shell-panel';
+import { FINISHED, PANEL_MIN, PANEL_WIDTH, STATES, TerminalsScreen } from './terminal-screen';
 import type { TermView } from './term';
 import { terminals } from './terminals';
 import { TitleBar } from './titlebar';
@@ -15,6 +17,15 @@ import {
 } from './types';
 
 const MB = 1024 * 1024;
+// Larguras da linha principal: o Nav, o mínimo que a coluna central mantém, e a faixa da árvore e da pesquisa (a inicial, que não se guarda entre aberturas, e a mínima).
+const NAV_WIDTH = 44;
+const CENTER_MIN_WIDTH = 240;
+const SIDE_WIDTH = 280;
+const SIDE_MIN = 200;
+// Objeto constante: o duplo clique na alça volta para a largura inicial (o DraggablePanel usa `defaultSize` nesse reset).
+const SIDE_DEFAULT_SIZE = { width: SIDE_WIDTH };
+// Altura que a área do arquivo mantém quando o painel Terminal está aberto no máximo.
+const FILE_MIN_HEIGHT = 160;
 
 type Overlay = 'start' | 'executor' | null;
 // Um shell do painel Terminal: `program` fica '' até o backend responder com o nome do programa.
@@ -132,6 +143,22 @@ const updateText = (status: UpdateStatus, fatal: boolean) => {
 
 const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
 
+// Largura ou altura de um elemento, medida com ResizeObserver. O elemento entra por callback ref: ele só existe em algumas telas,
+// então a medida segue o elemento que está montado agora, e não o primeiro que apareceu.
+function useSize(axis: 'width' | 'height') {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  const [size, setSize] = useState(0);
+  useLayoutEffect(() => {
+    if (!el) return;
+    const measure = () => setSize(axis === 'width' ? el.clientWidth : el.clientHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [el, axis]);
+  return [setEl, size] as const;
+}
+
 export function App() {
   const [state, dispatch] = useReducer(reducer, initial);
   const stateRef = useRef(state);
@@ -139,6 +166,12 @@ export function App() {
     stateRef.current = state;
   });
   const [route, setRoute] = useState<Route>('arquivos');
+  // Arquivo aberto na área do meio (um por vez). Clicar de novo no mesmo caminho não muda nada.
+  const [openFile, setOpenFile] = useState<string | null>(null);
+  // Espelha a edição do FileView para proteger troca de arquivo e fechamento da janela.
+  const [fileDirty, setFileDirty] = useState(false);
+  const fileDirtyRef = useRef(false);
+  fileDirtyRef.current = fileDirty;
   // Sobe a cada Ctrl+Shift+F: a pesquisa refoca o campo mesmo se já estiver na tela.
   const [searchFocus, setSearchFocus] = useState(0);
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
@@ -148,7 +181,10 @@ export function App() {
   const [fatal, setFatal] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [projectError, setProjectError] = useState('');
+  // A confirmação combina descarte de edição e encerramento de terminais conforme a ação pedida.
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [confirmTerminals, setConfirmTerminals] = useState(false);
   const closeAnswer = useRef<((ok: boolean) => void) | null>(null);
   const updateEvents = useRef(0);
   const [maxValue, setMaxValue] = useState<number | null>(null);
@@ -156,6 +192,26 @@ export function App() {
   useEffect(() => setMaxValue(maxParallel ?? null), [maxParallel]);
   // Contador dos shells do painel Terminal: só cresce, então um id nunca se repete enquanto o app está aberto.
   const shellSeq = useRef(0);
+  // Largura da janela (a faixa e o painel do Orquestrador cabem nela) e altura da coluna central (o painel Terminal não come a área do arquivo).
+  const [rowRef, rowWidth] = useSize('width');
+  const [centerRef, centerHeight] = useSize('height');
+  // Larguras que o usuário deu à faixa e ao painel do Orquestrador. As exibidas são elas limitadas ao que cabe na janela agora.
+  const [sideWidth, setSideWidth] = useState(SIDE_WIDTH);
+  const [panelWidth, setPanelWidth] = useState(PANEL_WIDTH);
+  // O que a faixa e o painel dividem: a janela menos o Nav e o mínimo da coluna central. Indefinido enquanto a janela não foi medida: os dois nascem na largura inicial, sem limite e sem animação.
+  const sharedWidth = rowWidth ? rowWidth - NAV_WIDTH - CENTER_MIN_WIDTH : undefined;
+  // Janela estreita: o painel cede primeiro, até a mínima dele, e só depois a faixa. Por isso a faixa conta o painel na mínima, e o painel conta a faixa já exibida.
+  const shownSideWidth = sharedWidth === undefined
+    ? sideWidth
+    : Math.min(sideWidth, Math.max(SIDE_MIN, sharedWidth - PANEL_MIN));
+  const panelMaxWidth = sharedWidth === undefined
+    ? undefined
+    : Math.max(PANEL_MIN, sharedWidth - shownSideWidth);
+  const shownPanelWidth = Math.min(panelWidth, panelMaxWidth ?? Infinity);
+  // No arrasto, cada borda para quando a coluna central chega ao mínimo: o máximo de um conta a largura exibida do outro, e nenhum empurra o outro.
+  const sideMaxWidth = sharedWidth === undefined
+    ? undefined
+    : Math.max(SIDE_MIN, sharedWidth - shownPanelWidth);
 
   // ---------- ações ----------
 
@@ -164,10 +220,19 @@ export function App() {
     dispatch({ type: 'reset', notice });
   };
 
-  const askClose = () => new Promise<boolean>((resolve) => {
+  const askClose = (discard = false, running = false) => new Promise<boolean>((resolve) => {
     closeAnswer.current = resolve;
+    setConfirmDiscard(discard);
+    setConfirmTerminals(running);
     setConfirmOpen(true);
   });
+  // Fechar ou trocar o arquivo pede confirmação se o rascunho atual tiver alterações.
+  const requestOpenFile = async (path: string | null) => {
+    if (path === openFile) return;
+    if (fileDirty && !(await askClose(true))) return;
+    setOpenFile(path);
+    setFileDirty(false);
+  };
   const settleClose = (ok: boolean) => {
     setConfirmOpen(false);
     closeAnswer.current?.(ok);
@@ -199,7 +264,8 @@ export function App() {
         host().listen('shell-exit', ({ id }) => dropShell(id)),
         host().onCloseRequested(async () => {
           try {
-            if (await backend.hasRunning() && !(await askClose())) return false;
+            const running = await backend.hasRunning();
+            if ((running || fileDirtyRef.current) && !(await askClose(fileDirtyRef.current, running))) return false;
             await backend.shutdown();
           } catch { /* sem backend para responder não há o que proteger: deixa fechar */ }
           return true;
@@ -486,37 +552,40 @@ export function App() {
         </Flexbox>
       </TitleBar>
 
-      <Flexbox horizontal flex={1} className="min-h-0">
+      <Flexbox ref={rowRef} horizontal flex={1} className="min-h-0">
         <Nav route={route} changed={changed} onGo={setRoute} />
         <main className="relative min-h-0 min-w-0 flex-1">
           <div className={shown('arquivos', 'pesquisa')}>
             <Flexbox horizontal height="100%">
-              {/* Árvore e pesquisa ocupam a mesma faixa: as duas montadas, a inativa só invisível (os terminais não mudam de tamanho). */}
-              <div className="relative h-full w-[280px] shrink-0 border-r bg-background">
-                <div className={shown('arquivos')}>
-                  <FilesScreen />
+              {/* Árvore e pesquisa ocupam a mesma faixa: as duas montadas, a inativa só invisível (a coluna central não muda de tamanho na troca). A borda direita da faixa arrasta para mudar a largura. */}
+              <DraggablePanel
+                placement="left" expandable={false} showHandleWideArea={false}
+                size={{ width: shownSideWidth }} defaultSize={SIDE_DEFAULT_SIZE}
+                onSizeChange={(_, size) => typeof size?.width === 'number' && setSideWidth(size.width)}
+                minWidth={SIDE_MIN} maxWidth={sideMaxWidth}
+                backgroundColor="var(--ant-color-bg-layout)"
+              >
+                <div className="relative h-full">
+                  <div className={shown('arquivos')}>
+                    <FilesScreen openPath={openFile} onOpen={(path) => void requestOpenFile(path)} />
+                  </div>
+                  <div className={shown('pesquisa')}>
+                    <SearchScreen active={route === 'pesquisa'} focusKey={searchFocus} />
+                  </div>
                 </div>
-                <div className={shown('pesquisa')}>
-                  <SearchScreen active={route === 'pesquisa'} focusKey={searchFocus} />
-                </div>
-              </div>
-              <Flexbox height="100%" flex={1} allowShrink>
-                <TerminalsScreen
-                  orchestrator={orchestrator}
-                  executors={executors}
-                  executorChoice={state.executorChoice}
-                  notice={state.notice}
-                  shellOpen={state.shellOpen}
-                  shellTabs={shellTabs}
-                  shellActive={state.shellActive}
-                  onOpen={openOrchestrator}
-                  onExecutorChoice={toggleExecutorChoice}
-                  onStop={(id) => backend.stopExecutor(id).catch(report)}
-                  onShellSelect={(id) => dispatch({ type: 'shellSelect', id })}
-                  onShellAdd={addShell}
-                  onShellHide={() => dispatch({ type: 'shellOpen', open: false })}
-                  onShellClose={closeShell}
-                  onShellReady={startShell}
+              </DraggablePanel>
+              {/* Coluna central: a área do arquivo em cima e o painel Terminal embaixo. */}
+              <Flexbox ref={centerRef} height="100%" flex={1} allowShrink>
+                <Flexbox height="100%" flex={1} className="min-h-0">
+                  {openFile && (
+                    <FileView key={openFile} path={openFile} active={route !== 'git'} onDirtyChange={setFileDirty} onClose={() => void requestOpenFile(null)} />
+                  )}
+                </Flexbox>
+                <ShellPanel
+                  open={state.shellOpen} maxHeight={centerHeight - FILE_MIN_HEIGHT}
+                  tabs={shellTabs} active={state.shellActive}
+                  onSelect={(id) => dispatch({ type: 'shellSelect', id })} onAdd={addShell}
+                  onHide={() => dispatch({ type: 'shellOpen', open: false })} onClose={closeShell} onReady={startShell}
                 />
               </Flexbox>
             </Flexbox>
@@ -525,6 +594,19 @@ export function App() {
             <GitScreen git={git} locked={busy} active={route === 'git'} />
           </div>
         </main>
+        {/* Painel do Orquestrador, à direita de tudo e em todas as telas: nenhuma rota o desmonta nem muda o tamanho dele. */}
+        <TerminalsScreen
+          orchestrator={orchestrator}
+          executors={executors}
+          executorChoice={state.executorChoice}
+          notice={state.notice}
+          width={shownPanelWidth}
+          maxWidth={panelMaxWidth}
+          onWidthChange={setPanelWidth}
+          onOpen={openOrchestrator}
+          onExecutorChoice={toggleExecutorChoice}
+          onStop={(id) => backend.stopExecutor(id).catch(report)}
+        />
       </Flexbox>
 
       <StatusBar branch={git.data?.branch} terminalOpen={state.shellOpen} onToggleTerminal={toggleShell} />
@@ -553,7 +635,9 @@ export function App() {
       {/* Esc, clique fora e Cancelar recusam o fechamento; só o botão de perigo confirma. */}
       <Modal
         open={confirmOpen}
-        title="Fechar o Orquestrador?"
+        title={confirmDiscard && !confirmTerminals
+          ? 'Descartar alterações?'
+          : 'Fechar o Orquestrador?'}
         closable={false}
         keyboard
         maskClosable
@@ -561,11 +645,23 @@ export function App() {
         footer={(
           <Flexbox horizontal justify="flex-end" gap={8}>
             <Button onClick={() => settleClose(false)}>Cancelar</Button>
-            <Button type="primary" danger onClick={() => settleClose(true)}>Fechar e encerrar todos</Button>
+            <Button type="primary" danger onClick={() => settleClose(true)}>
+              {confirmDiscard && confirmTerminals
+                ? 'Descartar e encerrar todos'
+                : confirmDiscard
+                  ? 'Descartar'
+                  : 'Fechar e encerrar todos'}
+            </Button>
           </Flexbox>
         )}
       >
-        <Text as="p" type="secondary" fontSize={14}>Há terminais trabalhando; fechar encerra todos.</Text>
+        <Text as="p" type="secondary" fontSize={14}>
+          {confirmDiscard && confirmTerminals
+            ? 'Há alterações não salvas no arquivo e terminais trabalhando; fechar descarta a edição e encerra os terminais.'
+            : confirmDiscard
+              ? 'Há alterações não salvas no arquivo; descartá-las?'
+              : 'Há terminais trabalhando; fechar encerra todos.'}
+        </Text>
       </Modal>
     </Flexbox>
   );

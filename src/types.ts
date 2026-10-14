@@ -29,6 +29,9 @@ export type UpdateStatus =
 // Uma entrada de `list_dir`: um nível só. A ordem é a do backend (pastas primeiro, depois arquivos, alfabética).
 export type DirEntry = { name: string; dir: boolean };
 
+// Uma leitura de `read_file`: o texto como está no disco, com indicação de UTF-8. Binário e arquivo acima de 1 MiB voltam sem texto.
+export type FileContent = { binary: boolean; tooLarge: boolean; readOnly: boolean; text: string };
+
 // Painel Git (contrato do backend, JSON em camelCase). Um arquivo pode estar nas duas seções ao mesmo tempo.
 export type GitKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted';
 export type GitFile = { path: string; origPath: string | null; staged: GitKind | null; unstaged: GitKind | null };

@@ -23,7 +23,7 @@ const drop = (tree: ExplorerTree, path: string): ExplorerTree => ({
 const sameList = (a: DirEntry[] | undefined, b: DirEntry[]) =>
   !!a && a.length === b.length && a.every((e, i) => e.name === b[i].name && e.dir === b[i].dir);
 
-// Seleção fica sempre vazia: clicar na linha abre ou fecha a pasta, sem marcar nada.
+// Sem arquivo aberto, nada fica marcado. Pasta abre e fecha sem ficar marcada.
 const NO_SELECTION: string[] = [];
 
 /** Coluna de ícones: uma tela por botão, na ordem Arquivos, Pesquisar, Git. O botão da tela aberta tem aria-current. */
@@ -50,8 +50,8 @@ export function Nav({ route, changed, onGo }: { route: Route; changed: number; o
   );
 }
 
-/** Árvore de pastas do projeto, à esquerda dos terminais na tela principal. Pasta abre e fecha; clicar em arquivo não faz nada. */
-export function FilesScreen() {
+/** Árvore de pastas do projeto, na faixa à esquerda da tela principal. Pasta abre e fecha; arquivo abre na área do meio e fica marcado. */
+export function FilesScreen({ openPath, onOpen }: { openPath: string | null; onOpen: (path: string) => void }) {
   const [tree, setTree] = useState<ExplorerTree>({ children: {}, expanded: [] });
   const [error, setError] = useState('');
   const expanded = useRef<string[]>([]);
@@ -130,7 +130,7 @@ export function FilesScreen() {
           <Text as="p" type="secondary" fontSize={12} className="px-3 py-1">Lendo a pasta…</Text>
         )}
         <Tree
-          treeData={nodes('')} expandedKeys={tree.expanded} selectedKeys={NO_SELECTION}
+          treeData={nodes('')} expandedKeys={tree.expanded} selectedKeys={openPath ? [openPath] : NO_SELECTION}
           indent={16} size="small" showIcon style={{ paddingInline: 8 }}
           onExpand={(keys) => {
             // Abre o que entrou na lista e fecha o que saiu (a tecla * abre vários de uma vez).
@@ -138,7 +138,8 @@ export function FilesScreen() {
             tree.expanded.filter((k) => !keys.includes(k)).forEach((k) => toggle(k, true));
           }}
           onSelect={(_, { node }) => {
-            if (!node.isLeaf) toggle(node.key, tree.expanded.includes(node.key));
+            if (node.isLeaf) onOpen(node.key);
+            else toggle(node.key, tree.expanded.includes(node.key));
           }}
         />
       </Flexbox>
@@ -153,7 +154,7 @@ export function StatusBar({ branch, terminalOpen, onToggleTerminal }: {
   onToggleTerminal: () => void;
 }) {
   return (
-    <Flexbox as="footer" horizontal align="center" gap={6} height={24} flex="none" paddingInline={12} className="border-t bg-card">
+    <Flexbox as="footer" horizontal align="center" gap={6} height={25} flex="none" paddingInline={12} className="border-t bg-card">
       {branch && (
         <>
           <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />

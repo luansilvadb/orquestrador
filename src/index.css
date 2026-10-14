@@ -46,8 +46,13 @@ body,
     height: 100%;
 }
 
-body {
+/* O body nunca rola. O GlobalStyle do Lobe UI põe `body { overflow: hidden auto }` sem camada, depois deste arquivo, e venceria um `body` simples
+   (mesma especificidade, o último vence). `html body` tem mais especificidade e vence esse estilo. */
+html body {
     overflow: hidden;
+}
+
+body {
     user-select: none;
     -webkit-font-smoothing: antialiased;
 }

@@ -201,7 +201,7 @@ export function SearchScreen({ active, focusKey }: { active: boolean; focusKey: 
                     <Text as="span" type="secondary" fontSize={12} className="ml-auto shrink-0 pl-2">{file.matches.length}</Text>
                   </button>
                   {open && file.matches.map((m) => (
-                    // Linha de resultado não é botão: clicar ainda não faz nada (o app não abre arquivos).
+                    // Linha de resultado não é botão: clicar ainda não faz nada (a pesquisa não abre arquivos; só a árvore abre).
                     <Flexbox
                       key={m.line} horizontal align="center" gap={8} paddingInline="24px 8px" paddingBlock={1}
                       title={`${file.path}:${m.line}`} className="min-w-0 select-text"
