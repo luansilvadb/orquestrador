@@ -9,6 +9,9 @@ import { copyLineDown, deleteLine, indentWithTab, moveLineDown, moveLineUp, redo
 import { openSearchPanel, selectNextOccurrence } from '@codemirror/search';
 import { LanguageDescription, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
+import { indentationMarkers } from '@replit/codemirror-indentation-markers';
+import { showMinimap } from '@replit/codemirror-minimap';
+import { bracketColors } from './bracket-colors';
 import { message } from './backend';
 import { action, blocked, DIVIDER } from './file-tabs';
 import type { Scroll } from './workspace-store';
@@ -17,51 +20,97 @@ import type { Scroll } from './workspace-store';
 const COLOR_LIMIT = 200_000;
 // Quantos ecos de digitação guardar: a renderização atrasada nunca passa de algumas teclas.
 const ECHO_LIMIT = 64;
+// Medidas do editor do Antigravity (Monaco), com as cores do tema do app: texto de 14 px em linhas de 19 px; à esquerda, 19 px da
+// margem de ícones, 31 px dos números (alinhados à direita) e 26 px da dobra, que só aparece com o ponteiro na medianiz; a linha
+// do cursor tem só uma borda, sem fundo. As barras de rolagem têm 14 px (vertical) e 12 px (horizontal), quadradas.
 const darkTheme = EditorView.theme({
   '&': {
     height: '100%',
     color: 'var(--ant-color-text)',
     backgroundColor: 'var(--ant-color-bg-container)',
-    fontSize: '13px',
+    fontSize: '14px',
   },
   '.cm-scroller': {
     overflow: 'auto',
     fontFamily: 'var(--default-mono-font-family)',
-    lineHeight: '1.5',
+    lineHeight: '19px',
   },
+  '.cm-scroller::-webkit-scrollbar': { width: '14px', height: '12px' },
+  '.cm-scroller::-webkit-scrollbar-track, .cm-scroller::-webkit-scrollbar-corner': { background: 'transparent' },
+  '.cm-scroller::-webkit-scrollbar-thumb': { background: 'rgb(121 121 121 / 0.4)' },
+  '.cm-scroller::-webkit-scrollbar-thumb:hover': { background: 'rgb(100 100 100 / 0.7)' },
+  '.cm-scroller::-webkit-scrollbar-thumb:active': { background: 'rgb(191 191 191 / 0.4)' },
   '.cm-content': {
-    padding: '12px 12px 12px 0',
+    padding: '0',
     caretColor: 'var(--ant-color-text)',
   },
+  '.cm-line': { padding: '0' },
   '.cm-gutters': {
     color: 'var(--ant-color-text-tertiary)',
     backgroundColor: 'var(--ant-color-bg-container)',
     border: 'none',
   },
-  '.cm-activeLine, .cm-activeLineGutter': {
-    backgroundColor: 'var(--ant-color-fill-quaternary)',
-  },
+  '.cm-lineNumbers .cm-gutterElement': { padding: '0 0 0 19px', minWidth: '50px', textAlign: 'right' },
+  '.cm-foldGutter .cm-gutterElement': { width: '26px', paddingLeft: '6px', opacity: '0', transition: 'opacity 0.1s' },
+  '.cm-gutters:hover .cm-foldGutter .cm-gutterElement': { opacity: '1' },
+  '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--ant-color-text)' },
+  '.cm-activeLine': { backgroundColor: 'transparent', boxShadow: 'inset 0 0 0 2px var(--ant-color-fill-tertiary)' },
   '&.cm-focused': { outline: 'none' },
   '.cm-selectionBackground': { backgroundColor: 'var(--ant-color-primary-bg)' },
 }, { dark: true });
 
+// Minimap à direita, como o do Antigravity: 120 px, com os caracteres desenhados e a janela visível só com o ponteiro. Arquivo
+// acima do limite de cor fica sem ele (desenhar tudo custa como colorir). O objeto é fixo para o facet não recriar o minimap a cada tecla.
+// O minimap só redesenha quando o texto ou a configuração dele mudam; por isso, quando a linguagem chega (depois, assíncrona), ele
+// recebe uma configuração nova (`minimap()` outra vez), e assim passa a desenhar com as cores da sintaxe.
+const MINIMAP = { create: () => ({ dom: document.createElement('div') }), displayText: 'characters' as const, showOverlay: 'mouse-over' as const };
+const minimap = () => {
+  const config = { ...MINIMAP };
+  return showMinimap.compute(['doc'], (state) => (state.doc.length > COLOR_LIMIT ? null : config));
+};
+
+// Cores de sintaxe do tema padrão do Antigravity (Dark Modern, que herda as do Dark+), lidas do editor dele: controle de fluxo e
+// import/export em rosa, declarações e literais em azul, variáveis e propriedades em azul-claro, funções em amarelo, tipos em verde-água.
+// O minimap desenha com estas mesmas cores.
 const darkHighlight = HighlightStyle.define([
-  { tag: tags.keyword, color: '#c792ea' },
-  { tag: tags.string, color: '#c3e88d' },
-  { tag: tags.comment, color: '#7f8c98', fontStyle: 'italic' },
-  { tag: tags.number, color: '#f78c6c' },
-  { tag: tags.function(tags.variableName), color: '#82aaff' },
-  { tag: [tags.typeName, tags.className, tags.namespace], color: '#ffcb6b' },
-  { tag: tags.propertyName, color: '#80cbc4' },
-  { tag: tags.operator, color: '#89ddff' },
-  { tag: tags.heading, color: '#82aaff', fontWeight: 'bold' },
-  { tag: tags.link, color: '#80cbc4', textDecoration: 'underline' },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment], color: '#6a9955' },
+  { tag: [tags.keyword, tags.definitionKeyword, tags.modifier, tags.operatorKeyword, tags.self, tags.bool, tags.null, tags.atom], color: '#569cd6' },
+  { tag: [tags.controlKeyword, tags.moduleKeyword], color: '#c586c0' },
+  { tag: [tags.string, tags.special(tags.string), tags.docString, tags.attributeValue], color: '#ce9178' },
+  { tag: tags.regexp, color: '#d16969' },
+  { tag: [tags.escape, tags.character], color: '#d7ba7d' },
+  { tag: [tags.number, tags.integer, tags.float, tags.unit], color: '#b5cea8' },
+  { tag: [tags.variableName, tags.propertyName, tags.attributeName, tags.definition(tags.variableName), tags.special(tags.variableName)], color: '#9cdcfe' },
+  { tag: tags.constant(tags.variableName), color: '#4fc1ff' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.function(tags.definition(tags.variableName)), tags.annotation], color: '#dcdcaa' },
+  { tag: [tags.typeName, tags.className, tags.namespace, tags.standard(tags.typeName)], color: '#4ec9b0' },
+  { tag: tags.tagName, color: '#569cd6' },
+  { tag: tags.angleBracket, color: '#808080' },
+  { tag: tags.labelName, color: '#c8c8c8' },
+  { tag: [tags.operator, tags.derefOperator], color: '#d4d4d4' },
+  { tag: [tags.punctuation, tags.separator], color: '#cccccc' },
+  { tag: tags.invalid, color: '#f44747' },
+  { tag: tags.heading, color: '#569cd6', fontWeight: 'bold' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.strong, fontWeight: 'bold' },
+  { tag: tags.strikethrough, textDecoration: 'line-through' },
+  { tag: [tags.link, tags.url], color: '#ce9178', textDecoration: 'underline' },
+  { tag: tags.quote, color: '#6a9955' },
 ]);
 const basicExtensions = [
   basicSetup,
   keymap.of([indentWithTab]),
   darkTheme,
   syntaxHighlighting(darkHighlight),
+  bracketColors,
+  // Guias de recuo de 1 px; a do bloco do cursor fica mais forte.
+  indentationMarkers({
+    thickness: 1,
+    colors: {
+      dark: 'var(--ant-color-border)', activeDark: 'var(--ant-color-text-tertiary)',
+      light: 'var(--ant-color-border)', activeLight: 'var(--ant-color-text-tertiary)',
+    },
+  }),
 ];
 
 
@@ -135,6 +184,7 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
   const view = useRef<EditorView | null>(null);
   const language = useRef(new Compartment());
   const editable = useRef(new Compartment());
+  const mini = useRef(new Compartment());
   // Último pedido já atendido: o editor fica montado ao trocar de aba, e um pedido antigo não pode mover o cursor de novo.
   const revealed = useRef(0);
   // Textos que este editor já mandou para cima (um por digitação, em ordem). O pai devolve o texto com atraso: uma renderização
@@ -242,6 +292,7 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
         },
       }),
       language.current.of([]),
+      mini.current.of(minimap()),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           const value = update.state.doc.toString();
@@ -297,7 +348,7 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
     let live = true;
     void source.then((support) => {
       if (live && view.current === current) {
-        current.dispatch({ effects: language.current.reconfigure(support ?? []) });
+        current.dispatch({ effects: [language.current.reconfigure(support ?? []), mini.current.reconfigure(minimap())] });
       }
     });
     return () => {

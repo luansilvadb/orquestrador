@@ -26,10 +26,11 @@
 import {
   forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type DragEvent, type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
 } from 'react';
-import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, Modal, Popover, TabsIndicator, TabsList, TabsRoot, TabsTab, Text, toast } from '@lobehub/ui/base-ui';
+import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownMenu, Modal, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox, PatchDiff } from '@lobehub/ui';
-import { List, Pin, X } from 'lucide-react';
+import { Columns2, Ellipsis, Pin, X } from 'lucide-react';
 import { FileIcon } from './file-icon';
+import { Breadcrumbs } from './breadcrumbs';
 import { backend, message } from './backend';
 import { usePolling } from './polling';
 import { CodeEditor, forgetEditorState, liveEditorView, type Reveal, type StartCursor } from './file-view';
@@ -917,87 +918,122 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     for (const group of ws.groups) revealActive(group.id);
   });
 
+  // Faixa de abas de cada grupo, nas medidas do Antigravity: abas de 30 px com divisor à direita; a ativa tem o fundo do editor e uma
+  // borda de 1 px em cima (na cor de destaque com o grupo em foco). À direita, Dividir à Direita e Mais Ações (`...`).
   const renderStrip = (groupId: GroupId) => {
     const group = ws.groups.find((g) => g.id === groupId);
     if (!group) return null;
     const current = activeTabOf(group);
     const focusedHere = ws.focus === groupId;
     const details = detailsOf(ws.groups.flatMap((g) => g.tabs.map((t) => t.target.path)));
+    // Setas andam entre as abas da faixa (a ativação é no clique, Enter ou Espaço), como uma lista de abas.
+    const onTabKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return;
+      const items = [...(e.currentTarget.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])];
+      const at = items.indexOf(e.currentTarget);
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : at + (e.key === 'ArrowRight' ? 1 : -1);
+      const target = items[Math.min(Math.max(next, 0), items.length - 1)];
+      if (!target) return;
+      e.preventDefault();
+      target.focus();
+    };
+    const pinnedFree = group.tabs.filter((t) => !t.pinned);
+    const groupMenu = (): ContextMenuItem[] => [
+      ...group.tabs.map((tab) => ({
+        key: `tab-${tab.id}`, label: labelOf(tab.target), icon: <FileIcon path={tab.target.path} className="size-4" />,
+        onClick: () => activateTab(tab.id),
+      })),
+      DIVIDER,
+      pinnedFree.length > 0 ? action('close-all', 'Fechar Todas', () => void closeFlow({ kind: 'all', group: groupId }), 'Ctrl+K W')
+        : blocked('close-all', 'Fechar Todas', 'Não há abas para fechar. As fixadas ficam abertas.'),
+      pinnedFree.some((t) => !isDirtyTab(t.target)) ? action('close-saved', 'Fechar Salvas', () => void closeFlow({ kind: 'saved', group: groupId }))
+        : blocked('close-saved', 'Fechar Salvas', 'Não há abas salvas para fechar.'),
+      DIVIDER,
+      action('save-all', 'Salvar Tudo', () => void saveAll()),
+      wsRef.current.closed.length > 0 ? action('reopen', 'Reabrir Fechada', reopen, 'Ctrl+Shift+T') : blocked('reopen', 'Reabrir Fechada', 'Não há aba fechada para reabrir.'),
+      wsRef.current.groups.length === 2 ? action('join', 'Unir Grupos', join_) : blocked('join', 'Unir Grupos', 'Só há um grupo.'),
+    ];
     return (
-      // Faixa de 36 px, como a do Orquestrador: abas em variant square, com o divisor por baixo. O foco do grupo aparece na cor do indicador.
-      <Flexbox
-        horizontal align="stretch" gap={4} height={36} flex="none" paddingInline={4} className="relative bg-card"
+      <div
+        className="relative flex h-[30px] flex-none bg-[var(--ant-color-bg-layout)]"
         onDragOver={(e: DragEvent) => { if (dragId.current) e.preventDefault(); }}
         onDrop={(e: DragEvent) => { e.preventDefault(); dropOn(groupId); }}
         data-group={groupId}
       >
         <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-border" />
-        <Flexbox
-          ref={stripRefFor(groupId)} horizontal align="stretch" flex={1} className="@container min-w-0 overflow-x-auto [scrollbar-width:none]!"
+        <div
+          ref={stripRefFor(groupId)} role="tablist" aria-label={`Abas do grupo ${groupId}`}
+          className="@container relative flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none]!"
           onWheel={wheelToScroll}
         >
-          <TabsRoot variant="square" value={current?.id ?? ''} onValueChange={(id: string) => activateTab(id)} className="gap-0">
-            {/* Sem gap e sem sombra nativa: o indicador de 2 px fica colado no divisor. Grupo sem foco usa cor apagada. */}
-            <TabsList className="h-full flex-nowrap justify-start overflow-clip" style={{ gap: 0, boxShadow: 'none' }}>
-              <TabsIndicator style={focusedHere ? undefined : { background: 'var(--ant-color-text-quaternary)' }} />
-              {group.tabs.map((tab, index) => (
-                <ContextMenuTrigger key={tab.id} items={() => tabMenu(tab)}>
-                  <div
-                    data-tab={tab.id}
-                    draggable
-                    onDragStart={(e) => { dragId.current = tab.id; e.dataTransfer.setData('text/plain', tab.id); }}
-                    onDragEnd={() => { dragId.current = null; }}
-                    onDragOver={(e) => { if (dragId.current) e.preventDefault(); }}
-                    onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOn(groupId, index); }}
-                    className="relative h-full flex-none max-w-[min(14rem,100cqw)]"
-                    onKeyDown={(e) => {
-                      if (!((e.key === 'F10' && e.shiftKey) || e.key === 'ContextMenu')) return;
-                      e.preventDefault();
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      e.currentTarget.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 16, clientY: rect.bottom }));
-                    }}
+          {group.tabs.map((tab, index) => {
+            const active = tab.id === current?.id;
+            const dirtyTab = isDirtyTab(tab.target);
+            return (
+              <ContextMenuTrigger key={tab.id} items={() => tabMenu(tab)}>
+                <div
+                  data-tab={tab.id}
+                  draggable
+                  onDragStart={(e) => { dragId.current = tab.id; e.dataTransfer.setData('text/plain', tab.id); }}
+                  onDragEnd={() => { dragId.current = null; }}
+                  onDragOver={(e) => { if (dragId.current) e.preventDefault(); }}
+                  onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOn(groupId, index); }}
+                  className={`group/tab relative z-[1] flex h-full max-w-[min(14rem,100cqw)] flex-none items-center border-r border-border ${active ? 'bg-[var(--ant-color-bg-container)]' : 'hover:bg-[var(--ant-color-bg-container)]'}`}
+                  onKeyDown={(e) => {
+                    if (!((e.key === 'F10' && e.shiftKey) || e.key === 'ContextMenu')) return;
+                    e.preventDefault();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    e.currentTarget.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 16, clientY: rect.bottom }));
+                  }}
+                >
+                  {/* A aba ativa cobre a linha de baixo da faixa (fica "aberta" para o editor) e tem a borda de cima. */}
+                  {active && <span aria-hidden className="pointer-events-none absolute inset-x-0 -bottom-px h-px bg-[var(--ant-color-bg-container)]" />}
+                  {active && <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-px" style={{ background: focusedHere ? 'var(--ant-color-primary)' : 'var(--ant-color-text-quaternary)' }} />}
+                  <button
+                    type="button" role="tab" aria-selected={active} tabIndex={active ? 0 : -1} title={labelOf(tab.target)}
+                    onClick={() => activateTab(tab.id)} onKeyDown={onTabKey}
+                    className={`flex h-full min-w-0 items-center gap-1.5 pr-7 pl-2.5 text-left text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset ${tab.preview ? 'italic' : ''} ${active ? 'text-[var(--ant-color-text)]' : 'text-[var(--ant-color-text-secondary)]'}`}
                   >
-                    <TabsTab value={tab.id} title={labelOf(tab.target)} className={`h-full max-w-full flex-none gap-1.5 pr-7! pl-3${tab.preview ? ' italic' : ''}`}>
-                      {tab.pinned
-                        ? <Pin className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                        : <FileIcon path={tab.target.path} className="size-3.5" />}
-                      <Text as="span" ellipsis className="min-w-0">{titleOf(tab.target)}</Text>
-                      {details.get(tab.target.path) && (
-                        <Text as="span" ellipsis type="secondary" fontSize={12} className="min-w-0">{details.get(tab.target.path)}</Text>
-                      )}
-                      {tab.pinned && <span className="sr-only">(fixada)</span>}
-                      {tab.preview && <span className="sr-only">(prévia)</span>}
-                      {isDirtyTab(tab.target) && <Text as="span" aria-label="Alteração não salva" title="Alteração não salva" className="shrink-0">●</Text>}
-                    </TabsTab>
-                    <ActionIcon
-                      variant="borderless" size="small" icon={X}
-                      aria-label={`Fechar ${labelOf(tab.target)}`} title="Fechar"
-                      className="absolute! z-10 top-1/2 right-1 -translate-y-1/2!"
-                      onClick={() => void closeFlow({ kind: 'one', tabId: tab.id })}
-                    />
-                  </div>
-                </ContextMenuTrigger>
-              ))}
-            </TabsList>
-          </TabsRoot>
-        </Flexbox>
-        <Popover
-          trigger="click" placement="bottomRight"
-          content={(
-            <Flexbox gap={2} padding={8} className="w-64 max-h-72 overflow-y-auto">
-              {group.tabs.map((tab) => (
-                <Button key={tab.id} type="text" size="small" title={labelOf(tab.target)} className="min-w-0 justify-start! gap-2" aria-current={tab.id === current?.id ? 'true' : undefined} onClick={() => activateTab(tab.id)}>
-                  <Text as="span" ellipsis className="min-w-0">{labelOf(tab.target)}</Text>
-                </Button>
-              ))}
-            </Flexbox>
-          )}
-        >
-          <Button type="text" size="small" icon={<List className="size-3.5" />} className="shrink-0 self-center" aria-label={`Abas do grupo ${groupId}: ${group.tabs.length}`} title="Todas as abas deste grupo">
-            {group.tabs.length}
-          </Button>
-        </Popover>
-      </Flexbox>
+                    {tab.pinned
+                      ? <Pin className="size-4 shrink-0 text-[var(--ant-color-text-secondary)]" aria-hidden />
+                      : <FileIcon path={tab.target.path} className="size-4" />}
+                    <span className="min-w-0 truncate">{titleOf(tab.target)}</span>
+                    {details.get(tab.target.path) && (
+                      <span className="min-w-0 truncate text-[12px] text-[var(--ant-color-text-secondary)]">{details.get(tab.target.path)}</span>
+                    )}
+                    {tab.pinned && <span className="sr-only">(fixada)</span>}
+                    {tab.preview && <span className="sr-only">(prévia)</span>}
+                  </button>
+                  {/* Como no VS Code: o X aparece na aba ativa e com o ponteiro; com alteração não salva, o ● fica no lugar dele até o ponteiro chegar. */}
+                  {dirtyTab && (
+                    <span
+                      aria-label="Alteração não salva" title="Alteração não salva"
+                      className="pointer-events-none absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center text-[13px] group-hover/tab:opacity-0"
+                    >
+                      ●
+                    </span>
+                  )}
+                  <ActionIcon
+                    variant="borderless" icon={X} size={{ size: 16, blockSize: 20, borderRadius: 5 }}
+                    aria-label={`Fechar ${labelOf(tab.target)}`} title="Fechar (Ctrl+F4)"
+                    className={`absolute! top-1/2 right-1 z-10 -translate-y-1/2! focus-visible:opacity-100 group-hover/tab:opacity-100 ${active && !dirtyTab ? 'opacity-100' : 'opacity-0'}`}
+                    onClick={() => void closeFlow({ kind: 'one', tabId: tab.id })}
+                  />
+                </div>
+              </ContextMenuTrigger>
+            );
+          })}
+        </div>
+        <div className="flex flex-none items-center gap-0.5 pr-2 pl-1" role="toolbar" aria-label="Ações de editor">
+          <ActionIcon
+            variant="borderless" size="small" icon={Columns2} aria-label="Dividir o Editor à Direita" title="Dividir o Editor à Direita (Ctrl+\)"
+            disabled={!current} onClick={() => { if (current) split_(current.id); }}
+          />
+          <DropdownMenu items={groupMenu} placement="bottomRight">
+            <ActionIcon variant="borderless" size="small" icon={Ellipsis} aria-label="Mais Ações..." title={`Mais Ações... (${group.tabs.length} ${group.tabs.length === 1 ? 'aba' : 'abas'})`} />
+          </DropdownMenu>
+        </div>
+      </div>
     );
   };
 
@@ -1008,6 +1044,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     return (
       <Flexbox flex={1} height="100%" className="min-w-0 min-h-0" data-pane={groupId} onMouseDown={() => { if (ws.focus !== groupId) setWs({ ...wsRef.current, focus: groupId }); }}>
         {renderStrip(groupId)}
+        {/* Breadcrumbs só nas abas de arquivo: diff, commit e conflito já têm a faixa própria com o caminho. */}
+        {current?.target.kind === 'file' && <Breadcrumbs path={current.target.path} onOpen={(path) => openFile(path)} />}
         <Flexbox flex={1} className="min-h-0 relative">
           {group.tabs.map((tab) => (
             <div key={tab.id} className="absolute inset-0 flex flex-col min-h-0" style={{ display: tab.id === current?.id ? 'flex' : 'none' }} data-body={tab.id}>
@@ -1121,7 +1159,7 @@ function FileBody({ groupActive, buffer, status, disk, reveal, cursor, onChange,
           <Button size="small" onClick={() => onCompare('keep')}>Comparar e salvar minha edição</Button>
         </Flexbox>
       )}
-      <Flexbox flex={1} className="min-h-0 pr-1 pb-1">
+      <Flexbox flex={1} className="min-h-0">
         <Flexbox flex={1} className="min-h-0 overflow-hidden">
           <CodeEditor
             text={buffer.draft}
@@ -1558,7 +1596,7 @@ function ConflictTab({ path, common, shown, draft, putConflict, dropConflict, sa
           ))}
         </Flexbox>
       )}
-      <Flexbox flex={1} className="min-h-0 pr-1 pb-1">
+      <Flexbox flex={1} className="min-h-0">
         <Flexbox flex={1} className="min-h-0 overflow-hidden">
           <CodeEditor
             text={text}

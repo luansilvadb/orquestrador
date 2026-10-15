@@ -9,12 +9,12 @@ import assert from 'node:assert/strict';
 import { OUT, uiSuite, expand, treeItem, tabs, tabTitles, editorText, focusEditor, columnPoint, primaryCursor } from './editor-ui-harness.mjs';
 
 
-// Geometria real da faixa: área visível (scroll), contador, aba ativa e o X dela.
+// Geometria real da faixa: área visível (scroll), ações do editor à direita, aba ativa e o X dela.
 async function strip(page, group = 'A') {
   return page.evaluate((g) => {
     const box = document.querySelector(`[data-group="${g}"] .overflow-x-auto`);
     if (!box) return null;
-    const count = document.querySelector(`[data-group="${g}"] button[aria-label^="Abas do grupo"]`);
+    const count = document.querySelector(`[data-group="${g}"] [role="toolbar"][aria-label="Ações de editor"]`);
     const activeWrap = box.querySelector('[role="tab"][aria-selected="true"]')?.closest('[data-tab]') ?? null;
     const rect = (el) => { const b = el.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom, w: b.width }; };
     const x = activeWrap?.querySelector('button[aria-label^="Fechar"]');
@@ -39,7 +39,7 @@ function assertRevealed(s, label) {
   assert.ok(s.x.l >= s.box.l - EPS && s.x.r <= s.box.r + EPS, `${label}: X da aba ativa cortado pela faixa`);
   assert.ok(s.name && s.name.w > 0, `${label}: nome da aba ativa sem largura útil (${s.name ? s.name.w.toFixed(1) : 'ausente'}px)`);
   assert.ok(s.name.l >= s.active.l - EPS && s.name.r <= s.x.l + EPS, `${label}: nome da aba ativa cruza o X (nome ${s.name.l.toFixed(1)}–${s.name.r.toFixed(1)}, X ${s.x.l.toFixed(1)})`);
-  if (s.count) assert.ok(s.count.l >= s.box.r - EPS, `${label}: contador sobrepõe a faixa (contador começa em ${s.count.l.toFixed(1)}, faixa acaba em ${s.box.r.toFixed(1)})`);
+  if (s.count) assert.ok(s.count.l >= s.box.r - EPS, `${label}: ações do editor sobrepõem a faixa (ações começam em ${s.count.l.toFixed(1)}, faixa acaba em ${s.box.r.toFixed(1)})`);
   assert.ok(s.pageOverflow <= 0, `${label}: rolagem horizontal da página (${s.pageOverflow}px)`);
 }
 
@@ -356,5 +356,34 @@ scenario('busca: resultado com emoji posiciona o cursor na coluna UTF-16 exata (
 });
 
 
+
+scenario('breadcrumbs e Mais Ações: o caminho do arquivo abre o seletor da pasta; arquivo do seletor abre; pasta desce; o ... lista as abas do grupo', async ({ page }) => {
+  await expand(page, ['src']);
+  await treeItem(page, 'App.tsx').dblclick();
+  await focusEditor(page);
+  const crumbs = page.getByRole('navigation', { name: 'Caminho do arquivo' });
+  assert.deepEqual(await crumbs.getByRole('button').allTextContents(), ['src', 'App.tsx'], 'breadcrumbs: pasta e arquivo');
+  await page.screenshot({ path: join(OUT, 'editor-ui-breadcrumbs.png') });
+
+  // "src" abre o conteúdo da raiz, com src marcada; README.md abre como prévia.
+  await crumbs.getByRole('button', { name: 'src', exact: true }).click();
+  const raiz = page.getByRole('listbox', { name: 'Conteúdo de projeto' });
+  assert.equal(await raiz.getByRole('option', { name: 'src', exact: true }).getAttribute('aria-selected'), 'true', 'a pasta do item vem marcada');
+  await raiz.getByRole('option', { name: 'README.md', exact: true }).click();
+  await crumbs.getByRole('button', { name: 'README.md', exact: true }).waitFor();
+
+  // No seletor do arquivo, a pasta src desce um nível; o arquivo dela abre.
+  await crumbs.getByRole('button', { name: 'README.md', exact: true }).click();
+  await page.getByRole('listbox', { name: 'Conteúdo de projeto' }).getByRole('option', { name: 'src', exact: true }).click();
+  await page.getByRole('listbox', { name: 'Conteúdo de src' }).getByRole('option', { name: 'App.tsx', exact: true }).click();
+  await crumbs.getByRole('button', { name: 'App.tsx', exact: true }).waitFor();
+
+  // Mais Ações lista as abas do grupo e ativa a escolhida.
+  await treeItem(page, 'README.md').dblclick();
+  await crumbs.getByRole('button', { name: 'README.md', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Mais Ações...' }).first().click();
+  await page.getByRole('menuitem', { name: /App\.tsx/ }).click();
+  await crumbs.getByRole('button', { name: 'App.tsx', exact: true }).waitFor();
+});
 
 process.exitCode = await run();
