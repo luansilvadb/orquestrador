@@ -1,6 +1,6 @@
 # Orquestrador
 
-![Orquestrador](docs/onboarding.png)
+![Orquestrador](docs/screenshot.png)
 
 App para Windows (Tauri) que põe CLIs de IA para trabalhar sobre a pasta de um projeto, de preferência um repositório Git. Um **orquestrador** conversa com você, lê o projeto e delega tarefas. Os **executores** recebem essas tarefas, cada um numa aba do painel, e trabalham na mesma pasta, em paralelo. Os CLIs `claude` e `codex` podem ocupar qualquer um dos dois papéis.
 
