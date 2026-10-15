@@ -1,3 +1,5 @@
+<img src="src-tauri/icons/icon.svg" width="96" alt="">
+
 # Orquestrador
 
 ![Orquestrador](docs/screenshot.png)
@@ -215,6 +217,7 @@ O processo completo, com o modelo das notas e a checklist, está em `docs/releas
 | `scripts/check-file-tabs.mjs` | Checagem pura de caminhos copiados, de nomes recusados e de “dentro de pasta”. |
 | `scripts/check-explorer.mjs` | Checagem pura da escolha de ícones (os casos do Explorer do Antigravity) e das decorações do Git na árvore. |
 | `scripts/sync-file-icons.mjs` | Copia o tema de ícones Symbols (MIT, com a LICENSE) da pasta `extensions` de uma IDE do VS Code para `src/assets/symbols` e gera o `theme.json`; rode de novo para atualizar os ícones. |
+| `src-tauri/icons/` | O ícone do app: `icon.svg` é a fonte; `icon.ico` (o do executável e do instalador) e `icon.png` saem dele. Para regenerar, rode `npx tauri icon src-tauri/icons/icon.svg -o <pasta temporária>` e copie só `icon.ico` e `icon.png` para cá; sem `-o`, o comando cria arquivos que o projeto não usa. |
 | `scripts/editor-ui-harness.mjs` | Loader e helpers dos checks de interface: sobe o Vite na porta `SMOKE_PORT` (padrão 1421), usa o Chromium já instalado, sem instalar nada, e dá a cada cenário um contexto novo (`browser.newContext`) no mesmo Chromium. |
 | `scripts/check-editor-ui.mjs` | Check de interface da área central: abas, grupos, fechamento, recuperação, comparação com o disco e atalhos. |
 | `scripts/check-files-search-ui.mjs` | Check de interface da árvore e da pesquisa: criar, renomear, recortar e colar; pesquisa com `./pasta`, prévia na lista, troca por arquivo e Substituir Tudo, árvore e só nos editores abertos. |
