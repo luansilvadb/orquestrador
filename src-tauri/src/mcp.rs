@@ -160,25 +160,19 @@ fn dispatch(session: &Path, name: &str, args: &Value, window: Duration) -> Resul
         return Err(format!("Ferramenta desconhecida: {name}."));
     }
     delegate::check_session(session)?;
-    match name {
-        "delegar" => {
-            let id = delegate::publish(session, &tasks(args)?)?;
-            delegate::wait(session, &id, window)
-        }
-        "aguardar" => {
-            let id = delegate::resume(session)?;
-            delegate::wait(session, &id, window)
-        }
+    let id = match name {
+        "delegar" => delegate::publish(session, &tasks(args)?)?,
+        "aguardar" => delegate::resume(session)?,
         _ => {
             let node = text_arg(args, "executor")?;
             let choice = text_arg(args, "decisao")?;
             // Motivo em branco é o mesmo que motivo nenhum: `recusar` continua exigindo um texto.
             let reason = args["motivo"].as_str().filter(|m| !m.trim().is_empty());
             delegate::respond(session, &node, &choice, reason)?;
-            let id = delegate::resume(session)?;
-            delegate::wait(session, &id, window)
+            delegate::resume(session)?
         }
-    }
+    };
+    delegate::wait(session, &id, window)
 }
 
 fn tasks(args: &Value) -> Result<Vec<String>, String> {
@@ -206,37 +200,11 @@ fn write<W: Write>(out: &Mutex<W>, msg: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proc::start_time;
+    use crate::testutil::{batch_with_ask, session};
     use std::io::Cursor;
 
     /// A janela dos testes: curta, para a espera acabar logo.
     const SHORT: Duration = Duration::from_millis(300);
-
-    /// Uma sessão cujo dono é este processo (viva) ou um processo que já não existe.
-    fn session(tag: &str, alive: bool) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("orq-mcp-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        for sub in ["requests", "results", "exec"] {
-            std::fs::create_dir_all(dir.join(sub)).unwrap();
-        }
-        let me = std::process::id();
-        let started = start_time(me).unwrap() + u64::from(!alive);
-        std::fs::write(dir.join("owner"), format!("{me} {started} strategist-{tag}")).unwrap();
-        dir
-    }
-
-    /// Um lote com o executor `node` na tarefa `index` e um pedido de confirmação sem resposta com `payload`.
-    fn batch_with_ask(dir: &Path, batch: &str, node: &str, index: usize, size: usize, payload: &str) {
-        let req = dir.join("requests").join(batch);
-        std::fs::create_dir_all(&req).unwrap();
-        for n in 1..=size {
-            std::fs::write(req.join(format!("{n}.txt")), format!("Tarefa {n}\nescopo")).unwrap();
-        }
-        let node_dir = dir.join("exec").join(node);
-        std::fs::create_dir_all(node_dir.join("ask")).unwrap();
-        std::fs::write(node_dir.join("batch.json"), json!({ "batch": batch, "index": index, "size": size }).to_string()).unwrap();
-        std::fs::write(node_dir.join("ask").join("00000000000000000001-aaaaaaaa.json"), payload).unwrap();
-    }
 
     const BASH: &str = r#"{"tool_name":"Bash","tool_input":{"command":"rm /d/a.log","description":"x"}}"#;
 
@@ -280,7 +248,7 @@ mod tests {
 
     #[test]
     fn initialize_devolve_a_versao_pedida_ou_a_padrao() {
-        let s = session("init", true);
+        let s = session("orq-mcp", "init", true);
         let got = talk(
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"initialize\",\"params\":{}}\n",
             &s,
@@ -295,7 +263,7 @@ mod tests {
 
     #[test]
     fn ping_devolve_resultado_vazio() {
-        let s = session("ping", true);
+        let s = session("orq-mcp", "ping", true);
         let got = talk("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}\n", &s);
         assert_eq!(got, [json!({ "jsonrpc": "2.0", "id": 3, "result": {} })]);
         let _ = std::fs::remove_dir_all(&s);
@@ -303,7 +271,7 @@ mod tests {
 
     #[test]
     fn tools_list_traz_as_tres_ferramentas_com_esquema() {
-        let s = session("list", true);
+        let s = session("orq-mcp", "list", true);
         let got = talk("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\"}\n", &s);
         let tools = got[0]["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -318,7 +286,7 @@ mod tests {
 
     #[test]
     fn notificacao_nao_tem_resposta() {
-        let s = session("notif", true);
+        let s = session("orq-mcp", "notif", true);
         let got = talk(
             "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":7}}\n",
             &s,
@@ -330,7 +298,7 @@ mod tests {
     #[test]
     fn metodo_desconhecido_com_id_e_erro_32601() {
         // O Claude manda `server/discover` antes do `initialize`: o erro é a resposta certa.
-        let s = session("metodo", true);
+        let s = session("orq-mcp", "metodo", true);
         let got = talk("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"server/discover\"}\n", &s);
         assert_eq!(got[0]["id"], 5);
         assert_eq!(got[0]["error"]["code"], -32601);
@@ -339,7 +307,7 @@ mod tests {
 
     #[test]
     fn json_ilegivel_e_erro_32700_com_id_nulo() {
-        let s = session("ilegivel", true);
+        let s = session("orq-mcp", "ilegivel", true);
         let got = talk("{\"jsonrpc\":\"2.0\",\"id\":6,\n", &s);
         assert_eq!(got[0]["id"], Value::Null);
         assert_eq!(got[0]["error"]["code"], -32700);
@@ -348,7 +316,7 @@ mod tests {
 
     #[test]
     fn delegar_com_lista_vazia_ou_tarefa_em_branco_nao_publica_nada() {
-        let s = session("invalido", true);
+        let s = session("orq-mcp", "invalido", true);
         let input = [call(7, "delegar", json!({ "tarefas": [] })), call(8, "delegar", json!({ "tarefas": ["ok", "  "] })), call(9, "delegar", json!({}))].join("\n");
         let got = talk(&input, &s);
         let by_id = |id: u64| got.iter().find(|r| r["id"] == id).unwrap();
@@ -363,7 +331,7 @@ mod tests {
 
     #[test]
     fn aguardar_sem_lote_e_erro_sem_prefixo_nem_fim() {
-        let s = session("sem-lote", true);
+        let s = session("orq-mcp", "sem-lote", true);
         let got = talk(&call(10, "aguardar", json!({})), &s);
         let (text, is_error) = text_of(&got[0]);
         assert!(is_error);
@@ -374,7 +342,7 @@ mod tests {
 
     #[test]
     fn responder_valida_a_resposta_antes_de_gravar() {
-        let s = session("validacao", true);
+        let s = session("orq-mcp", "validacao", true);
         batch_with_ask(&s, "B1", "exec-1", 0, 1, BASH);
         let input = [
             call(11, "responder", json!({ "executor": "exec-1", "decisao": "recusar" })),
@@ -401,7 +369,7 @@ mod tests {
 
     #[test]
     fn responder_recusar_com_motivo_grava_e_volta_a_esperar_o_lote() {
-        let s = session("recusa", true);
+        let s = session("orq-mcp", "recusa", true);
         batch_with_ask(&s, "B1", "exec-1", 0, 1, BASH);
         let got = talk(&call(15, "responder", json!({ "executor": "exec-1", "decisao": "recusar", "motivo": "use só o arquivo que você criou" })), &s);
         let (text, is_error) = text_of(&got[0]);
@@ -414,7 +382,7 @@ mod tests {
 
     #[test]
     fn janela_curta_devolve_em_andamento_sem_marca_e_aguardar_pega_o_resultado() {
-        let s = session("janela", true);
+        let s = session("orq-mcp", "janela", true);
         let got = talk(&call(16, "delegar", json!({ "tarefas": ["Tarefa A"] })), &s);
         let (text, is_error) = text_of(&got[0]);
         assert!(!is_error);
@@ -434,7 +402,7 @@ mod tests {
 
     #[test]
     fn marca_de_entregue_so_entra_depois_que_a_resposta_sai() {
-        let s = session("marca", true);
+        let s = session("orq-mcp", "marca", true);
         batch_with_ask(&s, "B1", "exec-1", 0, 1, BASH);
         std::fs::write(s.join("results").join("B1.txt"), "0\n--- EXECUTOR 1/1 ---\nok\n--- FIM ---\n").unwrap();
         // O resultado devolvido traz a marca, que quem chama grava; a função em si não grava nada.
@@ -450,7 +418,7 @@ mod tests {
 
     #[test]
     fn pergunta_interrompe_a_espera_e_nao_entrega() {
-        let s = session("pergunta", true);
+        let s = session("orq-mcp", "pergunta", true);
         batch_with_ask(&s, "B1", "exec-1", 0, 2, BASH);
         let got = talk(&call(19, "aguardar", json!({})), &s);
         let (text, is_error) = text_of(&got[0]);
@@ -464,7 +432,7 @@ mod tests {
 
     #[test]
     fn sessao_sem_dono_e_erro_em_toda_chamada() {
-        let s = session("sem-dono", false);
+        let s = session("orq-mcp", "sem-dono", false);
         std::fs::remove_file(s.join("owner")).unwrap();
         let input = [
             call(20, "delegar", json!({ "tarefas": ["x"] })),
@@ -483,7 +451,7 @@ mod tests {
 
     #[test]
     fn ferramenta_desconhecida_e_erro() {
-        let s = session("desconhecida", true);
+        let s = session("orq-mcp", "desconhecida", true);
         let got = talk(&call(23, "apagar", json!({})), &s);
         let (text, is_error) = text_of(&got[0]);
         assert!(is_error && text.contains("Ferramenta desconhecida"), "{text}");

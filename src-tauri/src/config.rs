@@ -204,12 +204,10 @@ pub fn options(cfg: &Config, codex_exe: &str) -> Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::fresh;
 
     fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("orq-cfg-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("config.json")
+        fresh("orq-cfg", name).join("config.json")
     }
 
     fn drop_dir(config: &Path) {

@@ -7,14 +7,14 @@ import { EditorWorkspace, type EditorWorkspaceHandle } from './editor-workspace'
 import { BatchError, FilesScreen, Nav, StatusBar, type FileActions, type Route } from './explorer';
 import { createGitGuard } from './git-guard';
 import { GitSidebar, usePolled } from './git';
-import { type HistoryRequest, nextHistoryId } from './git-history';
+import { copy, type HistoryRequest, nextHistoryId, splitPath } from './git-history';
 import { QuickOpen } from './quick-open';
 import { SearchScreen } from './search';
 import { SHELL_HEIGHT, SHELL_MIN, ShellPanel } from './shell-panel';
 import { FINISHED, PANEL_MIN, PANEL_WIDTH, STATES, TerminalsScreen } from './terminal-screen';
 import type { TermView } from './term';
 import { terminals } from './terminals';
-import { TitleBar } from './titlebar';
+import { folderName, TitleBar } from './titlebar';
 import { pathText, relativeTo } from './file-tab-actions';
 import { isWithin, type TabTarget } from './workspace-model';
 import {
@@ -150,19 +150,6 @@ const updateText = (status: UpdateStatus, fatal: boolean) => {
 
 const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
 
-// Atalho de janela: o listener fica no window em captura (antes do xterm, que não recebe a tecla). Chama sempre o `onKey` da última renderização.
-function useWindowKey(onKey: (e: KeyboardEvent) => void) {
-  const handler = useRef(onKey);
-  useLayoutEffect(() => {
-    handler.current = onKey;
-  });
-  useEffect(() => {
-    const listener = (e: KeyboardEvent) => handler.current(e);
-    window.addEventListener('keydown', listener, true);
-    return () => window.removeEventListener('keydown', listener, true);
-  }, []);
-}
-
 // Layout da janela guardado por projeto (texto opaco na recuperação do editor). Lê com desconfiança: o que não for número vira o padrão,
 // e o número é limitado às faixas aceitas. Texto inválido devolve null, e nada muda.
 type Layout = { sideWidth: number; panelWidth: number; shellHeight: number };
@@ -297,17 +284,11 @@ export function App() {
     closeAnswer.current = null;
   };
 
-  // Copia o caminho (ou os caminhos) para o clipboard de texto. Erro do clipboard vira toast; nada é copiado pela metade.
-  const copyText = (texts: string[], done: string) => {
-    if (texts.length === 0) return;
-    navigator.clipboard.writeText(texts.join('\n')).then(
-      () => toast.success({ title: done, duration: 3000 }),
-      (e) => toast.error({ title: 'Não foi possível copiar o caminho', description: message(e), duration: 7000 }),
-    );
-  };
+  // Copia o caminho (ou os caminhos), um por linha. Lista vazia não copia nada.
   const copyPaths = (kind: 'relative' | 'absolute', paths: string[]) => {
     const texts = paths.map((p) => pathText(kind, p, stateRef.current.project)).filter((t): t is string => t !== null);
-    copyText(texts, texts.length === 1 ? 'Caminho copiado' : `${texts.length} caminhos copiados`);
+    if (texts.length === 0) return;
+    void copy(texts.join('\n'), texts.length === 1 ? 'Caminho copiado' : `${texts.length} caminhos copiados`);
   };
   // Destino que já tem aba (ou rascunho) aberta: mover ou colar ali criaria dois documentos no mesmo caminho. Recusa antes de mexer no disco.
   const clashAt = (targets: string[]) => {
@@ -315,8 +296,10 @@ export function App() {
     const hit = targets.find((t) => open.some((p) => isWithin(p, t)));
     return hit ? new Error(`Feche a aba aberta em “${hit}” antes de mover ou colar aqui.`) : null;
   };
-  const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
-  const targetOf = (dir: string, path: string) => (dir ? `${dir}/${nameOf(path)}` : nameOf(path));
+  const targetOf = (dir: string, path: string) => {
+    const name = splitPath(path).name;
+    return dir ? `${dir}/${name}` : name;
+  };
   // Renomear: o backend troca o nome (arquivo ou pasta) e o editor troca só o caminho das abas e dos rascunhos. Nada é recusado por rascunho.
   async function renameFile(path: string, name: string) {
     const next = await backend.renameFile(path, name);
@@ -569,56 +552,60 @@ export function App() {
   // Atalhos de projeto (pesquisa, F4, arquivo rápido) valem só com o projeto aberto e o app pronto.
   const canShortcut = () => !!stateRef.current.project && stateRef.current.update.phase === 'ready';
 
-  // Ctrl+` abre e fecha o painel de qualquer lugar. A captura no window vem antes do xterm, que não recebe a tecla.
-  useWindowKey((e) => {
-    if (!e.ctrlKey || e.altKey || e.metaKey || e.code !== 'Backquote') return;
-    e.preventDefault();
-    e.stopPropagation();
-    toggleShell();
+  // Atalhos de janela num listener só, no window em captura (antes do xterm, que não recebe a tecla). Chama sempre o da última renderização.
+  // Cada tecla tem a sua condição e são excludentes; a que casa consome o evento.
+  const windowKey = useRef<(e: KeyboardEvent) => void>(() => {});
+  useLayoutEffect(() => {
+    windowKey.current = (e) => {
+      const target = e.target as HTMLElement | null;
+      // Ctrl+` abre e fecha o painel de qualquer lugar.
+      if (e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Backquote') {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleShell();
+        return;
+      }
+      // Ctrl+Shift+F abre a pesquisa e foca o campo, de qualquer lugar (com projeto aberto).
+      // Com texto selecionado no editor, esse texto vira a consulta e a busca roda na hora.
+      if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.code === 'KeyF' && canShortcut()) {
+        e.preventDefault();
+        e.stopPropagation();
+        const text = editor.current?.selectedText() ?? '';
+        if (text) setSeed({ text, id: ++seedSeq.current });
+        setRoute('pesquisa');
+        setSearchFocus((n) => n + 1);
+        return;
+      }
+      // F4 vai ao próximo resultado da pesquisa e Shift+F4 ao anterior (com volta). Dentro do terminal (xterm) a tecla segue como antes.
+      // Sem resultados a pesquisa não faz nada; a tecla é consumida mesmo assim, pois o App não sabe se há resultados.
+      if (e.code === 'F4' && !e.ctrlKey && !e.altKey && !e.metaKey && canShortcut() && !target?.closest?.('.xterm')) {
+        e.preventDefault();
+        e.stopPropagation();
+        setRoute('pesquisa');
+        setStep({ dir: e.shiftKey ? -1 : 1, id: ++stepSeq.current });
+        return;
+      }
+      // Ctrl+P abre o arquivo rápido. Não consome o atalho dentro do terminal (xterm) nem dos campos de texto: ali a tecla segue como antes.
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.code === 'KeyP' && canShortcut()
+        && !target?.closest?.('.xterm') && !target?.closest?.('input, textarea')) {
+        e.preventDefault();
+        e.stopPropagation();
+        setQuickOpen(true);
+      }
+    };
   });
-
-  // Ctrl+Shift+F abre a pesquisa e foca o campo, de qualquer lugar (com projeto aberto). Mesma captura no window do Ctrl+`.
-  // Com texto selecionado no editor, esse texto vira a consulta e a busca roda na hora.
-  useWindowKey((e) => {
-    if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyF') return;
-    if (!canShortcut()) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const text = editor.current?.selectedText() ?? '';
-    if (text) setSeed({ text, id: ++seedSeq.current });
-    setRoute('pesquisa');
-    setSearchFocus((n) => n + 1);
-  });
-
-  // F4 vai ao próximo resultado da pesquisa e Shift+F4 ao anterior (com volta). Dentro do terminal (xterm) a tecla segue como antes.
-  // Sem resultados a pesquisa não faz nada; a tecla é consumida mesmo assim, pois o App não sabe se há resultados.
-  useWindowKey((e) => {
-    if (e.code !== 'F4' || e.ctrlKey || e.altKey || e.metaKey) return;
-    if (!canShortcut()) return;
-    if ((e.target as HTMLElement | null)?.closest?.('.xterm')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setRoute('pesquisa');
-    setStep({ dir: e.shiftKey ? -1 : 1, id: ++stepSeq.current });
-  });
-
-  // Ctrl+P abre o arquivo rápido. Não consome o atalho dentro do terminal (xterm) nem dos campos de texto: ali a tecla segue como antes.
-  useWindowKey((e) => {
-    if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyP') return;
-    if (!canShortcut()) return;
-    const target = e.target as HTMLElement | null;
-    if (target?.closest?.('.xterm') || target?.closest?.('input, textarea')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setQuickOpen(true);
-  });
+  useEffect(() => {
+    const listener = (e: KeyboardEvent) => windowKey.current(e);
+    window.addEventListener('keydown', listener, true);
+    return () => window.removeEventListener('keydown', listener, true);
+  }, []);
 
   // ---------- derivados ----------
 
   const { update, orchestrator, executors, options } = state;
   const ready = update.phase === 'ready';
   // Título da aba: nome da pasta do projeto (último segmento do caminho) e, depois que o backend responde, o programa.
-  const folder = state.project.split(/[\\/]/).filter(Boolean).pop() ?? '';
+  const folder = folderName(state.project);
   const shellTabs = state.shells.map((s) => ({ id: s.id, title: s.program ? `${folder} — ${s.program}` : folder, program: s.program }));
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
   const busy = executors.some((e) => !FINISHED.includes(e.state));
@@ -748,8 +735,8 @@ export function App() {
                 <div className={shown('git')}>
                   <GitSidebar
                     git={git} locked={busy} guard={gitGuard} active={route === 'git'} selected={activeTarget} historyRequest={historyRequest}
-                    onOpenTarget={(target, options) => editor.current?.openTarget(target, { permanent: options?.permanent })}
-                    onOpenFile={(path, options) => editor.current?.openFile(path, { permanent: options?.permanent, line: options?.line, col: options?.col })}
+                    onOpenTarget={(target, options) => editor.current?.openTarget(target, options)}
+                    onOpenFile={(path, options) => editor.current?.openFile(path, options)}
                   />
                 </div>
               </div>
@@ -759,7 +746,7 @@ export function App() {
               <Flexbox height="100%" flex={1} className="min-h-0">
                 {/* key por projeto: outro projeto remonta o editor (lê a recuperação dele); o anterior grava a sua ao sair. */}
                 <EditorWorkspace
-                  key={state.project} ref={editor} project={state.project} active locked={busy} guard={gitGuard}
+                  key={state.project} ref={editor} project={state.project} locked={busy} guard={gitGuard}
                   refreshGit={() => git.refresh()} onSaved={() => setSaveTick((n) => n + 1)}
                   onActivePath={setActivePath} onActiveTarget={setActiveTarget}
                   onGroupCount={setGroupCount}

@@ -283,9 +283,7 @@ pub fn rename(project: &Path, rel: &str, name: &str) -> Result<String, String> {
 /// Muda o nome (ou move) sem sobrescrever: `MoveFileExW` sem `MOVEFILE_REPLACE_EXISTING` falha se o destino existir (inclusive
 /// um link). O `std::fs::rename` do Windows sobrescreve, por isso não é usado aqui.
 fn move_no_replace(from: &Path, to: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    let wide = |p: &Path| p.as_os_str().encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>();
-    let (src, dst) = (wide(from), wide(to));
+    let (src, dst) = (wide(from.as_os_str()), wide(to.as_os_str()));
     if unsafe { MoveFileExW(src.as_ptr(), dst.as_ptr(), 0) } != 0 {
         return Ok(());
     }
@@ -312,12 +310,18 @@ pub struct Moved {
     pub to: String,
 }
 
-/// Falha de uma operação em lote. `done` lista o que já foi feito antes da falha (não é desfeito aqui); `error` diz o motivo.
+/// Resultado de uma ação em lote: o que foi feito (`done`) e o erro do que parou (`error`, `null` se tudo deu certo).
+/// Vem sempre como resposta, nunca como erro: a tela precisa do `done` também quando a operação falhou no meio.
 /// Quando a checagem prévia recusa o lote, `done` vem vazio e nada foi mexido.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Partial<T> {
+pub struct Batch<T> {
     pub done: Vec<T>,
-    pub error: String,
+    pub error: Option<String>,
+}
+
+/// Lote recusado antes de mexer em nada.
+fn refused<T>(error: String) -> Batch<T> {
+    Batch { done: Vec::new(), error: Some(error) }
 }
 
 /// O item `rel` do projeto, pronto para uma ação. Recusa a raiz, `.git`, link em qualquer parte do caminho, o que sai do
@@ -401,17 +405,20 @@ fn move_plan(project: &Path, rels: &[String], dest: &str) -> Result<Vec<(Item, P
 /// Move os itens `rels` para a pasta `dest` do projeto (vazio é a raiz), como o arrastar e soltar. Tudo é checado antes
 /// (ver `move_plan`); colisão não ganha nome novo, recusa. Se um movimento falha depois de outros, os que já saíram vêm em
 /// `done` e não voltam sozinhos.
-pub fn move_items(project: &Path, rels: &[String], dest: &str) -> Result<Vec<Moved>, Partial<Moved>> {
-    let plan = move_plan(project, rels, dest).map_err(|error| Partial { done: Vec::new(), error })?;
+pub fn move_items(project: &Path, rels: &[String], dest: &str) -> Batch<Moved> {
+    let plan = match move_plan(project, rels, dest) {
+        Ok(plan) => plan,
+        Err(error) => return refused(error),
+    };
     let total = plan.len();
     let mut done = Vec::with_capacity(total);
     for (it, to, to_rel) in plan {
         if let Err(msg) = move_no_replace(&it.path, &to) {
-            return Err(Partial { error: partial_text(done.len(), total, &msg), done });
+            return Batch { error: Some(partial_text(done.len(), total, &msg)), done };
         }
         done.push(Moved { from: it.rel, to: to_rel });
     }
-    Ok(done)
+    Batch { done, error: None }
 }
 
 /// Põe os itens `rels` no clipboard como copiados ou recortados, com a mesma checagem de `selection`. Nada é movido ou
@@ -423,17 +430,20 @@ pub fn copy_items(project: &Path, rels: &[String], cut: bool) -> Result<(), Stri
 
 /// Manda os itens `rels` para a Lixeira do Windows (pasta inteira ou arquivo), com a checagem de `selection` antes. Se um
 /// falha depois de outros, os que já foram ficam na Lixeira e vêm em `done`.
-pub fn recycle_many(project: &Path, rels: &[String]) -> Result<Vec<String>, Partial<String>> {
-    let items = selection(project, rels).map_err(|error| Partial { done: Vec::new(), error })?;
+pub fn recycle_many(project: &Path, rels: &[String]) -> Batch<String> {
+    let items = match selection(project, rels) {
+        Ok(items) => items,
+        Err(error) => return refused(error),
+    };
     let total = items.len();
     let mut done = Vec::with_capacity(total);
     for it in items {
         if let Err(msg) = recycle_path(&it.path) {
-            return Err(Partial { error: partial_text(done.len(), total, &msg), done });
+            return Batch { error: Some(partial_text(done.len(), total, &msg)), done };
         }
         done.push(it.rel);
     }
-    Ok(done)
+    Batch { done, error: None }
 }
 
 /// Manda o arquivo ou a pasta `rel` para a Lixeira do Windows, pelo `IFileOperation` com `FOFX_RECYCLEONDELETE`: a operação pede
@@ -445,16 +455,8 @@ pub fn recycle(project: &Path, rel: &str) -> Result<(), String> {
 
 /// Manda `file` (arquivo ou pasta já validada) para a Lixeira e confere que saiu do lugar.
 fn recycle_path(file: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    let wide: Vec<u16> = file.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-    let started = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
-    if started < 0 {
-        return Err("Não foi possível abrir a Lixeira do Windows. Nada foi excluído.".into());
-    }
-    let result = unsafe { send_to_recycle_bin(&wide) };
-    // `S_OK` e `S_FALSE` (já estava inicializado) pedem o `CoUninitialize` de volta.
-    unsafe { CoUninitialize() };
-    result?;
+    let _apartment = Apartment::enter("Não foi possível abrir a Lixeira do Windows. Nada foi excluído.")?;
+    unsafe { send_to_recycle_bin(file) }?;
     if std::fs::symlink_metadata(file).is_ok() {
         return Err("A Lixeira não recebeu o arquivo. Nada foi excluído.".into());
     }
@@ -510,36 +512,38 @@ impl Drop for Com {
     }
 }
 
-/// Pede ao Windows para reciclar `wide` (caminho com zero final). Erro se o Windows não criar a operação, não aceitar a
-/// reciclagem, abortar ou não executar. Não há caminho de exclusão definitiva.
-unsafe fn send_to_recycle_bin(wide: &[u16]) -> Result<(), String> {
+/// Roda uma IFileOperation com `flags`. `add` pede as ações sobre o vtable e devolve o HRESULT delas com os `IShellItem`
+/// usados, que ficam vivos até a execução. Depois executa e confere o aborto: só dá `Ok` se tudo deu certo. `criar` é a
+/// mensagem se o Windows não cria a operação; `falha`, a das outras.
+unsafe fn run_operation(flags: u32, criar: &str, falha: &str, add: impl FnOnce(&FileOperationVtbl, *mut c_void) -> Result<(HRESULT, Vec<Com>), String>) -> Result<(), String> {
     let mut op: *mut c_void = std::ptr::null_mut();
     let hr = CoCreateInstance(&CLSID_FILE_OPERATION, std::ptr::null_mut(), CLSCTX_INPROC_SERVER, &IID_IFILE_OPERATION, &mut op);
     if hr < 0 || op.is_null() {
-        return Err("Não foi possível abrir a Lixeira do Windows. Nada foi excluído.".into());
+        return Err(criar.into());
     }
     let op = Com(op);
-    let mut item: *mut c_void = std::ptr::null_mut();
-    let hr = SHCreateItemFromParsingName(wide.as_ptr(), std::ptr::null_mut(), &IID_ISHELL_ITEM, &mut item);
-    if hr < 0 || item.is_null() {
-        return Err("Não foi possível localizar o arquivo para a Lixeira. Nada foi excluído.".into());
-    }
-    let item = Com(item);
     let vtbl = &**(op.0 as *const *const FileOperationVtbl);
-    let flags = FOFX_RECYCLEONDELETE | FOF_ALLOWUNDO | FOF_SILENT | FOF_NOERRORUI;
-    let mut hr = (vtbl.set_operation_flags)(op.0, flags);
-    if hr >= 0 {
-        hr = (vtbl.delete_item)(op.0, item.0, std::ptr::null_mut());
-    }
+    let flagged = (vtbl.set_operation_flags)(op.0, flags);
+    let (mut hr, _items) = if flagged >= 0 { add(vtbl, op.0)? } else { (flagged, Vec::new()) };
     if hr >= 0 {
         hr = (vtbl.perform_operations)(op.0);
     }
     let mut aborted = 0;
     let aborted_hr = (vtbl.get_any_operations_aborted)(op.0, &mut aborted);
     if hr < 0 || aborted_hr < 0 || aborted != 0 {
-        return Err("A Lixeira não recebeu o arquivo. Nada foi excluído.".into());
+        return Err(falha.into());
     }
     Ok(())
+}
+
+/// Pede ao Windows para reciclar `file`. Erro se o Windows não criar a operação, não aceitar a reciclagem, abortar ou não
+/// executar. Não há caminho de exclusão definitiva.
+unsafe fn send_to_recycle_bin(file: &Path) -> Result<(), String> {
+    let flags = FOFX_RECYCLEONDELETE | FOF_ALLOWUNDO | FOF_SILENT | FOF_NOERRORUI;
+    run_operation(flags, "Não foi possível abrir a Lixeira do Windows. Nada foi excluído.", "A Lixeira não recebeu o arquivo. Nada foi excluído.", |vtbl, op| {
+        let item = shell_item(file, "Não foi possível localizar o arquivo para a Lixeira. Nada foi excluído.")?;
+        Ok(((vtbl.delete_item)(op, item.0, std::ptr::null_mut()), vec![item]))
+    })
 }
 
 /// Abre `programa` sem janela com `arg` como linha de comando crua. Se não abrir, `falha` vira o começo da mensagem.
@@ -619,37 +623,45 @@ pub struct Pasted {
     pub to: String,
 }
 
-/// Cola em `dest` (pasta do projeto, vazio é a raiz) os itens de `snap`: copia, ou move se `snap.cut`. `Ok` traz cada item
-/// colado; `Err` traz os que já foram antes da falha em `done` (não são desfeitos aqui) e a mensagem de `error`. Tudo é
+/// Cola em `dest` (pasta do projeto, vazio é a raiz) os itens de `snap`: copia, ou move se `snap.cut`. `done` traz cada item
+/// colado; se parou, `error` traz o motivo (os que já foram antes continuam em `done`, sem desfazer). Tudo é
 /// checado antes de começar: se um item é recusado, nada é colado. Nome que já existe vira "nome (2).ext", "nome (3).ext"...;
 /// nada existente é sobrescrito. A cópia e o movimento são do IFileOperation do Windows, que copia pasta inteira e move
 /// entre volumes. Recusa antes de mexer se um item está dentro de outro da mesma colagem, ou se um aparece duas vezes:
 /// a cópia ou o recorte falharia no meio sem motivo.
-pub fn paste_detailed(project: &Path, dest: &str, snap: &Snapshot) -> Result<Vec<Pasted>, Partial<Pasted>> {
-    let fail = |error: String| Partial { done: Vec::new(), error };
-    if snap.paths.is_empty() {
-        return Err(fail("Não há arquivo ou pasta copiado para colar.".into()));
-    }
-    check_overlap(&snap.paths).map_err(fail)?;
-    let parent = plain(project, dest, true).map_err(fail)?;
-    let parent_canon = parent.canonicalize().map_err(|e| fail(format!("Não foi possível abrir a pasta de destino: {e}")))?;
-    let mut taken = HashSet::new();
-    let mut plan = Vec::with_capacity(snap.paths.len());
-    for src in &snap.paths {
-        plan.push(check_source(src, &parent, &parent_canon, snap.cut, &mut taken).map_err(fail)?);
-    }
+pub fn paste_detailed(project: &Path, dest: &str, snap: &Snapshot) -> Batch<Pasted> {
+    let (parent, plan) = match paste_plan(project, dest, snap) {
+        Ok(plan) => plan,
+        Err(error) => return refused(error),
+    };
     let base = dest.trim_end_matches('/');
     let total = plan.len();
     let mut done = Vec::with_capacity(total);
     for (i, (src, name)) in plan.iter().enumerate() {
         if let Err(msg) = transfer(src, &parent, name, snap.cut) {
             let error = if i == 0 { msg } else { format!("Colados {i} de {total}; os primeiros já estão na pasta de destino. {msg}") };
-            return Err(Partial { done, error });
+            return Batch { done, error: Some(error) };
         }
         let to = if base.is_empty() { name.clone() } else { format!("{base}/{name}") };
         done.push(Pasted { from: src.display().to_string(), to });
     }
-    Ok(done)
+    Batch { done, error: None }
+}
+
+/// A checagem de `paste_detailed` antes de qualquer cópia: a pasta de destino, e por item a origem e o nome que ganha lá.
+fn paste_plan(project: &Path, dest: &str, snap: &Snapshot) -> Result<(PathBuf, Vec<(PathBuf, String)>), String> {
+    if snap.paths.is_empty() {
+        return Err("Não há arquivo ou pasta copiado para colar.".into());
+    }
+    check_overlap(&snap.paths)?;
+    let parent = plain(project, dest, true)?;
+    let parent_canon = parent.canonicalize().map_err(|e| format!("Não foi possível abrir a pasta de destino: {e}"))?;
+    let mut taken = HashSet::new();
+    let mut plan = Vec::with_capacity(snap.paths.len());
+    for src in &snap.paths {
+        plan.push(check_source(src, &parent, &parent_canon, snap.cut, &mut taken)?);
+    }
+    Ok((parent, plan))
 }
 
 /// Recusa a colagem em que um item aparece de novo ou está dentro de outro item. Compara o caminho do clipboard sem caixa.
@@ -765,7 +777,8 @@ fn transfer(src: &Path, parent: &Path, name: &str, cut: bool) -> Result<(), Stri
 }
 
 /// Um `IShellItem` para o caminho `path` do sistema de arquivos. O Shell recusa `/`, então as barras viram `\` aqui.
-unsafe fn shell_item(path: &Path) -> Result<Com, String> {
+/// `falha` é a mensagem se o Shell não achar o caminho.
+unsafe fn shell_item(path: &Path, falha: &str) -> Result<Com, String> {
     let mut wide = wide(path.as_os_str());
     for unit in wide.iter_mut().filter(|u| **u == b'/' as u16) {
         *unit = b'\\' as u16;
@@ -773,7 +786,7 @@ unsafe fn shell_item(path: &Path) -> Result<Com, String> {
     let mut item: *mut c_void = std::ptr::null_mut();
     let hr = SHCreateItemFromParsingName(wide.as_ptr(), std::ptr::null_mut(), &IID_ISHELL_ITEM, &mut item);
     if hr < 0 || item.is_null() {
-        return Err("Não foi possível localizar o item para colar. Nada foi colado.".into());
+        return Err(falha.into());
     }
     Ok(Com(item))
 }
@@ -788,11 +801,12 @@ fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
 struct Apartment;
 
 impl Apartment {
-    fn enter() -> Result<Apartment, String> {
+    /// Erro com `falha` se o COM não inicia.
+    fn enter(falha: &str) -> Result<Apartment, String> {
         // SAFETY: COM é inicializado na própria thread, e o Drop chama `CoUninitialize` para cada chamada bem-sucedida.
         let hr = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
         if hr < 0 {
-            return Err("Não foi possível iniciar o COM do Windows. Nada foi colado.".into());
+            return Err(falha.into());
         }
         Ok(Apartment)
     }
@@ -808,35 +822,20 @@ impl Drop for Apartment {
 /// Chama o IFileOperation para copiar ou mover `src` para dentro de `parent` com o nome `name`. Sem confirmação e com
 /// renomeação em conflito: nada existente é sobrescrito; um conflito que apareça na hora ganha outro nome (o `transfer` confere).
 unsafe fn run_transfer(src: &Path, parent: &Path, name: &str, cut: bool) -> Result<(), String> {
-    let _apartment = Apartment::enter()?;
-    let mut op: *mut c_void = std::ptr::null_mut();
-    let hr = CoCreateInstance(&CLSID_FILE_OPERATION, std::ptr::null_mut(), CLSCTX_INPROC_SERVER, &IID_IFILE_OPERATION, &mut op);
-    if hr < 0 || op.is_null() {
-        return Err("Não foi possível iniciar a cópia do Windows. Nada foi colado.".into());
-    }
-    let op = Com(op);
-    let item = shell_item(src)?;
-    let folder = shell_item(parent)?;
+    let _apartment = Apartment::enter("Não foi possível iniciar o COM do Windows. Nada foi colado.")?;
     let name_w = wide(std::ffi::OsStr::new(name));
-    let vtbl = &**(op.0 as *const *const FileOperationVtbl);
     let flags = FOF_RENAMEONCOLLISION | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
-    let mut hr = (vtbl.set_operation_flags)(op.0, flags);
-    if hr >= 0 {
-        hr = if cut {
-            (vtbl.move_item)(op.0, item.0, folder.0, name_w.as_ptr(), std::ptr::null_mut())
+    let falha = "Não foi possível localizar o item para colar. Nada foi colado.";
+    run_operation(flags, "Não foi possível iniciar a cópia do Windows. Nada foi colado.", "O Windows não concluiu a operação.", |vtbl, op| {
+        let item = shell_item(src, falha)?;
+        let folder = shell_item(parent, falha)?;
+        let hr = if cut {
+            (vtbl.move_item)(op, item.0, folder.0, name_w.as_ptr(), std::ptr::null_mut())
         } else {
-            (vtbl.copy_item)(op.0, item.0, folder.0, name_w.as_ptr(), std::ptr::null_mut())
+            (vtbl.copy_item)(op, item.0, folder.0, name_w.as_ptr(), std::ptr::null_mut())
         };
-    }
-    if hr >= 0 {
-        hr = (vtbl.perform_operations)(op.0);
-    }
-    let mut aborted = 0;
-    let aborted_hr = (vtbl.get_any_operations_aborted)(op.0, &mut aborted);
-    if hr < 0 || aborted_hr < 0 || aborted != 0 {
-        return Err("O Windows não concluiu a operação.".into());
-    }
-    Ok(())
+        Ok((hr, vec![item, folder]))
+    })
 }
 
 /// O caminho real de `rel` dentro do projeto. Recusa o que sai da pasta, o que não existe e o que não é do tipo pedido
@@ -863,6 +862,7 @@ fn inside(project: &Path, rel: &str, dir: bool) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{fresh, junction};
 
     fn e(name: &str, dir: bool) -> Entry {
         Entry { name: name.into(), dir }
@@ -870,8 +870,7 @@ mod tests {
 
     /// Um projeto de teste: pastas e arquivos com nomes que misturam caixa, mais um `.git` na raiz e outro na subpasta.
     fn fixture(tag: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("orq-files-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = fresh("orq-files", tag);
         for dir in ["Zeta", "alfa", "Beta", ".git", "sub/.git", "sub/dentro"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
@@ -1058,9 +1057,6 @@ mod tests {
         let root = fixture("junction");
         std::fs::write(root.join(".git/config"), "").unwrap();
         // Junction não pede privilégio. Se o `mklink` não criar, o teste só não roda esta parte.
-        let junction = |link: &Path, target: &Path| {
-            std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().is_ok_and(|o| o.status.success())
-        };
         if !junction(&root.join("alias"), &root.join("sub")) || !junction(&root.join("git-alias"), &root.join(".git")) {
             eprintln!("sem junction: teste pulado");
         } else {
@@ -1102,22 +1098,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Uma pasta fora do projeto, de onde vêm os itens copiados. Só existe dentro do temporário.
-    fn outside(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("orq-files-fora-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// Junction de teste (não pede privilégio). Diz se foi criada; sem ela, o teste pula a parte dos links.
-    fn junction(link: &Path, target: &Path) -> bool {
-        std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().is_ok_and(|o| o.status.success())
-    }
-
     /// Cola como `paste_detailed`, devolvendo só os caminhos criados ou o erro. Só os testes usam esta forma.
     fn paste(project: &Path, dest: &str, snap: &Snapshot) -> Result<Vec<String>, String> {
-        paste_detailed(project, dest, snap).map(|pasted| pasted.into_iter().map(|p| p.to).collect()).map_err(|p| p.error)
+        let got = paste_detailed(project, dest, snap);
+        match got.error {
+            Some(error) => Err(error),
+            None => Ok(got.done.into_iter().map(|p| p.to).collect()),
+        }
     }
 
     fn snap(paths: &[PathBuf], cut: bool) -> crate::clipboard::Snapshot {
@@ -1225,7 +1212,7 @@ mod tests {
     #[test]
     fn copia_arquivo_de_fora_para_subpasta_e_mantem_o_original() {
         let root = fixture("cola-copia");
-        let ext = outside("cola-copia");
+        let ext = fresh("orq-files-fora", "cola-copia");
         std::fs::write(ext.join("de-fora.txt"), "conteúdo").unwrap();
         assert_eq!(paste(&root, "sub", &snap(&[ext.join("de-fora.txt")], false)).unwrap(), vec!["sub/de-fora.txt"]);
         assert_eq!(std::fs::read_to_string(root.join("sub/de-fora.txt")).unwrap(), "conteúdo");
@@ -1247,7 +1234,7 @@ mod tests {
     #[test]
     fn copia_pasta_inteira_com_conteudo_e_mantem_a_origem() {
         let root = fixture("cola-pasta");
-        let ext = outside("cola-pasta");
+        let ext = fresh("orq-files-fora", "cola-pasta");
         std::fs::create_dir_all(ext.join("pasta/deep")).unwrap();
         std::fs::write(ext.join("pasta/a.txt"), "a").unwrap();
         std::fs::write(ext.join("pasta/deep/b.txt"), "bê").unwrap();
@@ -1272,7 +1259,7 @@ mod tests {
     #[test]
     fn colisao_ganha_nome_novo_e_o_existente_fica_igual() {
         let root = fixture("cola-colisao");
-        let ext = outside("cola-colisao");
+        let ext = fresh("orq-files-fora", "cola-colisao");
         std::fs::write(root.join("A.txt"), "primeiro").unwrap();
         std::fs::write(ext.join("A.txt"), "segundo").unwrap();
         std::fs::create_dir_all(root.join("alfa")).unwrap();
@@ -1308,7 +1295,7 @@ mod tests {
     #[test]
     fn um_item_recusado_faz_nada_ser_colado() {
         let root = fixture("cola-previa");
-        let ext = outside("cola-previa");
+        let ext = fresh("orq-files-fora", "cola-previa");
         std::fs::write(root.join(".git/config"), "").unwrap();
         std::fs::write(ext.join("ok.txt"), "ok").unwrap();
         let err = paste(&root, "sub", &snap(&[ext.join("ok.txt"), root.join(".git/config")], false)).unwrap_err();
@@ -1322,7 +1309,7 @@ mod tests {
     #[test]
     fn colar_em_git_ou_de_git_e_recusado() {
         let root = fixture("cola-git");
-        let ext = outside("cola-git");
+        let ext = fresh("orq-files-fora", "cola-git");
         std::fs::write(ext.join("x.txt"), "x").unwrap();
         for dest in [".git", "sub/.git", "../fora", "/"] {
             assert!(paste(&root, dest, &snap(&[ext.join("x.txt")], false)).is_err(), "{dest}");
@@ -1339,7 +1326,7 @@ mod tests {
     #[test]
     fn colar_item_que_some_ou_que_e_junction_e_recusado() {
         let root = fixture("cola-junction");
-        let ext = outside("cola-junction");
+        let ext = fresh("orq-files-fora", "cola-junction");
         assert!(paste(&root, "", &snap(&[ext.join("sumiu.txt")], false)).unwrap_err().contains("não existe mais"));
         std::fs::create_dir_all(ext.join("pasta")).unwrap();
         let atalho = ext.join("pasta").join("atalho");
@@ -1359,11 +1346,11 @@ mod tests {
     #[test]
     fn paste_detailed_devolve_origem_absoluta_e_destino_relativo() {
         let root = fixture("detalhe-ok");
-        let ext = outside("detalhe-ok");
+        let ext = fresh("orq-files-fora", "detalhe-ok");
         std::fs::write(ext.join("A.txt"), "a").unwrap();
         std::fs::write(root.join("A.txt"), "ja existe").unwrap();
         let sources = [ext.join("A.txt")];
-        let done = paste_detailed(&root, "sub", &snap(&sources, false)).unwrap();
+        let done = ok_lote(paste_detailed(&root, "sub", &snap(&sources, false)));
         assert_eq!(done, vec![Pasted { from: ext.join("A.txt").display().to_string(), to: "sub/A.txt".into() }]);
         // A API antiga continua dando só os destinos, com o mesmo nome.
         assert_eq!(paste(&root, "", &snap(&sources, false)).unwrap(), vec!["A (2).txt"]);
@@ -1374,16 +1361,16 @@ mod tests {
     #[test]
     fn paste_detailed_recusa_pasta_com_o_proprio_filho_antes_de_mexer() {
         let root = fixture("detalhe-filho");
-        let ext = outside("detalhe-filho");
+        let ext = fresh("orq-files-fora", "detalhe-filho");
         std::fs::create_dir_all(ext.join("pasta")).unwrap();
         std::fs::write(ext.join("pasta/f.txt"), "f").unwrap();
         let sources = [ext.join("pasta"), ext.join("pasta/f.txt")];
-        let err = paste_detailed(&root, "", &snap(&sources, true)).unwrap_err();
+        let err = paste_detailed(&root, "", &snap(&sources, true));
         assert!(err.done.is_empty());
-        assert!(err.error.contains("dentro de “pasta”"), "{}", err.error);
+        assert!(err.error.as_deref().is_some_and(|e| e.contains("dentro de “pasta”")), "{:?}", err.error);
         assert!(ext.join("pasta/f.txt").exists(), "nada foi movido");
         let twice = [ext.join("pasta/f.txt"), ext.join("pasta/f.txt")];
-        assert!(paste_detailed(&root, "", &snap(&twice, false)).unwrap_err().error.contains("repetido"));
+        assert!(erro_lote(paste_detailed(&root, "", &snap(&twice, false))).contains("repetido"));
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&ext);
     }
@@ -1397,6 +1384,17 @@ mod tests {
 
     fn rels(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// O `done` de um lote que deu certo. Falha se o lote parou.
+    fn ok_lote<T>(lote: Batch<T>) -> Vec<T> {
+        assert!(lote.error.is_none(), "{:?}", lote.error);
+        lote.done
+    }
+
+    /// O erro de um lote que parou. Falha se ele deu certo.
+    fn erro_lote<T>(lote: Batch<T>) -> String {
+        lote.error.expect("o lote deveria ter parado")
     }
 
     #[test]
@@ -1418,7 +1416,7 @@ mod tests {
     fn move_arquivo_e_pasta_para_outra_pasta_e_devolve_o_mapeamento() {
         let root = fixture("move-ok");
         pasta(&root);
-        let got = move_items(&root, &rels(&["origem", "b.txt"]), "Beta").unwrap();
+        let got = ok_lote(move_items(&root, &rels(&["origem", "b.txt"]), "Beta"));
         assert_eq!(
             got,
             vec![
@@ -1429,7 +1427,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(root.join("Beta/origem/interna/f.txt")).unwrap(), "f");
         assert!(!root.join("origem").exists() && !root.join("b.txt").exists());
         // De volta para a raiz: "" é o destino.
-        assert_eq!(move_items(&root, &rels(&["Beta/b.txt"]), "").unwrap()[0].to, "b.txt");
+        assert_eq!(ok_lote(move_items(&root, &rels(&["Beta/b.txt"]), ""))[0].to, "b.txt");
         assert!(root.join("b.txt").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1460,9 +1458,9 @@ mod tests {
             (&["b.txt", "nao-existe.txt"], "Beta", "não encontrado"),
         ];
         for (srcs, dest, quer) in casos {
-            let err = move_items(&root, &rels(srcs), dest).unwrap_err();
+            let err = move_items(&root, &rels(srcs), dest);
             assert!(err.done.is_empty(), "{srcs:?} -> {dest:?} não deveria mexer em nada");
-            assert!(err.error.contains(quer), "{srcs:?} -> {dest:?}: {}", err.error);
+            assert!(err.error.as_deref().is_some_and(|e| e.contains(quer)), "{srcs:?} -> {dest:?}: {:?}", err.error);
         }
         assert!(root.join("origem/interna/f.txt").exists() && root.join("origem/g.txt").exists());
         assert!(root.join("b.txt").exists() && root.join("c.txt").exists() && root.join("x/c.txt").exists());
@@ -1479,9 +1477,9 @@ mod tests {
         if !junction_ok {
             eprintln!("sem junction: teste pulado");
         } else {
-            assert!(move_items(&root, &rels(&["alias"]), "Beta").unwrap_err().error.contains("link"));
-            assert!(move_items(&root, &rels(&["alias/g.txt"]), "Beta").unwrap_err().error.contains("link"));
-            assert!(move_items(&root, &rels(&["b.txt"]), "alias").unwrap_err().error.contains("link"));
+            assert!(erro_lote(move_items(&root, &rels(&["alias"]), "Beta")).contains("link"));
+            assert!(erro_lote(move_items(&root, &rels(&["alias/g.txt"]), "Beta")).contains("link"));
+            assert!(erro_lote(move_items(&root, &rels(&["b.txt"]), "alias")).contains("link"));
             assert!(root.join("origem/g.txt").exists());
             assert!(!root.join("Beta/g.txt").exists());
             assert!(!root.join("Beta/b.txt").exists());
@@ -1495,12 +1493,12 @@ mod tests {
         let root = fixture("lote-lixeira");
         pasta(&root);
         std::fs::write(root.join(".git/config"), "").unwrap();
-        let err = recycle_many(&root, &rels(&["b.txt", ".git/config"])).unwrap_err();
-        assert!(err.done.is_empty() && err.error.contains(".git"), "{}", err.error);
-        assert!(recycle_many(&root, &rels(&["origem", "origem/interna"])).unwrap_err().error.contains("dentro de"));
-        assert!(recycle_many(&root, &rels(&["sub"])).unwrap_err().error.contains(".git"));
-        assert!(recycle_many(&root, &rels(&[""])).is_err());
-        assert!(recycle_many(&root, &[]).is_err());
+        let err = recycle_many(&root, &rels(&["b.txt", ".git/config"]));
+        assert!(err.done.is_empty() && err.error.as_deref().is_some_and(|e| e.contains(".git")), "{:?}", err.error);
+        assert!(erro_lote(recycle_many(&root, &rels(&["origem", "origem/interna"]))).contains("dentro de"));
+        assert!(erro_lote(recycle_many(&root, &rels(&["sub"]))).contains(".git"));
+        assert!(recycle_many(&root, &rels(&[""])).error.is_some());
+        assert!(recycle_many(&root, &[]).error.is_some());
         assert!(root.join("b.txt").exists() && root.join(".git/config").exists() && root.join("origem/interna/f.txt").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1512,7 +1510,7 @@ mod tests {
         std::fs::create_dir_all(root.join("lixo/dentro")).unwrap();
         std::fs::write(root.join("lixo/dentro/f.txt"), "f").unwrap();
         std::fs::write(root.join("descartavel.txt"), "d").unwrap();
-        assert_eq!(recycle_many(&root, &rels(&["lixo", "descartavel.txt"])).unwrap(), rels(&["lixo", "descartavel.txt"]));
+        assert_eq!(ok_lote(recycle_many(&root, &rels(&["lixo", "descartavel.txt"]))), rels(&["lixo", "descartavel.txt"]));
         assert!(std::fs::symlink_metadata(root.join("lixo")).is_err());
         assert!(std::fs::symlink_metadata(root.join("descartavel.txt")).is_err());
         let _ = std::fs::remove_dir_all(&root);

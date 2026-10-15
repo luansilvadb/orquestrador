@@ -1,5 +1,5 @@
 // O painel do Orquestrador, à direita da tela principal, em todas as telas: o orquestrador e um executor por aba. Todos os terminais ficam montados; só o da aba ativa aparece.
-// Redimensionável pela borda esquerda. Abre em 520 px; a largura que o usuário dá fica guardada por projeto, no layout que o App leva na recuperação do editor.
+// Redimensionável pela borda esquerda. Abre em 572 px; a largura que o usuário dá fica guardada por projeto, no layout que o App leva na recuperação do editor.
 import { useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { Check, CircleCheck, CircleHelp, CircleX, Clock, Hourglass, List, LoaderCircle, SlidersHorizontal, Square, SquareTerminal } from 'lucide-react';
 import { Button, colorsPreset, DraggablePanel, DropdownMenu, Tag, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
@@ -23,7 +23,7 @@ export const STATES: Record<NodeState, { label: string; icon: typeof Clock; colo
 export const FINISHED: NodeState[] = ['done', 'stopped', 'failed'];
 const CANCELLABLE: NodeState[] = ['queued', 'running', 'awaiting-orchestrator'];
 // Largura inicial, sem layout guardado do projeto; a mínima deixa a barra da aba ativa legível em 320 px.
-export const PANEL_WIDTH = 520;
+export const PANEL_WIDTH = 572;
 export const PANEL_MIN = 320;
 // Objeto constante: o duplo clique na alça volta para a largura inicial (o DraggablePanel usa `defaultSize` nesse reset).
 const PANEL_DEFAULT_SIZE = { width: PANEL_WIDTH };

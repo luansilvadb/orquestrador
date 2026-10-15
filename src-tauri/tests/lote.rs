@@ -20,8 +20,9 @@ use std::time::{Duration, Instant};
 const GIB: u64 = 1 << 30;
 
 /// O que o orquestrador escreve numa tarefa e precisa chegar igual ao executor: aspa dupla pura, barra antes
-/// da aspa, JSON com escapes, tarefa com espaço terminada em barra, acentos, apóstrofos e várias linhas.
-const TASKS: [&str; 8] = [
+/// da aspa, JSON com escapes, tarefa com espaço terminada em barra, acentos, apóstrofos, várias linhas e caracteres
+/// que um shell comeria (`$`, `;`, crase). As tarefas viajam em JSON pelo MCP, sem passar pelo shell.
+const TASKS: [&str; 11] = [
     "Diga \"oi\" e \"tchau\" puros",
     "Diga \\\"oi\\\" com barra antes da aspa",
     r#"{"a": "b\"c", "d": "e\\f", "g": "\u00e7"}"#,
@@ -30,10 +31,6 @@ const TASKS: [&str; 8] = [
     "Linha 1 \"x\"\nLinha 2 sem fim \\",
     "\"",
     "'começa e termina com apóstrofo'",
-];
-
-/// Tarefas com apóstrofo sem escape, várias linhas, e `; ( ) < > * @ $`, crase, aspas duplas e barra no fim.
-const AQUI: [&str; 3] = [
     "Ação: d'água, it's ''ok''",
     "Linha 1; (x) <y> *z* @ $HOME\nLinha 2 `crase` \"aspas\" e barra no fim\\",
     "C:\\Users\\Maria Silva\\ ; $(calc) && não",
@@ -143,18 +140,10 @@ struct Bench {
     seen: RefCell<Vec<(String, Value)>>,
 }
 
-fn bench(tag: &str) -> Bench {
-    bench_in(tag, "temp")
-}
-
 /// Uma sessão de teste cujo temp fica em `root\<temp>`: o nome dessa pasta é o que o teste quer provar.
-/// Oito CPUs (teto de 4) e 64 GiB livres: o teto por padrão é 4, sem apertar a fila.
-fn bench_in(tag: &str, temp: &str) -> Bench {
-    bench_com(tag, temp, Some(8))
-}
-
-/// `bench_in` com as CPUs que o teste escolhe: `Some(4)` dá teto 2, `Some(2)` dá teto 1.
-fn bench_com(tag: &str, temp: &str, cpus: Option<usize>) -> Bench {
+/// `cpus` são as CPUs que o teste escolhe: `Some(8)` dá teto 4 (com 64 GiB livres, sem apertar a fila),
+/// `Some(4)` dá teto 2 e `Some(2)` dá teto 1.
+fn bench(tag: &str, temp: &str, cpus: Option<usize>) -> Bench {
     let root = std::env::temp_dir().join(format!("orq-lote-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let repo = root.join("repo");
@@ -312,7 +301,7 @@ fn until(what: &str, done: impl Fn() -> bool) {
 #[test]
 fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     // 4 CPUs lógicas dão teto 2; a memória de sobra não aperta.
-    let b = bench_com("lote", "temp", Some(4));
+    let b = bench("lote", "temp", Some(4));
     b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
     until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
     let mut m = b.mcp();
@@ -401,48 +390,36 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     assert!(!session.exists(), "a pasta da sessão tem de sair no shutdown");
 }
 
+/// Publica `tasks` pelo `delegar` e confere, byte a byte, o texto publicado de cada tarefa e o título de cada nó.
+/// O lote termina sem erro, com um EXECUTOR por tarefa.
+fn publica_e_confere(b: &Bench, tasks: &[String]) {
+    b.pronto();
+    let mut m = b.mcp();
+    let run = m.start("delegar", json!({ "tarefas": tasks }));
+    let nodes = b.added(tasks.len());
+    let (out, is_error) = m.done(run);
+    assert!(!is_error, "{out}");
+    let batch = b.last_batch();
+    for (n, task) in tasks.iter().enumerate() {
+        let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
+        assert_eq!(published, *task, "a tarefa {} chegou diferente do pedido", n + 1);
+        assert_eq!(nodes[n]["title"], title(task), "título da tarefa {}", n + 1);
+    }
+    assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", tasks.len())), "{out}");
+}
+
 /// O texto publicado é o pedido, byte a byte, e o título de cada nó é o título dele; o lote termina sem erro.
 #[test]
 fn textos_com_aspas_barra_e_acentos_chegam_iguais_ao_pedido() {
-    let b = bench("texto");
-    b.pronto();
-    let mut m = b.mcp();
-    let run = m.start("delegar", json!({ "tarefas": &TASKS[..] }));
-    let nodes = b.added(TASKS.len());
-    let (out, is_error) = m.done(run);
-    assert!(!is_error, "{out}");
-    let batch = b.last_batch();
-    for (n, task) in TASKS.iter().enumerate() {
-        let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
-        assert_eq!(published, *task, "a tarefa {} chegou diferente do pedido", n + 1);
-        assert_eq!(nodes[n]["title"], title(task), "título da tarefa {}", n + 1);
-    }
-    assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", TASKS.len())), "{out}");
-}
-
-/// Tarefas com apóstrofo, várias linhas e caracteres que o shell comeria: cada texto publicado é o pedido, byte a byte.
-#[test]
-fn textos_com_apostrofo_e_caracteres_de_shell_chegam_iguais_ao_pedido() {
-    let b = bench("aqui");
-    b.pronto();
-    let mut m = b.mcp();
-    let run = m.start("delegar", json!({ "tarefas": &AQUI[..] }));
-    let nodes = b.added(AQUI.len());
-    let (out, is_error) = m.done(run);
-    assert!(!is_error, "{out}");
-    let batch = b.last_batch();
-    for (n, task) in AQUI.iter().enumerate() {
-        let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
-        assert_eq!(published, *task, "a tarefa {} chegou diferente do pedido", n + 1);
-        assert_eq!(nodes[n]["title"], title(task), "título da tarefa {}", n + 1);
-    }
-    assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", AQUI.len())), "{out}");
+    let b = bench("texto", "temp", Some(8));
+    let tasks: Vec<String> = TASKS.iter().map(|t| t.to_string()).collect();
+    publica_e_confere(&b, &tasks);
 }
 
 /// Com a pasta da sessão em caminho com espaço, acento e apóstrofo, o servidor sobe e o lote roda.
 #[test]
 fn caminhos_com_espaco_acento_e_apostrofo_funcionam() {
-    let b = bench_in("caminhos", "temp com espaço, açaí e it's");
+    let b = bench("caminhos", "temp com espaço, açaí e it's", Some(8));
     b.pronto();
     let session = b.core.session_dir().unwrap();
     let text = session.to_string_lossy();
@@ -456,7 +433,7 @@ fn caminhos_com_espaco_acento_e_apostrofo_funcionam() {
 
 #[test]
 fn saida_do_orquestrador_mata_os_executores_e_limpa_sessao_e_regra() {
-    let b = bench("saida");
+    let b = bench("saida", "temp", Some(8));
     assert!(b.core.start_orchestrator(Choice::new("gemini", "", ""), 100, 30).is_err());
     b.core.start_orchestrator(Choice::new("codex", "", ""), 100, 30).unwrap();
     assert!(b.core.start_orchestrator(Choice::new("codex", "", ""), 100, 30).unwrap_err().contains("Já há um orquestrador"));
@@ -490,7 +467,7 @@ fn saida_do_orquestrador_mata_os_executores_e_limpa_sessao_e_regra() {
 
 #[test]
 fn pasta_fora_de_repositorio_git_e_recusada() {
-    let b = bench("fora");
+    let b = bench("fora", "temp", Some(8));
     let outside = PathBuf::from(std::env::var("SystemRoot").unwrap());
     assert!(b.core.set_project(&outside).unwrap_err().contains("não está dentro de um repositório Git"));
 }
@@ -508,23 +485,11 @@ fn tarefa_longa(n: usize) -> String {
 /// é o original, byte a byte, e o lote termina sem erro.
 #[test]
 fn lote_com_mais_de_40_mil_caracteres_chega_inteiro() {
-    let b = bench("longo");
-    b.pronto();
+    let b = bench("longo", "temp", Some(8));
     let tasks: Vec<String> = (1..=5).map(tarefa_longa).collect();
     let chars: usize = tasks.iter().map(|t| t.chars().count()).sum();
     assert!(chars > 40_000, "o lote tem de passar de 40 mil caracteres: {chars}");
-    let mut m = b.mcp();
-    let run = m.start("delegar", json!({ "tarefas": tasks }));
-    let nodes = b.added(tasks.len());
-    let (out, is_error) = m.done(run);
-    assert!(!is_error, "{out}");
-    let batch = b.last_batch();
-    for (n, task) in tasks.iter().enumerate() {
-        let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
-        assert!(published == *task, "a tarefa {} chegou diferente do pedido", n + 1);
-        assert_eq!(nodes[n]["title"], title(task), "título da tarefa {}", n + 1);
-    }
-    assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", tasks.len())), "{out}");
+    publica_e_confere(&b, &tasks);
 }
 
 /// O protocolo contra o binário de verdade, sem sessão: `initialize` devolve a versão pedida, `tools/list` traz as
@@ -558,7 +523,7 @@ fn protocolo_do_binario_initialize_tools_list_e_metodo_desconhecido() {
 
 #[test]
 fn tarefa_invalida_e_falta_de_tarefa_fecham_com_erro_e_nao_publicam() {
-    let b = bench("invalida");
+    let b = bench("invalida", "temp", Some(8));
     b.pronto();
     let mut m = b.mcp();
     // Sem lote nenhum, `aguardar` é erro com o texto puro, sem prefixo nem --- FIM ---.
@@ -573,7 +538,7 @@ fn tarefa_invalida_e_falta_de_tarefa_fecham_com_erro_e_nao_publicam() {
 
 #[test]
 fn pergunta_do_executor_passa_pelo_orquestrador_e_aceita_sem_parar_o_outro() {
-    let b = bench("pergunta");
+    let b = bench("pergunta", "temp", Some(8));
     b.pronto();
     let mut m = b.mcp();
 
@@ -608,7 +573,7 @@ fn pergunta_do_executor_passa_pelo_orquestrador_e_aceita_sem_parar_o_outro() {
 /// (sem motivo, resposta desconhecida, executor sem pergunta) voltam com isError e o motivo, sem gravar nada.
 #[test]
 fn recusa_leva_o_motivo_ao_executor_e_erros_do_responder_nao_gravam_nada() {
-    let b = bench("recusa");
+    let b = bench("recusa", "temp", Some(8));
     b.pronto();
     let mut m = b.mcp();
 
@@ -642,7 +607,7 @@ fn recusa_leva_o_motivo_ao_executor_e_erros_do_responder_nao_gravam_nada() {
 /// sem ela. Responder depois disso é erro.
 #[test]
 fn parar_num_executor_que_espera_resposta_fecha_o_lote_sem_a_pergunta() {
-    let b = bench("parar");
+    let b = bench("parar", "temp", Some(8));
     b.pronto();
     let mut m = b.mcp();
 
@@ -670,7 +635,7 @@ fn parar_num_executor_que_espera_resposta_fecha_o_lote_sem_a_pergunta() {
 /// O `--ask` retira o próprio pedido ao expirar; o prazo de 100 s não é esperado aqui: a retirada é simulada na pasta.
 #[test]
 fn pedido_que_sai_da_pasta_devolve_o_no_a_rodando() {
-    let b = bench("expira");
+    let b = bench("expira", "temp", Some(8));
     b.pronto();
     let mut m = b.mcp();
 
@@ -693,7 +658,7 @@ fn pedido_que_sai_da_pasta_devolve_o_no_a_rodando() {
 /// e abre quando a resposta termina a rodada dele.
 #[test]
 fn executor_que_espera_o_orquestrador_ocupa_a_vaga() {
-    let b = bench_com("vaga", "temp", Some(2)); // teto 1
+    let b = bench("vaga", "temp", Some(2)); // teto 1
     b.pronto();
     let mut m = b.mcp();
 
@@ -724,7 +689,7 @@ fn executor_que_espera_o_orquestrador_ocupa_a_vaga() {
 /// rodava segue vivo.
 #[test]
 fn memoria_baixa_segura_a_fila_e_a_memoria_de_volta_abre_sem_matar_quem_roda() {
-    let b = bench_com("memoria", "temp", Some(16)); // teto de CPU 8
+    let b = bench("memoria", "temp", Some(16)); // teto de CPU 8
     b.memoria(64 * GIB, GIB * 5 / 2); // 2,5 GiB livres: a reserva de 2 GiB deixa 0,5 GiB, nenhuma vaga
     b.pronto();
     let mut m = b.mcp();
@@ -751,7 +716,7 @@ fn memoria_baixa_segura_a_fila_e_a_memoria_de_volta_abre_sem_matar_quem_roda() {
 /// depois espera. Quando a RAM volta, o que esperava abre.
 #[test]
 fn reducao_de_memoria_nao_mata_vivos_e_a_retomada_abre_a_fila() {
-    let b = bench_com("reducao", "temp", Some(16)); // teto de CPU 8
+    let b = bench("reducao", "temp", Some(16)); // teto de CPU 8
     b.pronto();
     let mut m = b.mcp();
 
@@ -785,7 +750,7 @@ fn reducao_de_memoria_nao_mata_vivos_e_a_retomada_abre_a_fila() {
 /// Com um executor por vez (pouca memória), a fila sai na ordem de chegada: cada um abre quando o anterior termina.
 #[test]
 fn fila_sai_na_ordem_de_chegada_com_um_executor_por_vez() {
-    let b = bench_com("fifo", "temp", Some(16));
+    let b = bench("fifo", "temp", Some(16));
     b.memoria(64 * GIB, GIB * 5 / 2); // teto 1
     b.pronto();
     let mut m = b.mcp();

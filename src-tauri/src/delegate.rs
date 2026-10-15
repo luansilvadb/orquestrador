@@ -194,24 +194,11 @@ pub fn respond(session: &Path, node: &str, choice: &str, reason: Option<&str>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proc::start_time;
-
-    /// Uma pasta de sessão cujo dono é este processo (vivo) ou um processo que já não existe.
-    fn session(tag: &str, alive: bool) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("orq-delegar-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        for sub in ["requests", "results", "exec"] {
-            std::fs::create_dir_all(dir.join(sub)).unwrap();
-        }
-        let me = std::process::id();
-        let started = start_time(me).unwrap() + u64::from(!alive);
-        std::fs::write(dir.join("owner"), format!("{me} {started} strategist-{tag}")).unwrap();
-        dir
-    }
+    use crate::testutil::{batch_with_ask, session};
 
     #[test]
     fn lote_sai_inteiro_e_renomeado_com_o_texto_exato() {
-        let dir = session("publica", true);
+        let dir = session("orq-delegar", "publica", true);
         let tasks = ["Tarefa A\nlinha 2 d'água", "Diga \"oi\" e \\\"tchau\\\" e a barra \\", "{\"a\":\"b\\\"c\"}"];
         let id = publish(&dir, &tasks.map(String::from)).unwrap();
         let batch = dir.join("requests").join(&id);
@@ -224,7 +211,7 @@ mod tests {
 
     #[test]
     fn tarefa_invalida_nao_publica_nada() {
-        let dir = session("invalida", true);
+        let dir = session("orq-delegar", "invalida", true);
         assert!(publish(&dir, &[]).unwrap_err().contains("Nenhuma tarefa"));
         assert!(publish(&dir, &["ok".into(), "  \n".into()]).unwrap_err().contains("Tarefa vazia"));
         assert_eq!(std::fs::read_dir(dir.join("requests")).unwrap().count(), 0);
@@ -232,7 +219,7 @@ mod tests {
 
     #[test]
     fn aguardar_pega_o_lote_mais_recente_que_nao_foi_entregue() {
-        let dir = session("retoma", true);
+        let dir = session("orq-delegar", "retoma", true);
         for id in ["00000000000000000001-aaaaaaaa", "00000000000000000002-bbbbbbbb", "00000000000000000003-cccccccc", "00000000000000000004-dddddddd.tmp"] {
             std::fs::create_dir_all(dir.join("requests").join(id)).unwrap();
         }
@@ -246,27 +233,11 @@ mod tests {
 
     #[test]
     fn espera_separa_o_codigo_de_saida_do_texto() {
-        let dir = session("espera", true);
+        let dir = session("orq-delegar", "espera", true);
         std::fs::write(dir.join("results").join("x.txt"), "1\n--- EXECUTOR 1/1 ---\nok\n").unwrap();
         let Waited::Result { text, marker } = wait(&dir, "x", WINDOW).unwrap() else { panic!("o resultado devia sair") };
         assert_eq!(text, "--- EXECUTOR 1/1 ---\nok\n");
         assert!(marker.ends_with("x.delivered"));
-    }
-
-    /// Um lote de `size` tarefas, com o executor `node` na tarefa `index` e um pedido sem resposta com `payload`.
-    /// Devolve o id do pedido.
-    fn batch_with_ask(dir: &Path, batch: &str, node: &str, index: usize, size: usize, payload: &str) -> String {
-        let req = dir.join("requests").join(batch);
-        std::fs::create_dir_all(&req).unwrap();
-        for n in 1..=size {
-            std::fs::write(req.join(format!("{n}.txt")), format!("Tarefa {n}\nescopo")).unwrap();
-        }
-        let node_dir = dir.join("exec").join(node);
-        std::fs::create_dir_all(node_dir.join("ask")).unwrap();
-        std::fs::write(node_dir.join("batch.json"), json!({ "batch": batch, "index": index, "size": size }).to_string()).unwrap();
-        let id = "00000000000000000001-aaaaaaaa";
-        std::fs::write(node_dir.join("ask").join(format!("{id}.json")), payload).unwrap();
-        id.to_string()
     }
 
     const BASH: &str = r#"{"tool_name":"Bash","tool_input":{"command":"rm /d/a.log\nlinha 2","description":"x"}}"#;
@@ -276,7 +247,7 @@ mod tests {
     /// outro lote fica de fora, e nada é entregue.
     #[test]
     fn pergunta_interrompe_a_espera_com_a_secao_e_a_linha_final() {
-        let dir = session("pergunta", true);
+        let dir = session("orq-delegar", "pergunta", true);
         batch_with_ask(&dir, "B1", "exec-1", 0, 2, BASH);
         batch_with_ask(&dir, "B2", "exec-2", 0, 1, BASH);
         let Waited::Asking(text) = wait(&dir, "B1", WINDOW).unwrap() else { panic!("a pergunta devia interromper a espera") };
@@ -292,7 +263,7 @@ mod tests {
     /// Pedido respondido, ou nó que não é de lote, não é pergunta pendente.
     #[test]
     fn respondida_ou_sem_lote_nao_e_pergunta() {
-        let dir = session("respondida", true);
+        let dir = session("orq-delegar", "respondida", true);
         let id = batch_with_ask(&dir, "B1", "exec-1", 0, 1, BASH);
         let ask_dir = dir.join("exec").join("exec-1").join("ask");
         // Um executor sem batch.json (não é de lote nenhum) com um pedido sem resposta.
@@ -307,7 +278,7 @@ mod tests {
     /// desconhecida, motivo que não bate com a escolha ou executor sem pergunta não gravam nada.
     #[test]
     fn responder_grava_a_decisao_ou_recusa_sem_gravar_nada() {
-        let dir = session("responder", true);
+        let dir = session("orq-delegar", "responder", true);
         let id = batch_with_ask(&dir, "B1", "exec-1", 0, 1, BASH);
         let answer = dir.join("exec").join("exec-1").join("ask").join(format!("{id}.reply"));
         assert!(respond(&dir, "exec-7", "aceitar", None).unwrap_err().contains("não tem pergunta pendente"));
@@ -326,14 +297,14 @@ mod tests {
 
     #[test]
     fn sessao_morta_com_lote_pendente_falha_em_vez_de_esperar() {
-        let dir = session("morta", false);
+        let dir = session("orq-delegar", "morta", false);
         assert_eq!(wait(&dir, "nunca", WINDOW).unwrap_err(), DEAD);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn pasta_sem_dono_nao_e_sessao_ativa() {
-        let dir = session("ativa", true);
+        let dir = session("orq-delegar", "ativa", true);
         assert!(check_session(&dir).is_ok());
         let nowhere = std::env::temp_dir().join(format!("orq-delegar-{}-inexistente", std::process::id()));
         assert_eq!(check_session(&nowhere).unwrap_err(), NOT_ACTIVE);

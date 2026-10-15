@@ -66,8 +66,7 @@ export function usePolled<T>(read: () => Promise<T>, enabled: boolean) {
 
 type GitPoll = ReturnType<typeof usePolled<GitStatus>>;
 /** Opções de abertura pedidas à tela de cima. `permanent` abre de vez (duplo clique) em vez de prévia. */
-export type OpenTargetOptions = { permanent?: boolean; side?: DiffSide };
-export type OpenFileOptions = { permanent?: boolean; line?: number; col?: number; side?: DiffSide };
+export type OpenTargetOptions = { permanent?: boolean };
 export type GitSidebarProps = {
   git: GitPoll;
   locked: boolean;
@@ -78,7 +77,7 @@ export type GitSidebarProps = {
   /** Alvo aberto no editor central: marca a linha de diff (do mesmo lado) ou de conflito correspondente. */
   selected?: TabTarget | null;
   onOpenTarget: (target: TabTarget, options?: OpenTargetOptions) => void;
-  onOpenFile: (path: string, options?: OpenFileOptions) => void;
+  onOpenFile: (path: string, options?: OpenTargetOptions) => void;
   /** Pedido de histórico: um `id` novo abre a lista (do projeto, ou do arquivo em `path`). */
   historyRequest?: HistoryRequest;
 };
@@ -129,7 +128,7 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
   active: boolean;
   selected: TabTarget | null | undefined;
   onOpenTarget: (target: TabTarget, options?: OpenTargetOptions) => void;
-  onOpenFile: (path: string, options?: OpenFileOptions) => void;
+  onOpenFile: (path: string, options?: OpenTargetOptions) => void;
   onShowHistory: () => void;
 }) {
   const [busy, setBusy] = useState<Busy | null>(null);
@@ -184,7 +183,7 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
   const withBusy: WithBusy = async (kind, task) => {
     if (busyRef.current) return undefined;
     // Trava compartilhada: se o editor central está salvando ou gravando um diff, esta ação espera (e avisa).
-    if (!guard.enter(kind)) return undefined;
+    if (!guard.enter()) return undefined;
     busyRef.current = true;
     setBusy(kind);
     try {

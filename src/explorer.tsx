@@ -10,7 +10,8 @@ import {
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
 import { fileNameError } from './file-tab-actions';
-import { action, blocked, DIVIDER } from './file-tabs';
+import { action, blocked, DIVIDER, useChord } from './file-tabs';
+import { splitPath } from './git-history';
 import { usePolling } from './polling';
 import type { DirEntry, Moved } from './types';
 
@@ -62,8 +63,8 @@ export type FileActions = {
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 const inside = (dir: string, path: string) => path.startsWith(`${dir}/`);
 const under = (base: string, path: string) => path === base || inside(base, path);
-const dirOf = (path: string) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
-const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
+const dirOf = (path: string) => splitPath(path).dir;
+const nameOf = (path: string) => splitPath(path).name;
 // Nó provisório ("Lendo a pasta…") tem a chave `<pasta>/`. Nenhum caminho real termina com barra.
 const provisional = (key: string) => key.endsWith('/');
 const where = (dest: string) => (dest ? `“${dest}”` : 'a raiz do projeto');
@@ -207,14 +208,12 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
   // Modificadores do último clique ou tecla. O Tree não entrega o evento ao `onSelect`, então ele é lido aqui.
   const mods = useRef(NO_MODS);
   // Acorde Ctrl+K, como nas abas: vale por 1,5 s, cancela ao sair da árvore e some com o componente.
-  const chordPending = useRef(false);
-  const chordTimer = useRef(0);
+  const { pending: chordPending, begin: beginChord, end: endChord } = useChord();
   useLayoutEffect(() => {
     expanded.current = tree.expanded;
   });
   // Trocar de aba limpa a seleção: a marcação volta a ser a do arquivo aberto.
   useEffect(() => setSelection([]), [openPath]);
-  useEffect(() => () => window.clearTimeout(chordTimer.current), []);
   // Linhas: arrastáveis quando há como mover, e a pasta que recebe o arraste ganha a moldura (vermelha se não pode). Roda a cada render, porque o Tree recria as linhas.
   useLayoutEffect(() => {
     panel.current?.querySelectorAll<HTMLElement>('[role="treeitem"][data-id]').forEach((row) => {
@@ -381,16 +380,6 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
       action('delete', many ? `Excluir ${paths.length} itens...` : 'Excluir...', () => startDelete(paths), 'Del'),
     ]);
     return sections.flatMap((items, i) => (i ? [DIVIDER, ...items] : items));
-  };
-
-  const beginChord = () => {
-    chordPending.current = true;
-    window.clearTimeout(chordTimer.current);
-    chordTimer.current = window.setTimeout(() => { chordPending.current = false; }, 1500);
-  };
-  const endChord = () => {
-    chordPending.current = false;
-    window.clearTimeout(chordTimer.current);
   };
 
   // Ações da raiz (área vazia do painel, abaixo das linhas): sempre na raiz do projeto, nunca no arquivo marcado.

@@ -157,14 +157,7 @@ pub fn guard() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Uma pasta de teste, vazia.
-    fn fresh(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("orq-hook-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::testutil::fresh;
 
     /// O id do primeiro pedido que aparecer em `dir`, esperando por ele.
     fn first_request(dir: &Path) -> String {
@@ -188,7 +181,7 @@ mod tests {
 
     #[test]
     fn hook_grava_um_arquivo_por_chamada() {
-        let dir = fresh("hook");
+        let dir = fresh("orq-hook", "hook");
         let d = dir.to_string_lossy().to_string();
         assert_eq!(run(&[d.clone(), r#"{"a":"ação"}"#.into()]), 0);
         assert_eq!(run(&[d.clone(), r#"{"b":2}"#.into()]), 0);
@@ -214,7 +207,7 @@ mod tests {
     /// resposta, nem o pedido nem a resposta ficam na pasta.
     #[test]
     fn ask_publica_o_pedido_e_devolve_a_decisao_gravada() {
-        let dir = fresh("ask-ok");
+        let dir = fresh("orq-hook", "ask-ok");
         let (answer_dir, payload) = (dir.clone(), r#"{"tool_name":"Bash","tool_input":{"command":"rm /d/a.log\nlinha 2"}}"#);
         let app = std::thread::spawn(move || {
             let id = first_request(&answer_dir);
@@ -230,7 +223,7 @@ mod tests {
     /// Uma resposta gravada pelo orquestrador como `<id>.reply` é lida pelo `--ask`, com o motivo de recusa inteiro.
     #[test]
     fn resposta_do_orquestrador_chega_ao_ask_com_o_motivo() {
-        let dir = fresh("ask-recusa");
+        let dir = fresh("orq-hook", "ask-recusa");
         let app_dir = dir.clone();
         let app = std::thread::spawn(move || {
             let id = first_request(&app_dir);
@@ -246,7 +239,7 @@ mod tests {
     /// em vez de esperar para sempre.
     #[test]
     fn pedido_que_some_sem_resposta_e_negado() {
-        let dir = fresh("ask-cancel");
+        let dir = fresh("orq-hook", "ask-cancel");
         let app_dir = dir.clone();
         let app = std::thread::spawn(move || {
             first_request(&app_dir);
@@ -260,7 +253,7 @@ mod tests {
     /// Pedido sem resposta é pendente; pedido com `.reply` não é. O `.tmp` de uma publicação em curso também não.
     #[test]
     fn pendentes_sao_os_pedidos_sem_decisao() {
-        let dir = fresh("pendentes");
+        let dir = fresh("orq-hook", "pendentes");
         for name in ["a.json", "b.json", "c.json", "c.reply", "d.json", "e.json.tmp"] {
             std::fs::write(dir.join(name), "{}").unwrap();
         }
@@ -271,7 +264,7 @@ mod tests {
     /// Sem resposta até o prazo, o `--ask` nega com a mensagem que manda repetir o comando, e o pedido sai da pasta.
     #[test]
     fn pedido_sem_resposta_no_prazo_e_negado_e_sai_da_pasta() {
-        let dir = fresh("ask-prazo");
+        let dir = fresh("orq-hook", "ask-prazo");
         assert_eq!(ask_within(&dir, "{}", Duration::from_millis(300)), deny(NO_ANSWER));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&dir);
@@ -280,7 +273,7 @@ mod tests {
     /// Resposta que chega antes do prazo continua valendo, com o prazo curto dos testes.
     #[test]
     fn resposta_antes_do_prazo_continua_valendo() {
-        let dir = fresh("ask-antes");
+        let dir = fresh("orq-hook", "ask-antes");
         let app_dir = dir.clone();
         let app = std::thread::spawn(move || {
             let id = first_request(&app_dir);
@@ -296,7 +289,7 @@ mod tests {
     /// na pasta, sem leitor, até `clear_asks` a levar quando o nó termina.
     #[test]
     fn resposta_que_chega_depois_do_prazo_nao_tem_efeito() {
-        let dir = fresh("ask-tarde");
+        let dir = fresh("orq-hook", "ask-tarde");
         let asker_dir = dir.clone();
         let asker = std::thread::spawn(move || ask_within(&asker_dir, "{}", Duration::from_millis(200)));
         let id = first_request(&dir);

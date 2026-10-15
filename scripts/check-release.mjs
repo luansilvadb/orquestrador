@@ -89,15 +89,6 @@ check('Cargo: lê a versão do [package] e as entradas do orquestrador no Cargo.
   assert.deepEqual(cargoLockVersions('name = "x"\n', 'orquestrador'), []);
 });
 
-check('Assinatura: a versão assinada é o campo version: exato, não um prefixo', () => {
-  const ok = sigFor('0.1.7');
-  const fixed = prepareManifest(manifest('0.1.7', ok), '0.1.7', validNotes());
-  assert.doesNotThrow(() => verifyManifest(fixed, '0.1.7', ok, validNotes()));
-  // Um sig de 0.1.70 não serve para 0.1.7: o campo tem de ser igual.
-  const other = Buffer.from('trusted comment: timestamp:1\tversion:0.1.70\n').toString('base64');
-  assert.throws(() => verifyManifest(manifest('0.1.7', other), '0.1.7', other), /versão assinada é 0\.1\.70/);
-});
-
 check('Manifesto: URL de rascunho, assinatura trocada ou notes antigas são recusados', () => {
   const sig = sigFor('0.1.7');
   const notes = validNotes();

@@ -1,24 +1,27 @@
 // Área central do editor: até dois grupos de abas lado a lado. Cada aba é um arquivo (CodeMirror), um diff staged/unstaged,
 // um commit do histórico (só leitura) ou um conflito de merge. Buffers e rascunhos são do arquivo (`docId`), não da aba.
 //
-// API para o App (ref do componente, `EditorWorkspaceHandle`). Começa do zero: não substitui o FileView/FileTabs antigos
-// até o App trocar a área do arquivo por este componente.
+// API para o App (ref do componente, `EditorWorkspaceHandle`):
 //   openFile(path, { permanent?, line?, col?, side? })  Abre o arquivo. Sem `permanent`, vira prévia (um clique). `line`/`col` (1-based, UTF-16) põem o cursor.
 //                                                        `side` é o grupo 'A' | 'B' (cria B se couber).
 //   openTarget(target, { permanent?, side? })           Abre um TabTarget do modelo (diff, commit, conflito ou arquivo com docId).
+//   openBeside(path, { permanent?, line?, col? })       Abre à direita, no segundo grupo (ou no outro, se só há um).
 //   remap(from, to)                                     Depois de renomear/mover: troca o caminho de abas e rascunhos. Não remonta buffer.
 //   remove(paths)                                       Depois de excluir: fecha as abas e descarta os buffers. Quem chama já decidiu o descarte.
 //   hasDraft(path): boolean                             Há rascunho neste caminho (ou dentro, se for pasta). Bloqueia descarte no Git.
 //   unsaved(): string[]                                 Os mesmos caminhos, para o integrador perguntar antes de fechar a janela.
 //   saveAll(): Promise<boolean>                         Salva arquivos e rascunhos de conflito (conflito é gravado sem marcar resolvido; marcadores podem ficar). false se algo falhou.
 //   discardAll(): void                                  Descarta todos os rascunhos (volta ao texto do disco/Git) e limpa a recuperação deles.
+//   openPaths(): string[]                               Caminhos de todas as abas, para checar colisão antes de criar ou mover.
+//   refresh(): void                                     Relê do disco os arquivos abertos que estão limpos.
+//   flushRecovery(): void                               Grava a recuperação agora (antes de fechar o app).
 //   selectedText(): string                              Texto da seleção principal no arquivo da aba ativa do grupo focado. Sem seleção, a palavra sob o cursor.
 //                                                        Vazio se não há aba de arquivo, se a seleção tem quebra de linha ou se não há palavra. Não mexe no editor.
-// Props: `project` (raiz absoluta, chave da recuperação), `active` (área visível: sem ela, não lê o disco), `locked` (executores vivos:
-// bloqueia mutações Git), `refreshGit` (chamado após mutação), `onActivePath`/`onDirtyPaths` (avisos), `layout` (texto opaco do layout
-// externo, salvo na recuperação), `onRestoreLayout` (chamado uma vez na montagem com o layout salvo), `onReveal` (revelar no Explorer).
-// `onSaved(paths)` (prop): chamada depois de cada gravação bem-sucedida no disco pelo editor (Ctrl+S, salvar tudo, comparação,
-// resolução de conflito). `paths` são relativos com "/", um por gravação.
+// Props: `project` (raiz absoluta, chave da recuperação), `locked` (executores vivos: bloqueia mutações Git), `guard` (trava compartilhada
+// com a barra do Git), `refreshGit` (chamado após mutação), `onActivePath`/`onActiveTarget` (avisos da aba ativa), `layout` (texto opaco do
+// layout externo, salvo na recuperação), `onRestoreLayout` (chamado uma vez na montagem com o layout salvo), `onReveal` (revelar no Explorer),
+// `onGroupCount` (1 ou 2 grupos), `onSaved()` (chamada depois de cada gravação bem-sucedida no disco pelo editor: Ctrl+S, salvar tudo,
+// comparação, resolução de conflito).
 // Recuperação: localStorage por projeto (`orquestrador.editor:<project>`), validada ao ler; nunca grava no disco.
 import {
   forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type DragEvent, type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
@@ -27,9 +30,11 @@ import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, Modal, Po
 import { Flexbox, PatchDiff } from '@lobehub/ui';
 import { File, List, Pin, X } from 'lucide-react';
 import { backend, message } from './backend';
+import { usePolling } from './polling';
 import { CodeEditor, forgetEditorState, liveEditorView, type Reveal, type StartCursor } from './file-view';
-import { action, blocked, DIVIDER, fileName } from './file-tabs';
+import { action, blocked, DIVIDER, fileName, useChord } from './file-tabs';
 import { pathText } from './file-tab-actions';
+import { copy, splitPath } from './git-history';
 import {
   activate, closeTabs, createWorkspace, isDirty, isWithin, joinGroups, loadWorkspace, markEdited, moveTab, navigate, openPermanent, openPreview,
   planClose, remapPath, reopenClosed, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
@@ -66,7 +71,6 @@ export type EditorWorkspaceHandle = {
 };
 export type EditorWorkspaceProps = {
   project: string;
-  active: boolean;
   locked: boolean;
   refreshGit: () => void;
   /** Trava compartilhada com a barra do Git: as operações Git desta área e da barra não rodam juntas. */
@@ -74,14 +78,13 @@ export type EditorWorkspaceProps = {
   onActivePath?: (path: string | null) => void;
   // Alvo da aba ativa no grupo focado (diff, commit, conflito ou arquivo): a sidebar marca o diff que está aberto.
   onActiveTarget?: (target: TabTarget | null) => void;
-  onDirtyPaths?: (paths: string[]) => void;
   layout?: string | null;
   onRestoreLayout?: (layout: string) => void;
-  onReveal?: (path: string) => void;
+  onReveal: (path: string) => void;
   /** Quantos grupos existem (1 ou 2): o App reserva a largura central de cada um. */
   onGroupCount?: (count: number) => void;
-  /** Chamada após cada gravação bem-sucedida no disco feita pelo editor, com o caminho relativo ("/") do arquivo. */
-  onSaved?: (paths: string[]) => void;
+  /** Chamada após cada gravação bem-sucedida no disco feita pelo editor. */
+  onSaved?: () => void;
 };
 
 type Status = { error?: string; binary?: boolean; large?: boolean };
@@ -91,7 +94,6 @@ type Ask = { title: string; body: ReactNode; actions: { key: string; label: stri
 // Comparação antes de gravar sobre o disco (ou de usar o disco): as duas versões são as que a tela tinha quando o usuário pediu.
 type Compare = { docId: string; path: string; mode: 'keep' | 'use'; disk: DiskVersion; draft: string };
 type Common = {
-  active: boolean;
   locked: boolean;
   guard: GitGuard;
   refreshGit: () => void;
@@ -106,12 +108,11 @@ const STORAGE = (project: string) => `orquestrador.editor:${project}`;
 const POLL_MS = 2500;
 const DEFAULT_SPLIT = 0.5;
 const newDocId = () => `doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-const folderOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf('/'), 0)) || 'raiz';
 // Mesmo nome em pastas diferentes: a pasta vira o detalhe da aba, para as duas não ficarem iguais. Sem repetição, não há detalhe.
 function detailsOf(paths: string[]) {
   const count = new Map<string, number>();
   for (const path of paths) count.set(fileName(path), (count.get(fileName(path)) ?? 0) + 1);
-  return new Map(paths.map((path) => [path, (count.get(fileName(path)) ?? 0) > 1 ? folderOf(path) : '']));
+  return new Map(paths.map((path) => [path, (count.get(fileName(path)) ?? 0) > 1 ? splitPath(path).dir || 'raiz' : '']));
 }
 const tabPath = (target: TabTarget) => target.path;
 
@@ -128,11 +129,11 @@ function labelOf(target: TabTarget): string {
 function emptyData(): EditorData { return { buffers: {}, conflicts: {} }; }
 
 export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(props, handle) {
-  const { project, active, locked, guard, refreshGit, onActivePath, onActiveTarget, onDirtyPaths, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
+  const { project, locked, guard, refreshGit, onActivePath, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
   // Ref para que as gravações antigas (ainda em await) avisem com a prop atual.
   const savedRef = useRef(onSaved);
   savedRef.current = onSaved;
-  const notifySaved = (path: string) => savedRef.current?.([path]);
+  const notifySaved = () => savedRef.current?.();
 
   // Restaura a recuperação uma vez, na montagem (lê o localStorage de forma síncrona e valida tudo).
   const [boot] = useState(() => {
@@ -158,7 +159,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       if (b.scroll) scrolls[b.docId] = b.scroll;
       if (b.dirty) data.buffers[b.docId] = { docId: b.docId, path: b.path, cursor: b.cursor, ...b.dirty };
     }
-    for (const c of decoded.recovery.conflicts) data.conflicts[conflictKey(c.path)] = { ...c };
+    for (const c of decoded.recovery.conflicts) data.conflicts[conflictKey(c.path)] = c;
     return { ws: ws.state, data, split: decoded.recovery.split ?? DEFAULT_SPLIT, layout: decoded.recovery.layout, notes, cursors, scrolls };
   });
 
@@ -185,7 +186,6 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const revealSeq = useRef(0);
   const layoutRef = useRef(layout ?? layoutSaved);
   const splitRef = useRef(split);
-  const dirtyPrev = useRef('');
   const dragId = useRef<string | null>(null);
   const splitDrag = useRef<{ startX: number; start: number; width: number } | null>(null);
 
@@ -340,7 +340,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       clearDisk(docId);
       setStatusOf(docId, {});
       refreshGit();
-      notifySaved(buffer.path);
+      notifySaved();
       return true;
     } catch (e) {
       const reason = message(e);
@@ -378,12 +378,12 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       return false;
     }
     // Gravar a resolução é operação Git da UI: a trava compartilhada vale aqui também (a da barra lateral).
-    if (!guard.enter('resolução do conflito')) return false;
+    if (!guard.enter()) return false;
     conflictSaving.current.add(key);
     const sent = current.draft;
     try {
       await backend.gitWriteResolution(path, sent, current.revision, markResolved);
-      notifySaved(path);
+      notifySaved();
       if (markResolved) {
         dropConflict(path);
         refreshGit();
@@ -471,14 +471,10 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     return tab && tab.target.kind === 'file' ? [tab.target.docId] : [];
   });
   const activeKey = activeFileIds(ws).join('|');
-  useEffect(() => {
-    if (!active) return;
-    const ids = activeKey === '' ? [] : activeKey.split('|');
-    ids.forEach((id) => void syncFile(id));
-    const timer = window.setInterval(() => ids.forEach((id) => void syncFile(id)), POLL_MS);
-    return () => window.clearInterval(timer);
-    // syncFile lê refs; o efeito só precisa refazer quando a aba ativa ou a visibilidade mudam.
-  }, [active, activeKey]);
+  // Sincroniza só as abas de arquivo ativas; sem nenhuma (chave vazia), o polling fica desligado.
+  usePolling(async () => {
+    await Promise.all(activeKey.split('|').map((id) => syncFile(id)));
+  }, POLL_MS, activeKey);
 
   // ---- Avisos e recuperação ----
   const dirtyList = (): string[] => {
@@ -487,13 +483,6 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     for (const c of Object.values(dataRef.current.conflicts)) if (isConflictDirty(c)) out.push(c.path);
     return out;
   };
-  useEffect(() => {
-    const list = dirtyList();
-    const text = JSON.stringify(list);
-    if (text === dirtyPrev.current) return;
-    dirtyPrev.current = text;
-    onDirtyPaths?.(list);
-  }, [data]);
   useEffect(() => {
     const group = ws.groups.find((g) => g.id === ws.focus);
     const tab = group?.tabs.find((t) => t.id === group.active);
@@ -526,7 +515,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           dirty: b && isBufferDirty(b) ? { raw: b.raw, bom: b.bom, newline: b.newline, draft: b.draft, readOnly: b.readOnly } : null,
         };
       }),
-      conflicts: conflicts.map((c) => ({ path: c.path, origin: c.origin, draft: c.draft, revision: c.revision })),
+      conflicts,
     };
     try {
       if (!hasState) {
@@ -557,19 +546,12 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
 
   // ---- Operações de aba (menu, teclado) ----
   const activateTab = (tabId: string) => setWs(activate(wsRef.current, tabId));
-  const copy = async (kind: 'relative' | 'absolute' | 'navigation', target: TabTarget) => {
+  // Copia o caminho pedido (relativo, absoluto ou de navegação); sucesso e erro vêm do helper `copy`.
+  const copyPath = (kind: 'relative' | 'absolute' | 'navigation', target: TabTarget) => {
     const cursor = target.kind === 'file' ? cursors.current[target.docId] : undefined;
     const text = pathText(kind, target.path, project, cursor);
     if (text === null) return;
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (e) {
-      toast.error({ title: message(e), duration: 5000 });
-    }
-  };
-  const reveal_ = (path: string) => {
-    if (onReveal) onReveal(path);
-    else void backend.revealFile(path).catch((e) => toast.error({ title: message(e), duration: 5000 }));
+    void copy(text, 'Caminho copiado');
   };
   const reopen = () => setWs(reopenClosed(wsRef.current));
 
@@ -619,18 +601,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   // e pode parar a propagação. Só alcança o que está dentro desta área; o xterm e os campos ficam fora dela ou são pulados abaixo.
   // Acordes: Ctrl+K e depois W (fecha as não fixadas do grupo ativo), Ctrl+Shift+C (caminho relativo), Ctrl+Shift+Enter não existe:
   // Shift+Enter (fixa/desafixa). O prefixo vale 1,5 s e cai ao sair da área.
-  const chordPending = useRef(false);
-  const chordTimer = useRef(0);
-  const beginChord = () => {
-    chordPending.current = true;
-    window.clearTimeout(chordTimer.current);
-    chordTimer.current = window.setTimeout(() => { chordPending.current = false; }, 1500);
-  };
-  const endChord = () => {
-    chordPending.current = false;
-    window.clearTimeout(chordTimer.current);
-  };
-  useEffect(() => () => window.clearTimeout(chordTimer.current), []);
+  const { pending: chordPending, begin: beginChord, end: endChord } = useChord();
   const focusedTab = (): EditorTab | null => {
     const group = wsRef.current.groups.find((g) => g.id === wsRef.current.focus);
     return group ? activeTabOf(group) : null;
@@ -654,7 +625,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       // Acorde sem ação (ou sem alvo) não é capturado: a tecla segue para o editor, como qualquer outra.
       let run: (() => void) | null = null;
       if (!mod && !e.altKey && !e.shiftKey && e.code === 'KeyW') run = () => void closeFlow({ kind: 'all', group: wsRef.current.focus });
-      else if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyC' && focused) run = () => void copy('relative', focused.target);
+      else if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyC' && focused) run = () => void copyPath('relative', focused.target);
       else if (!mod && !e.altKey && e.shiftKey && e.code === 'Enter' && focused) run = () => setWs(togglePin(wsRef.current, focused.id));
       if (!run) return;
       e.preventDefault();
@@ -673,7 +644,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     } else if (e.altKey && e.shiftKey && !mod && e.code === 'KeyC' && focused) {
       e.preventDefault();
       e.stopPropagation();
-      void copy('absolute', focused.target);
+      void copyPath('absolute', focused.target);
     } else if (e.ctrlKey && e.key === 'Tab') {
       e.preventDefault();
       e.stopPropagation();
@@ -773,7 +744,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       clearDisk(choice.docId);
       setStatusOf(choice.docId, {});
       refreshGit();
-      notifySaved(buffer.path);
+      notifySaved();
     } catch (e) {
       failed = e;
     } finally {
@@ -788,7 +759,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
 
   // ---- Corpo das abas ----
   const common: Common = {
-    active, locked, guard, refreshGit,
+    locked, guard, refreshGit,
     openLine: (path, line) => openFile(path, { permanent: true, line }),
     hasDraft: (path) => hasDraftAt(dataRef.current, path),
     fileDirty: (path) => Object.values(dataRef.current.buffers).some((b) => isBufferDirty(b) && b.path.toLowerCase() === path.toLowerCase()),
@@ -828,10 +799,10 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           : blocked('close-all', 'Fechar Todas', 'Não há abas para fechar. As fixadas ficam abertas.'),
       ],
       [
-        action('copy-relative', 'Copiar Caminho Relativo', () => void copy('relative', target), 'Ctrl+K Ctrl+Shift+C'),
-        action('copy-path', 'Copiar o Caminho', () => void copy('absolute', target), 'Shift+Alt+C'),
+        action('copy-relative', 'Copiar Caminho Relativo', () => void copyPath('relative', target), 'Ctrl+K Ctrl+Shift+C'),
+        action('copy-path', 'Copiar o Caminho', () => void copyPath('absolute', target), 'Shift+Alt+C'),
         target.kind === 'file' && cursors.current[target.docId]
-          ? action('copy-navigation', 'Copiar Caminho de Navegação', () => void copy('navigation', target))
+          ? action('copy-navigation', 'Copiar Caminho de Navegação', () => void copyPath('navigation', target))
           : blocked('copy-navigation', 'Copiar Caminho de Navegação', 'Abra o arquivo para ter a posição do cursor.'),
       ],
       [
@@ -842,7 +813,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       ],
       [
         action('pin', tab.pinned ? 'Desafixar' : 'Fixar', () => setWs(togglePin(wsRef.current, tab.id)), 'Ctrl+K Shift+Enter'),
-        action('reveal', 'Revelar no Explorer', () => reveal_(target.path)),
+        action('reveal', 'Revelar no Explorer', () => onReveal(target.path)),
       ],
     ];
     return sections.flatMap((items, i) => (i ? [DIVIDER, ...items] : items));
@@ -851,7 +822,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const bodyOf = (tab: EditorTab, groupActive: boolean, shown: boolean): ReactNode => {
     const target = tab.target;
     if (target.kind === 'diff') return <DiffTab target={target} common={common} shown={shown} />;
-    if (target.kind === 'commit') return <CommitTab target={target} common={common} />;
+    if (target.kind === 'commit') return <CommitTab target={target} />;
     if (target.kind === 'conflict') {
       return (
         <ConflictTab
@@ -868,7 +839,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     }
     return (
       <FileBody
-        active={groupActive && active}
+        groupActive={groupActive}
         buffer={data.buffers[target.docId]}
         status={status[target.docId]}
         disk={disk[target.docId]}
@@ -1123,8 +1094,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
 
 // ---- Arquivo ----
 
-function FileBody({ active, buffer, status, disk, reveal, cursor, onChange, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
-  active: boolean; buffer: Buffer | undefined; status: Status | undefined; disk: DiskVersion | undefined;
+function FileBody({ groupActive, buffer, status, disk, reveal, cursor, onChange, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
+  groupActive: boolean; buffer: Buffer | undefined; status: Status | undefined; disk: DiskVersion | undefined;
   reveal: (Reveal & { docId: string }) | null; cursor: StartCursor | null; onChange: (value: string) => void; onSave: () => void;
   onCursor: (line: number, col: number) => void; onCompare: (mode: 'keep' | 'use') => void; onRetry: () => void;
   scroll: Scroll | null; onScroll: (scroll: Scroll) => void;
@@ -1155,7 +1126,7 @@ function FileBody({ active, buffer, status, disk, reveal, cursor, onChange, onSa
             text={buffer.draft}
             readOnly={buffer.readOnly}
             path={buffer.path}
-            reveal={active && reveal ? { path: buffer.path, line: reveal.line, col: reveal.col, id: reveal.id } : null}
+            reveal={groupActive && reveal ? { path: buffer.path, line: reveal.line, col: reveal.col, id: reveal.id } : null}
             onChange={onChange}
             onSave={onSave}
             onCursor={onCursor}
@@ -1250,17 +1221,12 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
       setError(message(e));
     }
   };
-  useEffect(() => {
-    if (!common.active || !shown) return;
-    void load();
-    const timer = window.setInterval(() => void load(), POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [common.active, shown, target.path, target.side]);
+  usePolling(load, POLL_MS, shown && `${target.path}|${target.side}`);
 
   // Uma operação por vez: o clique duplo não dispara duas (o ref não espera o re-render).
   const run = async (work: () => Promise<void>) => {
     if (busyRef.current || common.locked) return;
-    if (!common.guard.enter('alteração do diff')) return;
+    if (!common.guard.enter()) return;
     busyRef.current = true;
     setBusy(true);
     try {
@@ -1281,11 +1247,8 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
   const head = review ? fileHead(review.diff.patch) : '';
   const blocked_ = common.locked || busy;
   const draftOpen = common.hasDraft(target.path);
-  // Não rastreado: o Git não separa em blocos (lista vazia), mas o patch existe. A tela mostra o arquivo inteiro e oferece preparar tudo.
-  const untracked = review !== null && review.hunks.length === 0 && review.diff.patch !== '' && !review.diff.binary && !review.diff.tooLarge;
-  // Ação por bloco só vale se os blocos da tela batem, um a um, com a lista oficial do backend (índice 0-based).
-  const aligned = review !== null && review.hunks.length === hunks.length && hunks.every((h, i) => review.hunks[i].header === h.header);
-  const blockOff = blocked_ || !aligned;
+  // Não rastreado: o Git não separa em blocos, mas o patch existe. A tela mostra o arquivo inteiro e oferece preparar tudo.
+  const untracked = review !== null && review.untracked;
   const jump = (step: number) => {
     if (hunks.length === 0) return;
     const next = Math.min(Math.max(at + step, 0), hunks.length - 1);
@@ -1293,12 +1256,11 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
     holder.current?.querySelector<HTMLElement>(`[data-hunk="${next}"]`)?.scrollIntoView({ block: 'start' });
   };
 
-  const note = (text: string, danger?: boolean) => <Flexbox padding={16}><Text as="p" role="status" fontSize={14} type={danger ? 'danger' : 'secondary'}>{text}</Text></Flexbox>;
-  if (error && !review) return note(error, true);
-  if (!review) return note('Lendo as alterações…');
-  if (review.diff.binary) return note('Arquivo binário: o diff não é mostrado.');
-  if (review.diff.tooLarge) return note('Diff grande demais para mostrar aqui.');
-  if (review.diff.patch === '') return note('Não há alterações neste lado.');
+  if (error && !review) return <Note text={error} danger />;
+  if (!review) return <Note text="Lendo as alterações…" />;
+  if (review.diff.binary) return <Note text="Arquivo binário: o diff não é mostrado." />;
+  if (review.diff.tooLarge) return <Note text="Diff grande demais para mostrar aqui." />;
+  if (review.diff.patch === '') return <Note text="Não há alterações neste lado." />;
 
   return (
     <Flexbox flex={1} className="min-h-0">
@@ -1344,24 +1306,19 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
             <PatchDiff patch={review.diff.patch} viewMode={mode} showHeader={false} variant="borderless" />
           </Flexbox>
         )}
-        {!untracked && hunks.length > 0 && !aligned && (
-          <Text as="p" role="status" type="danger" fontSize={12}>Os blocos mudaram desde a leitura. Atualize a tela antes de agir sobre um bloco.</Text>
-        )}
-        {!untracked && hunks.map((h, i) => {
-          // Índice e cabeçalho vêm da lista oficial (`review.hunks[i]`), não da contagem local de `@@`.
-          const official = aligned ? review.hunks[i] : null;
-          const ref: HunkRef = { path: target.path, index: official?.index ?? -1, header: h.header, revision: review.revision };
+        {!untracked && hunks.map((h) => {
+          const ref: HunkRef = { path: target.path, index: h.index, header: h.header, revision: review.revision };
           return (
             <Flexbox key={h.index} gap={4} data-hunk={h.index}>
               <Flexbox horizontal align="center" wrap="wrap" gap={6}>
                 <Text as="code" code fontSize={12} type="secondary" className="min-w-32 flex-1 break-all">{h.header}</Text>
                 <Button size="small" onClick={() => common.openLine(target.path, h.newLine)}>Abrir no arquivo</Button>
                 {staged
-                  ? <Button size="small" disabled={blockOff} onClick={() => run(() => backend.gitUnstageHunk(ref))}>Tirar do stage</Button>
-                  : <Button size="small" disabled={blockOff} onClick={() => run(() => backend.gitStageHunk(ref))}>Preparar</Button>}
+                  ? <Button size="small" disabled={blocked_} onClick={() => run(() => backend.gitUnstageHunk(ref))}>Tirar do stage</Button>
+                  : <Button size="small" disabled={blocked_} onClick={() => run(() => backend.gitStageHunk(ref))}>Preparar</Button>}
                 {!staged && (
                   <Button
-                    size="small" danger disabled={blockOff || draftOpen}
+                    size="small" danger disabled={blocked_ || draftOpen}
                     title={draftOpen ? 'Resolva o rascunho aberto deste arquivo antes de descartar.' : 'Descartar este bloco'}
                     onClick={async () => {
                       // Confirma mostrando o patch capturado agora; o clique em confirmar usa este mesmo `ref`, sem reler outro patch.
@@ -1393,21 +1350,19 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
 
 // ---- Histórico (commit): leitura imutável, sem botões de mutação ----
 
-function CommitTab({ target, common }: { target: Extract<TabTarget, { kind: 'commit' }>; common: Common }) {
+function CommitTab({ target }: { target: Extract<TabTarget, { kind: 'commit' }> }) {
   const [diff, setDiff] = useState<GitDiff | null>(null);
   const [error, setError] = useState('');
   const [mode, setMode] = useState<'split' | 'unified'>('unified');
   useEffect(() => {
-    if (!common.active) return;
     if (diff) return; // histórico é imutável: lê uma vez
     backend.gitCommitDiff(target.hash, target.path).then(setDiff, (e) => setError(message(e)));
-  }, [common.active, target.hash, target.path]);
-  const note = (text: string, danger?: boolean) => <Flexbox padding={16}><Text as="p" role="status" fontSize={14} type={danger ? 'danger' : 'secondary'}>{text}</Text></Flexbox>;
-  if (error) return note(error, true);
-  if (!diff) return note('Lendo o commit…');
-  if (diff.binary) return note('Arquivo binário: o diff não é mostrado.');
-  if (diff.tooLarge) return note('Diff grande demais para mostrar aqui.');
-  if (diff.patch === '') return note('Este commit não altera o texto deste arquivo.');
+  }, [target.hash, target.path]);
+  if (error) return <Note text={error} danger />;
+  if (!diff) return <Note text="Lendo o commit…" />;
+  if (diff.binary) return <Note text="Arquivo binário: o diff não é mostrado." />;
+  if (diff.tooLarge) return <Note text="Diff grande demais para mostrar aqui." />;
+  if (diff.patch === '') return <Note text="Este commit não altera o texto deste arquivo." />;
   return (
     <Flexbox flex={1} className="min-h-0">
       <Flexbox horizontal align="center" gap={6} height={32} flex="none" paddingInline={12} className="border-b">
@@ -1457,9 +1412,9 @@ function ConflictTab({ path, common, shown, draft, putConflict, dropConflict, sa
   };
   // Aba escondida não relê: ao voltar a ser a atual, relê a pasta (a revisão do rascunho pode ter ficado velha).
   useEffect(() => {
-    if (!common.active || !shown) return;
+    if (!shown) return;
     void load();
-  }, [common.active, shown, path]);
+  }, [shown, path]);
 
   const text = draft?.draft ?? '';
   // Trechos lidos do texto atual do rascunho (inclusive o que já foi resolvido à mão ou por trecho).
@@ -1498,10 +1453,9 @@ function ConflictTab({ path, common, shown, draft, putConflict, dropConflict, sa
     if (draft) putConflict({ ...draft, draft: value });
   };
 
-  const note = (message_: string, danger?: boolean) => <Flexbox padding={16}><Text as="p" role="status" fontSize={14} type={danger ? 'danger' : 'secondary'}>{message_}</Text></Flexbox>;
-  if (error && !conflict) return note(error, true);
-  if (!conflict || !draft) return note('Lendo o conflito…');
-  if (conflict.binary) return note('Conflito em arquivo binário: escolha um lado pelo Git; não há texto para resolver aqui.');
+  if (error && !conflict) return <Note text={error} danger />;
+  if (!conflict || !draft) return <Note text="Lendo o conflito…" />;
+  if (conflict.binary) return <Note text="Conflito em arquivo binário: escolha um lado pelo Git; não há texto para resolver aqui." />;
 
   return (
     <Flexbox flex={1} className="min-h-0">

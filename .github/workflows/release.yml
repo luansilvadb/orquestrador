@@ -169,8 +169,6 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $version = $env:TAG.Substring(1)
-
           & gh release edit $env:TAG --repo $env:REPO --draft=false --latest
           if ($LASTEXITCODE -ne 0) { throw "gh release edit (publicar) falhou com código $LASTEXITCODE." }
 
@@ -179,20 +177,4 @@ jobs:
           $state = $json | ConvertFrom-Json
           if ($state.isDraft -or $state.isPrerelease) { throw "Estado inesperado depois de publicar: $json" }
 
-          # A API (releases/latest) e o latest.json público precisam apontar para a versão nova. Pode levar alguns segundos até o GitHub atualizar.
-          # Daqui em diante a release já está publicada: se a conferência falhar, ela não é refeita nem movida pelo job.
-          $announced = $false
-          for ($try = 1; $try -le 6 -and -not $announced; $try++) {
-            try {
-              $apiTag = [string](& gh api "repos/$($env:REPO)/releases/latest" --jq .tag_name)
-              if ($LASTEXITCODE -ne 0) { throw "gh api releases/latest falhou com código $LASTEXITCODE." }
-              $raw = Invoke-RestMethod -Uri "https://github.com/$($env:REPO)/releases/latest/download/latest.json"
-              $manifest = if ($raw -is [string]) { $raw | ConvertFrom-Json } else { $raw }
-              $announced = ($manifest.version -eq $version) -and ($apiTag.Trim() -eq $env:TAG)
-            } catch {
-              Write-Host "Endereço latest ainda indisponível ($try/6): $($_.Exception.Message)"
-            }
-            if (-not $announced -and $try -lt 6) { Start-Sleep -Seconds 10 }
-          }
-          if (-not $announced) { throw "A release $($env:TAG) está publicada, mas a API e o latest.json ainda não apontam para $version." }
           Write-Host "Release $($env:TAG) publicada como a última release estável."

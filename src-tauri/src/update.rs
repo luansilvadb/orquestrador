@@ -162,14 +162,13 @@ async fn attempt<R: Remote>(gate: &Gate, remote: &R) -> Status {
     }
 }
 
-/// Começa a rodada se não houver outra em curso e o uso ainda não foi liberado. Devolve se começou.
-pub fn start<R: Remote>(gate: &Gate, remote: R) -> bool {
+/// Começa a rodada se não houver outra em curso e o uso ainda não foi liberado.
+pub fn start<R: Remote>(gate: &Gate, remote: R) {
     if !gate.reserve() {
-        return false;
+        return;
     }
     let gate = gate.clone();
     tauri::async_runtime::spawn(async move { settle(&gate, &remote).await });
-    true
 }
 
 /// Roda a rodada e registra o fim dela. Se algo estourar um pânico, a tela recebe a falha: o uso

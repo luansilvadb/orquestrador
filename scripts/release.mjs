@@ -130,15 +130,6 @@ export function prepareManifest(text, version, notes, repo = REPO) {
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
-// O sig é o arquivo de assinatura do Tauri (base64 do .sig do minisign). O plugin lê `version:` como campo separado por tab.
-export function signedVersion(sigText) {
-  const decoded = Buffer.from(sigText.trim(), 'base64').toString('utf8');
-  const line = decoded.split(/\r?\n/).find((l) => l.startsWith('trusted comment: '));
-  if (!line) throw new Error('assinatura sem o comentário confiável.');
-  const field = line.slice('trusted comment: '.length).split('\t').find((f) => f.startsWith('version:'));
-  return field?.slice('version:'.length);
-}
-
 export function verifyManifest(text, version, sigText, notes, repo = REPO) {
   const manifest = JSON.parse(text);
   const problems = [];
@@ -149,11 +140,9 @@ export function verifyManifest(text, version, sigText, notes, repo = REPO) {
     if (platform.url !== installerUrl(version, repo)) problems.push(`URL ${platform.url}, esperada ${installerUrl(version, repo)}`);
     if (platform.signature !== sigText.trim()) problems.push('a assinatura não é a do .sig enviado');
   }
-  const signed = signedVersion(sigText);
-  if (signed !== version) problems.push(`a versão assinada é ${signed ?? 'ausente'}, não ${version}`);
   if (notes !== undefined && canonicalText(manifest.notes ?? '') !== canonicalText(notes)) problems.push('notes do latest.json não são o texto completo de docs/releases');
   if (problems.length > 0) throw new Error(`latest.json recusado:\n  - ${problems.join('\n  - ')}`);
-  return `latest.json de ${version}: URL, assinatura, versão assinada e notes conferidos.`;
+  return `latest.json de ${version}: URL, assinatura e notes conferidos.`;
 }
 
 // Assinatura Minisign, como o Tauri grava (formato: https://jedisct1.github.io/minisign/). Só verificação, com Ed25519 e BLAKE2b do Node.

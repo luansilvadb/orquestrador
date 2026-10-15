@@ -4,9 +4,8 @@
 use crate::{files, proc};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::process::Stdio;
 
 /// Diff com mais texto que isto não é montado: a tela mostra só o aviso.
 const MAX_DIFF: usize = 1_048_576;
@@ -359,21 +358,14 @@ pub struct HunkRef {
     pub revision: String,
 }
 
-/// A linha `@@` de um bloco e sua posição: o que a UI guarda para montar a lista de blocos.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HunkInfo {
-    pub index: usize,
-    pub header: String,
-}
-
-/// O diff de um arquivo com a revisão e os blocos. A UI devolve `revision` e o `index`/`header` do bloco.
+/// O diff de um arquivo com a revisão. A UI devolve `revision` e o `index`/`header` do bloco. `untracked` diz que o
+/// arquivo não é rastreado: ele não tem bloco, só o patch de arquivo novo.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewDiff {
     pub diff: Diff,
     pub revision: String,
-    pub hunks: Vec<HunkInfo>,
+    pub untracked: bool,
 }
 
 /// Um commit do histórico. `date` vem em ISO 8601 estrito; a tela formata.
@@ -446,21 +438,10 @@ fn block_header(block: &str) -> &str {
     block.split('\n').next().unwrap_or("").trim_end_matches('\r')
 }
 
-/// O diff de `rel` com a revisão e os blocos. A UI guarda a revisão e manda de volta com o `index` do bloco.
+/// O diff de `rel` com a revisão. A UI guarda a revisão e manda de volta com o `index` do bloco.
 pub fn review_diff(dir: &Path, rel: &str, staged: bool) -> Result<ReviewDiff, String> {
     let lido = snapshot(dir, spec(rel)?, staged)?;
-    // Binário, texto grande e não rastreado não têm bloco: a tela só mostra o aviso ou o arquivo inteiro.
-    let hunks = if lido.untracked || lido.diff.binary || lido.diff.too_large {
-        Vec::new()
-    } else {
-        split_hunks(&lido.raw)
-            .1
-            .iter()
-            .enumerate()
-            .map(|(index, block)| HunkInfo { index, header: block_header(block).to_string() })
-            .collect()
-    };
-    Ok(ReviewDiff { revision: files::fingerprint(lido.raw.as_bytes()), diff: lido.diff, hunks })
+    Ok(ReviewDiff { revision: files::fingerprint(lido.raw.as_bytes()), diff: lido.diff, untracked: lido.untracked })
 }
 
 /// Os caminhos do índice, com `-z`: nome com quebra de linha não vira duas linhas. Pathspec literal, como em `proc`.
@@ -511,53 +492,26 @@ fn current_block(dir: &Path, hunk: &HunkRef, staged: bool) -> Result<String, Str
     }
 }
 
-/// Roda `git apply` com o patch pela entrada padrão, sem `--index`: só `--cached` toca o índice, e nada toca
-/// o índice sem ele. O erro é o que o Git escreveu.
-fn apply(dir: &Path, args: &[&str], patch: &str) -> Result<(), String> {
-    let mut child = proc::quiet("git")
-        .arg("-C")
-        .arg(dir)
-        .arg("--literal-pathspecs")
-        .arg("apply")
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("git não pôde ser executado: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        // Se o Git sair antes de ler tudo, o erro dele é o que importa: por isso a falha de escrita não é reportada.
-        let _ = stdin.write_all(patch.as_bytes());
-    }
-    let out = child.wait_with_output().map_err(|e| format!("git não respondeu: {e}"))?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    Err(if stderr.is_empty() { format!("código {}", out.status.code().unwrap_or(-1)) } else { stderr })
-}
-
-/// Prepara um bloco da pasta de trabalho. Os outros blocos do arquivo ficam na pasta, como estavam.
+/// Prepara um bloco da pasta de trabalho. Os outros blocos do arquivo ficam na pasta, como estavam. Sem `--index`:
+/// só `--cached` toca o índice. O `git apply` é atômico: se o trecho não aplica, ele não muda nada, então não há
+/// `--check` antes.
 pub fn stage_hunk(dir: &Path, hunk: &HunkRef) -> Result<(), String> {
     let patch = current_block(dir, hunk, false)?;
-    apply(dir, &["--cached", "--check"], &patch).map_err(|why| format!("O bloco não pôde ser preparado: {why}"))?;
-    apply(dir, &["--cached"], &patch).map_err(|why| format!("O bloco não pôde ser preparado: {why}"))
+    proc::git_entrada(dir, &["apply", "--cached"], patch.as_bytes()).map_err(|why| format!("O bloco não pôde ser preparado: {why}"))
 }
 
 /// Tira um bloco do índice; a pasta de trabalho não muda. Os outros blocos preparados ficam preparados.
 pub fn unstage_hunk(dir: &Path, hunk: &HunkRef) -> Result<(), String> {
     let patch = current_block(dir, hunk, true)?;
-    apply(dir, &["--cached", "-R", "--check"], &patch).map_err(|why| format!("O bloco não pôde ser tirado do preparo: {why}"))?;
-    apply(dir, &["--cached", "-R"], &patch).map_err(|why| format!("O bloco não pôde ser tirado do preparo: {why}"))
+    proc::git_entrada(dir, &["apply", "--cached", "-R"], patch.as_bytes())
+        .map_err(|why| format!("O bloco não pôde ser tirado do preparo: {why}"))
 }
 
 /// Descarta um bloco da alteração não preparada: a pasta volta a como estava no índice nesse trecho. O índice não
 /// é tocado, então o que estava preparado continua preparado. Não existe descarte de bloco do lado preparado.
 pub fn discard_hunk(dir: &Path, hunk: &HunkRef) -> Result<(), String> {
     let patch = current_block(dir, hunk, false)?;
-    apply(dir, &["-R", "--check"], &patch).map_err(|why| format!("O bloco não pôde ser descartado: {why}"))?;
-    apply(dir, &["-R"], &patch).map_err(|why| format!("O bloco não pôde ser descartado: {why}"))
+    proc::git_entrada(dir, &["apply", "-R"], patch.as_bytes()).map_err(|why| format!("O bloco não pôde ser descartado: {why}"))
 }
 
 /// Descarta a alteração não preparada de um arquivo rastreado. `revision_seen` é a revisão do diff não preparado
@@ -573,14 +527,16 @@ pub fn discard_file(dir: &Path, rel: &str, revision_seen: &str) -> Result<(), St
     proc::git_saida(dir, &["restore", "--worktree", "--", rel]).map(|_| ())
 }
 
+/// `--max-count` e `--skip` de uma página do `log`: `limit` fica entre 1 e `MAX_HISTORY`. Sem HEAD (repositório sem
+/// commit) não há página, então `None`.
+fn pagina(dir: &Path, limit: usize, skip: usize) -> Option<[String; 2]> {
+    has_head(dir).then(|| [format!("--max-count={}", limit.clamp(1, MAX_HISTORY)), format!("--skip={skip}")])
+}
+
 /// Commits do HEAD, do mais novo para o mais antigo. `limit` fica entre 1 e 200; `skip` pula os já mostrados.
 /// Com `path`, só os commits que tocaram o caminho, seguindo renomeações. Repositório sem commit: lista vazia.
 pub fn history(dir: &Path, limit: usize, skip: usize, path: Option<&str>) -> Result<Vec<Commit>, String> {
-    if !has_head(dir) {
-        return Ok(Vec::new());
-    }
-    let max = format!("--max-count={}", limit.clamp(1, MAX_HISTORY));
-    let skip = format!("--skip={skip}");
+    let Some([max, skip]) = pagina(dir, limit, skip) else { return Ok(Vec::new()) };
     let mut args = vec!["log", LOG_FORMAT, "--no-color", &max, &skip];
     if let Some(path) = path {
         args.extend(["--follow", "--", spec(path)?]);
@@ -593,34 +549,31 @@ fn records(out: &str) -> impl Iterator<Item = &str> {
     out.split('\x1e').map(|rec| rec.trim_start_matches('\n')).filter(|rec| !rec.is_empty())
 }
 
+/// Monta o `Commit` com os cinco campos do `LOG_FORMAT`, nessa ordem: hash, abreviado, autor, data e assunto.
+fn commit_de(hash: &str, short: &str, author: &str, date: &str, subject: &str) -> Commit {
+    Commit { hash: hash.into(), short: short.into(), author: author.into(), date: date.into(), subject: subject.into() }
+}
+
 /// Lê a saída de `log`/`show` com `LOG_FORMAT`: cada registro acaba em 0x1e e os campos são separados por 0x1f.
 fn parse_commits(out: &str) -> Vec<Commit> {
     records(out)
         .filter_map(|rec| {
             let f: Vec<&str> = rec.splitn(5, '\x1f').collect();
             match f.as_slice() {
-                [hash, short, author, date, subject] => Some(Commit {
-                    hash: hash.to_string(),
-                    short: short.to_string(),
-                    author: author.to_string(),
-                    date: date.to_string(),
-                    subject: subject.to_string(),
-                }),
+                [hash, short, author, date, subject] => Some(commit_de(hash, short, author, date, subject)),
                 _ => None,
             }
         })
         .collect()
 }
 
-/// Um commit do gráfico: os campos de `Commit` mais os pais e as refs que apontam para ele. Plano, sem objeto aninhado.
+/// Um commit do gráfico: o `Commit` mais os pais e as refs que apontam para ele. No JSON, `commit` é achatado: os campos
+/// do `Commit` ficam no mesmo nível que `parents` e `refs`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphCommit {
-    pub hash: String,
-    pub short: String,
-    pub author: String,
-    pub date: String,
-    pub subject: String,
+    #[serde(flatten)]
+    pub commit: Commit,
     /// Hashes completos dos pais; vazio no commit raiz.
     pub parents: Vec<String>,
     pub refs: Vec<GitRef>,
@@ -652,11 +605,7 @@ const GRAPH_FORMAT: &str = "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%P%x1f%D%x1f%s%x1
 /// Commits de HEAD e, se a branch atual tem upstream, também do upstream, em ordem topológica (mais novo primeiro).
 /// `limit` fica entre 1 e 200; `skip` pula os já mostrados. Repositório sem commit: lista vazia.
 pub fn graph(dir: &Path, limit: usize, skip: usize) -> Result<Vec<GraphCommit>, String> {
-    if !has_head(dir) {
-        return Ok(Vec::new());
-    }
-    let max = format!("--max-count={}", limit.clamp(1, MAX_HISTORY));
-    let skip = format!("--skip={skip}");
+    let Some([max, skip]) = pagina(dir, limit, skip) else { return Ok(Vec::new()) };
     let mut args = vec!["log", GRAPH_FORMAT, "--no-color", "--decorate=full", "--topo-order", &max, &skip, "HEAD"];
     if upstream(dir).is_some() {
         args.push("@{upstream}");
@@ -673,11 +622,7 @@ fn parse_graph(out: &str) -> Vec<GraphCommit> {
             let f: Vec<&str> = rec.splitn(7, '\x1f').collect();
             match f.as_slice() {
                 [hash, short, author, date, parents, refs, subject] => Some(GraphCommit {
-                    hash: hash.to_string(),
-                    short: short.to_string(),
-                    author: author.to_string(),
-                    date: date.to_string(),
-                    subject: subject.to_string(),
+                    commit: commit_de(hash, short, author, date, subject),
                     parents: parents.split_whitespace().map(str::to_string).collect(),
                     refs: parse_refs(refs),
                 }),
@@ -1076,59 +1021,18 @@ pub fn accept_deletion(dir: &Path, rel: &str, revision: &str) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{commit_all, git, identity, junction, write, Tmp};
     use std::fs;
-
-    /// Pasta temporária do teste. Some quando o teste acaba, mesmo se ele falhar.
-    struct Tmp(std::path::PathBuf);
-
-    impl Tmp {
-        fn new(tag: &str) -> Tmp {
-            let path = std::env::temp_dir().join(format!("orq-git-{}-{tag}", std::process::id()));
-            let _ = fs::remove_dir_all(&path);
-            fs::create_dir_all(&path).unwrap();
-            Tmp(path)
-        }
-
-        fn at(&self, name: &str) -> std::path::PathBuf {
-            self.0.join(name)
-        }
-    }
-
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn git(dir: &Path, args: &[&str]) -> String {
-        proc::git_saida(dir, args).unwrap()
-    }
-
-    /// Identidade e fim de linha fixos na configuração local: nada do usuário nem do Windows entra no teste.
-    fn identity(dir: &Path) {
-        for (key, value) in [("user.name", "teste"), ("user.email", "teste@teste"), ("core.autocrlf", "false"), ("core.safecrlf", "false"), ("commit.gpgsign", "false")] {
-            git(dir, &["config", key, value]);
-        }
-    }
+    use std::io::Write;
+    use std::process::Stdio;
 
     /// Repositório novo, sem commit, com a branch `main`.
     fn repo(tmp: &Tmp, name: &str) -> std::path::PathBuf {
-        let dir = tmp.at(name);
+        let dir = tmp.0.join(name);
         fs::create_dir_all(&dir).unwrap();
         git(&dir, &["init", "-q", "-b", "main"]);
         identity(&dir);
         dir
-    }
-
-    fn write(dir: &Path, rel: &str, data: impl AsRef<[u8]>) {
-        let file = dir.join(rel);
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        fs::write(file, data).unwrap();
-    }
-
-    fn commit_all(dir: &Path, message: &str) {
-        git(dir, &["add", "-A"]);
-        git(dir, &["commit", "-q", "-m", message]);
     }
 
     fn find<'a>(st: &'a Status, path: &str) -> &'a GitFile {
@@ -1141,7 +1045,7 @@ mod tests {
 
     #[test]
     fn status_mostra_cada_mudanca_no_lugar_certo() {
-        let tmp = Tmp::new("status");
+        let tmp = Tmp::new("orq-git", "status");
         let dir = repo(&tmp, "r");
         write(&dir, "modificado.txt", "um\n");
         write(&dir, "apagado.txt", "x\n");
@@ -1180,7 +1084,7 @@ mod tests {
 
     #[test]
     fn status_de_conflito_e_de_head_destacado_e_repositorio_sem_commit() {
-        let tmp = Tmp::new("conflito");
+        let tmp = Tmp::new("orq-git", "conflito");
         let dir = repo(&tmp, "r");
         write(&dir, "x.txt", "base\n");
         commit_all(&dir, "base");
@@ -1213,7 +1117,7 @@ mod tests {
 
     #[test]
     fn status_conta_ahead_e_behind_contra_o_remoto_local() {
-        let tmp = Tmp::new("ahead");
+        let tmp = Tmp::new("orq-git", "ahead");
         let (bare, dir) = with_remote(&tmp);
         let st = git_status_of(&dir);
         assert_eq!((upstream(&dir).as_deref(), st.ahead, st.behind), (Some("origin/main"), 0, 0));
@@ -1230,7 +1134,7 @@ mod tests {
 
     #[test]
     fn diff_traz_os_numeros_de_linha_de_cada_lado() {
-        let tmp = Tmp::new("diff-linhas");
+        let tmp = Tmp::new("orq-git", "diff-linhas");
         let dir = repo(&tmp, "r");
         write(&dir, "f.txt", "a\nb\nc\nd\n");
         commit_all(&dir, "base");
@@ -1244,7 +1148,7 @@ mod tests {
 
     #[test]
     fn diff_de_nao_rastreado_apagado_e_sem_diferenca() {
-        let tmp = Tmp::new("diff-outros");
+        let tmp = Tmp::new("orq-git", "diff-outros");
         let dir = repo(&tmp, "r");
         write(&dir, "apagar.txt", "x\ny\n");
         write(&dir, "igual.txt", "z\n");
@@ -1267,7 +1171,7 @@ mod tests {
 
     #[test]
     fn diff_staged_compara_o_indice_com_o_head_e_o_outro_com_o_indice() {
-        let tmp = Tmp::new("diff-staged");
+        let tmp = Tmp::new("orq-git", "diff-staged");
         let dir = repo(&tmp, "r");
         write(&dir, "f.txt", "um\n");
         commit_all(&dir, "base");
@@ -1283,7 +1187,7 @@ mod tests {
 
     #[test]
     fn diff_de_binario_e_de_texto_grande_vem_so_com_o_aviso() {
-        let tmp = Tmp::new("diff-binario");
+        let tmp = Tmp::new("orq-git", "diff-binario");
         let dir = repo(&tmp, "r");
         write(&dir, "dado.bin", [0u8, 1, 2, 0, 255]);
         write(&dir, "grande.txt", "a\n".repeat(600_000));
@@ -1300,7 +1204,7 @@ mod tests {
 
     #[test]
     fn stage_e_unstage_por_arquivo_e_com_lista_vazia() {
-        let tmp = Tmp::new("stage");
+        let tmp = Tmp::new("orq-git", "stage");
         let dir = repo(&tmp, "r");
         write(&dir, "base.txt", "b");
         commit_all(&dir, "base");
@@ -1333,7 +1237,7 @@ mod tests {
 
     #[test]
     fn caminho_com_asterisco_e_com_hifen_nao_vira_padrao_nem_opcao() {
-        let tmp = Tmp::new("pathspec");
+        let tmp = Tmp::new("orq-git", "pathspec");
         let dir = repo(&tmp, "r");
         write(&dir, "base.txt", "b");
         commit_all(&dir, "base");
@@ -1350,7 +1254,7 @@ mod tests {
 
     #[test]
     fn caminho_que_sai_da_pasta_e_recusado() {
-        let tmp = Tmp::new("fora");
+        let tmp = Tmp::new("orq-git", "fora");
         let dir = repo(&tmp, "r");
         for rel in ["..", "../x", "a/../../x", "/etc", "C:/x", ".", "./a", ""] {
             assert!(stage(&dir, &[rel.into()]).is_err(), "{rel} deveria ser recusado");
@@ -1361,7 +1265,7 @@ mod tests {
 
     #[test]
     fn stage_e_unstage_funcionam_sem_nenhum_commit() {
-        let tmp = Tmp::new("unborn");
+        let tmp = Tmp::new("orq-git", "unborn");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "a");
         write(&dir, "b.txt", "b");
@@ -1382,7 +1286,7 @@ mod tests {
 
     #[test]
     fn commit_com_sucesso_mensagem_vazia_e_nada_preparado() {
-        let tmp = Tmp::new("commit");
+        let tmp = Tmp::new("orq-git", "commit");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "a");
         assert_eq!(commit(&dir, "   \n ").unwrap_err(), "Escreva a mensagem do commit.");
@@ -1396,7 +1300,7 @@ mod tests {
 
     #[test]
     fn commit_roda_o_hook_do_repositorio() {
-        let tmp = Tmp::new("hook");
+        let tmp = Tmp::new("orq-git", "hook");
         let dir = repo(&tmp, "r");
         write(&dir, ".git/hooks/pre-commit", "#!/bin/sh\necho bloqueado pelo hook >&2\nexit 1\n");
         write(&dir, "a.txt", "a");
@@ -1407,7 +1311,7 @@ mod tests {
 
     #[test]
     fn sincronizar_sem_remoto_da_erro_em_portugues() {
-        let tmp = Tmp::new("sem-remoto");
+        let tmp = Tmp::new("orq-git", "sem-remoto");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "a");
         commit_all(&dir, "a");
@@ -1418,7 +1322,7 @@ mod tests {
 
     /// Um remoto bare numa pasta temporária e um repositório que já o tem como `origin`, com a branch publicada.
     fn with_remote(tmp: &Tmp) -> (std::path::PathBuf, std::path::PathBuf) {
-        let bare = tmp.at("remoto.git");
+        let bare = tmp.0.join("remoto.git");
         git(&tmp.0, &["init", "-q", "--bare", "-b", "main", "remoto.git"]);
         let dir = repo(tmp, "r");
         write(&dir, "a.txt", "a");
@@ -1430,7 +1334,7 @@ mod tests {
 
     /// Um segundo clone do remoto que publica um commit novo, para o repositório ficar atrás.
     fn other_pushes(tmp: &Tmp, bare: &Path, file: &str) {
-        let outro = tmp.at("outro");
+        let outro = tmp.0.join("outro");
         git(&tmp.0, &["clone", "-q", bare.to_str().unwrap(), outro.to_str().unwrap()]);
         identity(&outro);
         write(&outro, file, "de fora");
@@ -1440,7 +1344,7 @@ mod tests {
 
     #[test]
     fn fetch_traz_o_que_o_remoto_tem() {
-        let tmp = Tmp::new("fetch");
+        let tmp = Tmp::new("orq-git", "fetch");
         let (bare, dir) = with_remote(&tmp);
         other_pushes(&tmp, &bare, "de-fora.txt");
         fetch(&dir).unwrap();
@@ -1449,7 +1353,7 @@ mod tests {
 
     #[test]
     fn pull_traz_o_commit_do_remoto() {
-        let tmp = Tmp::new("pull");
+        let tmp = Tmp::new("orq-git", "pull");
         let (bare, dir) = with_remote(&tmp);
         other_pushes(&tmp, &bare, "de-fora.txt");
         pull(&dir).unwrap();
@@ -1459,7 +1363,7 @@ mod tests {
 
     #[test]
     fn pull_com_historia_dividida_faz_merge_sem_abrir_editor() {
-        let tmp = Tmp::new("pull-merge");
+        let tmp = Tmp::new("orq-git", "pull-merge");
         let (bare, dir) = with_remote(&tmp);
         git(&dir, &["config", "pull.rebase", "false"]);
         write(&dir, "local.txt", "local");
@@ -1473,7 +1377,7 @@ mod tests {
 
     #[test]
     fn push_com_upstream_envia_o_commit() {
-        let tmp = Tmp::new("push");
+        let tmp = Tmp::new("orq-git", "push");
         let (bare, dir) = with_remote(&tmp);
         write(&dir, "b.txt", "b");
         commit_all(&dir, "b");
@@ -1483,7 +1387,7 @@ mod tests {
 
     #[test]
     fn push_de_branch_sem_upstream_publica_em_origin_e_configura_o_upstream() {
-        let tmp = Tmp::new("push-novo");
+        let tmp = Tmp::new("orq-git", "push-novo");
         let (bare, dir) = with_remote(&tmp);
         git(&dir, &["switch", "-q", "-c", "feature"]);
         write(&dir, "f.txt", "f");
@@ -1496,11 +1400,11 @@ mod tests {
 
     #[test]
     fn push_sem_upstream_e_sem_origin_da_erro() {
-        let tmp = Tmp::new("push-sem-origin");
+        let tmp = Tmp::new("orq-git", "push-sem-origin");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "a");
         commit_all(&dir, "a");
-        let outro = tmp.at("outro.git");
+        let outro = tmp.0.join("outro.git");
         git(&tmp.0, &["init", "-q", "--bare", "outro.git"]);
         git(&dir, &["remote", "add", "outro", outro.to_str().unwrap()]);
         assert!(push(&dir).unwrap_err().contains("origin"));
@@ -1508,7 +1412,7 @@ mod tests {
 
     #[test]
     fn branches_lista_troca_e_cria() {
-        let tmp = Tmp::new("branches");
+        let tmp = Tmp::new("orq-git", "branches");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "a");
         commit_all(&dir, "a");
@@ -1529,7 +1433,7 @@ mod tests {
 
     #[test]
     fn branch_com_nome_invalido_ou_repetido_da_erro_em_portugues() {
-        let tmp = Tmp::new("branch-erro");
+        let tmp = Tmp::new("orq-git", "branch-erro");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "a");
         commit_all(&dir, "a");
@@ -1543,7 +1447,7 @@ mod tests {
 
     #[test]
     fn erro_do_git_chega_com_o_texto_do_stderr() {
-        let tmp = Tmp::new("stderr");
+        let tmp = Tmp::new("orq-git", "stderr");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "a");
         commit_all(&dir, "a");
@@ -1554,7 +1458,7 @@ mod tests {
 
     #[test]
     fn repositorio_sem_commit_lista_branch_e_troca_pelo_nome() {
-        let tmp = Tmp::new("branches-unborn");
+        let tmp = Tmp::new("orq-git", "branches-unborn");
         let dir = repo(&tmp, "r");
         let b = branches(&dir).unwrap();
         assert_eq!((b.current.as_str(), b.local.is_empty()), ("main", true));
@@ -1567,11 +1471,17 @@ mod tests {
         (1..=n).map(|i| format!("linha {i}\n")).collect()
     }
 
+    /// Quantos blocos o diff de `rel` tem, lidos do patch que a revisão devolve.
+    fn quantos_blocos(dir: &Path, rel: &str, staged: bool) -> usize {
+        split_hunks(&review_diff(dir, rel, staged).unwrap().diff.patch).1.len()
+    }
+
     /// Um bloco como a UI o receberia: da revisão lida agora do diff.
     fn bloco(dir: &Path, rel: &str, staged: bool, index: usize) -> HunkRef {
         let r = review_diff(dir, rel, staged).unwrap();
-        let info = r.hunks.iter().find(|h| h.index == index).unwrap_or_else(|| panic!("sem bloco {index}: {r:?}"));
-        HunkRef { path: rel.into(), index, header: info.header.clone(), revision: r.revision.clone() }
+        let (_, blocks) = split_hunks(&r.diff.patch);
+        let block = blocks.get(index).unwrap_or_else(|| panic!("sem bloco {index}: {r:?}"));
+        HunkRef { path: rel.into(), index, header: block_header(block).into(), revision: r.revision.clone() }
     }
 
     /// Duas alterações longe uma da outra: dois blocos no diff não preparado.
@@ -1581,26 +1491,26 @@ mod tests {
 
     #[test]
     fn bloco_prepara_tira_e_descarta_sem_mexer_nos_outros() {
-        let tmp = Tmp::new("bloco");
+        let tmp = Tmp::new("orq-git", "bloco");
         let dir = repo(&tmp, "r");
         write(&dir, "f.txt", texto(30));
         commit_all(&dir, "base");
         dois_blocos(&dir, "f.txt");
-        assert_eq!(review_diff(&dir, "f.txt", false).unwrap().hunks.len(), 2);
+        assert_eq!(quantos_blocos(&dir, "f.txt", false), 2);
 
         stage_hunk(&dir, &bloco(&dir, "f.txt", false, 0)).unwrap();
         let cached = git(&dir, &["diff", "--cached"]);
         assert!(cached.contains("+dois") && !cached.contains("vinte e oito"), "só o primeiro bloco foi preparado: {cached}");
         let st = git_status_of(&dir);
         assert_eq!((find(&st, "f.txt").staged, find(&st, "f.txt").unstaged), (Some(Kind::Modified), Some(Kind::Modified)));
-        assert_eq!(review_diff(&dir, "f.txt", false).unwrap().hunks.len(), 1, "sobrou só o bloco não preparado");
+        assert_eq!(quantos_blocos(&dir, "f.txt", false), 1, "sobrou só o bloco não preparado");
 
         // Descarta o bloco que sobrou na pasta: o preparado continua preparado e a linha volta ao original.
         discard_hunk(&dir, &bloco(&dir, "f.txt", false, 0)).unwrap();
         let conteudo = fs::read_to_string(dir.join("f.txt")).unwrap();
         assert!(conteudo.contains("dois\n") && conteudo.contains("linha 28\n") && !conteudo.contains("vinte e oito"), "{conteudo}");
         assert!(git(&dir, &["diff", "--cached"]).contains("+dois"), "o descarte não tocou o índice");
-        assert!(review_diff(&dir, "f.txt", false).unwrap().hunks.is_empty());
+        assert_eq!(quantos_blocos(&dir, "f.txt", false), 0);
 
         // Tira do preparo: o índice volta ao original e a pasta mantém a mudança, que aparece como não preparada.
         unstage_hunk(&dir, &bloco(&dir, "f.txt", true, 0)).unwrap();
@@ -1612,7 +1522,7 @@ mod tests {
 
     #[test]
     fn bloco_com_snapshot_obsoleto_e_recusado_sem_tocar_o_indice() {
-        let tmp = Tmp::new("obsoleto");
+        let tmp = Tmp::new("orq-git", "obsoleto");
         let dir = repo(&tmp, "r");
         write(&dir, "f.txt", texto(30));
         commit_all(&dir, "base");
@@ -1630,7 +1540,7 @@ mod tests {
 
     #[test]
     fn bloco_com_indice_caminho_ou_cabecalho_invalido_e_recusado() {
-        let tmp = Tmp::new("bloco-invalido");
+        let tmp = Tmp::new("orq-git", "bloco-invalido");
         let dir = repo(&tmp, "r");
         write(&dir, "f.txt", texto(30));
         write(&dir, "[a] -x.txt", "x\n");
@@ -1662,7 +1572,7 @@ mod tests {
 
     #[test]
     fn bloco_preserva_fim_de_linha_crlf_do_arquivo() {
-        let tmp = Tmp::new("bloco-crlf");
+        let tmp = Tmp::new("orq-git", "bloco-crlf");
         let dir = repo(&tmp, "r");
         write(&dir, "f.txt", texto(30).replace('\n', "\r\n"));
         commit_all(&dir, "base");
@@ -1676,7 +1586,7 @@ mod tests {
 
     #[test]
     fn bloco_de_arquivo_apagado_e_de_repositorio_sem_commit() {
-        let tmp = Tmp::new("bloco-apagado");
+        let tmp = Tmp::new("orq-git", "bloco-apagado");
         let dir = repo(&tmp, "r");
         write(&dir, "apagar.txt", "x\ny\n");
         commit_all(&dir, "base");
@@ -1699,26 +1609,26 @@ mod tests {
 
     #[test]
     fn bloco_de_binario_e_de_nao_rastreado_e_recusado_com_motivo() {
-        let tmp = Tmp::new("bloco-binario");
+        let tmp = Tmp::new("orq-git", "bloco-binario");
         let dir = repo(&tmp, "r");
         write(&dir, "dado.bin", [0u8, 1, 2]);
         commit_all(&dir, "base");
         write(&dir, "dado.bin", [9u8, 0, 8]);
         let r = review_diff(&dir, "dado.bin", false).unwrap();
-        assert!(r.diff.binary && r.hunks.is_empty());
+        assert!(r.diff.binary);
         let why = stage_hunk(&dir, &HunkRef { path: "dado.bin".into(), index: 0, header: String::new(), revision: r.revision }).unwrap_err();
         assert!(why.contains("binário"), "{why}");
 
         write(&dir, "novo.txt", "n\n");
         let r = review_diff(&dir, "novo.txt", false).unwrap();
-        assert!(r.hunks.is_empty());
+        assert!(r.untracked);
         let why = stage_hunk(&dir, &HunkRef { path: "novo.txt".into(), index: 0, header: String::new(), revision: r.revision }).unwrap_err();
         assert!(why.contains("não está rastreado"), "{why}");
     }
 
     #[test]
     fn descarte_por_arquivo_mantem_o_que_esta_preparado() {
-        let tmp = Tmp::new("descarte-arquivo");
+        let tmp = Tmp::new("orq-git", "descarte-arquivo");
         let dir = repo(&tmp, "r");
         write(&dir, "f.txt", "um\n");
         commit_all(&dir, "base");
@@ -1740,7 +1650,7 @@ mod tests {
 
     #[test]
     fn historia_pagina_filtra_por_caminho_e_segue_renomeacao() {
-        let tmp = Tmp::new("historia");
+        let tmp = Tmp::new("orq-git", "historia");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "a\n");
         commit_all(&dir, "c1 raiz");
@@ -1771,12 +1681,12 @@ mod tests {
     }
 
     fn assuntos(todos: &[GraphCommit]) -> Vec<&str> {
-        todos.iter().map(|c| c.subject.as_str()).collect()
+        todos.iter().map(|c| c.commit.subject.as_str()).collect()
     }
 
     #[test]
     fn graph_linear_traz_pais_datas_e_a_branch_atual() {
-        let tmp = Tmp::new("graph-linear");
+        let tmp = Tmp::new("orq-git", "graph-linear");
         let dir = repo(&tmp, "r");
         for i in 1..=3 {
             write(&dir, "a.txt", i.to_string());
@@ -1785,20 +1695,24 @@ mod tests {
 
         let todos = graph(&dir, 10, 0).unwrap();
         assert_eq!(assuntos(&todos), ["c3", "c2", "c1"]);
-        assert_eq!(todos[0].hash, git(&dir, &["rev-parse", "HEAD"]).trim());
-        assert_eq!(todos[0].short.len(), 7);
-        assert_eq!(todos[0].author, "teste");
-        assert!(todos[0].date.contains('T'), "data ISO: {}", todos[0].date);
-        assert_eq!(todos[0].parents, [todos[1].hash.as_str()]);
-        assert_eq!(todos[1].parents, [todos[2].hash.as_str()]);
+        assert_eq!(todos[0].commit.hash, git(&dir, &["rev-parse", "HEAD"]).trim());
+        assert_eq!(todos[0].commit.short.len(), 7);
+        assert_eq!(todos[0].commit.author, "teste");
+        assert!(todos[0].commit.date.contains('T'), "data ISO: {}", todos[0].commit.date);
+        assert_eq!(todos[0].parents, [todos[1].commit.hash.as_str()]);
+        assert_eq!(todos[1].parents, [todos[2].commit.hash.as_str()]);
         assert!(todos[2].parents.is_empty(), "commit raiz não tem pai");
         assert_eq!(todos[0].refs, [GitRef { name: "main".into(), kind: RefKind::Branch, current: true }]);
         assert!(todos[1].refs.is_empty());
+        // O JSON segue plano: os campos do `Commit` saem no mesmo nível que `parents` e `refs`.
+        let json = serde_json::to_value(&todos[0]).unwrap();
+        assert_eq!(json["hash"], todos[0].commit.hash.as_str());
+        assert!(json.get("commit").is_none() && json["parents"].is_array() && json["refs"].is_array(), "{json}");
     }
 
     #[test]
     fn graph_mostra_branch_lateral_mesclada_com_merge_de_dois_pais() {
-        let tmp = Tmp::new("graph-merge");
+        let tmp = Tmp::new("orq-git", "graph-merge");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "1");
         commit_all(&dir, "base");
@@ -1818,15 +1732,15 @@ mod tests {
             assert!(assuntos(&todos).contains(&subject), "{subject} some do gráfico");
         }
         let merge = &todos[0];
-        assert_eq!(merge.subject, "mescla lateral");
+        assert_eq!(merge.commit.subject, "mescla lateral");
         assert_eq!(merge.parents, [git(&dir, &["rev-parse", "HEAD^1"]).trim(), git(&dir, &["rev-parse", "HEAD^2"]).trim()]);
-        let lateral = todos.iter().find(|c| c.subject == "lateral 2").unwrap();
+        let lateral = todos.iter().find(|c| c.commit.subject == "lateral 2").unwrap();
         assert_eq!(lateral.refs, [GitRef { name: "lateral".into(), kind: RefKind::Branch, current: false }]);
     }
 
     #[test]
     fn graph_separa_branch_atual_de_branch_e_tag_e_ignora_o_resto() {
-        let tmp = Tmp::new("graph-refs");
+        let tmp = Tmp::new("orq-git", "graph-refs");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "1");
         commit_all(&dir, "c1");
@@ -1846,7 +1760,7 @@ mod tests {
 
     #[test]
     fn graph_com_head_destacado_marca_o_head_como_atual() {
-        let tmp = Tmp::new("graph-destacado");
+        let tmp = Tmp::new("orq-git", "graph-destacado");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "1");
         commit_all(&dir, "c1");
@@ -1861,7 +1775,7 @@ mod tests {
 
     #[test]
     fn graph_pagina_com_skip_e_limita_o_limite_entre_1_e_200() {
-        let tmp = Tmp::new("graph-pagina");
+        let tmp = Tmp::new("orq-git", "graph-pagina");
         let dir = repo(&tmp, "r");
         for i in 1..=5 {
             write(&dir, "a.txt", i.to_string());
@@ -1878,7 +1792,7 @@ mod tests {
 
     #[test]
     fn graph_de_repositorio_sem_commit_e_vazio() {
-        let tmp = Tmp::new("graph-vazio");
+        let tmp = Tmp::new("orq-git", "graph-vazio");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "a");
         assert!(graph(&dir, 5, 0).unwrap().is_empty());
@@ -1886,7 +1800,7 @@ mod tests {
 
     #[test]
     fn graph_traz_o_commit_do_upstream_com_ref_remota_e_ignora_origin_head() {
-        let tmp = Tmp::new("graph-upstream");
+        let tmp = Tmp::new("orq-git", "graph-upstream");
         let (bare, dir) = with_remote(&tmp);
         // Cria `refs/remotes/origin/HEAD` localmente; ele não pode aparecer no gráfico.
         git(&dir, &["remote", "set-head", "origin", "main"]);
@@ -1895,7 +1809,7 @@ mod tests {
 
         let todos = graph(&dir, 10, 0).unwrap();
         assert_eq!(assuntos(&todos), ["c.txt", "a"], "o commit do upstream sai antes do HEAD");
-        assert_eq!(todos[0].parents, [todos[1].hash.as_str()]);
+        assert_eq!(todos[0].parents, [todos[1].commit.hash.as_str()]);
         assert_eq!(todos[0].refs, [GitRef { name: "origin/main".into(), kind: RefKind::Remote, current: false }]);
         assert_eq!(todos[1].refs, [GitRef { name: "main".into(), kind: RefKind::Branch, current: true }]);
         assert!(todos.iter().flat_map(|c| &c.refs).all(|r| r.name != "origin/HEAD"));
@@ -1903,7 +1817,7 @@ mod tests {
 
     #[test]
     fn commit_invalido_e_recusado_antes_de_chegar_ao_git() {
-        let tmp = Tmp::new("commit-invalido");
+        let tmp = Tmp::new("orq-git", "commit-invalido");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "a\n");
         commit_all(&dir, "a");
@@ -1917,7 +1831,7 @@ mod tests {
 
     #[test]
     fn detalhe_de_commit_raiz_renomeado_e_apagado() {
-        let tmp = Tmp::new("commit-detalhe");
+        let tmp = Tmp::new("orq-git", "commit-detalhe");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", "um\ndois\ntres\nquatro\ncinco\nseis\n");
         write(&dir, "apagar.txt", "x\n");
@@ -2002,15 +1916,9 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
-    /// Junction do Windows (`mklink /J`): não exige privilégio, ao contrário do link simbólico.
-    fn junction(link: &Path, alvo: &Path) {
-        let out = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(alvo).output().unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
-    }
-
     #[test]
     fn conflito_mostra_os_tres_lados_e_grava_resolucao_protegida() {
-        let tmp = Tmp::new("resolve-tres");
+        let tmp = Tmp::new("orq-git", "resolve-tres");
         let dir = conflito(&tmp, "r", "base\n", "main\n", "outra\n");
         let c = conflict(&dir, "x.txt").unwrap();
         assert_eq!((c.base.as_deref(), c.ours.as_deref(), c.theirs.as_deref()), (Some("base\n"), Some("main\n"), Some("outra\n")));
@@ -2030,12 +1938,11 @@ mod tests {
         let st = git_status_of(&dir);
         assert!(st.files.iter().all(|f| f.unstaged != Some(Kind::Conflicted)), "{st:?}");
         assert_eq!(find(&st, "x.txt").staged, Some(Kind::Modified));
-        assert!(!dir.join(".x.txt.orq-tmp").exists(), "o temporário some depois de gravar");
     }
 
     #[test]
     fn rascunho_com_marcador_grava_sem_preparar() {
-        let tmp = Tmp::new("rascunho");
+        let tmp = Tmp::new("orq-git", "rascunho");
         let dir = conflito(&tmp, "r", "base\n", "main\n", "outra\n");
         let c = conflict(&dir, "x.txt").unwrap();
         write_resolution(&dir, "x.txt", "parcial\n<<<<<<< rascunho\n", &c.revision, false).unwrap();
@@ -2045,7 +1952,7 @@ mod tests {
 
     #[test]
     fn gravacao_concorrente_nao_atropela_o_que_outro_escreveu() {
-        let tmp = Tmp::new("concorrente");
+        let tmp = Tmp::new("orq-git", "concorrente");
         let dir = conflito(&tmp, "r", "base\n", "main\n", "outra\n");
         let lido = conflict(&dir, "x.txt").unwrap();
         // Outro processo grava no arquivo depois da leitura da UI.
@@ -2058,7 +1965,7 @@ mod tests {
 
     #[test]
     fn resolucao_preserva_bom_e_crlf() {
-        let tmp = Tmp::new("bom-crlf");
+        let tmp = Tmp::new("orq-git", "bom-crlf");
         let mut base = files::BOM.to_vec();
         base.extend_from_slice(b"base\r\n");
         let mut ours = files::BOM.to_vec();
@@ -2076,7 +1983,7 @@ mod tests {
 
     #[test]
     fn conflito_de_apagado_de_um_lado_aceita_remocao_ou_conteudo() {
-        let tmp = Tmp::new("apagado");
+        let tmp = Tmp::new("orq-git", "apagado");
         let dir = repo(&tmp, "r");
         write(&dir, "a.txt", texto(5));
         commit_all(&dir, "base");
@@ -2099,7 +2006,7 @@ mod tests {
 
     #[test]
     fn estagio_trocado_com_a_pasta_igual_recusa_o_snapshot_antigo() {
-        let tmp = Tmp::new("estagio");
+        let tmp = Tmp::new("orq-git", "estagio");
         let dir = conflito(&tmp, "r", "base\n", "main\n", "outra\n");
         let lido = conflict(&dir, "x.txt").unwrap();
         let antes = fs::read(dir.join("x.txt")).unwrap();
@@ -2114,27 +2021,16 @@ mod tests {
     }
 
     #[test]
-    fn arquivo_temporario_com_o_nome_antigo_do_temporario_nao_e_tocado() {
-        let tmp = Tmp::new("tmp-usuario");
-        let dir = conflito(&tmp, "r", "base\n", "main\n", "outra\n");
-        let c = conflict(&dir, "x.txt").unwrap();
-        write(&dir, ".x.txt.orq-tmp", "arquivo do usuário\n");
-        write_resolution(&dir, "x.txt", "resolvido\n", &c.revision, true).unwrap();
-        assert_eq!(fs::read_to_string(dir.join(".x.txt.orq-tmp")).unwrap(), "arquivo do usuário\n");
-        assert_eq!(fs::read_to_string(dir.join("x.txt")).unwrap(), "resolvido\n");
-    }
-
-    #[test]
     fn junction_no_caminho_do_conflito_e_recusada() {
-        let tmp = Tmp::new("junction");
+        let tmp = Tmp::new("orq-git", "junction");
         let dir = conflito_em(&tmp, "r", "pasta/x.txt", "base\n", "main\n", "outra\n");
         let c = conflict(&dir, "pasta/x.txt").unwrap();
         // A pasta do projeto passa a ser uma junction para uma pasta fora dela, com um arquivo do mesmo nome.
-        let fora = tmp.at("fora");
+        let fora = tmp.0.join("fora");
         fs::create_dir_all(&fora).unwrap();
         fs::write(fora.join("x.txt"), "de fora\n").unwrap();
-        fs::rename(dir.join("pasta"), tmp.at("pasta-real")).unwrap();
-        junction(&dir.join("pasta"), &fora);
+        fs::rename(dir.join("pasta"), tmp.0.join("pasta-real")).unwrap();
+        assert!(junction(&dir.join("pasta"), &fora), "mklink /J falhou");
         assert!(conflict(&dir, "pasta/x.txt").unwrap_err().contains("link"));
         assert!(write_resolution(&dir, "pasta/x.txt", "x\n", &c.revision, false).unwrap_err().contains("link"));
         assert!(accept_deletion(&dir, "pasta/x.txt", &c.revision).unwrap_err().contains("link"));
@@ -2145,14 +2041,14 @@ mod tests {
 
     #[test]
     fn lado_que_nao_e_utf8_recusa_o_conflito_inteiro() {
-        let tmp = Tmp::new("nao-utf8-lado");
+        let tmp = Tmp::new("orq-git", "nao-utf8-lado");
         let dir = conflito(&tmp, "r", "base\n", b"main\n\xFF\n", "outra\n");
         assert!(conflict(&dir, "x.txt").unwrap_err().contains("não é UTF-8"));
     }
 
     #[test]
     fn pasta_que_nao_e_utf8_vira_so_aviso_e_nao_e_gravada() {
-        let tmp = Tmp::new("nao-utf8-pasta");
+        let tmp = Tmp::new("orq-git", "nao-utf8-pasta");
         let dir = conflito(&tmp, "r", "base\n", "main\n", "outra\n");
         write(&dir, "x.txt", b"ok \xFF fim\n");
         let c = conflict(&dir, "x.txt").unwrap();
@@ -2164,7 +2060,7 @@ mod tests {
 
     #[test]
     fn conflito_grande_demais_e_recusado_sem_ler_tudo() {
-        let tmp = Tmp::new("grande");
+        let tmp = Tmp::new("orq-git", "grande");
         let grande = "a\n".repeat(600_000);
         let dir = conflito(&tmp, "r", "base\n", "main\n", "outra\n");
         write(&dir, "x.txt", grande.as_str());
@@ -2175,7 +2071,7 @@ mod tests {
 
     #[test]
     fn remocao_recusada_quando_os_dois_lados_existem() {
-        let tmp = Tmp::new("dois-lados");
+        let tmp = Tmp::new("orq-git", "dois-lados");
         let dir = conflito(&tmp, "r", "base\n", "main\n", "outra\n");
         let c = conflict(&dir, "x.txt").unwrap();
         assert!(accept_deletion(&dir, "x.txt", &c.revision).unwrap_err().contains("Os dois lados"));
@@ -2185,7 +2081,7 @@ mod tests {
 
     #[test]
     fn ausencia_validada_cria_o_arquivo_sem_sobrescrever_quem_apareceu_antes() {
-        let tmp = Tmp::new("ausente");
+        let tmp = Tmp::new("orq-git", "ausente");
         let dir = modificado_e_apagado(&tmp, "r");
         // A pasta não tem o arquivo: o usuário o tirou com o conflito aberto.
         fs::remove_file(dir.join("x.txt")).unwrap();
@@ -2207,7 +2103,7 @@ mod tests {
 
     #[test]
     fn ausencia_validada_aceita_a_remocao_direto_no_git() {
-        let tmp = Tmp::new("ausente-remove");
+        let tmp = Tmp::new("orq-git", "ausente-remove");
         let dir = modificado_e_apagado(&tmp, "r");
         fs::remove_file(dir.join("x.txt")).unwrap();
         let c = conflict(&dir, "x.txt").unwrap();
@@ -2218,7 +2114,7 @@ mod tests {
 
     #[test]
     fn falha_do_git_na_remocao_e_dita_com_o_que_ficou_feito() {
-        let tmp = Tmp::new("falha-remocao");
+        let tmp = Tmp::new("orq-git", "falha-remocao");
         let dir = modificado_e_apagado(&tmp, "r");
         // Sem arquivo na pasta, nada sai do disco: o erro diz que nada foi alterado.
         fs::remove_file(dir.join("x.txt")).unwrap();
@@ -2240,7 +2136,7 @@ mod tests {
 
     #[test]
     fn caminho_de_pasta_nao_vira_patch_de_varios_arquivos() {
-        let tmp = Tmp::new("pasta-patch");
+        let tmp = Tmp::new("orq-git", "pasta-patch");
         let dir = repo(&tmp, "r");
         write(&dir, "pasta/um.txt", texto(3));
         write(&dir, "pasta/dois.txt", texto(3));
@@ -2252,6 +2148,6 @@ mod tests {
         let hunk = HunkRef { path: "pasta".into(), index: 0, header: String::new(), revision: String::new() };
         assert!(stage_hunk(&dir, &hunk).unwrap_err().contains("é uma pasta"));
         assert!(git(&dir, &["diff", "--cached", "--name-only"]).trim().is_empty());
-        assert_eq!(review_diff(&dir, "pasta/um.txt", false).unwrap().hunks.len(), 1, "o arquivo sozinho segue normal");
+        assert_eq!(quantos_blocos(&dir, "pasta/um.txt", false), 1, "o arquivo sozinho segue normal");
     }
 }

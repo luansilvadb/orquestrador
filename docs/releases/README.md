@@ -70,7 +70,7 @@ Dois formatos, da mesma fonte:
    - gera o instalador NSIS assinado e o `latest.json` em rascunho (`tauri-action`);
    - põe o texto das notas sem o título no corpo da release, põe o texto completo (com o H1) no `notes` do `latest.json`, e aponta a URL do instalador para a URL pública da tag;
    - confere o rascunho: baixa o instalador, o `.sig` e o `latest.json`; verifica a assinatura Minisign do instalador com a pubkey de `tauri.conf.json` (key id, assinatura do arquivo e comentário confiável); confere versão, URL, assinatura e notas do `latest.json`; e confere que o corpo da release é o texto das notas sem o título (só diferença de CRLF/LF e espaço final é ignorada; título repetido, seção faltando ou qualquer mudança de conteúdo é recusada; o campo `notes` do `latest.json` segue a regra de conteúdo, com o H1);
-   - só então publica como a última release estável e confere, pela API (`releases/latest`) e pelo `latest.json` público, que a tag é a última.
+   - só então publica como a última release estável.
 
 ## Conferências fora do workflow
 
@@ -98,10 +98,9 @@ Não mexe em tag, instalador, `.sig`, `latest.json`, versão nem nos flags de pu
 
 ## Se algo der errado
 
-A situação da release depende do momento da falha. Três casos:
+A situação da release depende do momento da falha. Dois casos:
 
 - **Antes da publicação** (checks, build, instalador, conferência do rascunho): a release fica em rascunho, ou nem chega a ser criada. O app não a vê. Corrija a causa e rode o job de novo: o rascunho é refeito. Se o código mudou, a tag só pode ser movida enquanto não houver release publicada, e quem move é o mantenedor.
 - **Durante a publicação** (`gh release edit --draft=false --latest`): se esse passo chegou a rodar, a release já pode estar publicada e ser a última, mesmo que o job tenha falhado depois. Não rode o job de novo e não mova a tag. Confira a API (`releases/latest`) e o `latest.json` público: se apontam para a tag, a release está publicada, e qualquer correção vira versão nova.
-- **Depois da publicação** (a checagem do endereço `latest`, que pode levar alguns segundos): a release já está publicada. Se o job reportar que o `latest.json` público ainda não anuncia a versão, espere e confira de novo; não é preciso republicar.
 - Release já publicada: nenhum passo a altera. Para corrigir, publique uma versão nova.
 - Chave de assinatura: o secret `TAURI_SIGNING_PRIVATE_KEY` é o conteúdo da chave privada, fora do repositório (README, seção 8). Sem ela, o build do instalador falha, porque o updater exige assinatura. Nunca escreva a chave em arquivo versionado.

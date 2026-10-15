@@ -157,17 +157,17 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   /** Abre o arquivo na linha e na coluna (UTF-16, a partir de 1). Clique simples pede prévia; duplo clique ou Enter pedem permanente. */
   onOpen: (path: string, line: number, col?: number, options?: { permanent?: boolean }) => void;
   /** Pedido de pesquisa só nesta pasta (`path` relativo, '' é o projeto). Um novo `id` a cada pedido. */
-  folder?: { path: string; id: number } | null;
+  folder: { path: string; id: number } | null;
   /** Texto selecionado no editor: vira a consulta e a busca roda na hora. Um novo `id` a cada pedido. */
-  seed?: { text: string; id: number } | null;
+  seed: { text: string; id: number } | null;
   /** Sobe a cada gravação no editor: refaz a busca atual, se não há revisão de substituição aberta. */
-  refreshKey?: number;
+  refreshKey: number;
   /** F4 (`dir` 1) ou Shift+F4 (`dir` -1): anda pelos resultados. Um novo `id` a cada tecla. */
-  step?: { dir: 1 | -1; id: number } | null;
+  step: { dir: 1 | -1; id: number } | null;
   /** Diz se o arquivo tem alteração não salva no editor. Consultado ao exibir e de novo ao aplicar. */
-  hasDraft?: (path: string) => boolean;
-  /** Chamado com os caminhos que a substituição gravou, para o App recarregar o que estiver aberto. */
-  onChanged?: (paths: string[]) => void;
+  hasDraft: (path: string) => boolean;
+  /** Chamado depois que a substituição gravou arquivos, para o App recarregar o que estiver aberto. */
+  onChanged: () => void;
 }) {
   const [form, setForm] = useState<Form>(EMPTY_FORM);
   const [results, setResults] = useState<SearchResults | null>(null);
@@ -360,7 +360,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
       if (id !== latestPreview.current) return;
       const next: Preview = { query, replacement: form.replacement, scope: form.scope, data };
       setPreview(next);
-      setPicked(visibleFiles(next).filter((f) => !hasDraft?.(f.path)).map((f) => f.path));
+      setPicked(visibleFiles(next).filter((f) => !hasDraft(f.path)).map((f) => f.path));
     } catch (e) {
       if (id !== latestPreview.current) return;
       setPreview(null);
@@ -378,14 +378,13 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   );
   const chosen = reviewed.filter(({ file }) => picked.includes(file.path));
   const chosenCount = chosen.reduce((n, { file }) => n + file.count, 0);
-  const draftOf = (path: string) => !!hasDraft?.(path);
 
   // Aplicação: só os arquivos marcados na prévia. Alteração não salva que apareceu desde a prévia também fica de fora, e é dita no relatório.
   async function applyChosen() {
     if (!preview || applying) return;
     setConfirming(false);
-    const files = chosen.map(({ file }) => file).filter((f) => !draftOf(f.path));
-    const draft = chosen.map(({ file }) => file.path).filter(draftOf);
+    const files = chosen.map(({ file }) => file).filter((f) => !hasDraft(f.path));
+    const draft = chosen.map(({ file }) => file.path).filter(hasDraft);
     if (!files.length) {
       setReport({ applied: [], errors: [], draft, failure: '' });
       return;
@@ -401,7 +400,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
       setPreview(null);
       setPicked([]);
       setReport({ applied: done.applied, errors: done.errors, draft, failure: '' });
-      if (done.applied.length) onChanged?.(done.applied.map((a) => a.path));
+      if (done.applied.length) onChanged();
       if (form.query) await run(form);
     } catch (e) {
       setReport({ applied: [], errors: [], draft, failure: message(e) });
@@ -505,7 +504,6 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   const upFrom = at < 0 && history[0] === form.query ? 1 : at + 1;
 
   const filterCount = (terms(form.include).length + terms(form.exclude).length) + (form.scope ? 1 : 0);
-  const hasPreviewReview = !!preview;
 
   return (
     <Flexbox height="100%" className="min-h-0">
@@ -630,7 +628,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
         )}
       </Flexbox>
 
-      {!hasPreviewReview && (
+      {!preview && (
         <Text
           as="p" role="status" fontSize={12} type={error ? 'danger' : 'secondary'} className="select-text"
           style={{ paddingInline: 12, paddingBottom: 6 }}
@@ -669,13 +667,13 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
         </Flexbox>
       )}
 
-      {hasPreviewReview && preview ? (
+      {preview ? (
         <Flexbox flex={1} className="min-h-0" gap={0}>
           <Flexbox horizontal align="center" gap={6} paddingInline={12} paddingBlock={4}>
             <Text as="p" fontSize={12} type="secondary" className="min-w-0 flex-1" ellipsis role="status">
               {`${preview.data.totalMatches} ${preview.data.totalMatches === 1 ? 'troca' : 'trocas'} em ${visibleFiles(preview).length} ${visibleFiles(preview).length === 1 ? 'arquivo' : 'arquivos'} · ${picked.length} marcado${picked.length === 1 ? '' : 's'}`}
             </Text>
-            <Button size="small" type="text" onClick={() => setPicked(reviewed.filter(({ file }) => !draftOf(file.path)).map(({ file }) => file.path))}>Marcar todos</Button>
+            <Button size="small" type="text" onClick={() => setPicked(reviewed.filter(({ file }) => !hasDraft(file.path)).map(({ file }) => file.path))}>Marcar todos</Button>
             <Button size="small" type="text" onClick={() => setPicked([])}>Nenhum</Button>
           </Flexbox>
           {preview.data.omittedFiles > 0 && (
@@ -692,7 +690,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
             <ScrollArea className="h-full" disableContentFit>
               <Flexbox paddingBlock={4}>
                 {reviewed.map(({ file, pairs }) => {
-                  const draft = draftOf(file.path);
+                  const draft = hasDraft(file.path);
                   const { name, dir } = splitPath(file.path);
                   return (
                     <Flexbox as="section" key={file.path} paddingInline={8} paddingBlock={4} gap={2} className="border-b">
@@ -760,7 +758,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
                 {files.map((file) => {
                   const open = !collapsed.includes(file.path);
                   const { name, dir } = splitPath(file.path);
-                  const draft = draftOf(file.path);
+                  const draft = hasDraft(file.path);
                   return (
                     <Flexbox as="section" key={file.path}>
                       {/* O botão de dispensar fica ao lado do de abrir, não dentro dele: botão dentro de botão é HTML inválido. Mostra com o mouse ou o foco na linha. */}

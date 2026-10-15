@@ -23,7 +23,7 @@ function WindowButton({ label, icon: Icon, disabled, onClick }: {
 }
 
 /** Último segmento do caminho, com \ ou / (o caminho todo fica no title). */
-function folderName(path: string) {
+export function folderName(path: string) {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 

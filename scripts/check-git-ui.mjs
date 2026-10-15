@@ -35,16 +35,18 @@ const act = (scope, name) => scope.getByRole('button', { name, exact: true });
 const dialog = (page, title) => page.getByRole('dialog', { name: title });
 const dialogBtn = (page, title, name) => dialog(page, title).getByRole('button', { name, exact: true });
 const calls = (page, cmd) => page.evaluate((c) => window.__mock.calls.filter((x) => x.cmd === c && !x.error), cmd);
-// Último diff de um lado, como a tela o viu: a revisão e a lista oficial de blocos.
+// Último diff de um lado, como a tela o viu: a revisão e o patch.
 async function lastReview(page, path, staged) {
   const seen = (await calls(page, 'git_review_diff')).filter((x) => x.args.path === path && x.args.staged === staged);
   assert.ok(seen.length > 0, `nenhuma leitura do diff de ${path} (${staged ? 'preparadas' : 'alterações'})`);
   return seen.at(-1).result;
 }
+// Índice do bloco (0-based) pela ordem das linhas `@@` do patch, como o backend numera.
 const indexOf = (review, header) => {
-  const found = review.hunks.find((h) => h.header === header);
-  assert.ok(found, `bloco ${header} não está na lista oficial: ${JSON.stringify(review.hunks)}`);
-  return found.index;
+  const headers = review.diff.patch.split('\n').filter((l) => l.startsWith('@@'));
+  const index = headers.indexOf(header);
+  assert.ok(index >= 0, `bloco ${header} não está no patch: ${JSON.stringify(headers)}`);
+  return index;
 };
 const waitCount = async (page, cmd, n) => {
   for (let i = 0; i < 100 && (await calls(page, cmd)).length < n; i++) await page.waitForTimeout(50);
@@ -161,7 +163,7 @@ scenario('diff: mesmo arquivo nas duas seções abre duas abas; preparar, tirar 
   assert.equal(await hunk(page, '@@').count(), 0, 'não rastreado não tem ação por bloco');
   const untracked = await lastReview(page, 'docs/rascunho-painel.md', false);
   assert.ok(untracked.diff.patch.includes('new file mode'), 'o patch do não rastreado é o arquivo inteiro');
-  assert.equal(untracked.hunks.length, 0);
+  assert.equal(untracked.untracked, true);
   await act(page, 'Preparar arquivo').click();
   await waitCount(page, 'git_stage', 1);
   assert.deepEqual((await calls(page, 'git_stage')).at(-1).args.paths, ['docs/rascunho-painel.md']);

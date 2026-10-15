@@ -4,11 +4,11 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Input, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
+import { splitPath } from './git-history';
 import type { QuickOpen as QuickOpenResult } from './types';
 
 // Espera a digitação parar antes de consultar; a resposta velha não vence a nova (cada consulta tem um número).
 const DELAY_MS = 120;
-const LIMIT_SHOWN = 200;
 
 export type QuickOpenChoice = { permanent: boolean; side: boolean };
 
@@ -54,7 +54,7 @@ export function QuickOpen({ onClose, onOpen }: {
     list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
   }, [index, result]);
 
-  const paths = result?.paths.slice(0, LIMIT_SHOWN) ?? [];
+  const paths = result?.paths ?? [];
   const open = (at: number, choice: QuickOpenChoice) => {
     const path = paths[at];
     if (path) onOpen(path, choice);
@@ -98,9 +98,7 @@ export function QuickOpen({ onClose, onOpen }: {
         </Text>
         <div id="quick-open-list" role="listbox" aria-label="Arquivos" ref={list} className="min-h-0 overflow-y-auto">
           {paths.map((path, at) => {
-            const cut = path.lastIndexOf('/');
-            const name = path.slice(cut + 1);
-            const folder = cut < 0 ? '' : path.slice(0, cut);
+            const { name, dir: folder } = splitPath(path);
             const selected = at === index;
             return (
               <div

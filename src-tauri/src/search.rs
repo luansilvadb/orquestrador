@@ -525,59 +525,18 @@ fn window(line: &str, at: usize) -> String {
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
+    use crate::testutil::{commit_all, git, identity, junction, write, Tmp};
 
-    /// Pasta temporária do teste, sempre um repositório Git. Some quando o teste acaba, mesmo se ele falhar.
-    struct Tmp(PathBuf);
-
-    impl Tmp {
-        fn new(tag: &str) -> Tmp {
-            let path = std::env::temp_dir().join(format!("orq-search-{}-{tag}", std::process::id()));
-            let _ = fs::remove_dir_all(&path);
-            fs::create_dir_all(&path).unwrap();
-            git(&path, &["init", "-q"]);
-            Tmp(path)
-        }
-
-        fn dir(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn git(dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    }
-
-    fn write(dir: &Path, rel: &str, data: impl AsRef<[u8]>) {
-        let file = dir.join(rel);
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        fs::write(file, data).unwrap();
+    /// Pasta temporária do teste, já um repositório Git com a identidade fixa. Some quando o teste acaba.
+    fn repo_tmp(tag: &str) -> Tmp {
+        let tmp = Tmp::new("orq-search", tag);
+        git(&tmp.0, &["init", "-q"]);
+        identity(&tmp.0);
+        tmp
     }
 
     fn read(dir: &Path, rel: &str) -> Vec<u8> {
         fs::read(dir.join(rel)).unwrap()
-    }
-
-    /// Adiciona tudo e commita, para que os arquivos sejam rastreados.
-    fn commit_all(dir: &Path) {
-        git(dir, &["add", "-A"]);
-        git(dir, &["commit", "-qm", "base"]);
     }
 
     fn q(text: &str) -> Query {
@@ -604,61 +563,61 @@ mod tests {
 
     #[test]
     fn literal_respeita_ou_nao_a_caixa() {
-        let t = Tmp::new("caixa");
-        write(t.dir(), "a.txt", "Olá mundo\nolá de novo\n");
-        commit_all(t.dir());
-        assert_eq!(linhas(&buscar(t.dir(), &q("olá")), "a.txt").len(), 2);
+        let t = repo_tmp("caixa");
+        write(&t.0, "a.txt", "Olá mundo\nolá de novo\n");
+        commit_all(&t.0, "base");
+        assert_eq!(linhas(&buscar(&t.0, &q("olá")), "a.txt").len(), 2);
         let exato = Query { case_sensitive: true, ..q("olá") };
-        assert_eq!(linhas(&buscar(t.dir(), &exato), "a.txt"), vec![(2, "olá de novo".to_string())]);
+        assert_eq!(linhas(&buscar(&t.0, &exato), "a.txt"), vec![(2, "olá de novo".to_string())]);
     }
 
     #[test]
     fn palavra_inteira_nao_pega_pedaco_e_regex_com_captura_funciona() {
-        let t = Tmp::new("palavra");
-        write(t.dir(), "a.txt", "gato\ngatinho\nx.y\nxzy\n");
-        commit_all(t.dir());
+        let t = repo_tmp("palavra");
+        write(&t.0, "a.txt", "gato\ngatinho\nx.y\nxzy\n");
+        commit_all(&t.0, "base");
         let inteira = Query { whole_word: true, ..q("gato") };
-        assert_eq!(linhas(&buscar(t.dir(), &inteira), "a.txt").len(), 1);
+        assert_eq!(linhas(&buscar(&t.0, &inteira), "a.txt").len(), 1);
         // Literal trata o ponto como ponto; regex trata como qualquer caractere.
-        assert_eq!(linhas(&buscar(t.dir(), &q("x.y")), "a.txt").len(), 1);
+        assert_eq!(linhas(&buscar(&t.0, &q("x.y")), "a.txt").len(), 1);
         let regex = Query { regex: true, ..q("x.y") };
-        assert_eq!(linhas(&buscar(t.dir(), &regex), "a.txt").len(), 2);
+        assert_eq!(linhas(&buscar(&t.0, &regex), "a.txt").len(), 2);
         let captura = Query { regex: true, ..q("gat(\\w+)") };
-        assert_eq!(linhas(&buscar(t.dir(), &captura), "a.txt").len(), 2);
+        assert_eq!(linhas(&buscar(&t.0, &captura), "a.txt").len(), 2);
     }
 
     #[test]
     fn regex_invalida_e_quebra_de_linha_sao_recusadas() {
-        let t = Tmp::new("invalida");
-        write(t.dir(), "a.txt", "x\n");
-        commit_all(t.dir());
+        let t = repo_tmp("invalida");
+        write(&t.0, "a.txt", "x\n");
+        commit_all(&t.0, "base");
         let invalida = Query { regex: true, ..q("(aberto") };
-        assert!(search(t.dir(), &invalida).unwrap_err().starts_with("Expressão regular inválida"));
-        assert!(search(t.dir(), &q("a\nb")).unwrap_err().contains("quebra de linha"));
-        assert!(buscar(t.dir(), &q("   ")).files.is_empty());
+        assert!(search(&t.0, &invalida).unwrap_err().starts_with("Expressão regular inválida"));
+        assert!(search(&t.0, &q("a\nb")).unwrap_err().contains("quebra de linha"));
+        assert!(buscar(&t.0, &q("   ")).files.is_empty());
     }
 
     #[test]
     fn nao_rastreado_aparece_e_ignorado_nao() {
-        let t = Tmp::new("ignorado");
-        write(t.dir(), ".gitignore", "escondido.txt\n");
-        write(t.dir(), "base.txt", "marca\n");
-        commit_all(t.dir());
-        write(t.dir(), "novo.txt", "marca\n");
-        write(t.dir(), "escondido.txt", "marca\n");
-        let r = buscar(t.dir(), &q("marca"));
+        let t = repo_tmp("ignorado");
+        write(&t.0, ".gitignore", "escondido.txt\n");
+        write(&t.0, "base.txt", "marca\n");
+        commit_all(&t.0, "base");
+        write(&t.0, "novo.txt", "marca\n");
+        write(&t.0, "escondido.txt", "marca\n");
+        let r = buscar(&t.0, &q("marca"));
         assert_eq!(caminhos(&r), vec!["base.txt", "novo.txt"]);
     }
 
     #[test]
     fn binario_nao_utf8_e_grande_ficam_de_fora_e_sao_dizidos() {
-        let t = Tmp::new("fora");
-        write(t.dir(), "texto.txt", "marca\n");
-        write(t.dir(), "bin.dat", b"marca\0\0");
-        write(t.dir(), "latin.txt", b"marca \xFF\n");
-        write(t.dir(), "grande.txt", vec![b'a'; (files::MAX_FILE + 1) as usize]);
-        commit_all(t.dir());
-        let r = buscar(t.dir(), &q("marca"));
+        let t = repo_tmp("fora");
+        write(&t.0, "texto.txt", "marca\n");
+        write(&t.0, "bin.dat", b"marca\0\0");
+        write(&t.0, "latin.txt", b"marca \xFF\n");
+        write(&t.0, "grande.txt", vec![b'a'; (files::MAX_FILE + 1) as usize]);
+        commit_all(&t.0, "base");
+        let r = buscar(&t.0, &q("marca"));
         assert_eq!(caminhos(&r), vec!["texto.txt"]);
         let motivos: Vec<(String, SkipReason)> = r.skipped.iter().map(|s| (s.path.clone(), s.reason)).collect();
         assert!(motivos.contains(&("bin.dat".into(), SkipReason::Binary)));
@@ -668,10 +627,10 @@ mod tests {
 
     #[test]
     fn coluna_conta_caracteres_e_nao_bytes() {
-        let t = Tmp::new("coluna");
-        write(t.dir(), "a.txt", "ação ok\n");
-        commit_all(t.dir());
-        let r = buscar(t.dir(), &q("ok"));
+        let t = repo_tmp("coluna");
+        write(&t.0, "a.txt", "ação ok\n");
+        commit_all(&t.0, "base");
+        let r = buscar(&t.0, &q("ok"));
         assert_eq!(r.files[0].matches[0].col, 6);
     }
 
@@ -683,15 +642,15 @@ mod tests {
 
     #[test]
     fn coluna_e_utf16_e_cai_no_termo_com_emoji_acento_tab_e_crlf() {
-        let t = Tmp::new("coluna-utf16");
+        let t = repo_tmp("coluna-utf16");
         // Emoji fora do BMP (dois code units em UTF-16), acentos e tab antes do termo; a linha 3 tem emoji e espaço.
-        write(t.dir(), "a.txt", "😀 ação\tfoo\r\nalvo\r\n😀 alvo\r\n");
-        commit_all(t.dir());
-        let r = buscar(t.dir(), &q("foo"));
+        write(&t.0, "a.txt", "😀 ação\tfoo\r\nalvo\r\n😀 alvo\r\n");
+        commit_all(&t.0, "base");
+        let r = buscar(&t.0, &q("foo"));
         assert_eq!(r.files[0].matches[0].col, 9, "😀(2) + espaço + ação(4) + tab = 8 unidades");
         let linha = "😀 ação\tfoo";
         assert!(a_partir_da_coluna(linha, 9).starts_with("foo"));
-        let r = buscar(t.dir(), &q("alvo"));
+        let r = buscar(&t.0, &q("alvo"));
         let cols: Vec<(u32, u32)> = r.files[0].matches.iter().map(|m| (m.line, m.col)).collect();
         assert_eq!(cols, vec![(2, 1), (3, 4)]);
         assert_eq!(r.files[0].matches[1].text, "😀 alvo", "o CR do fim não entra no texto");
@@ -700,12 +659,12 @@ mod tests {
 
     #[test]
     fn coluna_e_da_linha_original_mesmo_com_janela_recortada() {
-        let t = Tmp::new("coluna-janela");
+        let t = repo_tmp("coluna-janela");
         // 200 pares "é😀" (600 unidades UTF-16) antes do termo, e 300 caracteres depois: a janela recorta o começo.
         let linha = format!("{}ALVO{}", "é😀".repeat(200), "z".repeat(300));
-        write(t.dir(), "a.txt", format!("{linha}\n"));
-        commit_all(t.dir());
-        let m = &buscar(t.dir(), &q("ALVO")).files[0].matches[0];
+        write(&t.0, "a.txt", format!("{linha}\n"));
+        commit_all(&t.0, "base");
+        let m = &buscar(&t.0, &q("ALVO")).files[0].matches[0];
         assert!(m.text.starts_with('é') && m.text.len() < linha.len(), "a janela tem que ter recortado");
         assert!(m.text.contains("ALVO"));
         assert_eq!(m.col, 601);
@@ -714,43 +673,43 @@ mod tests {
 
     #[test]
     fn linha_com_crlf_sai_sem_cr_e_dois_pontos_nao_atrapalham() {
-        let t = Tmp::new("crlf");
-        write(t.dir(), "a.txt", "um: dois\r\n");
-        commit_all(t.dir());
-        assert_eq!(linhas(&buscar(t.dir(), &q("dois")), "a.txt"), vec![(1, "um: dois".to_string())]);
+        let t = repo_tmp("crlf");
+        write(&t.0, "a.txt", "um: dois\r\n");
+        commit_all(&t.0, "base");
+        assert_eq!(linhas(&buscar(&t.0, &q("dois")), "a.txt"), vec![(1, "um: dois".to_string())]);
     }
 
     #[test]
     fn filtros_incluir_e_excluir_caminhos() {
-        let t = Tmp::new("filtros");
-        write(t.dir(), "src/a.ts", "marca\n");
-        write(t.dir(), "src/b.md", "marca\n");
-        write(t.dir(), "docs/c.ts", "marca\n");
-        commit_all(t.dir());
+        let t = repo_tmp("filtros");
+        write(&t.0, "src/a.ts", "marca\n");
+        write(&t.0, "src/b.md", "marca\n");
+        write(&t.0, "docs/c.ts", "marca\n");
+        commit_all(&t.0, "base");
         let so_ts = Query { include: vec!["*.ts".into()], ..q("marca") };
-        assert_eq!(caminhos(&buscar(t.dir(), &so_ts)), vec!["docs/c.ts", "src/a.ts"]);
+        assert_eq!(caminhos(&buscar(&t.0, &so_ts)), vec!["docs/c.ts", "src/a.ts"]);
         let sem_docs = Query { exclude: vec!["docs/".into()], ..q("marca") };
-        assert_eq!(caminhos(&buscar(t.dir(), &sem_docs)), vec!["src/a.ts", "src/b.md"]);
+        assert_eq!(caminhos(&buscar(&t.0, &sem_docs)), vec!["src/a.ts", "src/b.md"]);
     }
 
     #[test]
     fn limite_de_linhas_marca_truncado() {
-        let t = Tmp::new("limite");
-        write(t.dir(), "a.txt", "x\n".repeat(MAX_LINES + 5));
-        commit_all(t.dir());
-        let r = buscar(t.dir(), &q("x"));
+        let t = repo_tmp("limite");
+        write(&t.0, "a.txt", "x\n".repeat(MAX_LINES + 5));
+        commit_all(&t.0, "base");
+        let r = buscar(&t.0, &q("x"));
         assert!(r.truncated);
         assert_eq!(r.files[0].matches.len(), MAX_LINES);
     }
 
     #[test]
     fn preview_nao_grava_e_traz_original_resultado_e_bom() {
-        let t = Tmp::new("preview");
-        write(t.dir(), "a.txt", b"\xEF\xBB\xBFtroca isto\r\nisto de novo\r\n");
-        commit_all(t.dir());
-        let before = read(t.dir(), "a.txt");
-        let prev = preview(t.dir(), &q("isto"), "aquilo").unwrap();
-        assert_eq!(read(t.dir(), "a.txt"), before, "a prévia não pode gravar");
+        let t = repo_tmp("preview");
+        write(&t.0, "a.txt", b"\xEF\xBB\xBFtroca isto\r\nisto de novo\r\n");
+        commit_all(&t.0, "base");
+        let before = read(&t.0, "a.txt");
+        let prev = preview(&t.0, &q("isto"), "aquilo").unwrap();
+        assert_eq!(read(&t.0, "a.txt"), before, "a prévia não pode gravar");
         let f = &prev.files[0];
         assert!(f.bom);
         assert_eq!(f.count, 2);
@@ -762,88 +721,88 @@ mod tests {
 
     #[test]
     fn aplicacao_seletiva_preserva_bom_e_crlf() {
-        let t = Tmp::new("seletiva");
-        write(t.dir(), "a.txt", b"\xEF\xBB\xBFfoo\r\n");
-        write(t.dir(), "b.txt", "foo\nfoo\n");
-        write(t.dir(), "c.txt", "foo\n");
-        commit_all(t.dir());
-        let prev = preview(t.dir(), &q("foo"), "bar").unwrap();
+        let t = repo_tmp("seletiva");
+        write(&t.0, "a.txt", b"\xEF\xBB\xBFfoo\r\n");
+        write(&t.0, "b.txt", "foo\nfoo\n");
+        write(&t.0, "c.txt", "foo\n");
+        commit_all(&t.0, "base");
+        let prev = preview(&t.0, &q("foo"), "bar").unwrap();
         assert_eq!(prev.total_files, 3);
         let req = ApplyRequest { query: q("foo"), replacement: "bar".into(), files: vec![pick(&prev, "a.txt"), pick(&prev, "b.txt")] };
-        let out = apply(t.dir(), &req).unwrap();
+        let out = apply(&t.0, &req).unwrap();
         assert_eq!(out.applied, vec![Done { path: "a.txt".into(), count: 1 }, Done { path: "b.txt".into(), count: 2 }]);
         assert!(out.errors.is_empty());
-        assert_eq!(read(t.dir(), "a.txt"), b"\xEF\xBB\xBFbar\r\n");
-        assert_eq!(read(t.dir(), "b.txt"), b"bar\nbar\n");
-        assert_eq!(read(t.dir(), "c.txt"), b"foo\n", "arquivo não escolhido fica como estava");
+        assert_eq!(read(&t.0, "a.txt"), b"\xEF\xBB\xBFbar\r\n");
+        assert_eq!(read(&t.0, "b.txt"), b"bar\nbar\n");
+        assert_eq!(read(&t.0, "c.txt"), b"foo\n", "arquivo não escolhido fica como estava");
     }
 
     #[test]
     fn stale_e_recusado_sem_gravar_e_os_outros_seguem() {
-        let t = Tmp::new("stale");
-        write(t.dir(), "a.txt", "foo\n");
-        write(t.dir(), "b.txt", "foo\n");
-        commit_all(t.dir());
-        let prev = preview(t.dir(), &q("foo"), "bar").unwrap();
-        write(t.dir(), "a.txt", "foo mudou por fora\n");
+        let t = repo_tmp("stale");
+        write(&t.0, "a.txt", "foo\n");
+        write(&t.0, "b.txt", "foo\n");
+        commit_all(&t.0, "base");
+        let prev = preview(&t.0, &q("foo"), "bar").unwrap();
+        write(&t.0, "a.txt", "foo mudou por fora\n");
         let req = ApplyRequest { query: q("foo"), replacement: "bar".into(), files: vec![pick(&prev, "a.txt"), pick(&prev, "b.txt")] };
-        let out = apply(t.dir(), &req).unwrap();
+        let out = apply(&t.0, &req).unwrap();
         assert_eq!(out.applied, vec![Done { path: "b.txt".into(), count: 1 }]);
         assert!(out.errors[0].error.contains("mudou desde a prévia"));
-        assert_eq!(read(t.dir(), "a.txt"), b"foo mudou por fora\n");
+        assert_eq!(read(&t.0, "a.txt"), b"foo mudou por fora\n");
     }
 
     #[test]
     fn captures_funcionam_e_sintaxe_nao_suportada_e_recusada() {
-        let t = Tmp::new("captures");
-        write(t.dir(), "a.txt", "nome=ana\n");
-        commit_all(t.dir());
+        let t = repo_tmp("captures");
+        write(&t.0, "a.txt", "nome=ana\n");
+        commit_all(&t.0, "base");
         let regex = Query { regex: true, ..q(r"(\w+)=(?P<valor>\w+)") };
-        let prev = preview(t.dir(), &regex, "$valor:$1 $$").unwrap();
+        let prev = preview(&t.0, &regex, "$valor:$1 $$").unwrap();
         assert_eq!(prev.files[0].result, "ana:nome $\n");
         // `$9` não existe: recusa antes de qualquer arquivo; `$x` também.
-        assert!(preview(t.dir(), &regex, "$9").unwrap_err().contains("não suportada"));
-        assert!(preview(t.dir(), &regex, "$x").unwrap_err().contains("não suportada"));
-        assert!(preview(t.dir(), &regex, "${sem-fechar").unwrap_err().contains("não suportada"));
+        assert!(preview(&t.0, &regex, "$9").unwrap_err().contains("não suportada"));
+        assert!(preview(&t.0, &regex, "$x").unwrap_err().contains("não suportada"));
+        assert!(preview(&t.0, &regex, "${sem-fechar").unwrap_err().contains("não suportada"));
         // Literal não interpreta nada: `$1` sai como texto.
-        let literal = preview(t.dir(), &q("nome"), "$1").unwrap();
+        let literal = preview(&t.0, &q("nome"), "$1").unwrap();
         assert_eq!(literal.files[0].result, "$1=ana\n");
     }
 
     #[test]
     fn preservar_maiusculas_segue_a_caixa_da_ocorrencia() {
-        let t = Tmp::new("preserva");
-        write(t.dir(), "a.txt", "foo FOO Foo fOo\n");
-        commit_all(t.dir());
-        let sem = preview(t.dir(), &q("foo"), "bar").unwrap();
+        let t = repo_tmp("preserva");
+        write(&t.0, "a.txt", "foo FOO Foo fOo\n");
+        commit_all(&t.0, "base");
+        let sem = preview(&t.0, &q("foo"), "bar").unwrap();
         assert_eq!(sem.files[0].result, "bar bar bar bar\n", "sem a opção, a substituição vai como foi digitada");
         let com = Query { preserve_case: true, ..q("foo") };
-        assert_eq!(preview(t.dir(), &com, "bar").unwrap().files[0].result, "bar BAR Bar bar\n");
+        assert_eq!(preview(&t.0, &com, "bar").unwrap().files[0].result, "bar BAR Bar bar\n");
     }
 
     #[test]
     fn preservar_maiusculas_com_acento_e_regex_com_captura() {
-        let t = Tmp::new("preserva-acento");
-        write(t.dir(), "a.txt", "AÇÃO e ação e Ação\nNOME Nome nome\n");
-        commit_all(t.dir());
+        let t = repo_tmp("preserva-acento");
+        write(&t.0, "a.txt", "AÇÃO e ação e Ação\nNOME Nome nome\n");
+        commit_all(&t.0, "base");
         let acento = Query { preserve_case: true, ..q("ação") };
-        assert_eq!(preview(t.dir(), &acento, "revisão").unwrap().files[0].result, "REVISÃO e revisão e Revisão\nNOME Nome nome\n");
+        assert_eq!(preview(&t.0, &acento, "revisão").unwrap().files[0].result, "REVISÃO e revisão e Revisão\nNOME Nome nome\n");
         let captura = Query { preserve_case: true, regex: true, ..q("(nome)") };
-        assert_eq!(preview(t.dir(), &captura, "$1 novo").unwrap().files[0].result, "AÇÃO e ação e Ação\nNOME NOVO Nome novo nome novo\n");
+        assert_eq!(preview(&t.0, &captura, "$1 novo").unwrap().files[0].result, "AÇÃO e ação e Ação\nNOME NOVO Nome novo nome novo\n");
     }
 
     #[test]
     fn caminho_fora_da_pesquisa_e_recusado_na_aplicacao() {
-        let t = Tmp::new("caminho");
-        write(t.dir(), "a.txt", "foo\n");
-        write(t.dir(), "dentro/b.txt", "foo\n");
-        commit_all(t.dir());
-        let prev = preview(t.dir(), &q("foo"), "bar").unwrap();
+        let t = repo_tmp("caminho");
+        write(&t.0, "a.txt", "foo\n");
+        write(&t.0, "dentro/b.txt", "foo\n");
+        commit_all(&t.0, "base");
+        let prev = preview(&t.0, &q("foo"), "bar").unwrap();
         let mut files = vec![pick(&prev, "a.txt")];
         for path in ["../fora.txt", "/abs.txt", "dentro\\b.txt", ".git/config", "nao-existe.txt"] {
             files.push(Pick { path: path.into(), revision: "x".into() });
         }
-        let out = apply(t.dir(), &ApplyRequest { query: q("foo"), replacement: "bar".into(), files }).unwrap();
+        let out = apply(&t.0, &ApplyRequest { query: q("foo"), replacement: "bar".into(), files }).unwrap();
         assert_eq!(out.applied.len(), 1);
         assert_eq!(out.errors.len(), 5);
         assert!(out.errors.iter().all(|e| e.error.contains("não está na pesquisa atual")));
@@ -851,78 +810,76 @@ mod tests {
 
     #[test]
     fn crlf_sobrevive_a_substituicao_que_mexe_na_linha() {
-        let t = Tmp::new("eol");
-        write(t.dir(), "a.txt", "a x\r\nb x\r\n");
-        commit_all(t.dir());
-        let prev = preview(t.dir(), &q("x"), "yy").unwrap();
+        let t = repo_tmp("eol");
+        write(&t.0, "a.txt", "a x\r\nb x\r\n");
+        commit_all(&t.0, "base");
+        let prev = preview(&t.0, &q("x"), "yy").unwrap();
         assert_eq!(prev.files[0].result, "a yy\r\nb yy\r\n");
     }
 
     #[test]
     fn apply_nao_grava_se_a_consulta_nao_tem_mais_ocorrencia() {
-        let t = Tmp::new("sem-ocorrencia");
-        write(t.dir(), "a.txt", "foo\n");
-        commit_all(t.dir());
-        let prev = preview(t.dir(), &q("foo"), "bar").unwrap();
-        write(t.dir(), "a.txt", "nada aqui\n");
+        let t = repo_tmp("sem-ocorrencia");
+        write(&t.0, "a.txt", "foo\n");
+        commit_all(&t.0, "base");
+        let prev = preview(&t.0, &q("foo"), "bar").unwrap();
+        write(&t.0, "a.txt", "nada aqui\n");
         let req = ApplyRequest { query: q("foo"), replacement: "bar".into(), files: vec![pick(&prev, "a.txt")] };
-        let out = apply(t.dir(), &req).unwrap();
+        let out = apply(&t.0, &req).unwrap();
         assert!(out.applied.is_empty());
-        assert_eq!(read(t.dir(), "a.txt"), b"nada aqui\n");
+        assert_eq!(read(&t.0, "a.txt"), b"nada aqui\n");
     }
 
     #[test]
     fn abertura_rapida_so_rastreado_e_nao_ignorado_e_ordenada() {
-        let t = Tmp::new("rapida");
-        write(t.dir(), ".gitignore", "build/\n");
-        write(t.dir(), "src/app.ts", "x\n");
-        write(t.dir(), "docs/app-guia.md", "x\n");
-        write(t.dir(), "build/app.js", "x\n");
-        commit_all(t.dir());
-        write(t.dir(), "app-novo.ts", "x\n");
-        let quick = quick_open(t.dir(), "app").unwrap();
+        let t = repo_tmp("rapida");
+        write(&t.0, ".gitignore", "build/\n");
+        write(&t.0, "src/app.ts", "x\n");
+        write(&t.0, "docs/app-guia.md", "x\n");
+        write(&t.0, "build/app.js", "x\n");
+        commit_all(&t.0, "base");
+        write(&t.0, "app-novo.ts", "x\n");
+        let quick = quick_open(&t.0, "app").unwrap();
         assert_eq!(quick.total, 3);
         assert_eq!(quick.paths, vec!["src/app.ts", "app-novo.ts", "docs/app-guia.md"]);
-        assert_eq!(quick_open(t.dir(), "build").unwrap().total, 0);
-        assert_eq!(quick_open(t.dir(), "src app").unwrap().paths, vec!["src/app.ts"]);
+        assert_eq!(quick_open(&t.0, "build").unwrap().total, 0);
+        assert_eq!(quick_open(&t.0, "src app").unwrap().paths, vec!["src/app.ts"]);
     }
 
     #[test]
     fn abertura_rapida_nao_segue_junction_de_pasta_do_meio() {
-        // Pasta de fora sem `.git` (o `Tmp` inicia um repositório, e isso muda o que o git lista lá dentro).
-        let fora = Tmp(std::env::temp_dir().join(format!("orq-search-{}-junction-fora", std::process::id())));
-        let _ = fs::remove_dir_all(&fora.0);
-        write(fora.dir(), "segredo.txt", "x\n");
-        let t = Tmp::new("junction");
-        write(t.dir(), "base.txt", "x\n");
-        commit_all(t.dir());
+        // Pasta de fora sem `.git` (o `repo_tmp` inicia um repositório, e isso muda o que o git lista lá dentro).
+        let fora = Tmp::new("orq-search", "junction-fora");
+        write(&fora.0, "segredo.txt", "x\n");
+        let t = repo_tmp("junction");
+        write(&t.0, "base.txt", "x\n");
+        commit_all(&t.0, "base");
         // Junção não exige privilégio no Windows. Se não der para criar, o teste é pulado.
-        let criou = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(t.dir().join("link")).arg(fora.dir()).output();
-        if !criou.is_ok_and(|o| o.status.success()) {
+        if !junction(&t.0.join("link"), &fora.0) {
             eprintln!("sem como criar junção neste ambiente; teste pulado");
             return;
         }
         // Antes de tudo: a pesquisa enxerga o caminho pela junção, mas recusa o conteúdo que sai do projeto.
-        assert!(candidates(t.dir(), &[], &[]).unwrap().contains(&"link/segredo.txt".to_string()));
-        assert!(buscar(t.dir(), &q("x")).skipped.iter().any(|s| s.path == "link/segredo.txt" && s.reason == SkipReason::NotFile));
-        assert_eq!(quick_open(t.dir(), "segredo").unwrap().total, 0);
-        assert_eq!(quick_open(t.dir(), "base").unwrap().paths, vec!["base.txt"]);
+        assert!(candidates(&t.0, &[], &[]).unwrap().contains(&"link/segredo.txt".to_string()));
+        assert!(buscar(&t.0, &q("x")).skipped.iter().any(|s| s.path == "link/segredo.txt" && s.reason == SkipReason::NotFile));
+        assert_eq!(quick_open(&t.0, "segredo").unwrap().total, 0);
+        assert_eq!(quick_open(&t.0, "base").unwrap().paths, vec!["base.txt"]);
         // Apagar o projeto (com a junção dentro) não pode apagar o alvo da junção.
         drop(t);
-        assert!(fora.dir().join("segredo.txt").exists(), "a limpeza do projeto não pode seguir a junção");
+        assert!(fora.0.join("segredo.txt").exists(), "a limpeza do projeto não pode seguir a junção");
     }
 
     #[test]
     fn link_nao_entra_na_substituicao() {
-        let t = Tmp::new("link");
-        write(t.dir(), "real.txt", "foo\n");
-        commit_all(t.dir());
-        if std::os::windows::fs::symlink_file(t.dir().join("real.txt"), t.dir().join("atalho.txt")).is_err() {
+        let t = repo_tmp("link");
+        write(&t.0, "real.txt", "foo\n");
+        commit_all(&t.0, "base");
+        if std::os::windows::fs::symlink_file(&t.0.join("real.txt"), &t.0.join("atalho.txt")).is_err() {
             eprintln!("sem permissão para criar link no Windows; teste pulado");
             return;
         }
-        git(t.dir(), &["add", "-A"]);
-        let prev = preview(t.dir(), &q("foo"), "bar").unwrap();
+        git(&t.0, &["add", "-A"]);
+        let prev = preview(&t.0, &q("foo"), "bar").unwrap();
         assert_eq!(prev.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), vec!["real.txt"]);
         assert!(prev.skipped.iter().any(|s| s.path == "atalho.txt" && s.reason == SkipReason::NotFile));
     }

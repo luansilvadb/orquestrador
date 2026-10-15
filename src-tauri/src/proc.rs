@@ -2,6 +2,7 @@
 //! de uma sessão.
 use std::os::windows::process::CommandExt;
 use std::path::Path;
+use std::io::Write;
 use std::process::{Command, Stdio};
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, FILETIME, HANDLE};
 use windows_sys::Win32::System::JobObjects::{
@@ -21,22 +22,32 @@ pub fn quiet(program: &str) -> Command {
     cmd
 }
 
-/// Roda o Git sem nada que espere digitação: sem entrada, sem pedido de credencial, sem editor. Sucesso
-/// devolve os bytes de (stdout, stderr); falha devolve o que o Git escreveu (stderr e stdout, aparados e em
-/// UTF-8 com troca de byte inválido), ou o código de saída quando ele não escreveu nada. Os caminhos são
-/// pathspec literal e o nome sai em UTF-8 sem aspas.
-fn run(dir: &Path, args: &[&str]) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let out = quiet("git")
-        .arg("-C")
+/// Roda o Git sem nada que espere digitação: sem pedido de credencial, sem editor. `entrada` vai pela entrada
+/// padrão; sem ela, a entrada é nula. Sucesso devolve os bytes de (stdout, stderr); falha devolve o que o Git
+/// escreveu (stderr e stdout, aparados e em UTF-8 com troca de byte inválido), ou o código de saída quando ele não
+/// escreveu nada. Os caminhos são pathspec literal e o nome sai em UTF-8 sem aspas.
+fn run(dir: &Path, args: &[&str], entrada: Option<&[u8]>) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let mut cmd = quiet("git");
+    cmd.arg("-C")
         .arg(dir)
         .args(["--literal-pathspecs", "-c", "core.quotepath=false"])
         .args(args)
-        .stdin(Stdio::null())
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", ":")
         .env("GIT_MERGE_AUTOEDIT", "no")
-        .output()
-        .map_err(|e| format!("git não pôde ser executado: {e}"))?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let out = match entrada {
+        None => cmd.stdin(Stdio::null()).output(),
+        Some(bytes) => cmd.stdin(Stdio::piped()).spawn().and_then(|mut child| {
+            // Se o Git sair antes de ler tudo, o erro dele é o que importa: por isso a falha de escrita não é reportada.
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(bytes);
+            }
+            child.wait_with_output()
+        }),
+    }
+    .map_err(|e| format!("git não pôde ser executado: {e}"))?;
     if out.status.success() {
         return Ok((out.stdout, out.stderr));
     }
@@ -46,17 +57,22 @@ fn run(dir: &Path, args: &[&str]) -> Result<(Vec<u8>, Vec<u8>), String> {
 
 /// A saída (stdout) do Git sem espera de digitação. Na falha, o erro traz o texto do Git.
 pub fn git_saida(dir: &Path, args: &[&str]) -> Result<String, String> {
-    run(dir, args).map(|(out, _)| String::from_utf8_lossy(&out).into_owned())
+    run(dir, args, None).map(|(out, _)| String::from_utf8_lossy(&out).into_owned())
 }
 
 /// A saída completa do Git (stdout e stderr juntos), para mostrar na tela. Na falha, o erro traz o texto do Git.
 pub fn git_completa(dir: &Path, args: &[&str]) -> Result<String, String> {
-    run(dir, args).map(|(out, err)| String::from_utf8_lossy(&out).into_owned() + &String::from_utf8_lossy(&err))
+    run(dir, args, None).map(|(out, err)| String::from_utf8_lossy(&out).into_owned() + &String::from_utf8_lossy(&err))
 }
 
 /// A saída (stdout) do Git em bytes crus, sem trocar byte inválido: para saber se um conteúdo é UTF-8. Na falha, o erro é o de `run`.
 pub fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    run(dir, args).map(|(out, _)| out)
+    run(dir, args, None).map(|(out, _)| out)
+}
+
+/// O Git com `entrada` pela entrada padrão, como o `git apply` que recebe o patch. Na falha, o erro é o de `run`.
+pub fn git_entrada(dir: &Path, args: &[&str], entrada: &[u8]) -> Result<(), String> {
+    run(dir, args, Some(entrada)).map(drop)
 }
 
 /// Pasta -> raiz do repositório Git (com barras invertidas), ou `None` fora de um work tree.
@@ -183,6 +199,7 @@ pub fn owner_state(pid: u32, started: u64) -> Owner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::fresh;
 
     #[test]
     fn dono_vivo_morto_e_pid_reaproveitado() {
@@ -209,9 +226,7 @@ mod tests {
 
     #[test]
     fn branch_le_o_nome_e_em_head_destacado_o_hash() {
-        let dir = std::env::temp_dir().join(format!("orq-proc-{}-branch", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = fresh("orq-proc", "branch");
         git_saida(&dir, &["init", "-q"]).unwrap();
         // Sem commit ainda: a branch já tem nome, mesmo sem nascer.
         git_saida(&dir, &["symbolic-ref", "HEAD", "refs/heads/trabalho"]).unwrap();

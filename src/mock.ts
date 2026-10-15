@@ -1,13 +1,9 @@
 // Backend simulado, só para desenvolvimento no navegador (nunca entra no build de produção).
-// Digite no orquestrador: `lote` (6 tarefas), `sair` (termina com código 0), `sair 3` (código 3).
 // No painel Terminal (Ctrl+`), cada aba é um shell simulado: ecoa o que se digita, com a própria linha em edição. `exit` encerra só aquela aba (código 0);
 // o `+` abre outra, e o X fecha a aba sem evento. O programa simulado é sempre `pwsh.exe`.
-// Na URL: `?mock=nogit` faz a escolha da pasta falhar como "fora de um repositório Git"; `?mock=noshell` faz o shell não abrir.
-// Na URL: `?update=falha` mostra a atualização bloqueada por falta de internet (a nova tentativa libera) e
-// `?update=download` simula o download. Sem parâmetro, o uso já vem liberado, como no build de desenvolvimento.
 // No console: `__mock.close()` simula fechar a janela.
 // `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto.
-// A árvore (`list_dir`) é em memória: muda só com o executor que termina bem (cria `src/tarefa-<lote>-<n>.ts`) e com `__mock.remove`.
+// A árvore (`list_dir`) é em memória e muda com as ações do menu e com `__mock.remove`.
 // O Git tem estado só no que a mock modela: blocos (preparar, tirar do preparo, descartar), arquivo descartado, commit, histórico, gráfico e
 // conflitos (resolver e aceitar remoção). Branches, fetch, pull e push são respostas fixas; as refs são fixas, exceto a `main`, que anda com o commit. Regex da pesquisa e da substituição usa a
 // sintaxe do JavaScript (o backend usa a do Rust); o texto de busca e de substituição é o mesmo nos dois.
@@ -19,18 +15,17 @@
 // O clipboard do simulado é uma variável em memória, nunca o do Windows: `copy_files` (copiar ou recortar) e `paste_files_detailed` mexem nela.
 // `paste_files_detailed` move ou copia a árvore e `TEXTS` de verdade, e nome repetido vira "nome (2)". `__mock.clipboard()` mostra o que há.
 // `rename_file` renomeia pasta também (leva os textos de dentro). `__mock.addFolder('pasta')` cria pasta de teste; `__mock.failOn = ['src/a.ts']`
-// faz colar ou mover falhar de I/O nesse item, no meio do lote: o que já saiu segue como feito (só para o check de arquivos e pesquisa).
+// faz colar ou mover falhar de I/O nesse item, no meio da operação: o que já saiu segue como feito (só para o check de arquivos e pesquisa).
 import type { Transport } from './backend';
 import { fileNameError } from './file-tab-actions';
 import {
-  ORCHESTRATOR, type Batch, type Choice, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events, type ExecutorNode,
-  type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type NodeState, type Options, type Pasted, type QuickOpen,
+  type Batch, type Choice, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
+  type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type Pasted, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
-  type SearchResults, type SkipReason, type UpdateStatus,
+  type SearchResults, type SkipReason,
 } from './types';
 
 type Handler = (payload: never) => void;
-type Job = ExecutorNode & { timer?: number };
 
 const CLAUDE = ['low', 'medium', 'high', 'xhigh', 'max'], CODEX = ['low', 'medium', 'high', 'xhigh'];
 const options: Options = {
@@ -41,17 +36,6 @@ const options: Options = {
   ],
   last: { orchestrator: { tool: 'codex', model: '', effort: '' }, executor: { tool: 'claude', model: 'opus', effort: 'high' } },
 };
-// Vagas internas de executores, como o backend escolhe sozinho: metade dos núcleos lógicos, de 1 a 16. Sem valor, assume 4 núcleos (2 vagas).
-// Não é configurável na tela; só existe aqui para a fila simulada.
-const CAPACITY = Math.min(16, Math.max(1, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
-const TASKS = [
-  'Extrair a validação de configuração para um módulo próprio',
-  'Cobrir o analisador de argumentos com testes',
-  'Atualizar o README com o fluxo novo',
-  'Trocar o cliente HTTP por fetch nativo e remover a dependência antiga do projeto inteiro',
-  'Migrar o esquema do banco (esta falha de propósito)',
-  'Revisar mensagens de erro em português',
-];
 
 const handlers = new Map<string, Handler[]>();
 const emit = <K extends keyof Events>(event: K, payload: Events[K]) =>
@@ -234,11 +218,10 @@ function requireFile(path: string) {
   return entry;
 }
 
-let alive = false, line = '', batches = 0, executorChoice: Choice | null = null, closeHandler: (() => Promise<boolean>) | null = null;
-// Shells do painel Terminal: vivem à parte do orquestrador (sobrevivem a `sair`), e só `exit` ou `close_shell` os encerram.
+let closeHandler: (() => Promise<boolean>) | null = null;
+// Shells do painel Terminal: só `exit` ou `close_shell` os encerram.
 // Cada um guarda a própria linha em edição.
 const shells = new Map<string, { line: string; prompt: string }>();
-const jobs = new Map<string, Job>();
 const debug = { close: async () => {
   const closed = closeHandler ? await closeHandler() : true;
   if (closed) document.body.innerHTML = '<p style="padding:24px">Janela fechada (simulado).</p>';
@@ -269,130 +252,6 @@ const debug = { close: async () => {
   calls: [] as { cmd: string; args: unknown; result: unknown; error: string | null }[] };
 (window as unknown as { __mock: typeof debug }).__mock = debug;
 
-const PROMPT = '\x1b[38;5;105morquestrador>\x1b[0m ';
-
-const MB = 1024 * 1024;
-let update: UpdateStatus = { phase: 'ready' };
-const setUpdate = (next: UpdateStatus) => { update = next; emit('update-status', next); };
-// Download de 40 MB em passos de 2 MB; depois instala e volta a pronto.
-function demoDownload() {
-  const size = 40 * MB;
-  let downloaded = 0;
-  const tick = () => {
-    downloaded = Math.min(size, downloaded + 2 * MB);
-    setUpdate({ phase: 'downloading', version: '0.2.0', downloaded, total: size });
-    if (downloaded < size) return void setTimeout(tick, 150);
-    setUpdate({ phase: 'installing', version: '0.2.0' });
-    setTimeout(() => setUpdate({ phase: 'ready' }), 1500);
-  };
-  setTimeout(tick, 300);
-}
-const updateMode = new URLSearchParams(location.search).get('update');
-if (updateMode === 'falha') update = { phase: 'failed', message: 'Não foi possível verificar atualizações: sem conexão com o GitHub.' };
-if (updateMode === 'download') demoDownload();
-
-function setState(job: Job, state: NodeState) {
-  job.state = state;
-  emit('node-state', { id: job.id, state, choice: job.choice });
-}
-
-// Estado vivo que ocupa vaga de executor, como o `running`.
-const live = (state: NodeState) => state === 'running' || state === 'awaiting-orchestrator';
-
-function schedule() {
-  const count = () => [...jobs.values()].filter((j) => live(j.state)).length;
-  for (const job of jobs.values()) if (job.state === 'queued' && executorChoice && count() < CAPACITY) run(job);
-  for (const batch of new Set([...jobs.values()].map((j) => j.batch))) {
-    const all = [...jobs.values()].filter((j) => j.batch === batch);
-    if (!alive || !all.length || all.some((j) => !['done', 'stopped', 'failed'].includes(j.state)) || reported.has(batch)) continue;
-    reported.add(batch);
-    out(ORCHESTRATOR, `\r\n\x1b[2mlote ${batch} devolvido:\x1b[0m\r\n` +
-      all.map((j) => `  #${j.index + 1} ${j.state === 'done' ? '\x1b[32mok\x1b[0m' : j.state === 'stopped' ? '\x1b[33minterrompido pelo usuário\x1b[0m' : '\x1b[31mfalhou\x1b[0m'}  ${j.title}`).join('\r\n') +
-      `\r\n${PROMPT}`);
-  }
-}
-const reported = new Set<string>();
-
-function run(job: Job) {
-  job.choice = executorChoice;
-  setState(job, 'running');
-  const steps = 18 + job.index * 9, fails = job.index === 4;
-  // Uma tarefa (índice 2) pede confirmação ao orquestrador no passo 5 e fica 3 s em `awaiting-orchestrator`.
-  let pauseAt = job.index === 2 ? 5 : -1;
-  let step = 0;
-  out(job.id, `\x1b[1m${job.choice!.tool}\x1b[0m \x1b[2m${job.choice!.model || 'modelo padrão'} · ${job.choice!.effort || 'esforço padrão'}\x1b[0m\r\n\x1b[36m>\x1b[0m ${job.title}\r\n\r\n`);
-  job.timer = window.setInterval(() => {
-    if (job.state === 'awaiting-orchestrator') return;
-    if (step === pauseAt) {
-      pauseAt = -1;
-      setState(job, 'awaiting-orchestrator');
-      out(job.id, '\x1b[33mPedido de confirmação: aguardando o orquestrador.\x1b[0m\r\n');
-      setTimeout(() => { if (job.state === 'awaiting-orchestrator') setState(job, 'running'); }, 3000);
-      return;
-    }
-    step++;
-    out(job.id, `\x1b[2m${String(step).padStart(3)}\x1b[0m  \x1b[32m●\x1b[0m ${['Read', 'Grep', 'Edit', 'Bash'][step % 4]}(src/modulo-${step}.ts)  \x1b[2m${(step * 37) % 900} linhas\x1b[0m\r\n`);
-    if (fails && step === 12) {
-      out(job.id, '\r\n\x1b[31mErro: o processo terminou com código 1.\x1b[0m\r\n');
-      finish(job, 'failed');
-    } else if (step >= steps) {
-      out(job.id, `\r\n\x1b[1mConcluído.\x1b[0m ${steps} passos, nenhuma pendência.\r\n`);
-      finish(job, 'done');
-    }
-  }, 140);
-}
-
-function finish(job: Job, state: NodeState) {
-  clearInterval(job.timer);
-  setState(job, state);
-  // Um executor que termina bem deixa um arquivo: a árvore muda e a lista do explorador tem de acompanhar.
-  if (state === 'done') addFile('src', `tarefa-${job.batch}-${job.index + 1}.ts`);
-  schedule();
-}
-
-function startBatch() {
-  const batch = String(++batches);
-  TASKS.forEach((title, index) => {
-    const state: NodeState = executorChoice ? 'queued' : 'awaiting-choice';
-    const job: Job = { id: `exec-${batch}-${index}`, batch, index, title: title.slice(0, 80), state, choice: null };
-    setTimeout(() => {
-      if (!alive) return;
-      jobs.set(job.id, job);
-      emit('node-added', { ...job });
-      schedule();
-    }, 90 * index);
-  });
-}
-
-function killAll() {
-  for (const job of jobs.values()) clearInterval(job.timer);
-  jobs.clear();
-  // Os shells não dependem do orquestrador: os terminais deles ficam.
-  for (const id of [...terms.keys()]) if (!shells.has(id)) terms.delete(id);
-  reported.clear();
-  alive = false;
-  executorChoice = null;
-}
-
-function typed(data: string) {
-  for (const char of data) {
-    if (char === '\r') {
-      const [command, arg] = line.trim().split(/\s+/);
-      line = '';
-      out(ORCHESTRATOR, '\r\n');
-      if (command === 'lote') { out(ORCHESTRATOR, 'delegando 6 tarefas; aguardando todas voltarem...\r\n'); startBatch(); continue; }
-      if (command === 'sair') { killAll(); emit('orchestrator-exit', { code: arg ? Number(arg) : 0 }); return; }
-      if (command) out(ORCHESTRATOR, `eco: ${command}${arg ? ' ' + arg : ''}\r\n`);
-      out(ORCHESTRATOR, PROMPT);
-    } else if (char === '\x7f') {
-      if (line) { line = line.slice(0, -1); out(ORCHESTRATOR, '\b \b'); }
-    } else if (char >= ' ') {
-      line += char;
-      out(ORCHESTRATOR, char);
-    }
-  }
-}
-
 const SHELL_PROMPT = 'PS C:\\projetos\\exemplo> ';
 function shellTyped(id: string, data: string) {
   const shell = shells.get(id)!;
@@ -417,8 +276,6 @@ function shellTyped(id: string, data: string) {
     }
   }
 }
-
-// ---------- Git simulado: respostas fixas, sem estado ----------
 
 // ---------- Git com estado (simulado): blocos, descarte, histórico, commit e conflitos ----------
 
@@ -465,20 +322,19 @@ function syncEntry(path: string) {
   else files[i] = { ...files[i], staged, unstaged };
 }
 
-// Diff de um lado com a revisão e a lista de blocos (`index` e `header`), como o backend.
+// Diff de um lado com a revisão e se o arquivo é não rastreado (`untracked`), como o backend.
 function reviewDiff(path: string, staged: boolean): ReviewDiff {
-  if (path.endsWith('.png')) return { diff: { binary: true, tooLarge: false, patch: '' }, revision: hash(''), hunks: [] };
-  if (path === 'dados/exportacao.json') return { diff: { binary: false, tooLarge: true, patch: '' }, revision: hash(''), hunks: [] };
-  // Não rastreado: o Git não separa em blocos. O patch é o arquivo inteiro como arquivo novo, e a lista de blocos fica vazia (como no backend).
+  if (path.endsWith('.png')) return { diff: { binary: true, tooLarge: false, patch: '' }, revision: hash(''), untracked: false };
+  if (path === 'dados/exportacao.json') return { diff: { binary: false, tooLarge: true, patch: '' }, revision: hash(''), untracked: false };
+  // Não rastreado: o Git não separa em blocos. O patch é o arquivo inteiro como arquivo novo.
   if (!staged && files.find((f) => f.path === path)?.unstaged === 'untracked') {
     const lines = (TEXTS[path] ?? '').split('\n');
     if (lines[lines.length - 1] === '') lines.pop();
     const patch = `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n` + lines.map((l) => `+${l}\n`).join('');
-    return { diff: { binary: false, tooLarge: false, patch }, revision: hash(patch), hunks: [] };
+    return { diff: { binary: false, tooLarge: false, patch }, revision: hash(patch), untracked: true };
   }
-  const blocks = blocksOf(path, staged);
-  const patch = patchOf(path, blocks);
-  return { diff: { binary: false, tooLarge: false, patch }, revision: hash(patch), hunks: blocks.map((b, index) => ({ index, header: b.header })) };
+  const patch = patchOf(path, blocksOf(path, staged));
+  return { diff: { binary: false, tooLarge: false, patch }, revision: hash(patch), untracked: false };
 }
 
 // Confere a revisão do lado e o bloco antes de mexer. Qualquer diferença recusa e não muda nada.
@@ -892,36 +748,13 @@ function moveItems(paths: string[], dest: string): Batch<Moved> {
 }
 
 const commands: Record<string, (args: any) => unknown> = {
-  update_status: () => update,
-  retry_update: () => {
-    if (update.phase === 'failed') {
-      setUpdate({ phase: 'checking' });
-      setTimeout(() => setUpdate({ phase: 'ready' }), 400);
-    }
-    return update;
-  },
-  choose_project: () => {
-    if (new URLSearchParams(location.search).get('mock') === 'nogit') throw 'A pasta C:\\Users\\Luan\\Documentos não está dentro de um repositório Git. Escolha outra.';
-    return 'C:\\projetos\\exemplo';
-  },
+  update_status: () => ({ phase: 'ready' }),
+  retry_update: () => ({ phase: 'ready' }),
+  choose_project: () => 'C:\\projetos\\exemplo',
   get_options: () => structuredClone(options),
-  start_orchestrator: ({ choice }: { choice: Choice }) => {
-    if (alive) throw 'Já existe um orquestrador aberto.';
-    if (choice.model.includes(' ')) throw `orchestrator: modelo '${choice.model}' inválido (sem espaço, aspas nem iniciar com '-')`;
-    options.last.orchestrator = choice;
-    alive = true;
-    line = '';
-    out(ORCHESTRATOR, `\x1b[1mOrquestrador simulado\x1b[0m \x1b[2m(${choice.tool} ${choice.model || 'modelo padrão'} ${choice.effort || 'esforço padrão'})\x1b[0m\r\n` +
-      `Digite \x1b[33mlote\x1b[0m + Enter para delegar 6 tarefas, \x1b[33msair\x1b[0m para terminar. O resto é ecoado.\r\n\r\n${PROMPT}`);
-  },
-  set_executor_choice: ({ choice }: { choice: Choice }) => {
-    if (choice.model.includes(' ')) throw `executor: modelo '${choice.model}' inválido (sem espaço, aspas nem iniciar com '-')`;
-    options.last.executor = executorChoice = choice;
-    for (const job of jobs.values()) if (job.state === 'awaiting-choice') setState(job, 'queued');
-    schedule();
-  },
+  start_orchestrator: ({ choice }: { choice: Choice }) => { options.last.orchestrator = choice; },
+  set_executor_choice: ({ choice }: { choice: Choice }) => { options.last.executor = choice; },
   start_shell: ({ id, cwd }: { id: string; cwd?: string }) => {
-    if (new URLSearchParams(location.search).get('mock') === 'noshell') throw 'Não foi possível abrir o PowerShell: o programa não foi encontrado.';
     // Pasta do projeto (relativa); sem ela, ou com '', é a raiz, como no backend. Pasta que não existe é recusada antes de abrir.
     if (cwd && !folderAt(cwd)) throw `Pasta não encontrada: ${cwd}`;
     const prompt = cwd ? `PS C:\\projetos\\exemplo\\${cwd.split('/').join('\\')}> ` : SHELL_PROMPT;
@@ -1000,7 +833,6 @@ const commands: Record<string, (args: any) => unknown> = {
   term_write: ({ id, data }: { id: string; data: string }) => {
     // Marcas de colagem entre aspas (bracketed paste) não são texto: o simulado só põe o conteúdo no rascunho.
     const text = data.replace(/\x1b\[20[01]~/g, '');
-    if (id === ORCHESTRATOR && alive) typed(text);
     if (shells.has(id)) shellTyped(id, text);
   },
   list_dir: ({ path }: { path: string }) => {
@@ -1050,12 +882,9 @@ const commands: Record<string, (args: any) => unknown> = {
     const term = terms.get(id);
     return { seq: term?.seq ?? 0, data: base64(term?.text ?? '') };
   },
-  stop_executor: ({ id }: { id: string }) => {
-    const job = jobs.get(id);
-    if (job && (job.state === 'queued' || live(job.state))) finish(job, 'stopped');
-  },
-  has_running: () => alive || [...jobs.values()].some((j) => live(j.state)),
-  shutdown: () => killAll(),
+  stop_executor: () => {},
+  has_running: () => false,
+  shutdown: () => {},
 };
 
 export const mock: Transport = {

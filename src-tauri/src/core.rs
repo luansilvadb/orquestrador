@@ -677,6 +677,7 @@ impl Core {
 mod tests {
     use super::*;
     use crate::git;
+    use crate::testutil::fresh;
 
     fn ok(text: &str) -> Outcome {
         Outcome { text: text.into(), exit: "0".into(), ok: true }
@@ -745,8 +746,7 @@ mod tests {
     }
 
     fn git_core_with(tag: &str, emit: Emit) -> (Core, std::path::PathBuf) {
-        let root = std::env::temp_dir().join(format!("orq-core-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = fresh("orq-core", tag);
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         let git = |args: &[&str]| proc::git_saida(&repo, args).unwrap();

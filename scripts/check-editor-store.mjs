@@ -1,23 +1,11 @@
 // Check dos buffers, rascunhos, recuperação, conflitos e blocos de diff (src/workspace-store.ts).
 // Roda sem dependências e sem navegador: `node scripts/check-editor-store.mjs`. Sai com 1 se alguma regra quebrar.
-// O src importa sem extensão (como o resto do app); o resolver abaixo acrescenta `.ts` só para este check.
-import { register } from 'node:module';
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
-
-register(`data:text/javascript,${encodeURIComponent(`
-export async function resolve(specifier, context, next) {
-  if (specifier.startsWith('.') && !/\\.[a-z]+$/i.test(specifier)) {
-    try { return await next(specifier + '.ts', context); } catch { /* cai no resolver padrão */ }
-  }
-  return next(specifier, context);
-}`)}`);
-
-const store = await import('../src/workspace-store.ts');
-const {
+import {
   blockCount, conflictKey, decodeRecovery, dirtyKeys, dropData, encodeRecovery, hasDraftAt, hasMarkers, isBufferDirty, MAX_DRAFT_CHARS,
   MAX_RECOVERY_CHARS, parseConflict, patchHunks, remapData, renderConflict, toDiskNewlines,
-} = store;
+} from '../src/workspace-store.ts';
 
 const buffer = (over = {}) => ({
   docId: 'doc-1', path: 'src/a.ts', raw: 'a\nb', bom: false, newline: '\n', draft: 'a\nb', readOnly: false, cursor: null, ...over,

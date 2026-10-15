@@ -5,24 +5,25 @@ import { toast } from '@lobehub/ui/base-ui';
 
 export type GitGuard = {
   /** Começa uma operação. Devolve false (e avisa) se outra já está rodando. */
-  enter(label: string): boolean;
+  enter(): boolean;
   /** Termina a operação que `enter` começou. Sempre chamar no `finally`. */
   leave(): void;
 };
 
 export function createGitGuard(): GitGuard {
-  let owner: string | null = null;
+  // Há operação em andamento (quem a começou é quem a termina).
+  let busy = false;
   return {
-    enter(label) {
-      if (owner !== null) {
+    enter() {
+      if (busy) {
         toast.warning({ title: 'Espere a operação do Git em andamento terminar.', duration: 4000 });
         return false;
       }
-      owner = label;
+      busy = true;
       return true;
     },
     leave() {
-      owner = null;
+      busy = false;
     },
   };
 }

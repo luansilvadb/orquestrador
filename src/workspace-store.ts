@@ -3,7 +3,7 @@
 // O texto gravado é `raw` (como veio do disco, sem BOM); `draft` é o que o CodeMirror mostra, com `\n`.
 // Sujo é `draft` diferente do `raw` normalizado. Conflito é sujo quando o texto difere do que foi carregado (`origin`).
 // Só usa sintaxe apagável (sem enum/namespace), para o check rodar direto no Node.
-import { asArray, isRecord, isSafePath, isWithin } from './workspace-model';
+import { asArray, isRecord, isSafePath, isWithin } from './workspace-model.ts';
 
 export const RECOVERY_VERSION = 1;
 // Limites da recuperação no localStorage: texto de um rascunho e total. Passou disso, rascunho grande fica de fora (com aviso).
@@ -70,9 +70,8 @@ export function dropData(data: EditorData, paths: readonly string[]): EditorData
 // ---- Recuperação (localStorage, por projeto). Nunca grava no disco. ----
 
 export type RecoveryBuffer = { docId: string; path: string; cursor: Cursor | null; scroll: Scroll | null; dirty: Pick<Buffer, 'raw' | 'bom' | 'newline' | 'draft' | 'readOnly'> | null };
-export type RecoveryConflict = { path: string; origin: string; draft: string; revision: string };
 // `split` é a proporção do grupo A (0,15 a 0,85) e `layout` é o texto opaco do layout externo (o App decide o formato).
-export type Recovery = { workspace: string | null; layout: string | null; split: number | null; buffers: RecoveryBuffer[]; conflicts: RecoveryConflict[] };
+export type Recovery = { workspace: string | null; layout: string | null; split: number | null; buffers: RecoveryBuffer[]; conflicts: ConflictDraft[] };
 export type Recovered = { recovery: Recovery; notes: string[] };
 
 /**
@@ -145,7 +144,7 @@ export function decodeRecovery(text: string, project: string): Recovered {
     if (entry.dirty !== undefined && entry.dirty !== null && !dirty) notes.push(`Rascunho de ${entry.path} inválido descartado.`);
     buffers.push({ docId: entry.docId, path: entry.path, cursor: parseCursor(entry.cursor), scroll: parseScroll(entry.scroll), dirty });
   }
-  const conflicts: RecoveryConflict[] = [];
+  const conflicts: ConflictDraft[] = [];
   const paths = new Set<string>();
   for (const entry of asArray(raw.conflicts)) {
     if (!isRecord(entry) || !isSafePath(entry.path) || paths.has(entry.path.toLowerCase())

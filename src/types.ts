@@ -47,8 +47,8 @@ export type GitBranches = { current: string; local: string[] };
 
 // Revisão por bloco (contrato do backend). `revision` é a impressão digital do diff que a tela viu; um bloco é identificado por `index` e `header`.
 export type HunkRef = { path: string; index: number; header: string; revision: string };
-export type HunkInfo = { index: number; header: string };
-export type ReviewDiff = { diff: GitDiff; revision: string; hunks: HunkInfo[] };
+// `untracked`: o arquivo é novo para o Git, então o patch é o arquivo inteiro e não há blocos a agir.
+export type ReviewDiff = { diff: GitDiff; revision: string; untracked: boolean };
 // Histórico e commits. `date` vem em ISO 8601; a tela formata.
 export type Commit = { hash: string; short: string; author: string; date: string; subject: string };
 export type CommitFile = { path: string; origPath: string | null; kind: GitKind };

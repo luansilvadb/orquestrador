@@ -15,35 +15,27 @@ pub mod roles;
 pub mod search;
 pub mod session;
 pub mod update;
+#[cfg(test)]
+mod testutil;
 
 use crate::config::{Choice, Options};
 use crate::core::{Core, Snapshot};
 use crate::update::Gate;
-use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
-
-/// Resultado de uma ação em lote: o que foi feito (`done`) e o erro do que parou (`error`, `null` se tudo deu certo).
-/// Vem sempre como resposta, nunca como erro: a tela precisa do `done` também quando a operação falhou no meio.
-#[derive(Serialize)]
-struct Batch<T> {
-    done: Vec<T>,
-    error: Option<String>,
-}
-
-fn batch<T>(result: Result<Vec<T>, files::Partial<T>>) -> Batch<T> {
-    match result {
-        Ok(done) => Batch { done, error: None },
-        Err(partial) => Batch { done: partial.done, error: Some(partial.error) },
-    }
-}
 
 /// A pasta do projeto para um comando, depois de checar que o uso está liberado.
 fn repo(core: &Core, gate: &Gate) -> Result<PathBuf, String> {
     gate.ensure_open()?;
     core.repo()
+}
+
+/// Roda `run` na pasta do projeto, depois de checar que o uso está liberado e que nenhum executor está trabalhando.
+fn idle<T>(core: &Core, gate: &Gate, run: impl FnOnce(&Path) -> Result<T, String>) -> Result<T, String> {
+    gate.ensure_open()?;
+    core.git_idle(run)
 }
 
 // Todos os comandos são `async` para rodar fora da thread da janela: vários esperam processo
@@ -148,29 +140,25 @@ fn git_review_diff(core: State<Core>, gate: State<Gate>, path: String, staged: b
 /// Prepara um bloco da pasta de trabalho. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
 fn git_stage_hunk(core: State<Core>, gate: State<Gate>, hunk: git::HunkRef) -> Result<(), String> {
-    gate.ensure_open()?;
-    core.git_idle(|dir| git::stage_hunk(dir, &hunk))
+    idle(&core, &gate, |dir| git::stage_hunk(dir, &hunk))
 }
 
 /// Tira um bloco do índice. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
 fn git_unstage_hunk(core: State<Core>, gate: State<Gate>, hunk: git::HunkRef) -> Result<(), String> {
-    gate.ensure_open()?;
-    core.git_idle(|dir| git::unstage_hunk(dir, &hunk))
+    idle(&core, &gate, |dir| git::unstage_hunk(dir, &hunk))
 }
 
 /// Descarta um bloco da alteração não preparada. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
 fn git_discard_hunk(core: State<Core>, gate: State<Gate>, hunk: git::HunkRef) -> Result<(), String> {
-    gate.ensure_open()?;
-    core.git_idle(|dir| git::discard_hunk(dir, &hunk))
+    idle(&core, &gate, |dir| git::discard_hunk(dir, &hunk))
 }
 
 /// Descarta a alteração não preparada do arquivo, se ele ainda está na `revision` mostrada. Recusado com executor ativo.
 #[tauri::command(async)]
 fn git_discard_file(core: State<Core>, gate: State<Gate>, path: String, revision: String) -> Result<(), String> {
-    gate.ensure_open()?;
-    core.git_idle(|dir| git::discard_file(dir, &path, &revision))
+    idle(&core, &gate, |dir| git::discard_file(dir, &path, &revision))
 }
 
 /// Uma página do histórico (`limit` até 200, `skip` os já mostrados); com `path`, só os commits que tocaram o arquivo.
@@ -206,22 +194,19 @@ fn git_conflict(core: State<Core>, gate: State<Gate>, path: String) -> Result<gi
 /// Grava a resolução de um conflito se a pasta ainda está na `revision` lida. Com `markResolved`, prepara o arquivo.
 #[tauri::command(async)]
 fn git_write_resolution(core: State<Core>, gate: State<Gate>, path: String, content: String, revision: String, mark_resolved: bool) -> Result<(), String> {
-    gate.ensure_open()?;
-    core.git_idle(|dir| git::write_resolution(dir, &path, &content, &revision, mark_resolved))
+    idle(&core, &gate, |dir| git::write_resolution(dir, &path, &content, &revision, mark_resolved))
 }
 
 /// Aceita a remoção de um arquivo em conflito que um lado apagou, se ainda está na `revision` lida.
 #[tauri::command(async)]
 fn git_accept_deletion(core: State<Core>, gate: State<Gate>, path: String, revision: String) -> Result<(), String> {
-    gate.ensure_open()?;
-    core.git_idle(|dir| git::accept_deletion(dir, &path, &revision))
+    idle(&core, &gate, |dir| git::accept_deletion(dir, &path, &revision))
 }
 
 /// Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
 fn git_pull(core: State<Core>, gate: State<Gate>) -> Result<String, String> {
-    gate.ensure_open()?;
-    core.git_idle(git::pull)
+    idle(&core, &gate, git::pull)
 }
 
 /// A saída do `git push`, para a tela mostrar. Sem upstream, publica em origin.
@@ -238,15 +223,13 @@ fn git_branches(core: State<Core>, gate: State<Gate>) -> Result<git::Branches, S
 /// Troca para uma branch local existente. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
 fn git_switch(core: State<Core>, gate: State<Gate>, name: String) -> Result<(), String> {
-    gate.ensure_open()?;
-    core.git_idle(|dir| git::switch(dir, &name))
+    idle(&core, &gate, |dir| git::switch(dir, &name))
 }
 
 /// Cria a branch a partir do HEAD e troca para ela. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
 fn git_create_branch(core: State<Core>, gate: State<Gate>, name: String) -> Result<(), String> {
-    gate.ensure_open()?;
-    core.git_idle(|dir| git::create_branch(dir, &name))
+    idle(&core, &gate, |dir| git::create_branch(dir, &name))
 }
 
 #[tauri::command(async)]
@@ -271,14 +254,14 @@ fn rename_file(core: State<Core>, gate: State<Gate>, path: String, name: String)
 
 /// Manda os itens `paths` para a Lixeira. Devolve os feitos e o erro do que parou (ver `Batch`).
 #[tauri::command(async)]
-fn delete_files(core: State<Core>, gate: State<Gate>, paths: Vec<String>) -> Result<Batch<String>, String> {
-    Ok(batch(files::recycle_many(&repo(&core, &gate)?, &paths)))
+fn delete_files(core: State<Core>, gate: State<Gate>, paths: Vec<String>) -> Result<files::Batch<String>, String> {
+    Ok(files::recycle_many(&repo(&core, &gate)?, &paths))
 }
 
 /// Move os itens `paths` para a pasta `dest` (vazio é a raiz). Devolve os movidos e o erro do que parou (ver `Batch`).
 #[tauri::command(async)]
-fn move_files(core: State<Core>, gate: State<Gate>, paths: Vec<String>, dest: String) -> Result<Batch<files::Moved>, String> {
-    Ok(batch(files::move_items(&repo(&core, &gate)?, &paths, &dest)))
+fn move_files(core: State<Core>, gate: State<Gate>, paths: Vec<String>, dest: String) -> Result<files::Batch<files::Moved>, String> {
+    Ok(files::move_items(&repo(&core, &gate)?, &paths, &dest))
 }
 
 /// Põe os itens `paths` no clipboard como copiados (`cut` false) ou recortados. Nada se move aqui.
@@ -326,13 +309,9 @@ fn clipboard_snapshot(gate: State<Gate>) -> Result<clipboard::Snapshot, String> 
 
 /// Cola `snap` e, se um recorte moveu algo, esvazia o clipboard se ele ainda for `snap`. Um clipboard trocado no meio
 /// fica como está.
-fn paste_and_clear(project: &std::path::Path, dest: &str, snap: &clipboard::Snapshot) -> Result<Vec<files::Pasted>, files::Partial<files::Pasted>> {
+fn paste_and_clear(project: &Path, dest: &str, snap: &clipboard::Snapshot) -> files::Batch<files::Pasted> {
     let result = files::paste_detailed(project, dest, snap);
-    let moved = match &result {
-        Ok(done) => !done.is_empty(),
-        Err(partial) => !partial.done.is_empty(),
-    };
-    if snap.cut && moved {
+    if snap.cut && !result.done.is_empty() {
         clipboard::clear_if_same(snap);
     }
     result
@@ -341,8 +320,8 @@ fn paste_and_clear(project: &std::path::Path, dest: &str, snap: &clipboard::Snap
 /// A colagem com o detalhe: cada item colado (`from` absoluto como estava no clipboard, `to` relativo ao projeto), e
 /// o erro do que parou, se parou. Ver `Batch`.
 #[tauri::command(async)]
-fn paste_files_detailed(core: State<Core>, gate: State<Gate>, dest: String, snap: clipboard::Snapshot) -> Result<Batch<files::Pasted>, String> {
-    Ok(batch(paste_and_clear(&repo(&core, &gate)?, &dest, &snap)))
+fn paste_files_detailed(core: State<Core>, gate: State<Gate>, dest: String, snap: clipboard::Snapshot) -> Result<files::Batch<files::Pasted>, String> {
+    Ok(paste_and_clear(&repo(&core, &gate)?, &dest, &snap))
 }
 
 /// Fecha o shell `id` e mata o processo dele.

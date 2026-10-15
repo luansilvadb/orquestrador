@@ -65,26 +65,26 @@ fn read_open() -> Snapshot {
 
 /// Esvazia o clipboard só se ele ainda tem exatamente `expected` (os mesmos arquivos, na ordem, com o mesmo efeito).
 /// Lê e esvazia na mesma abertura, então um clipboard trocado por outro programa ou pelo usuário fica como está.
-/// Devolve se esvaziou.
-pub fn clear_if_same(expected: &Snapshot) -> bool {
+pub fn clear_if_same(expected: &Snapshot) {
     if !open() {
-        return false;
+        return;
     }
-    let same = read_open() == *expected;
-    unsafe {
-        if same {
-            EmptyClipboard();
-        }
-        CloseClipboard();
+    if read_open() == *expected {
+        unsafe { EmptyClipboard() };
     }
-    same
+    unsafe { CloseClipboard() };
+}
+
+/// O formato "Preferred DropEffect" registrado no Windows. `0` se o sistema não o dá.
+fn drop_effect_format() -> u32 {
+    let name: Vec<u16> = PREFERRED_DROP_EFFECT.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe { RegisterClipboardFormatW(name.as_ptr()) }
 }
 
 /// Lê o `Preferred DropEffect` do clipboard aberto. Sem o formato, ou sem o bit de mover, é cópia.
 /// Quem chama já abriu o clipboard.
 unsafe fn read_cut() -> bool {
-    let name: Vec<u16> = PREFERRED_DROP_EFFECT.encode_utf16().chain(std::iter::once(0)).collect();
-    let format = RegisterClipboardFormatW(name.as_ptr());
+    let format = drop_effect_format();
     if format == 0 {
         return false;
     }
@@ -163,7 +163,6 @@ fn payload(paths: &[PathBuf], cut: bool) -> (Vec<u8>, u32) {
 /// falhar no meio, o clipboard é esvaziado para não ficar um recorte pela metade.
 pub fn set_files(paths: &[PathBuf], cut: bool) -> Result<(), String> {
     let (bytes, effect) = payload(paths, cut);
-    let name: Vec<u16> = PREFERRED_DROP_EFFECT.encode_utf16().chain(std::iter::once(0)).collect();
 
     if !open() {
         return Err("A área de transferência está ocupada. Tente de novo.".into());
@@ -174,7 +173,7 @@ pub fn set_files(paths: &[PathBuf], cut: bool) -> Result<(), String> {
         } else {
             put(CF_HDROP, &bytes).and_then(|_| {
                 // `RegisterClipboardFormatW` devolve 0 quando o formato não existe; sem ele o efeito não iria junto.
-                let format = RegisterClipboardFormatW(name.as_ptr());
+                let format = drop_effect_format();
                 if format == 0 {
                     return Err("Não foi possível pôr o efeito do arquivo na área de transferência.".to_string());
                 }
