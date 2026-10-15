@@ -13,6 +13,7 @@ import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
 import { decorations, IGNORED } from './explorer-decorations';
 import { FileIcon } from './file-icon';
+import { SourceControl } from './source-control-icon';
 import { fileNameError } from './file-tab-actions';
 import { action, blocked, DIVIDER, useChord } from './file-tabs';
 import { splitPath } from './git-history';
@@ -128,7 +129,7 @@ export function Nav({ route, changed, onGo }: { route: Route; changed: number; o
     <Flexbox as="nav" aria-label="Telas" flex="none" width={44} align="center" gap={4} paddingBlock={8} className="border-r bg-card">
       {button('arquivos', 'Arquivos', Files)}
       {button('pesquisa', 'Pesquisar', Search, 'Pesquisar (Ctrl+Shift+F)')}
-      {button('git', gitLabel, GitBranch, 'Git', gitBadge)}
+      {button('git', gitLabel, SourceControl, 'Git', gitBadge)}
     </Flexbox>
   );
 }

@@ -203,6 +203,7 @@ O processo completo, com o modelo das notas e a checklist, está em `docs/releas
 | `src/terminal-screen.tsx` | O painel do Orquestrador, à direita da tela principal: faixa de abas (orquestrador e um executor por aba), a barra da aba ativa e os terminais, com o da aba ativa visível. |
 | `src/file-view.tsx` | O editor de texto (CodeMirror com as cores do app e as medidas do Monaco, guias de recuo e minimap), usado pela área central: não lê nem grava o disco; guarda o estado do CodeMirror por arquivo e reporta cursor e rolagem. |
 | `src/breadcrumbs.tsx` | Os breadcrumbs embaixo das abas de arquivo: pastas e arquivo, com o seletor do conteúdo da pasta. |
+| `src/source-control-icon.tsx` | O ícone do Git na coluna de ícones: o codicon `source-control` do Antigravity/VS Code (de `@vscode/codicons`, CC BY 4.0, licença em `src/assets/codicons/LICENSE`). |
 | `src/bracket-colors.ts` | A cor dos parênteses, colchetes e chaves pelo nível de aninhamento, lida da árvore de sintaxe. |
 | `src/editor-workspace.tsx` | A área central: até dois grupos lado a lado, com abas de arquivo, diff, commit e conflito; a comparação com o disco antes de gravar; e a recuperação por projeto (rascunhos, cursor, rolagem e layout). |
 | `src/workspace-model.ts` | O modelo puro das abas e dos grupos (prévia, fixadas, fechamento com confirmação, reabertura e carga do estado salvo). Sem React. |
