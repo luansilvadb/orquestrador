@@ -91,3 +91,42 @@ body {
 .search-hit-added {
   background-color: rgb(156 204 44 / 0.2);
 }
+
+/* Menus (de contexto e suspensos, do lobehub) nas medidas do menu do Antigravity/VS Code, com as cores do tema: 4 px de folga em
+   cima e embaixo, borda de 1 px e raio de 5 px; itens de 26 px com 4 px de margem dos lados, raio de 4 px e o texto a 26 px da
+   borda; o atalho à direita na fonte da interface, a 70%; separador com 5 px de margem. As classes do lobehub são geradas, então os
+   seletores usam os papéis ARIA (o item é filho direto do menu). */
+[role='menu']:has(> [role='menuitem']) {
+  padding: 4px 0;
+  border: 1px solid var(--ant-color-border);
+  border-radius: 5px;
+  font-size: 13px;
+}
+[role='menu'] > [role='menuitem'] {
+  height: 26px;
+  min-height: 26px;
+  width: auto;
+  margin: 0 4px;
+  padding: 0 26px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 26px;
+}
+[role='menu'] > [role='menuitem'] > div > span {
+  font-size: 13px;
+  line-height: 26px;
+}
+[role='menu'] > [role='menuitem'] > div > span + span,
+[role='menu'] > [role='menuitem'] > div > span + span * {
+  padding-left: 26px;
+  font-family: inherit;
+  font-size: 13px !important;
+  opacity: 0.7;
+}
+[role='menu'] > [role='menuitem'] > div > span + span * {
+  padding-left: 0;
+  opacity: 1;
+}
+[role='menu'] > [role='separator'] {
+  margin: 5px 0;
+}
