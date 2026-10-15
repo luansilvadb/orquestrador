@@ -85,7 +85,9 @@ export type Skipped = { path: string; reason: SkipReason };
 export type SearchResults = { files: SearchFile[]; truncated: boolean; skipped: Skipped[]; skippedOmitted: number };
 export type SearchOptions = { caseSensitive: boolean; wholeWord: boolean; regex: boolean };
 // Filtros de caminho: trechos separados por vírgula na tela, `*` qualquer sequência e `?` um caractere, sem diferenciar caixa. Lista vazia de `include` quer dizer todos.
-export type SearchFilter = { include: string[]; exclude: string[] };
+// Trecho com `./` na frente vale a partir da raiz (`./src` é a pasta `src`); sem ele, casa em qualquer ponto do caminho.
+// `only`: só estes caminhos exatos (os editores abertos); ausente é sem esse recorte, lista vazia não deixa nada.
+export type SearchFilter = { include: string[]; exclude: string[]; only?: string[] };
 // Abertura rápida: caminhos que casam com os termos (até 100) e o total que casou.
 export type QuickOpen = { paths: string[]; total: number };
 

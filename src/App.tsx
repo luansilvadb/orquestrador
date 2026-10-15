@@ -654,7 +654,7 @@ export function App() {
       setHistoryRequest({ path, id: nextHistoryId() });
       setRoute('git');
     } : null,
-    // Localizar na pasta: a pesquisa com o escopo da pasta (vazio é o projeto inteiro), com o campo focado.
+    // Localizar na pasta: a pasta vai para o campo de incluir da pesquisa (vazio é o projeto inteiro), com o campo focado.
     search: (dir = '') => {
       setScope({ path: dir, id: ++scopeSeq.current });
       setRoute('pesquisa');
@@ -741,6 +741,7 @@ export function App() {
                 <div className={shown('pesquisa')}>
                   <SearchScreen
                     active={route === 'pesquisa'} focusKey={searchFocus} folder={scope} seed={seed} refreshKey={saveTick} step={step} hasDraft={hasDraft}
+                    openPaths={() => editor.current?.openPaths() ?? []}
                     onOpen={(path, line, col, options) => editor.current?.openFile(path, { permanent: options?.permanent, line, col })}
                     onChanged={() => { git.refresh(); editor.current?.refresh(); }}
                   />

@@ -28,6 +28,9 @@ const MAX_QUICK: usize = 100;
 
 /// A consulta. `text` é o texto (literal) ou o padrão (`regex`); `include` e `exclude` são trechos de caminho, em que `*`
 /// vale qualquer sequência e `?` um caractere, sem diferenciar maiúsculas. Lista de `include` vazia quer dizer todos.
+/// Trecho que começa com `./` vale a partir da raiz do projeto (`./src` é a pasta `src`, não `outro/src`); sem `./`, o
+/// trecho casa em qualquer ponto do caminho. `only`, quando vem, limita a busca a estes caminhos exatos (os editores
+/// abertos); lista vazia não deixa nada.
 /// `preserve_case` só vale para a substituição (prévia e aplicação): ajusta a caixa do substituto à ocorrência casada.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -38,6 +41,7 @@ pub struct Query {
     pub regex: bool,
     pub include: Vec<String>,
     pub exclude: Vec<String>,
+    pub only: Option<Vec<String>>,
     pub preserve_case: bool,
 }
 
@@ -186,9 +190,9 @@ pub fn search(dir: &Path, query: &Query) -> Result<Results, String> {
         return Ok(out);
     }
     let re = compile(query)?;
-    let (include, exclude) = filters(query)?;
+    let filter = filters(query)?;
     let mut hits = 0usize;
-    for path in candidates(dir, &include, &exclude)? {
+    for path in candidates(dir, &filter)? {
         let doc = match load(dir, &path) {
             Ok(doc) => doc,
             Err(reason) => {
@@ -223,7 +227,7 @@ pub fn search(dir: &Path, query: &Query) -> Result<Results, String> {
 /// começa pelos mais curtos. Devolve até 100 e o total que casou.
 pub fn quick_open(dir: &Path, term: &str) -> Result<Quick, String> {
     let words: Vec<String> = term.to_lowercase().split_whitespace().map(str::to_string).collect();
-    let mut hits: Vec<String> = candidates(dir, &[], &[])?
+    let mut hits: Vec<String> = candidates(dir, &Filter::default())?
         .into_iter()
         .filter(|p| {
             let low = p.to_lowercase();
@@ -245,9 +249,9 @@ pub fn preview(dir: &Path, query: &Query, replacement: &str) -> Result<Preview, 
     }
     let re = compile(query)?;
     let rep = template(query, &re, replacement)?;
-    let (include, exclude) = filters(query)?;
+    let filter = filters(query)?;
     let mut shown = 0usize;
-    for path in candidates(dir, &include, &exclude)? {
+    for path in candidates(dir, &filter)? {
         let doc = match load(dir, &path) {
             Ok(doc) => doc,
             Err(reason) => {
@@ -282,8 +286,7 @@ pub fn apply(dir: &Path, request: &ApplyRequest) -> Result<Applied, String> {
     }
     let re = compile(query)?;
     let rep = template(query, &re, &request.replacement)?;
-    let (include, exclude) = filters(query)?;
-    let listed = candidates(dir, &include, &exclude)?;
+    let listed = candidates(dir, &filters(query)?)?;
     let mut out = Applied { applied: Vec::new(), errors: Vec::new() };
     for pick in &request.files {
         match apply_one(dir, &listed, &re, &rep, query.preserve_case, pick) {
@@ -373,24 +376,41 @@ fn template(query: &Query, re: &Regex, replacement: &str) -> Result<String, Stri
     Ok(replacement.to_string())
 }
 
-/// Os filtros de caminho de `query`: cada trecho vira um padrão sem diferença de caixa.
-fn filters(query: &Query) -> Result<(Vec<Regex>, Vec<Regex>), String> {
+/// Os filtros de caminho de uma consulta, já compilados. O padrão deixa passar tudo.
+#[derive(Default)]
+struct Filter {
+    include: Vec<Regex>,
+    exclude: Vec<Regex>,
+    only: Option<Vec<String>>,
+}
+
+/// Os filtros de caminho de `query`: cada trecho vira um padrão sem diferença de caixa; `only` vai com "/".
+fn filters(query: &Query) -> Result<Filter, String> {
     let compile_all = |terms: &[String]| -> Result<Vec<Regex>, String> {
         terms.iter().map(|t| t.trim().replace('\\', "/")).filter(|t| !t.is_empty()).map(|t| glob(&t)).collect()
     };
-    Ok((compile_all(&query.include)?, compile_all(&query.exclude)?))
+    let only = query.only.as_ref().map(|paths| paths.iter().map(|p| p.replace('\\', "/")).collect());
+    Ok(Filter { include: compile_all(&query.include)?, exclude: compile_all(&query.exclude)?, only })
 }
 
-/// Trecho de caminho com `*` e `?`; o resto é literal. Acha o trecho em qualquer lugar do caminho.
+/// Trecho de caminho com `*` e `?`; o resto é literal. Sem `./` na frente, acha o trecho em qualquer lugar do caminho.
+/// Com `./`, o trecho começa na raiz e vai até o fim de um nome: `./src` casa `src` e o que está dentro, mas não
+/// `src-tauri` nem `outro/src`. `./` sozinho (ou `.`) é o projeto inteiro.
 fn glob(term: &str) -> Result<Regex, String> {
     // `escape` põe `\` antes de `*` e de `?`; trocar esses pares pelo equivalente do `regex` dá o glob.
-    let pattern = format!("(?i){}", regex::escape(term).replace(r"\*", ".*").replace(r"\?", "."));
+    let body = |t: &str| regex::escape(t).replace(r"\*", ".*").replace(r"\?", ".");
+    let rooted = if term == "." { Some("") } else { term.strip_prefix("./") };
+    let pattern = match rooted.map(|rest| rest.trim_end_matches('/')) {
+        Some("") => "^".to_string(),
+        Some(rest) => format!("(?i)^{}(?:/|$)", body(rest)),
+        None => format!("(?i){}", body(term)),
+    };
     Regex::new(&pattern).map_err(|e| format!("Filtro de caminho inválido: {}", regex_reason(&e)))
 }
 
 /// Os caminhos que a busca enxerga, em ordem, depois dos filtros. Com repositório, são os do `git ls-files`
 /// (rastreados e não ignorados); sem ele, a pasta percorrida (`caminhos_da_pasta`).
-fn candidates(dir: &Path, include: &[Regex], exclude: &[Regex]) -> Result<Vec<String>, String> {
+fn candidates(dir: &Path, filter: &Filter) -> Result<Vec<String>, String> {
     let mut paths = match git::modo(dir)? {
         git::Modo::Repo => {
             let out = proc::git_saida(dir, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"])?;
@@ -398,8 +418,11 @@ fn candidates(dir: &Path, include: &[Regex], exclude: &[Regex]) -> Result<Vec<St
         }
         _ => caminhos_da_pasta(dir)?,
     };
-    paths.retain(|p| include.is_empty() || include.iter().any(|r| r.is_match(p)));
-    paths.retain(|p| !exclude.iter().any(|r| r.is_match(p)));
+    if let Some(only) = &filter.only {
+        paths.retain(|p| only.contains(p));
+    }
+    paths.retain(|p| filter.include.is_empty() || filter.include.iter().any(|r| r.is_match(p)));
+    paths.retain(|p| !filter.exclude.iter().any(|r| r.is_match(p)));
     paths.sort();
     paths.dedup();
     Ok(paths)
@@ -720,6 +743,47 @@ mod tests {
     }
 
     #[test]
+    fn filtro_com_ponto_barra_vale_a_partir_da_raiz() {
+        let t = repo_tmp("raiz");
+        write(&t.0, "src/a.ts", "marca\n");
+        write(&t.0, "src-tauri/src/b.rs", "marca\n");
+        write(&t.0, "docs/src/c.md", "marca\n");
+        write(&t.0, "srcx.txt", "marca\n");
+        commit_all(&t.0, "base");
+        let incluir = |include: &str| -> Vec<String> {
+            let r = buscar(&t.0, &Query { include: vec![include.into()], ..q("marca") });
+            caminhos(&r).into_iter().map(String::from).collect()
+        };
+        assert_eq!(incluir("./src"), vec!["src/a.ts"]);
+        assert_eq!(incluir("./src/"), vec!["src/a.ts"]);
+        assert_eq!(incluir(".\\SRC"), vec!["src/a.ts"], "barra invertida e caixa não importam");
+        assert_eq!(incluir("./src-tauri/*.rs"), vec!["src-tauri/src/b.rs"]);
+        assert_eq!(incluir("./").len(), 4);
+        // Sem `./`, o trecho continua casando em qualquer ponto do caminho.
+        assert_eq!(incluir("src/"), vec!["docs/src/c.md", "src-tauri/src/b.rs", "src/a.ts"]);
+        let fora = Query { exclude: vec!["./src".into()], ..q("marca") };
+        assert_eq!(caminhos(&buscar(&t.0, &fora)), vec!["docs/src/c.md", "src-tauri/src/b.rs", "srcx.txt"]);
+    }
+
+    #[test]
+    fn so_nos_caminhos_abertos() {
+        let t = repo_tmp("abertos");
+        write(&t.0, "a.txt", "marca\n");
+        write(&t.0, "b[1].txt", "marca\n");
+        write(&t.0, "c.txt", "marca\n");
+        commit_all(&t.0, "base");
+        let abertos = Query { only: Some(vec!["b[1].txt".into(), "c.txt".into(), "sumiu.txt".into()]), ..q("marca") };
+        assert_eq!(caminhos(&buscar(&t.0, &abertos)), vec!["b[1].txt", "c.txt"]);
+        let nenhum = Query { only: Some(vec![]), ..q("marca") };
+        assert!(buscar(&t.0, &nenhum).files.is_empty());
+        // A aplicação usa o mesmo recorte: arquivo fora dele é recusado.
+        let prev = preview(&t.0, &abertos, "x").unwrap();
+        let so_c = Query { only: Some(vec!["c.txt".into()]), ..q("marca") };
+        let req = ApplyRequest { query: so_c, replacement: "x".into(), files: vec![pick(&prev, "b[1].txt")] };
+        assert_eq!(apply(&t.0, &req).unwrap().errors.len(), 1);
+    }
+
+    #[test]
     fn limite_de_linhas_marca_truncado() {
         let t = repo_tmp("limite");
         write(&t.0, "a.txt", "x\n".repeat(MAX_LINES + 5));
@@ -887,7 +951,7 @@ mod tests {
             return;
         }
         // Antes de tudo: a pesquisa enxerga o caminho pela junção, mas recusa o conteúdo que sai do projeto.
-        assert!(candidates(&t.0, &[], &[]).unwrap().contains(&"link/segredo.txt".to_string()));
+        assert!(candidates(&t.0, &Filter::default()).unwrap().contains(&"link/segredo.txt".to_string()));
         assert!(buscar(&t.0, &q("x")).skipped.iter().any(|s| s.path == "link/segredo.txt" && s.reason == SkipReason::NotFile));
         assert_eq!(quick_open(&t.0, "segredo").unwrap().total, 0);
         assert_eq!(quick_open(&t.0, "base").unwrap().paths, vec!["base.txt"]);
@@ -925,7 +989,7 @@ mod tests {
         write(&t.0, "sub/x.txt", "x");
         write(&t.0, "node_modules/lib/i.txt", "x");
         write(&t.0, "pasta/node_modules/j.txt", "x");
-        assert_eq!(candidates(&t.0, &[], &[]).unwrap(), vec![".gitignore", ".oculto", "a.txt", "pasta/b.txt", "sub/x.txt"]);
+        assert_eq!(candidates(&t.0, &Filter::default()).unwrap(), vec![".gitignore", ".oculto", "a.txt", "pasta/b.txt", "sub/x.txt"]);
         assert_eq!(quick_open(&t.0, "b.txt").unwrap().paths, vec!["pasta/b.txt"]);
     }
 
@@ -937,7 +1001,7 @@ mod tests {
         write(&t.0, "base.txt", "x\n");
         // Junção não exige privilégio no Windows.
         assert!(junction(&t.0.join("link"), &fora.0), "mklink /J falhou");
-        assert_eq!(candidates(&t.0, &[], &[]).unwrap(), vec!["base.txt"]);
+        assert_eq!(candidates(&t.0, &Filter::default()).unwrap(), vec!["base.txt"]);
         assert_eq!(quick_open(&t.0, "segredo").unwrap().total, 0);
     }
 }

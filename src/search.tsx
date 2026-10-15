@@ -1,16 +1,20 @@
-// A pesquisa de texto nos arquivos do projeto, na coluna da árvore de pastas. A busca roda no backend (comando `search`) e a substituição
-// em vários arquivos tem prévia (`replace_preview`, não grava) e aplicação (`replace_apply`, só nos arquivos escolhidos da prévia).
-// Aqui ficam o cabeçalho com as ações, o campo com as três opções, os filtros de caminho, o resumo, a lista de resultados por arquivo
-// e a revisão da substituição (antes e depois, com caixa por arquivo).
-import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { CaseSensitive, CaseUpper, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eraser, ListFilter, type LucideIcon, Regex, RefreshCw, Replace, WholeWord, X } from 'lucide-react';
-import { ActionIcon, Alert, Button, ContextMenuTrigger, Input, Modal, ScrollArea, Text } from '@lobehub/ui/base-ui';
+// A pesquisa de texto nos arquivos do projeto, na coluna da árvore de pastas, no layout do painel Pesquisar do Antigravity/VS Code:
+// cabeçalho com Atualizar, Limpar, Árvore/Lista e Recolher; a seta à esquerda abre o Substituir embaixo da busca; o `...` abre os
+// campos de incluir e excluir. Cada ocorrência é uma linha da lista, agrupada por arquivo (ou por pasta, na árvore).
+// A busca roda no backend (comando `search`). Com texto no Substituir, a prévia (`replace_preview`, não grava) mostra na própria
+// lista o que sai riscado e o que entra; a troca por arquivo e o Substituir Tudo gravam com `replace_apply`, só nos arquivos da prévia.
+import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  BookOpen, CaseSensitive, CaseUpper, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Ellipsis, List, ListTree, ListX,
+  type LucideIcon, Regex, ReplaceAll, RotateCw, WholeWord, X,
+} from 'lucide-react';
+import { ActionIcon, Button, ContextMenuTrigger, Input, Modal, ScrollArea, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
 import { FileIcon } from './file-icon';
 import { copy, splitPath } from './git-history';
 import { action, DIVIDER } from './file-tabs';
-import type { ReplacePreview, ReplaceQuery, SearchMatch, SearchOptions, SearchResults, SkipReason } from './types';
+import type { ReplacePreview, ReplaceQuery, SearchFile, SearchMatch, SearchOptions, SearchResults, SkipReason } from './types';
 
 const DELAY_MS = 300;
 // Mesmo limite do backend: com mais linhas casadas, só as primeiras aparecem e a lista avisa.
@@ -18,13 +22,13 @@ const LIMIT = 2000;
 // Histórico de consultas no navegador do app: só as mais recentes, sem repetir.
 const HISTORY_KEY = 'orquestrador.search.history';
 const HISTORY_MAX = 20;
-// Linhas trocadas mostradas por arquivo na revisão; o resto vira a contagem.
-const REVIEW_LINES = 30;
+// Lista ou árvore, guardado no navegador do app. O padrão é a lista, como no VS Code.
+const VIEW_KEY = 'orquestrador.search.view';
+// Como no VS Code: o trecho antes da ocorrência fica com no máximo 26 caracteres (cortado em limite de palavra, com "…").
+const BEFORE_MAX = 26;
+const AFTER_MAX = 250;
 // Quantos arquivos o diálogo de confirmação lista antes de resumir.
 const CONFIRM_LIST = 12;
-const HINT = 'Digite para pesquisar nos arquivos do projeto.';
-const REGEX_HINT = 'Sintaxe de regex do Rust. Capturas: $1 ou ${nome}. Sem lookaround (?=, (?!, (?<=, (?<!) e sem referências como \\1.';
-const REPLACE_HINT = 'Texto literal. Deixe vazio para apagar o que casar.';
 const NO_OPTIONS: SearchOptions = { caseSensitive: false, wholeWord: false, regex: false };
 const TOGGLES: { key: keyof SearchOptions; icon: LucideIcon; label: string }[] = [
   { key: 'caseSensitive', icon: CaseSensitive, label: 'Diferenciar maiúsculas de minúsculas' },
@@ -38,26 +42,31 @@ const REASON: Record<SkipReason, string> = {
   notFile: 'não é arquivo comum',
   unreadable: 'não pôde ser lido',
 };
+// Medidas do Antigravity: botão dentro do campo com 20 px e ícone de 16 px; linhas da lista com 22 px e recuo de 8 px por nível.
+const INPUT_TOGGLE = { size: 16, blockSize: 20, borderRadius: 3 } as const;
+const INPUT_STYLE = { height: 26 };
+const INDENT = 8;
+const FOCUS = 'focus-visible:ring-2 focus-visible:ring-ring/50';
 
 /** Tudo o que a busca e a substituição usam, do jeito que está nos campos. */
 type Form = {
   query: string;
   options: SearchOptions;
-  // Filtros de caminho como digitados: trechos separados por vírgula.
+  // Filtros de caminho como digitados: trechos separados por vírgula. `./` no começo vale a partir da raiz do projeto.
   include: string;
   exclude: string;
-  // Pasta da pesquisa (relativa, com "/"); `null` é o projeto inteiro.
-  scope: string | null;
+  // Só nos arquivos abertos no editor.
+  onlyOpen: boolean;
   replacement: string;
   // Substituição que segue a caixa da ocorrência (ver `ReplaceQuery.preserveCase`).
   preserveCase: boolean;
 };
-const EMPTY_FORM: Form = { query: '', options: NO_OPTIONS, include: '', exclude: '', scope: null, replacement: '', preserveCase: false };
+const EMPTY_FORM: Form = { query: '', options: NO_OPTIONS, include: '', exclude: '', onlyOpen: false, replacement: '', preserveCase: false };
 
 // Caracteres especiais escapados quando a consulta é texto, não regex.
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** RegExp do destaque, com as mesmas opções da busca. Se não puder ser montada (regex inválida), devolve null. */
+/** RegExp das ocorrências, com as mesmas opções da busca. Se não puder ser montada (regex que só o backend entende), devolve null. */
 function highlighter(query: string, options: SearchOptions): RegExp | null {
   if (!query) return null;
   try {
@@ -68,45 +77,69 @@ function highlighter(query: string, options: SearchOptions): RegExp | null {
   }
 }
 
-/** Texto com os trechos que casam destacados. Sem RegExp ou sem casamento, o texto sai puro. */
-function marked(text: string, pattern: RegExp | null): ReactNode {
-  if (!pattern) return text;
-  const parts: ReactNode[] = [];
-  let last = 0;
-  for (const m of text.matchAll(pattern)) {
-    if (!m[0]) continue; // casamento vazio não tem o que destacar
-    const at = m.index;
-    parts.push(
-      text.slice(last, at),
-      <mark key={at} className="rounded-sm bg-[var(--ant-color-primary-bg)] text-foreground shadow-[inset_0_0_0_1px_var(--ant-color-primary-border)]">{m[0]}</mark>,
-    );
-    last = at + m[0].length;
+/** O `lcut` do VS Code: tira os espaços do começo e, se passar de `max`, corta no começo em limite de palavra e põe `prefix`. */
+export function lcut(text: string, max: number, prefix = '…'): string {
+  const trimmed = text.trimStart();
+  if (trimmed.length < max) return trimmed;
+  const re = /\b/g;
+  let at = 0;
+  while (re.test(trimmed) && !(trimmed.length - re.lastIndex < max)) {
+    at = re.lastIndex;
+    re.lastIndex += 1;
   }
-  parts.push(text.slice(last));
-  return parts;
+  return at === 0 ? trimmed : prefix + trimmed.substring(at).trimStart();
+}
+
+/** Uma ocorrência na lista. `start`/`end` são posições em `text` (a janela que o backend mandou); -1 quando a RegExp daqui não achou. */
+type Hit = { path: string; line: number; col: number; text: string; start: number; end: number; offset: number };
+
+/** As ocorrências de uma linha do backend. `col` de cada uma sai da coluna da primeira (UTF-16, como o índice das strings do JS).
+ *  `offset` é onde a janela começa na linha inteira, para achar a ocorrência na prévia. Sem casamento aqui, a linha vira uma só. */
+export function hitsOf(path: string, m: SearchMatch, pattern: RegExp | null): Hit[] {
+  const found = pattern ? [...m.text.matchAll(pattern)].filter((x) => x[0]) : [];
+  if (!found.length) return [{ path, line: m.line, col: m.col, text: m.text, start: -1, end: -1, offset: 0 }];
+  const first = found[0].index;
+  return found.map((x) => ({
+    path, line: m.line, col: m.col + x.index - first, text: m.text, start: x.index, end: x.index + x[0].length, offset: m.col - 1 - first,
+  }));
+}
+
+/** O que entra no lugar de cada ocorrência de `before`, lido de `after` (a linha que o backend calculou). O texto entre as ocorrências
+ *  não muda, então ele serve de âncora. Devolve posição em `before` → substituto, ou null quando o alinhamento é ambíguo. */
+export function replacementsOf(before: string, after: string, pattern: RegExp): Map<number, string> | null {
+  const found = [...before.matchAll(pattern)].filter((x) => x[0]);
+  if (!found.length) return null;
+  const gaps: string[] = [];
+  let last = 0;
+  for (const f of found) {
+    gaps.push(before.slice(last, f.index));
+    last = f.index + f[0].length;
+  }
+  const tail = before.slice(last);
+  if (!after.startsWith(gaps[0]) || !after.endsWith(tail) || after.length < gaps[0].length + tail.length) return null;
+  const end = after.length - tail.length;
+  const out = new Map<number, string>();
+  let pos = gaps[0].length;
+  for (let i = 0; i < found.length; i++) {
+    const gap = gaps[i + 1];
+    if (gap === '') return null; // ocorrências coladas: não dá para saber onde uma termina
+    const next = gap === undefined ? end : after.indexOf(gap, pos);
+    if (next < pos || next > end) return null;
+    out.set(found[i].index, after.slice(pos, next));
+    pos = next + (gap?.length ?? 0);
+  }
+  return out;
 }
 
 // Trechos separados por vírgula, sem espaço nas pontas e sem os vazios.
 const terms = (text: string) => text.split(',').map((t) => t.trim()).filter(Boolean);
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-/** Filtros da consulta. Na pasta escolhida sem filtro de inclusão, o backend recebe a pasta como trecho; o recorte exato vem depois, em `inScope`. */
-function filtersOf(form: Form) {
-  const include = terms(form.include);
-  return {
-    include: include.length ? include : form.scope ? [`${form.scope}/*`] : [],
-    exclude: terms(form.exclude),
-  };
-}
-const queryOf = (form: Form): ReplaceQuery => ({ text: form.query, ...form.options, ...filtersOf(form), preserveCase: form.preserveCase });
-
-// Só entra o que está dentro da pasta da pesquisa. O backend casa trechos em qualquer ponto do caminho, então o recorte é conferido aqui.
-const inScope = (path: string, scope: string | null) => !scope || path.startsWith(`${scope}/`);
-
-/** Resumo da busca: contagem de linhas e de arquivos, com o aviso do limite quando passou dele. */
-function summary(lines: number, files: number, truncated: boolean): string {
-  if (!lines) return 'Nenhum resultado.';
-  const text = `${lines} ${lines === 1 ? 'resultado' : 'resultados'} em ${files} ${files === 1 ? 'arquivo' : 'arquivos'}`;
-  return truncated ? `${text}. Só os ${LIMIT} primeiros aparecem.` : text;
+/** Resumo da busca: contagem de resultados e de arquivos, com o aviso do limite quando passou dele. */
+function summary(hits: number, files: number, truncated: boolean): string {
+  if (!hits) return 'Nenhum resultado.';
+  const text = `${plural(hits, 'resultado', 'resultados')} em ${plural(files, 'arquivo', 'arquivos')}`;
+  return truncated ? `${text}. Só as ${LIMIT} primeiras linhas aparecem.` : text;
 }
 
 /** Histórico salvo. Leitura com falha (sem acesso ao armazenamento ou JSON inválido) vira histórico vazio. */
@@ -120,67 +153,125 @@ function readHistory(): string[] {
   }
 }
 
-/** Grava o histórico. Sem espaço ou sem acesso, a busca segue e o histórico vale só nesta sessão. */
-function writeHistory(list: string[]) {
+/** Grava no armazenamento do navegador. Sem espaço ou sem acesso, segue sem persistir. */
+function store(key: string, value: string) {
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+    localStorage.setItem(key, value);
   } catch {
-    // Sem armazenamento: nada a fazer além de seguir sem persistir.
+    // Sem armazenamento: vale só nesta sessão.
   }
 }
 
-// Chave de uma linha dispensada: caminho e posição juntos, para não confundir linhas de arquivos diferentes.
-const lineKey = (path: string, m: SearchMatch) => JSON.stringify([path, m.line, m.col]);
+function readView(): 'list' | 'tree' {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'tree' ? 'tree' : 'list';
+  } catch {
+    return 'list';
+  }
+}
+
+// Chave de uma ocorrência dispensada: caminho e posição juntos, para não confundir arquivos diferentes.
+const hitKey = (h: { path: string; line: number; col: number }) => JSON.stringify([h.path, h.line, h.col]);
 
 // Texto de um arquivo para a área de transferência: caminho numa linha e, depois, "  linha: texto" por resultado.
-const blockText = (path: string, matches: SearchMatch[]) =>
-  [path, ...matches.map((m) => `  ${m.line}: ${m.text.trimStart()}`)].join('\n');
+const blockText = (path: string, hits: Hit[]) =>
+  [path, ...[...new Map(hits.map((h) => [h.line, h])).values()].map((h) => `  ${h.line}: ${h.text.trimStart()}`)].join('\n');
 
-/** Linhas que mudaram entre o original e o resultado. A substituição não cria nem junta linhas, então o índice serve de pareamento. */
-function changedLines(original: string, result: string) {
-  const before = original.split('\n');
-  const after = result.split('\n');
-  const out: { line: number; before: string; after: string }[] = [];
-  for (let i = 0; i < before.length; i++) {
-    if (before[i] !== after[i]) out.push({ line: i + 1, before: before[i].replace(/\r$/, ''), after: (after[i] ?? '').replace(/\r$/, '') });
+/** Linhas de um texto da prévia, sem o CR do fim. A substituição não cria nem junta linhas: o índice pareia original e resultado. */
+const linesOf = (text: string) => text.split('\n').map((l) => l.replace(/\r$/, ''));
+
+/** Uma linha da lista na tela: pasta (só na árvore), arquivo ou ocorrência. */
+type Row =
+  | { kind: 'dir'; key: string; path: string; label: string; depth: number; count: number }
+  | { kind: 'file'; key: string; path: string; depth: number; hits: Hit[]; tree: boolean }
+  | { kind: 'hit'; key: string; hit: Hit; depth: number };
+
+type Dir = { name: string; path: string; dirs: Map<string, Dir>; files: { path: string; hits: Hit[] }[] };
+
+/** As linhas da tela, na ordem. Na árvore, pastas com uma só subpasta e sem arquivo ficam numa linha só ("src/components"). */
+function rowsOf(files: { path: string; hits: Hit[] }[], view: 'list' | 'tree', collapsed: Set<string>): Row[] {
+  const rows: Row[] = [];
+  const pushFile = (f: { path: string; hits: Hit[] }, depth: number, tree: boolean) => {
+    const key = `f:${f.path}`;
+    rows.push({ kind: 'file', key, path: f.path, depth, hits: f.hits, tree });
+    if (!collapsed.has(key)) for (const h of f.hits) rows.push({ kind: 'hit', key: hitKey(h), hit: h, depth: depth + 1 });
+  };
+  if (view === 'list') {
+    for (const f of files) pushFile(f, 0, false);
+    return rows;
   }
-  return out;
+  const root: Dir = { name: '', path: '', dirs: new Map(), files: [] };
+  for (const f of files) {
+    let node = root;
+    for (const part of splitPath(f.path).dir.split('/').filter(Boolean)) {
+      const path = node.path ? `${node.path}/${part}` : part;
+      if (!node.dirs.has(part)) node.dirs.set(part, { name: part, path, dirs: new Map(), files: [] });
+      node = node.dirs.get(part)!;
+    }
+    node.files.push(f);
+  }
+  const count = (d: Dir): number => d.files.reduce((n, f) => n + f.hits.length, 0) + [...d.dirs.values()].reduce((n, c) => n + count(c), 0);
+  const walk = (dir: Dir, depth: number) => {
+    for (const child of [...dir.dirs.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+      let node = child;
+      let label = child.name;
+      while (node.files.length === 0 && node.dirs.size === 1) {
+        node = [...node.dirs.values()][0];
+        label += `/${node.name}`;
+      }
+      const key = `d:${node.path}`;
+      rows.push({ kind: 'dir', key, path: node.path, label, depth, count: count(node) });
+      if (!collapsed.has(key)) walk(node, depth + 1);
+    }
+    for (const f of dir.files) pushFile(f, depth, true);
+  };
+  walk(root, 0);
+  return rows;
 }
 
-type Shown = { query: string; options: SearchOptions; scope: string | null };
-type Preview = { query: ReplaceQuery; replacement: string; scope: string | null; data: ReplacePreview };
-type Report = { applied: { path: string; count: number }[]; errors: { path: string; error: string }[]; draft: string[]; failure: string };
+// As chaves das pastas da árvore (comprimidas ou não) acima de um caminho: abrir todas mostra o arquivo.
+const ancestors = (path: string) => {
+  const parts = splitPath(path).dir.split('/').filter(Boolean);
+  return parts.map((_, i) => `d:${parts.slice(0, i + 1).join('/')}`);
+};
 
-/** Pesquisa de texto e substituição: o cabeçalho com as ações, o campo com as opções, os filtros, o resumo, os resultados e a revisão. */
-export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKey, step, hasDraft, onChanged }: {
+/** A prévia que está valendo: a resposta do backend e, por arquivo, a revisão e as linhas antes e depois. */
+type Preview = { key: string; query: ReplaceQuery; replacement: string; data: ReplacePreview };
+type Report = { replaced: number; files: number; replacement: string; errors: { path: string; error: string }[]; left: string[] };
+
+/** Pesquisa de texto e substituição no layout do Antigravity: cabeçalho, campos, detalhes, resumo e a lista de resultados. */
+export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKey, step, hasDraft, openPaths, onChanged }: {
   active: boolean;
   focusKey: number;
   /** Abre o arquivo na linha e na coluna (UTF-16, a partir de 1). Clique simples pede prévia; duplo clique ou Enter pedem permanente. */
   onOpen: (path: string, line: number, col?: number, options?: { permanent?: boolean }) => void;
-  /** Pedido de pesquisa só nesta pasta (`path` relativo, '' é o projeto). Um novo `id` a cada pedido. */
+  /** Pedido de pesquisa só nesta pasta (`path` relativo, '' é o projeto): vira `./pasta` no campo de incluir. Um novo `id` a cada pedido. */
   folder: { path: string; id: number } | null;
   /** Texto selecionado no editor: vira a consulta e a busca roda na hora. Um novo `id` a cada pedido. */
   seed: { text: string; id: number } | null;
-  /** Sobe a cada gravação no editor: refaz a busca atual, se não há revisão de substituição aberta. */
+  /** Sobe a cada gravação no editor: refaz a busca atual. */
   refreshKey: number;
   /** F4 (`dir` 1) ou Shift+F4 (`dir` -1): anda pelos resultados. Um novo `id` a cada tecla. */
   step: { dir: 1 | -1; id: number } | null;
-  /** Diz se o arquivo tem alteração não salva no editor. Consultado ao exibir e de novo ao aplicar. */
+  /** Diz se o arquivo tem alteração não salva no editor. Consultado ao exibir e de novo ao substituir. */
   hasDraft: (path: string) => boolean;
+  /** Caminhos abertos no editor, para "só nos editores abertos". */
+  openPaths: () => string[];
   /** Chamado depois que a substituição gravou arquivos, para o App recarregar o que estiver aberto. */
   onChanged: () => void;
 }) {
   const [form, setForm] = useState<Form>(EMPTY_FORM);
   const [results, setResults] = useState<SearchResults | null>(null);
-  // Consulta, opções e pasta da resposta que está na tela: o destaque e o recorte usam estas, não as do campo.
-  const [shown, setShown] = useState<Shown>({ query: '', options: NO_OPTIONS, scope: null });
+  // Consulta e opções da resposta que está na tela: o destaque usa estas, não as do campo.
+  const [shown, setShown] = useState<{ query: string; options: SearchOptions }>({ query: '', options: NO_OPTIONS });
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
-  // Arquivos recolhidos. Começam todos abertos a cada busca nova.
+  const [view, setView] = useState<'list' | 'tree'>(readView);
+  // Arquivos (`f:`) e pastas (`d:`) recolhidos. Começam todos abertos a cada busca nova.
   const [collapsed, setCollapsed] = useState<string[]>([]);
-  // Resultados dispensados na tela (não mexem no disco). Zerados a cada resposta nova da busca.
+  // Resultados dispensados na tela (não mexem no disco). Zerados a cada busca nova.
   const [dismissedFiles, setDismissedFiles] = useState<string[]>([]);
-  const [dismissedLines, setDismissedLines] = useState<string[]>([]);
+  const [dismissedHits, setDismissedHits] = useState<string[]>([]);
   // Histórico de consultas, a mais recente primeiro. `at` é a posição de navegação com ArrowUp/ArrowDown (-1 é o texto digitado).
   const [history, setHistory] = useState<string[]>(readHistory);
   const [at, setAt] = useState(-1);
@@ -188,28 +279,31 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   // Trocar pelo histórico não deve reordená-lo: a busca feita por ele não entra de novo no histórico.
   const skipHistory = useRef(false);
   const resultsBox = useRef<HTMLDivElement>(null);
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
-  // Substituição: a prévia que está na tela, os arquivos marcados, o resultado da última aplicação e o que está rodando.
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewError, setPreviewError] = useState('');
-  const [picked, setPicked] = useState<string[]>([]);
   const [report, setReport] = useState<Report | null>(null);
-  const [previewing, setPreviewing] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [confirming, setConfirming] = useState(false);
+  // Substituir Tudo espera a confirmação com a prévia que será aplicada.
+  const [confirming, setConfirming] = useState<Preview | null>(null);
   // Ref no contêiner do campo, não no `Input`: o lobehub lê `element.ref` e o React 19 avisa. O campo é achado dentro do contêiner.
   const fieldBox = useRef<HTMLDivElement>(null);
   const field = () => fieldBox.current?.querySelector('input') ?? null;
   const timer = useRef(0);
-  // Só a resposta da busca mais nova vale: uma antiga que chega depois é descartada.
+  const previewTimer = useRef(0);
+  // Só a resposta mais nova vale: uma antiga que chega depois é descartada (busca e prévia, cada uma com o seu contador).
   const latest = useRef(0);
-  // Mesma regra para a prévia: qualquer mudança nos campos invalida a prévia em voo.
   const latestPreview = useRef(0);
   // Resultado atual (clique ou F4): a linha marcada na lista e de onde o F4 sai.
   const [current, setCurrent] = useState<{ path: string; line: number; col: number } | null>(null);
   // Texto do pedido de seleção que espera aparecer no campo para ser selecionado.
   const selectAfter = useRef<string | null>(null);
+
+  const filtersOf = (f: Form) => ({ include: terms(f.include), exclude: terms(f.exclude), ...(f.onlyOpen ? { only: openPaths() } : {}) });
+  const queryOf = (f: Form): ReplaceQuery => ({ text: f.query, ...f.options, ...filtersOf(f), preserveCase: f.preserveCase });
+  // A prévia vale para esta combinação de consulta, filtros e substituição; mudou qualquer um, ela é refeita.
+  const previewKey = (f: Form) => JSON.stringify([queryOf(f), f.replacement]);
 
   // Ao entrar na tela, e a cada Ctrl+Shift+F (`focusKey`), o campo recebe o foco com o texto selecionado.
   useEffect(() => {
@@ -218,14 +312,13 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     field()?.select();
   }, [active, focusKey]);
 
-  // Pedido de pesquisa na pasta: aplica o recorte e refaz a busca, se já há consulta.
+  // Localizar na pasta: a pasta vai para o campo de incluir (como o VS Code faz), os detalhes abrem e a busca refaz, se há consulta.
   useEffect(() => {
     if (!folder) return;
-    const scope = folder.path || null;
-    setForm((prev) => ({ ...prev, scope }));
-    setFiltersOpen(true);
-    invalidate();
-    if (form.query) void run({ ...form, scope });
+    const next = { ...form, include: folder.path ? `./${folder.path}` : '' };
+    setForm(next);
+    setDetailsOpen(true);
+    if (next.query) now(next);
     field()?.focus();
     // Só o `id` do pedido importa: cada pedido de pasta é novo, mesmo para a mesma pasta.
   }, [folder?.id]);
@@ -233,12 +326,10 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   // Texto selecionado no editor: vira a consulta e a busca roda na hora, como Enter. O campo é selecionado depois que o texto novo aparece nele.
   useEffect(() => {
     if (!seed) return;
-    window.clearTimeout(timer.current);
     setAt(-1);
     const next = { ...form, query: seed.text };
     setForm(next);
-    invalidate();
-    void run(next);
+    now(next);
     if (seed.text === form.query) field()?.select();
     else selectAfter.current = seed.text;
     // Só o `id` do pedido importa: cada pedido é novo, mesmo com o mesmo texto.
@@ -251,15 +342,15 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     field()?.select();
   });
 
-  // Gravação no editor: refaz a busca atual sem entrar no histórico, sem roubar o foco e sem tirar o recolhido e o dispensado. Com revisão de substituição aberta, espera.
+  // Gravação no editor: refaz a busca atual sem entrar no histórico, sem roubar o foco e sem tirar o recolhido e o dispensado.
   useEffect(() => {
-    if (!refreshKey || !form.query || preview) return;
+    if (!refreshKey || !form.query) return;
     void run(form, true);
     // Só o contador de gravações dispara; o resto vem do render atual.
   }, [refreshKey]);
 
-  // Grava o histórico a cada mudança (leitura e gravação protegidas em `readHistory` e `writeHistory`).
-  useEffect(() => writeHistory(history), [history]);
+  useEffect(() => store(HISTORY_KEY, JSON.stringify(history)), [history]);
+  useEffect(() => store(VIEW_KEY, view), [view]);
 
   // Uma busca. Consulta vazia limpa sem chamar o backend. `quiet` é a atualização depois de gravar: não entra no histórico e mantém recolhidos e dispensados.
   async function run(f: Form, quiet = false) {
@@ -274,18 +365,17 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     if (!quiet && !skipHistory.current) setHistory((prev) => [f.query, ...prev.filter((q) => q !== f.query)].slice(0, HISTORY_MAX));
     setPending(true);
     try {
-      const filters = filtersOf(f);
-      const found = await backend.search(f.query, f.options, filters);
+      const found = await backend.search(f.query, f.options, filtersOf(f));
       if (id !== latest.current) return;
       setResults(found);
-      setShown({ query: f.query, options: f.options, scope: f.scope });
+      setShown({ query: f.query, options: f.options });
       if (quiet) {
         // Recolhido só sai da lista se o arquivo sumiu da busca.
-        setCollapsed((prev) => prev.filter((p) => found.files.some((x) => x.path === p)));
+        setCollapsed((prev) => prev.filter((k) => !k.startsWith('f:') || found.files.some((x) => `f:${x.path}` === k)));
       } else {
         setCollapsed([]);
         setDismissedFiles([]);
-        setDismissedLines([]);
+        setDismissedHits([]);
       }
     } catch (e) {
       if (id !== latest.current) return;
@@ -296,44 +386,35 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     }
   }
 
-  // Qualquer mudança nos campos tira a prévia, a seleção dela e o resultado da aplicação anterior.
-  function invalidate() {
-    latestPreview.current++;
-    setPreview(null);
-    setPreviewError('');
-    setPicked([]);
-    setConfirming(false);
-    setReport(null);
-    setPreviewing(false);
-  }
-
   // Digitar espera um pouco; Enter, o botão Atualizar e as opções buscam na hora.
+  function now(next: Form) {
+    window.clearTimeout(timer.current);
+    void run(next);
+  }
   const later = (next: Form) => {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => void run(next), DELAY_MS);
   };
-  const now = (next: Form) => {
-    window.clearTimeout(timer.current);
-    void run(next);
-  };
 
-  // Muda campos do formulário: tira a prévia e busca (agora ou com espera, conforme `mode`).
+  // Muda campos do formulário e busca (agora ou com espera, conforme `mode`). O relatório da última substituição sai.
   const change = (patch: Partial<Form>, mode: 'later' | 'now' | 'none') => {
     const next = { ...form, ...patch };
     setForm(next);
-    invalidate();
+    setReport(null);
     if (mode === 'later') later(next);
     if (mode === 'now') now(next);
   };
 
   const toggle = (key: keyof SearchOptions) => change({ options: { ...form.options, [key]: !form.options[key] } }, 'now');
 
+  // Limpar: como o VS Code, tira a consulta, a substituição, os filtros e os resultados.
   const clear = () => {
     window.clearTimeout(timer.current);
     setAt(-1);
-    setForm((prev) => ({ ...prev, query: '' }));
-    invalidate();
-    void run({ ...form, query: '' });
+    const next = { ...form, query: '', replacement: '', include: '', exclude: '', onlyOpen: false };
+    setForm(next);
+    setReport(null);
+    void run(next);
     field()?.focus();
   };
 
@@ -347,99 +428,133 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
 
   // ---------- substituição ----------
 
-  // Prévia: não grava nada. Marca por padrão os arquivos que não têm alteração não salva.
-  async function previewReplace() {
-    if (!form.query) return;
+  // A prévia aparece na lista com o Substituir aberto e algum texto nele (vazio apaga, mas só se vê ao confirmar, como no VS Code).
+  const showReplace = replaceOpen && form.replacement !== '' && !!form.query;
+  const wantedKey = showReplace ? previewKey(form) : '';
+
+  // Pede a prévia para a forma atual. Não grava nada; uma resposta antiga é descartada.
+  async function loadPreview(f: Form): Promise<Preview | null> {
     const id = ++latestPreview.current;
-    const query = queryOf(form);
-    setPreviewing(true);
-    setPreviewError('');
-    setReport(null);
-    setConfirming(false);
+    const query = queryOf(f);
     try {
-      const data = await backend.replacePreview(query, form.replacement);
-      if (id !== latestPreview.current) return;
-      const next: Preview = { query, replacement: form.replacement, scope: form.scope, data };
+      const data = await backend.replacePreview(query, f.replacement);
+      if (id !== latestPreview.current) return null;
+      const next: Preview = { key: previewKey(f), query, replacement: f.replacement, data };
       setPreview(next);
-      setPicked(visibleFiles(next).filter((f) => !hasDraft(f.path)).map((f) => f.path));
+      setPreviewError('');
+      return next;
     } catch (e) {
-      if (id !== latestPreview.current) return;
+      if (id !== latestPreview.current) return null;
       setPreview(null);
       setPreviewError(message(e));
-    } finally {
-      if (id === latestPreview.current) setPreviewing(false);
+      return null;
     }
   }
 
-  // Arquivos da prévia que entram nesta pasta da pesquisa. Os demais nem aparecem na revisão.
-  const visibleFiles = (p: Preview) => p.data.files.filter((f) => inScope(f.path, p.scope));
-  const reviewed = useMemo(
-    () => (preview ? visibleFiles(preview).map((f) => ({ file: f, pairs: changedLines(f.original, f.result) })) : []),
-    [preview],
-  );
-  const chosen = reviewed.filter(({ file }) => picked.includes(file.path));
-  const chosenCount = chosen.reduce((n, { file }) => n + file.count, 0);
+  // A prévia acompanha os campos (com a mesma espera da busca) e cada resposta nova da busca (uma gravação muda as revisões).
+  useEffect(() => {
+    window.clearTimeout(previewTimer.current);
+    if (!wantedKey) {
+      latestPreview.current++;
+      setPreviewError('');
+      return;
+    }
+    const f = form;
+    previewTimer.current = window.setTimeout(() => void loadPreview(f), DELAY_MS);
+  }, [wantedKey, results]);
 
-  // Aplicação: só os arquivos marcados na prévia. Alteração não salva que apareceu desde a prévia também fica de fora, e é dita no relatório.
-  async function applyChosen() {
-    if (!preview || applying) return;
-    setConfirming(false);
-    const files = chosen.map(({ file }) => file).filter((f) => !hasDraft(f.path));
-    const draft = chosen.map(({ file }) => file.path).filter(hasDraft);
-    if (!files.length) {
-      setReport({ applied: [], errors: [], draft, failure: '' });
+  const livePreview = preview && preview.key === wantedKey ? preview : null;
+  const pattern = highlighter(shown.query, shown.options);
+
+  // Substitutos por arquivo e linha, lidos da prévia: posição na linha inteira → texto que entra.
+  const replacements = useMemo(() => {
+    const out = new Map<string, Map<number, Map<number, string> | null>>();
+    if (!livePreview || !pattern) return out;
+    for (const f of livePreview.data.files) {
+      const before = linesOf(f.original);
+      const after = linesOf(f.result);
+      const lines = new Map<number, Map<number, string> | null>();
+      before.forEach((b, i) => {
+        if (b !== after[i]) lines.set(i + 1, replacementsOf(b, after[i] ?? '', new RegExp(pattern.source, pattern.flags)));
+      });
+      out.set(f.path, lines);
+    }
+    return out;
+  }, [livePreview, shown]);
+  // O que entra no lugar da ocorrência, ou null quando a prévia não diz (arquivo fora dela ou linha ambígua).
+  const replacementOf = (h: Hit) => (h.start < 0 ? null : replacements.get(h.path)?.get(h.line)?.get(h.offset + h.start) ?? null);
+
+  // Grava a substituição nos arquivos dados (`null` é tudo o que está na tela). Arquivo com rascunho, com ocorrência dispensada ou fora da
+  // prévia fica de fora e é dito no relatório. `confirmed` é a prévia já confirmada no diálogo do Substituir Tudo.
+  async function replaceIn(paths: string[] | null, confirmed?: Preview) {
+    if (!form.query || applying) return;
+    const prev = confirmed ?? (livePreview ?? (await loadPreview(form)));
+    if (!prev) return;
+    const visible = new Set(files.map((f) => f.path));
+    const wanted = prev.data.files.filter((f) => visible.has(f.path) && (!paths || paths.includes(f.path)));
+    if (!paths && !confirmed) {
+      setConfirming(prev);
+      return;
+    }
+    const left: string[] = [];
+    const picks = wanted.filter((f) => {
+      const why = hasDraft(f.path) ? 'alteração não salva no editor' : partial.has(f.path) ? 'ocorrência dispensada (a troca é do arquivo inteiro)' : '';
+      if (why) left.push(`${f.path}: ${why}`);
+      return !why;
+    });
+    for (const p of paths ?? []) if (!prev.data.files.some((f) => f.path === p)) left.push(`${p}: ficou fora da prévia (limite de arquivos)`);
+    if (!picks.length) {
+      setReport({ replaced: 0, files: 0, replacement: prev.replacement, errors: [], left });
       return;
     }
     setApplying(true);
     try {
       const done = await backend.replaceApply({
-        query: preview.query,
-        replacement: preview.replacement,
-        files: files.map((f) => ({ path: f.path, revision: f.revision })),
+        query: prev.query,
+        replacement: prev.replacement,
+        files: picks.map((f) => ({ path: f.path, revision: f.revision })),
       });
-      latestPreview.current++;
-      setPreview(null);
-      setPicked([]);
-      setReport({ applied: done.applied, errors: done.errors, draft, failure: '' });
+      setReport({ replaced: done.applied.reduce((n, a) => n + a.count, 0), files: done.applied.length, replacement: prev.replacement, errors: done.errors, left });
       if (done.applied.length) onChanged();
-      if (form.query) await run(form);
+      await run(form, true);
     } catch (e) {
-      setReport({ applied: [], errors: [], draft, failure: message(e) });
+      setReport({ replaced: 0, files: 0, replacement: prev.replacement, errors: [{ path: '', error: message(e) }], left });
     } finally {
       setApplying(false);
     }
   }
 
-  const togglePick = (path: string) =>
-    setPicked((prev) => (prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]));
-
   // ---------- resultados ----------
 
   // `files` é o que está na tela: sem os dispensados. Resumo, recolher e navegação contam só isto.
-  const scoped = (results?.files ?? []).filter((f) => inScope(f.path, shown.scope));
-  const gone = new Set(dismissedLines);
-  const files = scoped
-    .filter((f) => !dismissedFiles.includes(f.path))
-    .map((f) => ({ ...f, matches: f.matches.filter((m) => !gone.has(lineKey(f.path, m))) }))
-    .filter((f) => f.matches.length > 0);
-  const skipped = (results?.skipped ?? []).filter((s) => inScope(s.path, shown.scope));
-  const lines = files.reduce((n, f) => n + f.matches.length, 0);
-  const allCollapsed = files.length > 0 && collapsed.length === files.length;
-  const toggleAll = () => setCollapsed(allCollapsed ? [] : files.map((f) => f.path));
-  const toggleFile = (path: string) =>
-    setCollapsed((prev) => (prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]));
-  const mark = (path: string, m: SearchMatch) => setCurrent({ path, line: m.line, col: m.col });
-  const isCurrent = (path: string, m: SearchMatch) => current?.path === path && current.line === m.line && current.col === m.col;
+  const gone = new Set(dismissedHits);
+  const scoped = (results?.files ?? []).filter((f) => !dismissedFiles.includes(f.path));
+  const allHits = (f: SearchFile) => f.matches.flatMap((m) => hitsOf(f.path, m, pattern));
+  const withHits = scoped.map((f) => ({ path: f.path, all: allHits(f) }));
+  const files = withHits.map(({ path, all }) => ({ path, hits: all.filter((h) => !gone.has(hitKey(h))) })).filter((f) => f.hits.length > 0);
+  // Arquivos com alguma ocorrência dispensada: a troca grava o arquivo inteiro, então eles ficam fora dela.
+  const partial = new Set(withHits.filter(({ all }) => all.some((h) => gone.has(hitKey(h)))).map(({ path }) => path));
+  const skipped = results?.skipped ?? [];
+  const hitCount = files.reduce((n, f) => n + f.hits.length, 0);
+  const collapsedSet = new Set(collapsed);
+  const rows = rowsOf(files, view, collapsedSet);
+  const collapsible = view === 'tree' ? rowsOf(files, view, new Set()).filter((r) => r.kind !== 'hit').map((r) => r.key) : files.map((f) => `f:${f.path}`);
+  const someOpen = collapsible.some((k) => !collapsedSet.has(k));
+  const toggleAll = () => setCollapsed(someOpen ? collapsible : []);
+  const toggleRow = (key: string) => setCollapsed((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  const mark = (h: Hit) => setCurrent({ path: h.path, line: h.line, col: h.col });
+  const isCurrent = (h: Hit) => current?.path === h.path && current.line === h.line && current.col === h.col;
 
   // F4 e Shift+F4: anda pela ordem da tela (arquivo recolhido entra também), com volta. Abre como prévia e não tira o foco do teclado.
   useEffect(() => {
     if (!step) return;
-    const all = files.flatMap((f) => f.matches.map((m) => ({ path: f.path, line: m.line, col: m.col })));
+    const all = files.flatMap((f) => f.hits);
     if (!all.length) return;
-    const idx = current ? all.findIndex((r) => r.path === current.path && r.line === current.line && r.col === current.col) : -1;
+    const idx = current ? all.findIndex((h) => isCurrent(h)) : -1;
     const hit = all[idx < 0 ? (step.dir > 0 ? 0 : all.length - 1) : (idx + step.dir + all.length) % all.length];
-    setCurrent(hit);
-    setCollapsed((prev) => prev.filter((p) => p !== hit.path));
+    mark(hit);
+    const open = new Set([`f:${hit.path}`, ...ancestors(hit.path)]);
+    setCollapsed((prev) => prev.filter((k) => !open.has(k)));
     onOpen(hit.path, hit.line, hit.col);
     // Só o `id` da tecla importa: cada toque é novo, mesmo na mesma direção.
   }, [step?.id]);
@@ -449,51 +564,51 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     resultsBox.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
   }, [current]);
 
-  // Foco vai para a linha (ou o cabeçalho) vizinha antes de a atual sair da tela; sem vizinha, volta ao campo.
-  const focusNeighbor = (leaving: Element, attr: 'data-row' | 'data-file') => {
-    const rows = [...(resultsBox.current?.querySelectorAll<HTMLElement>(`[${attr}]`) ?? [])];
-    const idx = rows.indexOf(leaving as HTMLElement);
-    const next = rows[idx + 1] ?? rows[idx - 1];
-    if (next) next.querySelector<HTMLElement>('button')?.focus();
+  // Foco vai para a linha vizinha antes de a atual sair da tela; sem vizinha, volta ao campo.
+  const focusNeighbor = (leaving: Element) => {
+    const items = [...(resultsBox.current?.querySelectorAll<HTMLElement>('[data-result]') ?? [])];
+    const own = leaving.querySelector('[data-result]');
+    const idx = items.indexOf(own as HTMLElement);
+    const next = items.slice(idx + 1).find((el) => !leaving.contains(el)) ?? items.slice(0, Math.max(idx, 0)).reverse().find((el) => !leaving.contains(el));
+    if (next) next.focus();
     else field()?.focus();
   };
-  // Dispensar uma linha só tira da tela. `row` vem do clique ou da tecla; pelo menu de contexto não há foco a mover.
-  const dismissLine = (path: string, m: SearchMatch, row?: Element | null) => {
-    if (row) focusNeighbor(row, 'data-row');
-    setDismissedLines((prev) => [...prev, lineKey(path, m)]);
+  // Dispensar só tira da tela. `row` vem do clique ou da tecla; pelo menu de contexto não há foco a mover.
+  const dismissHit = (h: Hit, row?: Element | null) => {
+    if (row) focusNeighbor(row);
+    setDismissedHits((prev) => [...prev, hitKey(h)]);
   };
   const dismissFile = (path: string, row?: Element | null) => {
-    if (row) focusNeighbor(row, 'data-file');
+    if (row) focusNeighbor(row);
     setDismissedFiles((prev) => [...prev, path]);
   };
 
   // Menus de contexto: copiar linha, caminho ou o que está na tela, e dispensar.
-  const allText = () => files.map((f) => blockText(f.path, f.matches)).join('\n\n');
-  const lineMenu = (path: string, m: SearchMatch, row?: Element | null) => [
-    action('copy', 'Copiar', () => void copy(m.text.trimStart(), 'Linha copiada')),
-    action('copy-path', 'Copiar caminho', () => void copy(path, 'Caminho copiado')),
-    action('copy-all', 'Copiar tudo', () => void copy(allText(), `${lines} ${lines === 1 ? 'resultado copiado' : 'resultados copiados'}`)),
+  const allText = () => files.map((f) => blockText(f.path, f.hits)).join('\n\n');
+  const hitMenu = (h: Hit) => [
+    action('copy', 'Copiar', () => void copy(h.text.trimStart(), 'Linha copiada')),
+    action('copy-path', 'Copiar caminho', () => void copy(h.path, 'Caminho copiado')),
+    action('copy-all', 'Copiar tudo', () => void copy(allText(), `${plural(hitCount, 'resultado copiado', 'resultados copiados')}`)),
     DIVIDER,
-    action('dismiss', 'Dispensar', () => dismissLine(path, m, row)),
+    action('dismiss', 'Dispensar', () => dismissHit(h)),
   ];
-  const fileMenu = (path: string, matches: SearchMatch[], row?: Element | null) => [
+  const fileMenu = (path: string, hits: Hit[]) => [
     action('copy-path', 'Copiar caminho', () => void copy(path, 'Caminho copiado')),
-    action('copy-all', 'Copiar tudo', () => void copy(blockText(path, matches), 'Resultados do arquivo copiados')),
+    action('copy-all', 'Copiar tudo', () => void copy(blockText(path, hits), 'Resultados do arquivo copiados')),
     DIVIDER,
-    action('dismiss', 'Dispensar', () => dismissFile(path, row)),
+    action('dismiss', 'Dispensar', () => dismissFile(path)),
   ];
-  const pattern = highlighter(shown.query, shown.options);
-  // Campo preenchido sem resposta ainda (o debounce espera) mostra "Pesquisando…", não a dica.
-  const status = error || (pending ? 'Pesquisando…' : results ? summary(lines, files.length, results.truncated) : form.query ? 'Pesquisando…' : HINT);
+  // Campo preenchido sem resposta ainda (o debounce espera) mostra "Pesquisando…".
+  const status = error || (pending ? 'Pesquisando…' : results ? summary(hitCount, files.length, results.truncated) : form.query ? 'Pesquisando…' : '');
 
-  // Setas sobem e descem entre os resultados; Início e Fim vão ao primeiro e ao último.
+  // Setas sobem e descem entre as linhas; Início e Fim vão à primeira e à última.
   const onResultsKey = (e: ReactKeyboardEvent<HTMLElement>) => {
     const keys = ['ArrowDown', 'ArrowUp', 'Home', 'End'];
     if (!keys.includes(e.key)) return;
     const items = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[data-result]')];
-    const at = items.indexOf(e.target as HTMLButtonElement);
-    if (at < 0 && e.key !== 'Home' && e.key !== 'End') return;
-    const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : e.key === 'ArrowDown' ? at + 1 : at - 1;
+    const idx = items.indexOf(e.target as HTMLButtonElement);
+    if (idx < 0 && e.key !== 'Home' && e.key !== 'End') return;
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : e.key === 'ArrowDown' ? idx + 1 : idx - 1;
     const target = items[Math.min(Math.max(next, 0), items.length - 1)];
     if (!target) return;
     e.preventDefault();
@@ -503,349 +618,308 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   // Posição que o próximo ArrowUp alcança. A consulta atual já está no topo do histórico (entrou ao buscar), então, sem navegação,
   // a primeira subida pula essa e traz a anterior.
   const upFrom = at < 0 && history[0] === form.query ? 1 : at + 1;
+  const canClear = !!(form.query || form.replacement || form.include || form.exclude || results);
 
-  const filterCount = (terms(form.include).length + terms(form.exclude).length) + (form.scope ? 1 : 0);
+  // Linha da lista. O recuo é de 8 px por nível e a seta ocupa 30 px (8 + 16 + 6), como o `monaco-tl-twistie`.
+  const renderRow = (row: Row) => {
+    const indent = { paddingLeft: row.depth * INDENT };
+    if (row.kind === 'hit') {
+      const h = row.hit;
+      const rep = showReplace ? replacementOf(h) : null;
+      const before = h.start < 0 ? lcut(h.text, AFTER_MAX) : lcut(h.text.slice(0, h.start), BEFORE_MAX);
+      const inside = h.start < 0 ? '' : h.text.slice(h.start, h.end);
+      const after = h.start < 0 ? '' : h.text.slice(h.end, h.end + AFTER_MAX);
+      const struck = showReplace && h.start >= 0;
+      return (
+        // Cada ocorrência tem o botão que abre (Enter abre de forma permanente, clique e Espaço abrem como prévia; duplo clique abre permanente) e o de dispensar.
+        <ContextMenuTrigger key={row.key} items={() => hitMenu(h)}>
+          <div className="group/row relative flex h-[22px] items-center hover:bg-[var(--ant-color-fill-tertiary)] has-[[aria-current=true]]:bg-[var(--ant-color-fill-secondary)]" style={indent} data-row>
+            <button
+              type="button" data-result title={`${h.path}:${h.line}:${h.col}`} aria-current={isCurrent(h) ? 'true' : undefined}
+              aria-label={`Linha ${h.line}: ${h.text.trim()}`}
+              onClick={() => { mark(h); onOpen(h.path, h.line, h.col); }}
+              onDoubleClick={() => onOpen(h.path, h.line, h.col, { permanent: true })}
+              onKeyDown={(e) => {
+                if (e.key === 'Delete') {
+                  e.preventDefault();
+                  dismissHit(h, e.currentTarget.closest('[data-row]'));
+                  return;
+                }
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                mark(h);
+                onOpen(h.path, h.line, h.col, { permanent: true });
+              }}
+              className={`flex h-full min-w-0 flex-1 items-center pl-[30px] pr-2 text-left text-[13px] leading-[22px] outline-none ${FOCUS}`}
+            >
+              <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre">
+                {before}
+                {inside && (
+                  <span className={struck ? 'search-hit search-hit-removed' : 'search-hit'}>{inside}</span>
+                )}
+                {struck && rep && <span className="search-hit-added">{rep}</span>}
+                {after}
+              </span>
+            </button>
+            <span className="hidden h-full shrink-0 items-center pr-2 group-hover/row:flex group-focus-within/row:flex">
+              <ActionIcon
+                size="small" variant="borderless" icon={X} aria-label="Dispensar" title="Ignorar (Delete)"
+                onClick={(e) => dismissHit(h, e.currentTarget.closest('[data-row]'))} className={FOCUS}
+              />
+            </span>
+          </div>
+        </ContextMenuTrigger>
+      );
+    }
+    const open = !collapsedSet.has(row.key);
+    const twistie = open
+      ? <ChevronDown className="size-4 shrink-0 text-[var(--ant-color-text-secondary)]" aria-hidden />
+      : <ChevronRight className="size-4 shrink-0 text-[var(--ant-color-text-secondary)]" aria-hidden />;
+    const count = row.kind === 'dir' ? row.count : row.hits.length;
+    const badge = (
+      <span className="mr-3 ml-1 shrink-0 rounded-full bg-[var(--ant-color-fill-secondary)] px-[5px] text-[11px] leading-[18px] tabular-nums group-hover/file:hidden group-focus-within/file:hidden">
+        {count}
+      </span>
+    );
+    if (row.kind === 'dir') {
+      return (
+        <div key={row.key} className="group/file relative flex h-[22px] items-center hover:bg-[var(--ant-color-fill-tertiary)]" style={indent}>
+          <button
+            type="button" data-result aria-expanded={open} title={row.path} onClick={() => toggleRow(row.key)}
+            className={`flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none ${FOCUS}`}
+          >
+            {twistie}
+            <FileIcon path={row.path} dir className="ml-1.5 size-4" />
+            <span className="ml-1.5 min-w-0 flex-1 truncate">{row.label}</span>
+            {badge}
+          </button>
+        </div>
+      );
+    }
+    const { name, dir } = splitPath(row.path);
+    const draft = hasDraft(row.path);
+    return (
+      // O botão de dispensar fica ao lado do de abrir, não dentro dele: botão dentro de botão é HTML inválido. Mostra com o mouse ou o foco na linha.
+      <ContextMenuTrigger key={row.key} items={() => fileMenu(row.path, row.hits)}>
+        <div className="group/file relative flex h-[22px] items-center hover:bg-[var(--ant-color-fill-tertiary)]" style={indent} data-file data-row>
+          <button
+            type="button" data-result aria-expanded={open} title={row.path} onClick={() => toggleRow(row.key)}
+            aria-label={`${plural(row.hits.length, 'resultado', 'resultados')} em ${row.path}`}
+            className={`flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none ${FOCUS}`}
+            onKeyDown={(e) => {
+              if (e.key !== 'Delete') return;
+              e.preventDefault();
+              dismissFile(row.path, e.currentTarget.closest('[data-row]'));
+            }}
+          >
+            {twistie}
+            <FileIcon path={row.path} className="ml-1.5 size-4" />
+            <span className="ml-1.5 flex min-w-0 flex-1 items-baseline">
+              <span className={dir && !row.tree ? 'max-w-[70%] shrink-0 truncate' : 'min-w-0 truncate'}>{name}</span>
+              {dir && !row.tree && <span className="ml-[0.45em] min-w-0 flex-1 truncate text-[0.9em] text-[var(--ant-color-text-secondary)]">{dir}</span>}
+            </span>
+            {draft && <Text as="span" type="warning" fontSize={11} className="ml-1 shrink-0">alterado</Text>}
+            {badge}
+          </button>
+          <span className="hidden h-full shrink-0 items-center gap-0.5 pr-2 group-hover/file:flex group-focus-within/file:flex">
+            {showReplace && (
+              <ActionIcon
+                size="small" variant="borderless" icon={ReplaceAll} aria-label={`Substituir tudo em ${row.path}`} title="Substituir Tudo"
+                disabled={applying} onClick={() => void replaceIn([row.path])} className={FOCUS}
+              />
+            )}
+            <ActionIcon
+              size="small" variant="borderless" icon={X} aria-label="Dispensar" title="Ignorar (Delete)"
+              onClick={(e) => dismissFile(row.path, e.currentTarget.closest('[data-row]'))} className={FOCUS}
+            />
+          </span>
+        </div>
+      </ContextMenuTrigger>
+    );
+  };
+
+  const confirmFiles = confirming ? confirming.data.files.filter((f) => files.some((x) => x.path === f.path)) : [];
+  const confirmCount = confirmFiles.reduce((n, f) => n + f.count, 0);
 
   return (
     <Flexbox height="100%" className="min-h-0">
-      <Flexbox horizontal align="center" gap={2} height={36} paddingInline={12}>
+      <Flexbox horizontal align="center" gap={2} height={36} paddingInline={12} flex="none">
         <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">Pesquisar</Text>
-        <ActionIcon
-          size="small" variant="borderless" icon={ListFilter} active={filtersOpen || filterCount > 0}
-          aria-label="Filtros de caminho" aria-expanded={filtersOpen} title="Filtros de caminho: incluir e excluir"
-          onClick={() => setFiltersOpen((v) => !v)} className="focus-visible:ring-2 focus-visible:ring-ring/50"
+        <HeaderAction icon={RotateCw} label="Atualizar" disabled={!form.query} spin={pending} onClick={() => now(form)} />
+        <HeaderAction icon={ListX} label="Limpar os Resultados da Pesquisa" disabled={!canClear} onClick={clear} />
+        <HeaderAction
+          icon={view === 'list' ? ListTree : List} label={view === 'list' ? 'Exibir como Árvore' : 'Exibir como Lista'}
+          onClick={() => setView((v) => (v === 'list' ? 'tree' : 'list'))}
         />
-        <ActionIcon
-          size="small" variant="borderless" icon={Replace} active={replaceOpen}
-          aria-label="Substituir" aria-expanded={replaceOpen} title="Substituir em vários arquivos"
-          onClick={() => setReplaceOpen((v) => !v)} className="focus-visible:ring-2 focus-visible:ring-ring/50"
-        />
-        <ActionIcon
-          size="small" variant="borderless" icon={RefreshCw} spin={pending} disabled={!form.query}
-          aria-label="Atualizar" title="Atualizar: refaz a mesma busca" onClick={() => now(form)}
-          className="focus-visible:ring-2 focus-visible:ring-ring/50"
-        />
-        <ActionIcon
-          size="small" variant="borderless" icon={Eraser} disabled={!form.query}
-          aria-label="Limpar" title="Limpar a pesquisa" onClick={clear}
-          className="focus-visible:ring-2 focus-visible:ring-ring/50"
-        />
-        <ActionIcon
-          size="small" variant="borderless" icon={allCollapsed ? ChevronsUpDown : ChevronsDownUp} disabled={!files.length}
-          aria-label={allCollapsed ? 'Expandir tudo' : 'Recolher tudo'}
-          title={allCollapsed ? 'Expandir todos os arquivos' : 'Recolher todos os arquivos'} onClick={toggleAll}
-          className="focus-visible:ring-2 focus-visible:ring-ring/50"
+        <HeaderAction
+          icon={someOpen ? ChevronsDownUp : ChevronsUpDown} label={someOpen ? 'Recolher Tudo' : 'Expandir Tudo'}
+          disabled={!files.length} onClick={toggleAll}
         />
       </Flexbox>
 
-      <Flexbox ref={fieldBox} paddingInline={8} paddingBlock={6} gap={6}>
-        <Input
-          size="small" value={form.query} placeholder="Pesquisar" aria-label="Pesquisar nos arquivos do projeto" style={{ minHeight: 32 }}
-          onChange={(e) => {
-            // Digitar sai da navegação do histórico: o texto novo vira o rascunho.
-            setAt(-1);
-            change({ query: e.target.value }, 'later');
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') now(form);
-            // ArrowUp sobe no histórico (mais antiga); ArrowDown desce e, da mais recente, volta ao rascunho.
-            else if (e.key === 'ArrowUp' && upFrom < history.length) {
-              e.preventDefault();
-              if (at < 0) typed.current = form.query;
-              recall(upFrom);
-            } else if (e.key === 'ArrowDown' && at >= 0) {
-              e.preventDefault();
-              recall(at - 1);
-            }
-          }}
-          suffix={(
-            <Flexbox horizontal align="center" flex="none" gap={2}>
-              {TOGGLES.map(({ key, icon, label }) => (
-                <ActionIcon
-                  key={key} icon={icon} size={{ size: 18, blockSize: 24, borderRadius: 4 }} variant="borderless" active={form.options[key]}
-                  aria-pressed={form.options[key]} aria-label={label} title={label}
-                  onClick={() => toggle(key)} className="focus-visible:ring-2 focus-visible:ring-ring/50"
-                />
-              ))}
-            </Flexbox>
-          )}
-        />
-
-        {filtersOpen && (
-          <Flexbox gap={6} aria-label="Filtros de caminho">
-            {form.scope !== null && (
-              <Flexbox horizontal align="center" gap={4}>
-                <Text as="span" fontSize={12} type="secondary" className="min-w-0 flex-1" ellipsis title={form.scope || 'Projeto inteiro'}>
-                  Só na pasta <Text as="span" code fontSize={12}>{form.scope || '/'}</Text>
-                </Text>
-                <ActionIcon
-                  size="small" variant="borderless" icon={X} aria-label="Pesquisar no projeto inteiro"
-                  title="Tirar o recorte e pesquisar no projeto inteiro" onClick={() => change({ scope: null }, 'now')}
-                  className="focus-visible:ring-2 focus-visible:ring-ring/50"
-                />
+      {/* Campos: margem 0 12px 0 2px e padding 6px 0, como o `.search-widgets-container`. A seta de 16 px ocupa a altura dos dois campos. */}
+      <div ref={fieldBox} className="flex-none pt-1.5 pr-3 pb-1.5 pl-0.5">
+        <div className="relative pl-[18px]">
+          <button
+            type="button" aria-label="Ativar/Desativar Substituição" aria-expanded={replaceOpen} title="Ativar/Desativar Substituição"
+            onClick={() => { setReplaceOpen((v) => !v); setReport(null); }}
+            className={`absolute top-0 left-0 flex h-full w-4 items-center justify-center rounded-sm text-[var(--ant-color-text-secondary)] outline-none hover:bg-[var(--ant-color-fill-tertiary)] ${FOCUS}`}
+          >
+            {replaceOpen ? <ChevronDown className="size-4" aria-hidden /> : <ChevronRight className="size-4" aria-hidden />}
+          </button>
+          <Input
+            size="small" value={form.query} placeholder="Pesquisar" aria-label="Pesquisar nos arquivos do projeto" style={INPUT_STYLE}
+            onChange={(e) => {
+              // Digitar sai da navegação do histórico: o texto novo vira o rascunho.
+              setAt(-1);
+              change({ query: e.target.value }, 'later');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') now(form);
+              // ArrowUp sobe no histórico (mais antiga); ArrowDown desce e, da mais recente, volta ao rascunho.
+              else if (e.key === 'ArrowUp' && upFrom < history.length) {
+                e.preventDefault();
+                if (at < 0) typed.current = form.query;
+                recall(upFrom);
+              } else if (e.key === 'ArrowDown' && at >= 0) {
+                e.preventDefault();
+                recall(at - 1);
+              }
+            }}
+            suffix={(
+              <Flexbox horizontal align="center" flex="none" gap={2}>
+                {TOGGLES.map(({ key, icon, label }) => (
+                  <ActionIcon
+                    key={key} icon={icon} size={INPUT_TOGGLE} variant="borderless" active={form.options[key]}
+                    aria-pressed={form.options[key]} aria-label={label} title={label} onClick={() => toggle(key)} className={FOCUS}
+                  />
+                ))}
               </Flexbox>
             )}
-            <Input
-              size="small" value={form.include} aria-label="Incluir caminhos" placeholder="Incluir: src/*, *.ts"
-              onChange={(e) => change({ include: e.target.value }, 'later')}
-              onKeyDown={(e) => { if (e.key === 'Enter') now(form); }}
-            />
-            <Input
-              size="small" value={form.exclude} aria-label="Excluir caminhos" placeholder="Excluir: *.test.ts, dist"
-              onChange={(e) => change({ exclude: e.target.value }, 'later')}
-              onKeyDown={(e) => { if (e.key === 'Enter') now(form); }}
-            />
-            <Text as="p" type="secondary" fontSize={11}>
-              Trechos separados por vírgula. * vale qualquer sequência e ? um caractere. Não diferencia maiúsculas.
-            </Text>
-          </Flexbox>
-        )}
+          />
+          {replaceOpen && (
+            <div className="mt-1.5 flex items-center gap-1">
+              <Input
+                size="small" value={form.replacement} placeholder="Substituir" aria-label="Substituir por" style={INPUT_STYLE} className="min-w-0 flex-1"
+                onChange={(e) => change({ replacement: e.target.value }, 'none')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && e.ctrlKey && e.altKey) {
+                    e.preventDefault();
+                    void replaceIn(null);
+                  }
+                }}
+                suffix={(
+                  <ActionIcon
+                    icon={CaseUpper} size={INPUT_TOGGLE} variant="borderless" active={form.preserveCase}
+                    aria-pressed={form.preserveCase} aria-label="Preservar maiúsculas" title="Preservar Maiúsculas e Minúsculas"
+                    onClick={() => change({ preserveCase: !form.preserveCase }, 'none')} className={FOCUS}
+                  />
+                )}
+              />
+              <ActionIcon
+                size="small" variant="borderless" icon={ReplaceAll} aria-label="Substituir Tudo" title="Substituir Tudo (Ctrl+Alt+Enter)"
+                disabled={!form.query || !files.length || applying} loading={applying} onClick={() => void replaceIn(null)} className={FOCUS}
+              />
+            </div>
+          )}
+        </div>
+        {/* O `...` fica à direita, embaixo dos campos, e abre os filtros de caminho (`.query-details`). */}
+        <div className="relative ml-[18px] min-h-4">
+          <button
+            type="button" aria-label="Ativar/Desativar os Detalhes da Pesquisa" aria-expanded={detailsOpen} title="Ativar/Desativar os Detalhes da Pesquisa"
+            onClick={() => setDetailsOpen((v) => !v)}
+            className={`absolute -right-0.5 top-0 z-10 flex h-4 w-[25px] items-center justify-center rounded-sm text-[var(--ant-color-text-secondary)] outline-none hover:bg-[var(--ant-color-fill-tertiary)] ${FOCUS}`}
+          >
+            <Ellipsis className="size-4" aria-hidden />
+          </button>
+          {detailsOpen && (
+            <div className="pb-1">
+              <h4 className="m-0 truncate pt-1 text-[11px] leading-[18px] font-normal">arquivos a serem incluídos</h4>
+              <Input
+                size="small" value={form.include} aria-label="Incluir caminhos" placeholder="por exemplo, *.ts, ./src" style={INPUT_STYLE}
+                onChange={(e) => change({ include: e.target.value }, 'later')}
+                onKeyDown={(e) => { if (e.key === 'Enter') now(form); }}
+                suffix={(
+                  <ActionIcon
+                    icon={BookOpen} size={INPUT_TOGGLE} variant="borderless" active={form.onlyOpen}
+                    aria-pressed={form.onlyOpen} aria-label="Pesquisar só nos editores abertos" title="Fazer a pesquisa somente nos Editores Abertos"
+                    onClick={() => change({ onlyOpen: !form.onlyOpen }, 'now')} className={FOCUS}
+                  />
+                )}
+              />
+              <h4 className="m-0 truncate pt-1 text-[11px] leading-[18px] font-normal">arquivos a serem excluídos</h4>
+              <Input
+                size="small" value={form.exclude} aria-label="Excluir caminhos" placeholder="por exemplo, *.test.ts, ./dist" style={INPUT_STYLE}
+                onChange={(e) => change({ exclude: e.target.value }, 'later')}
+                onKeyDown={(e) => { if (e.key === 'Enter') now(form); }}
+              />
+            </div>
+          )}
+        </div>
+      </div>
 
-        {replaceOpen && (
-          <Flexbox gap={6}>
-            <Input
-              size="small" value={form.replacement} aria-label="Substituir por" placeholder="Substituir por (vazio apaga)"
-              onChange={(e) => change({ replacement: e.target.value }, 'none')}
-              onKeyDown={(e) => { if (e.key === 'Enter') void previewReplace(); }}
-              suffix={(
-                // Muda a substituição, então tira a prévia: a revisão antiga não vale com outra regra.
-                <ActionIcon
-                  icon={CaseUpper} size={{ size: 18, blockSize: 24, borderRadius: 4 }} variant="borderless" active={form.preserveCase}
-                  aria-pressed={form.preserveCase} aria-label="Preservar maiúsculas" title="Preservar maiúsculas"
-                  onClick={() => change({ preserveCase: !form.preserveCase }, 'none')} className="focus-visible:ring-2 focus-visible:ring-ring/50"
-                />
-              )}
-            />
-            <Flexbox horizontal align="center" gap={6}>
-              <Button size="small" onClick={() => void previewReplace()} disabled={!form.query || previewing || applying} loading={previewing}>
-                Ver substituições
-              </Button>
-              {preview && (
-                <Button size="small" type="text" onClick={invalidate}>Fechar revisão</Button>
-              )}
-            </Flexbox>
-            <Text as="p" type="secondary" fontSize={11}>{form.options.regex ? REGEX_HINT : REPLACE_HINT}</Text>
-          </Flexbox>
+      {/* Mensagens (`.messages`): resumo, erros, o que ficou de fora e o resultado da última substituição. */}
+      <div className="-mt-[5px] flex-none pr-3 pb-1 pl-[22px] text-[13px] text-[var(--ant-color-text-secondary)] select-text">
+        {status && <p role="status" className={error ? 'text-[var(--ant-color-error)]' : ''}>{status}</p>}
+        {showReplace && previewError && <p role="alert" className="text-[var(--ant-color-error)]">{previewError}</p>}
+        {showReplace && livePreview && livePreview.data.omittedFiles > 0 && (
+          <p className="text-[var(--ant-color-warning)]">
+            {`${plural(livePreview.data.omittedFiles, 'arquivo com ocorrência ficou', 'arquivos com ocorrência ficaram')} fora da prévia (limite). Não serão alterados.`}
+          </p>
         )}
+        {report && (
+          <>
+            {report.files > 0 && (
+              <p role="status">{`${plural(report.replaced, 'ocorrência substituída', 'ocorrências substituídas')} em ${plural(report.files, 'arquivo', 'arquivos')} por ${report.replacement ? `“${report.replacement}”` : 'nada (apagadas)'}.`}</p>
+            )}
+            {report.errors.map((err) => (
+              <p key={err.path || err.error} role="alert" className="text-[var(--ant-color-error)]">{err.path ? `${err.path}: ${err.error}` : err.error}</p>
+            ))}
+            {report.left.length > 0 && (
+              <p role="status" className="text-[var(--ant-color-warning)]">{`Ficaram de fora: ${report.left.join('; ')}.`}</p>
+            )}
+          </>
+        )}
+        {skipped.length > 0 && (
+          <details className="text-[12px]">
+            <summary className="cursor-pointer select-none">
+              {`${plural(skipped.length + (results?.skippedOmitted ?? 0), 'arquivo ficou', 'arquivos ficaram')} de fora`}
+            </summary>
+            {skipped.map((s) => (
+              <p key={s.path} className="truncate" title={`${s.path}: ${REASON[s.reason]}`}>{`${s.path}: ${REASON[s.reason]}`}</p>
+            ))}
+            {!!results?.skippedOmitted && <p>{`e mais ${results.skippedOmitted}`}</p>}
+          </details>
+        )}
+      </div>
+
+      <Flexbox flex={1} className="min-h-0">
+        <ScrollArea className="h-full" disableContentFit>
+          <div ref={resultsBox} role="tree" aria-label="Resultados da pesquisa" onKeyDown={onResultsKey}>
+            {rows.map(renderRow)}
+          </div>
+        </ScrollArea>
       </Flexbox>
 
-      {!preview && (
-        <Text
-          as="p" role="status" fontSize={12} type={error ? 'danger' : 'secondary'} className="select-text"
-          style={{ paddingInline: 12, paddingBottom: 6 }}
-        >
-          {status}
-        </Text>
-      )}
-
-      {report && (
-        <Flexbox paddingInline={8} paddingBlock={4} gap={4}>
-          {report.failure && <Alert type="error" role="alert" description={report.failure} className="select-text" />}
-          {report.applied.length > 0 && (
-            <Alert
-              type={report.errors.length || report.draft.length ? 'warning' : 'success'}
-              role="status"
-              description={`${report.applied.length} ${report.applied.length === 1 ? 'arquivo alterado' : 'arquivos alterados'}, ${report.applied.reduce((n, a) => n + a.count, 0)} substituições.`}
-            />
-          )}
-          {report.errors.length > 0 && (
-            <Alert
-              type="error" role="alert"
-              description={(
-                <Flexbox gap={2} className="select-text">
-                  <span>{`${report.errors.length} ${report.errors.length === 1 ? 'arquivo não foi alterado' : 'arquivos não foram alterados'}:`}</span>
-                  {report.errors.map((err) => <span key={err.path}>{`${err.path}: ${err.error}`}</span>)}
-                </Flexbox>
-              )}
-            />
-          )}
-          {report.draft.length > 0 && (
-            <Alert
-              type="warning" role="status"
-              description={`${report.draft.length} ${report.draft.length === 1 ? 'arquivo ficou' : 'arquivos ficaram'} de fora por ter alteração não salva no editor: ${report.draft.join(', ')}.`}
-            />
-          )}
-        </Flexbox>
-      )}
-
-      {preview ? (
-        <Flexbox flex={1} className="min-h-0" gap={0}>
-          <Flexbox horizontal align="center" gap={6} paddingInline={12} paddingBlock={4}>
-            <Text as="p" fontSize={12} type="secondary" className="min-w-0 flex-1" ellipsis role="status">
-              {`${preview.data.totalMatches} ${preview.data.totalMatches === 1 ? 'troca' : 'trocas'} em ${visibleFiles(preview).length} ${visibleFiles(preview).length === 1 ? 'arquivo' : 'arquivos'} · ${picked.length} marcado${picked.length === 1 ? '' : 's'}`}
-            </Text>
-            <Button size="small" type="text" onClick={() => setPicked(reviewed.filter(({ file }) => !hasDraft(file.path)).map(({ file }) => file.path))}>Marcar todos</Button>
-            <Button size="small" type="text" onClick={() => setPicked([])}>Nenhum</Button>
-          </Flexbox>
-          {preview.data.omittedFiles > 0 && (
-            <Text as="p" fontSize={12} type="warning" style={{ paddingInline: 12 }}>
-              {`${preview.data.omittedFiles} ${preview.data.omittedFiles === 1 ? 'arquivo com ocorrência ficou' : 'arquivos com ocorrência ficaram'} de fora desta revisão (limite). Não serão alterados.`}
-            </Text>
-          )}
-          {preview.data.skippedOmitted + preview.data.skipped.length > 0 && (
-            <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 12 }}>
-              {`${preview.data.skipped.length + preview.data.skippedOmitted} ${preview.data.skipped.length + preview.data.skippedOmitted === 1 ? 'arquivo ficou' : 'arquivos ficaram'} de fora (binário, não UTF-8, grande ou especial). Não serão alterados.`}
-            </Text>
-          )}
-          <Flexbox flex={1} className="min-h-0">
-            <ScrollArea className="h-full" disableContentFit>
-              <Flexbox paddingBlock={4}>
-                {reviewed.map(({ file, pairs }) => {
-                  const draft = hasDraft(file.path);
-                  const { name, dir } = splitPath(file.path);
-                  return (
-                    <Flexbox as="section" key={file.path} paddingInline={8} paddingBlock={4} gap={2} className="border-b">
-                      <label className={`flex min-w-0 items-center gap-2 ${draft ? 'opacity-60' : ''}`}>
-                        <input
-                          type="checkbox" className="size-4 shrink-0 accent-[var(--ant-color-primary)]"
-                          checked={picked.includes(file.path) && !draft} disabled={draft}
-                          aria-label={`Substituir em ${file.path}`}
-                          onChange={() => togglePick(file.path)}
-                        />
-                        <Text as="span" fontSize={13} ellipsis className="min-w-0 shrink-0">{name}</Text>
-                        {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 flex-1">{dir}</Text>}
-                        <Text as="span" type="secondary" fontSize={11} className="ml-auto shrink-0 rounded-full bg-muted px-1.5 tabular-nums">{file.count}</Text>
-                      </label>
-                      {draft && (
-                        <Text as="p" fontSize={12} type="warning">Alteração não salva no editor: salve ou descarte antes para substituir.</Text>
-                      )}
-                      {pairs.slice(0, REVIEW_LINES).map((pair) => (
-                        <Flexbox key={pair.line} gap={0} className="font-mono text-[12px]">
-                          <Text as="span" type="secondary" fontSize={11} className="tabular-nums">{pair.line}</Text>
-                          <Text as="span" type="secondary" fontSize={12} ellipsis title={pair.before} className="line-through">
-                            {marked(pair.before.trimStart(), highlighter(preview.query.text, preview.query))}
-                          </Text>
-                          <Text as="span" fontSize={12} ellipsis title={pair.after} className="bg-[var(--ant-color-success-bg)]">{pair.after.trimStart()}</Text>
-                        </Flexbox>
-                      ))}
-                      {pairs.length > REVIEW_LINES && (
-                        <Text as="span" type="secondary" fontSize={12}>{`e mais ${pairs.length - REVIEW_LINES} ${pairs.length - REVIEW_LINES === 1 ? 'linha' : 'linhas'}`}</Text>
-                      )}
-                    </Flexbox>
-                  );
-                })}
-              </Flexbox>
-            </ScrollArea>
-          </Flexbox>
-          <Flexbox horizontal align="center" justify="flex-end" gap={6} paddingInline={8} paddingBlock={6} className="border-t">
-            <Button type="primary" size="small" onClick={() => setConfirming(true)} disabled={!chosen.length || applying} loading={applying}>
-              {`Substituir em ${chosen.length} ${chosen.length === 1 ? 'arquivo' : 'arquivos'}`}
-            </Button>
-          </Flexbox>
-        </Flexbox>
-      ) : (
-        <>
-          {previewError && (
-            <Text as="p" role="alert" fontSize={12} type="danger" className="select-text" style={{ paddingInline: 12, paddingBottom: 6 }}>{previewError}</Text>
-          )}
-          <Flexbox flex={1} className="min-h-0">
-            <ScrollArea className="h-full" disableContentFit>
-              <Flexbox ref={resultsBox} paddingBlock={4} onKeyDown={onResultsKey}>
-                {skipped.length > 0 && (
-                  <details className="px-2 py-1 text-[12px] text-muted-foreground">
-                    <summary className="cursor-pointer select-none">
-                      {`${skipped.length + (results?.skippedOmitted ?? 0)} ${skipped.length + (results?.skippedOmitted ?? 0) === 1 ? 'arquivo ficou' : 'arquivos ficaram'} de fora`}
-                    </summary>
-                    <Flexbox gap={2} paddingBlock={2}>
-                      {skipped.map((s) => (
-                        <Text key={s.path} as="span" fontSize={12} ellipsis title={`${s.path}: ${REASON[s.reason]}`}>{`${s.path}: ${REASON[s.reason]}`}</Text>
-                      ))}
-                      {!!results?.skippedOmitted && (
-                        <Text as="span" fontSize={12}>{`e mais ${results.skippedOmitted}`}</Text>
-                      )}
-                    </Flexbox>
-                  </details>
-                )}
-                {files.map((file) => {
-                  const open = !collapsed.includes(file.path);
-                  const { name, dir } = splitPath(file.path);
-                  const draft = hasDraft(file.path);
-                  return (
-                    <Flexbox as="section" key={file.path}>
-                      {/* O botão de dispensar fica ao lado do de abrir, não dentro dele: botão dentro de botão é HTML inválido. Mostra com o mouse ou o foco na linha. */}
-                      <ContextMenuTrigger items={() => fileMenu(file.path, file.matches)}>
-                        <Flexbox horizontal align="center" gap={2} className="group/file" data-file>
-                          <button
-                            type="button" aria-expanded={open} onClick={() => toggleFile(file.path)} title={file.path}
-                            className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-sm pl-1 pr-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
-                          >
-                            {open
-                              ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                              : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
-                            <FileIcon path={file.path} className="size-3.5" />
-                            {/* Nome e pasta dividem o espaço do grupo: o nome tem prioridade, até 70% dele; a pasta é que encolhe primeiro. Sem pasta, o nome usa tudo. */}
-                            <Flexbox horizontal align="center" flex={1} gap={6} className="min-w-0">
-                              <Text as="span" fontSize={13} ellipsis className={dir ? 'max-w-[70%] shrink-0' : 'min-w-0 flex-1'}>{name}</Text>
-                              {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 flex-1">{dir}</Text>}
-                            </Flexbox>
-                            {draft && <Text as="span" type="warning" fontSize={11} className="shrink-0">alterado</Text>}
-                            <Text as="span" type="secondary" fontSize={11} className="ml-auto shrink-0 rounded-full bg-muted px-1.5 tabular-nums">{file.matches.length}</Text>
-                          </button>
-                          <ActionIcon
-                            size="small" variant="borderless" icon={X} aria-label="Dispensar" title="Dispensar"
-                            onClick={(e) => dismissFile(file.path, e.currentTarget.closest('[data-file]'))}
-                            className="shrink-0 opacity-0 group-hover/file:opacity-100 group-focus-within/file:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
-                          />
-                        </Flexbox>
-                      </ContextMenuTrigger>
-                      {open && file.matches.map((m) => {
-                        const where = `${file.path}:${m.line}:${m.col}`;
-                        return (
-                          // Cada linha tem o botão que abre (Enter abre de forma permanente, clique e Espaço abrem como prévia; duplo clique abre permanente) e o de dispensar.
-                          <ContextMenuTrigger key={`${m.line}:${m.col}`} items={() => lineMenu(file.path, m)}>
-                            <Flexbox horizontal align="center" gap={2} className="group/row" data-row>
-                              <button
-                                type="button" data-result title={where} aria-current={isCurrent(file.path, m) ? 'true' : undefined}
-                                onClick={() => { mark(file.path, m); onOpen(file.path, m.line, m.col); }}
-                                onDoubleClick={() => onOpen(file.path, m.line, m.col, { permanent: true })}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Delete') {
-                                    e.preventDefault();
-                                    dismissLine(file.path, m, e.currentTarget.closest('[data-row]'));
-                                    return;
-                                  }
-                                  if (e.key !== 'Enter') return;
-                                  e.preventDefault();
-                                  mark(file.path, m);
-                                  onOpen(file.path, m.line, m.col, { permanent: true });
-                                }}
-                                className={`flex h-6 min-w-0 flex-1 items-center gap-2 rounded-sm pl-6 pr-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 ${isCurrent(file.path, m) ? 'bg-muted' : ''}`}
-                              >
-                                <Text as="span" type="secondary" fontSize={12} className="min-w-8 shrink-0 text-right font-mono tabular-nums">{m.line}</Text>
-                                <Text as="span" fontSize={12} ellipsis className="min-w-0 flex-1 font-mono">
-                                  {marked(m.text.trimStart(), pattern)}
-                                </Text>
-                              </button>
-                              <ActionIcon
-                                size="small" variant="borderless" icon={X} aria-label="Dispensar" title="Dispensar"
-                                onClick={(e) => dismissLine(file.path, m, e.currentTarget.closest('[data-row]'))}
-                                className="mr-1 shrink-0 opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50"
-                              />
-                            </Flexbox>
-                          </ContextMenuTrigger>
-                        );
-                      })}
-                    </Flexbox>
-                  );
-                })}
-              </Flexbox>
-            </ScrollArea>
-          </Flexbox>
-        </>
-      )}
-
-      {/* Confirmação concreta: quantos arquivos e quantas trocas, e quais. Os com alteração não salva já não entram aqui. */}
+      {/* Substituir Tudo: confirmação concreta, com quantas trocas, em quais arquivos e por qual texto. */}
       <Modal
-        open={confirming}
-        title={`Substituir em ${chosen.length} ${chosen.length === 1 ? 'arquivo' : 'arquivos'}?`}
+        open={!!confirming}
+        title={`Substituir ${plural(confirmCount, 'ocorrência', 'ocorrências')} em ${plural(confirmFiles.length, 'arquivo', 'arquivos')}?`}
         closable={false}
         keyboard
         maskClosable
-        onCancel={() => !applying && setConfirming(false)}
+        onCancel={() => !applying && setConfirming(null)}
         footer={(
           <Flexbox horizontal justify="flex-end" gap={8}>
-            <Button onClick={() => setConfirming(false)} disabled={applying}>Cancelar</Button>
-            <Button type="primary" danger onClick={() => void applyChosen()} disabled={applying} loading={applying}>
+            <Button onClick={() => setConfirming(null)} disabled={applying}>Cancelar</Button>
+            <Button
+              type="primary" danger disabled={applying} loading={applying}
+              onClick={() => {
+                const prev = confirming;
+                setConfirming(null);
+                if (prev) void replaceIn(confirmFiles.map((f) => f.path), prev);
+              }}
+            >
               Substituir
             </Button>
           </Flexbox>
@@ -853,16 +927,26 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
       >
         <Flexbox gap={8}>
           <Text as="p" fontSize={14}>
-            {`${chosenCount} ${chosenCount === 1 ? 'troca' : 'trocas'} por ${preview?.replacement ? `“${preview.replacement}”` : 'nada (apagar)'}. As alterações vão para o disco; para voltar atrás, use o Git do projeto.`}
+            {`Por ${confirming?.replacement ? `“${confirming.replacement}”` : 'nada (apagar)'}. As alterações vão para o disco; para voltar atrás, use o Git do projeto. Arquivos com alteração não salva ou com ocorrência dispensada ficam de fora.`}
           </Text>
           <Flexbox gap={2} style={{ maxHeight: 180, overflow: 'auto' }}>
-            {chosen.slice(0, CONFIRM_LIST).map(({ file }) => (
-              <Text key={file.path} as="span" code fontSize={12} ellipsis title={file.path}>{`${file.path} (${file.count})`}</Text>
+            {confirmFiles.slice(0, CONFIRM_LIST).map((f) => (
+              <Text key={f.path} as="span" code fontSize={12} ellipsis title={f.path}>{`${f.path} (${f.count})`}</Text>
             ))}
-            {chosen.length > CONFIRM_LIST && <Text as="span" type="secondary" fontSize={12}>{`e mais ${chosen.length - CONFIRM_LIST}`}</Text>}
+            {confirmFiles.length > CONFIRM_LIST && <Text as="span" type="secondary" fontSize={12}>{`e mais ${confirmFiles.length - CONFIRM_LIST}`}</Text>}
           </Flexbox>
         </Flexbox>
       </Modal>
     </Flexbox>
+  );
+}
+
+/** Ação do cabeçalho: 22×22 px, ícone de 16 px, como as do `.composite.title` do Antigravity. */
+function HeaderAction({ icon, label, onClick, disabled, spin }: { icon: LucideIcon; label: string; onClick: () => void; disabled?: boolean; spin?: boolean }) {
+  return (
+    <ActionIcon
+      icon={icon} size="small" variant="borderless" aria-label={label} title={label} disabled={disabled} spin={spin}
+      onClick={onClick} className={FOCUS}
+    />
   );
 }

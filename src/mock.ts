@@ -616,16 +616,22 @@ function replaceIn(text: string, re: RegExp, literal: boolean, rep: string, pres
 }
 // Arquivos que a mock não lê como texto, com o motivo que o backend daria.
 const unreadable = (path: string): SkipReason | null => (path.endsWith('.png') ? 'binary' : path === 'dados/exportacao.json' ? 'tooLarge' : null);
-// Filtro de caminho: `*` qualquer sequência, `?` um caractere, sem diferença de caixa, em qualquer parte do caminho.
-const globRe = (term: string) => new RegExp(term.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.'), 'i');
+// Filtro de caminho: `*` qualquer sequência, `?` um caractere, sem diferença de caixa, em qualquer parte do caminho. Com `./` na frente,
+// vale a partir da raiz e até o fim de um nome (`./src` é a pasta src, não src2), como no backend.
+const globBody = (term: string) => term.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+const globRe = (term: string) => {
+  const rooted = term === '.' ? '' : term.startsWith('./') ? term.slice(2).replace(/\/+$/, '') : null;
+  if (rooted === null) return new RegExp(globBody(term), 'i');
+  return rooted ? new RegExp(`^${globBody(rooted)}(?:/|$)`, 'i') : /^/;
+};
 function allFiles(dir: Folder = tree, prefix = ''): string[] {
   return Object.entries(dir.children).flatMap(([name, e]) => (e.dir ? allFiles(e, `${prefix}${name}/`) : [`${prefix}${name}`]));
 }
 // Arquivos da pesquisa: os da árvore que passam nos filtros, em ordem alfabética.
-function candidates(include: string[], exclude: string[]): string[] {
+function candidates(include: string[], exclude: string[], only?: string[]): string[] {
   const inc = include.map((t) => t.trim().replace(/\\/g, '/')).filter(Boolean).map(globRe);
   const exc = exclude.map((t) => t.trim().replace(/\\/g, '/')).filter(Boolean).map(globRe);
-  return allFiles().filter((p) => (inc.length === 0 || inc.some((r) => r.test(p))) && !exc.some((r) => r.test(p))).sort();
+  return allFiles().filter((p) => (!only || only.includes(p)) && (inc.length === 0 || inc.some((r) => r.test(p))) && !exc.some((r) => r.test(p))).sort();
 }
 
 function searchText(q: ReplaceQuery): SearchResults {
@@ -633,7 +639,7 @@ function searchText(q: ReplaceQuery): SearchResults {
   if (!q.text.trim()) return out;
   const re = compile(q);
   let hits = 0;
-  for (const path of candidates(q.include, q.exclude)) {
+  for (const path of candidates(q.include, q.exclude, q.only)) {
     const why = unreadable(path);
     if (why) { out.skipped.push({ path, reason: why }); continue; }
     const matches: SearchMatch[] = [];
@@ -658,7 +664,7 @@ function replacePreview(q: ReplaceQuery, replacement: string): ReplacePreview {
   if (!q.text.trim()) return out;
   if (/[\n\r\0]/.test(replacement)) throw 'A substituição precisa ser de uma linha só.';
   const re = compile(q);
-  for (const path of candidates(q.include, q.exclude)) {
+  for (const path of candidates(q.include, q.exclude, q.only)) {
     const why = unreadable(path);
     if (why) { out.skipped.push({ path, reason: why }); continue; }
     const { result, count } = replaceIn(textOf(path), re, !q.regex, replacement, !!q.preserveCase);
@@ -677,7 +683,7 @@ function replaceApply({ query, replacement, files: picks }: ReplaceRequest): Rep
   if (!query.text.trim()) throw 'Digite o texto a substituir.';
   if (/[\n\r\0]/.test(replacement)) throw 'A substituição precisa ser de uma linha só.';
   const re = compile(query);
-  const listed = new Set(candidates(query.include, query.exclude));
+  const listed = new Set(candidates(query.include, query.exclude, query.only));
   for (const pick of picks) {
     try {
       if (!listed.has(pick.path) || unreadable(pick.path)) throw 'Este arquivo não está na pesquisa atual (filtro, ignorado ou apagado). Nada foi gravado.';

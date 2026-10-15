@@ -78,3 +78,16 @@ body {
 .explorer-tree:hover [role='treeitem']::before {
     opacity: 1;
 }
+
+/* Pesquisa: as cores do destaque e da prévia da troca são as do VS Code (findMatchHighlight, removedText e insertedText do diff),
+   translúcidas para valer nos temas claro e escuro. */
+.search-hit {
+  background-color: rgb(234 92 0 / 0.33);
+}
+.search-hit-removed {
+  background-color: rgb(255 0 0 / 0.2);
+  text-decoration: line-through;
+}
+.search-hit-added {
+  background-color: rgb(156 204 44 / 0.2);
+}

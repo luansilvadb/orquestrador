@@ -23,7 +23,11 @@ const dirtyCount = (page) => page.locator('[aria-label="Alteração não salva"]
 const pesquisar = (page) => page.getByRole('button', { name: 'Pesquisar', exact: true }).click();
 const arquivos = (page) => page.getByRole('button', { name: 'Arquivos', exact: true }).click();
 const field = (page) => page.getByRole('textbox', { name: 'Pesquisar nos arquivos do projeto' });
-const previewHeader = (page) => page.getByText(/\d+ trocas? em \d+ arquivos?/);
+const replaceField = (page) => page.getByRole('textbox', { name: 'Substituir por' });
+// Os substitutos que a prévia mostra na lista, em ordem.
+const added = (page) => page.locator('.search-hit-added').allTextContents();
+// Confirma o Substituir Tudo no diálogo com o título dado.
+const confirmReplace = (page, title) => page.getByRole('dialog', { name: title }).getByRole('button', { name: 'Substituir', exact: true }).click();
 const toggle = (page, label) => page.getByRole('button', { name: label, exact: true }).click();
 const save = async (page) => { await focusEditor(page); await page.keyboard.press('Control+s'); };
 // Diálogo de confirmação de Renomear/Criar/Excluir: o botão com o nome dado dentro do diálogo com o título dado.
@@ -184,7 +188,7 @@ scenario('seleção por Shift e Ctrl; recortar e colar em outra pasta com rascun
   await page.screenshot({ path: join(OUT, 'files-search-arvore-parcial.png') });
 });
 
-scenario('pesquisa na pasta src não pega src2; resultado abre linha e coluna exatas; prévia não grava; aplicar 1 de 2 grava só o marcado; rascunho é barrado na aplicação; mudança invalida a prévia', async ({ page }) => {
+scenario('pesquisa na pasta src não pega src2 e põe ./src no incluir; resultado abre linha e coluna exatas; a prévia aparece na lista e não grava; troca por arquivo grava só aquele; rascunho é barrado no Substituir Tudo', async ({ page }) => {
   await page.evaluate(() => {
     window.__mock.addFolder('src2');
     window.__mock.addFile('src/termo-a.ts', 'const termo = 1;\n');
@@ -197,18 +201,23 @@ scenario('pesquisa na pasta src não pega src2; resultado abre linha e coluna ex
   // Controle: sem pasta, a pesquisa acha src2 também.
   await pesquisar(page);
   await field(page).fill('termo');
-  await page.locator('[data-result][title="src2/termo-c.ts:1:1"]').waitFor();
+  await result(page, 'src2/termo-c.ts').waitFor();
 
-  // Localizar na pasta src: src2 (irmã com prefixo igual) não entra. A árvore só aparece na tela Arquivos.
+  // Localizar na pasta src: a pasta vai para o incluir como ./src, e src2 (irmã com prefixo igual) não entra. A árvore só aparece na tela Arquivos.
   await arquivos(page);
   await rightClick(page, 'src');
   await menu(page, 'Localizar na Pasta...').click();
-  await page.locator('[data-result][title="src/termo-a.ts:1:7"]').waitFor();
+  await result(page, 'src/termo-a.ts', 1, 7).waitFor();
+  assert.equal(await page.getByRole('textbox', { name: 'Incluir caminhos' }).inputValue(), './src', 'a pasta foi para o campo de incluir');
   const shown = await page.locator('[data-result]').evaluateAll((els) => els.map((el) => el.title));
   assert.ok(shown.length > 0 && shown.every((t) => t.startsWith('src/')), `escopo src: nenhum resultado de src2 (${JSON.stringify(shown)})`);
+  // Uma linha por ocorrência: termo-b tem duas na mesma linha.
+  await result(page, 'src/termo-b.ts', 1, 9).waitFor();
+  await result(page, 'src/termo-b.ts', 1, 17).waitFor();
+  await statusText(page, '3 resultados em 2 arquivos').waitFor();
 
   // Resultado abre na linha e coluna exatas (1:7 de termo-a.ts): o cursor cai no caractere 7 da linha 1.
-  await page.locator('[data-result][title="src/termo-a.ts:1:7"]').click();
+  await result(page, 'src/termo-a.ts', 1, 7).click();
   await page.locator('.cm-content:visible').first().waitFor();
   await page.waitForTimeout(250);
   const point = await columnPoint(page, 1, 7);
@@ -216,53 +225,39 @@ scenario('pesquisa na pasta src não pega src2; resultado abre linha e coluna ex
   assert.ok(!point.error && cursor && Math.abs(cursor.x - point.x) <= 2, `cursor na coluna 7 da linha 1 (cursor ${cursor?.x}, coluna ${point.x})`);
   await pesquisar(page);
 
-  // Prévia: 3 trocas em 2 arquivos, os dois marcados, e nada gravado.
-  await toggle(page, 'Substituir');
-  await page.getByRole('textbox', { name: 'Substituir por' }).fill('novo');
-  await page.getByRole('button', { name: 'Ver substituições' }).click();
-  await previewHeader(page).filter({ hasText: '3 trocas em 2 arquivos · 2 marcados' }).waitFor();
-  assert.ok(await page.getByRole('checkbox', { name: 'Substituir em src/termo-a.ts' }).isChecked(), 'termo-a marcado na prévia');
-  assert.ok(await page.getByRole('checkbox', { name: 'Substituir em src/termo-b.ts' }).isChecked(), 'termo-b marcado na prévia');
+  // Prévia na lista: cada ocorrência riscada com o substituto ao lado, e nada gravado.
+  await toggle(page, 'Ativar/Desativar Substituição');
+  await replaceField(page).fill('novo');
+  await page.waitForFunction(() => document.querySelectorAll('.search-hit-added').length === 3);
+  assert.deepEqual(await added(page), ['novo', 'novo', 'novo'], 'o substituto aparece ao lado de cada ocorrência');
+  assert.equal(await page.locator('.search-hit-removed').count(), 3, 'cada ocorrência aparece riscada');
   assert.equal(await disk(page, 'src/termo-a.ts'), 'const termo = 1;\n', 'prévia não gravou termo-a');
   assert.equal(await disk(page, 'src/termo-b.ts'), 'let x = termo + termo;\n', 'prévia não gravou termo-b');
   await page.screenshot({ path: join(OUT, 'files-search-previa.png') });
 
-  // Mudar a substituição, a consulta ou uma opção tira a prévia da tela.
-  await page.getByRole('textbox', { name: 'Substituir por' }).fill('novo2');
-  await previewHeader(page).waitFor({ state: 'detached' });
-  await page.getByRole('button', { name: 'Ver substituições' }).click();
-  await previewHeader(page).waitFor();
-  await toggle(page, 'Diferenciar maiúsculas de minúsculas');
-  await previewHeader(page).waitFor({ state: 'detached' });
-  await toggle(page, 'Diferenciar maiúsculas de minúsculas');
-  await field(page).fill('termos');
-  await previewHeader(page).waitFor({ state: 'detached' });
-  await field(page).fill('termo');
-  await page.getByRole('textbox', { name: 'Substituir por' }).fill('novo');
-  await page.getByRole('button', { name: 'Ver substituições' }).click();
-  await previewHeader(page).waitFor();
+  // Mudar a substituição refaz a prévia.
+  await replaceField(page).fill('novo2');
+  await page.waitForFunction(() => [...document.querySelectorAll('.search-hit-added')].every((el) => el.textContent === 'novo2'));
+  await replaceField(page).fill('novo');
+  await page.waitForFunction(() => [...document.querySelectorAll('.search-hit-added')].every((el) => el.textContent === 'novo'));
 
-  // Rodada 1: desmarca termo-b e aplica: só termo-a muda; termo-b fica igual no disco.
-  await page.getByRole('checkbox', { name: 'Substituir em src/termo-b.ts' }).uncheck();
-  await page.getByRole('button', { name: 'Substituir em 1 arquivo' }).click();
-  await page.getByRole('dialog', { name: 'Substituir em 1 arquivo?' }).getByRole('button', { name: 'Substituir', exact: true }).click();
-  await page.getByText('1 arquivo alterado, 1 substituições.').waitFor();
+  // Troca por arquivo (botão na linha do arquivo, com o mouse sobre ela): só termo-a muda; termo-b fica igual no disco.
+  await fileOf(page, 'src/termo-a.ts').hover();
+  await page.getByRole('button', { name: 'Substituir tudo em src/termo-a.ts' }).click();
+  await statusText(page, '1 ocorrência substituída em 1 arquivo por “novo”.').waitFor();
   assert.equal(await disk(page, 'src/termo-a.ts'), 'const novo = 1;\n', 'aplicado: termo-a trocado');
-  assert.equal(await disk(page, 'src/termo-b.ts'), 'let x = termo + termo;\n', 'desmarcado: termo-b byte a byte igual');
+  assert.equal(await disk(page, 'src/termo-b.ts'), 'let x = termo + termo;\n', 'termo-b byte a byte igual');
 
-  // Rodada 2: termo-b (ainda com "termo") entra na prévia; depois de a prévia ser feita, o arquivo fica sujo no editor.
-  // A aplicação consulta o rascunho de novo e deixa termo-b de fora, dizendo por quê.
-  await page.getByRole('button', { name: 'Ver substituições' }).click();
-  await previewHeader(page).filter({ hasText: '2 trocas em 1 arquivo' }).waitFor();
+  // termo-b fica sujo no editor depois da prévia. O Substituir Tudo confirma e deixa termo-b de fora, dizendo por quê.
   await arquivos(page);
   await treeItem(page, 'termo-b.ts').dblclick();
   await focusEditor(page);
   await page.keyboard.type(' // rascunho');
   await page.locator('[aria-label="Alteração não salva"]').first().waitFor();
   await pesquisar(page);
-  await page.getByRole('button', { name: 'Substituir em 1 arquivo' }).click();
-  await page.getByRole('dialog', { name: 'Substituir em 1 arquivo?' }).getByRole('button', { name: 'Substituir', exact: true }).click();
-  await page.getByText('ficou de fora por ter alteração não salva no editor: src/termo-b.ts.').waitFor();
+  await page.getByRole('button', { name: 'Substituir Tudo', exact: true }).click();
+  await confirmReplace(page, 'Substituir 2 ocorrências em 1 arquivo?');
+  await page.getByText('Ficaram de fora: src/termo-b.ts: alteração não salva no editor.').waitFor();
   assert.equal(await disk(page, 'src/termo-b.ts'), 'let x = termo + termo;\n', 'rascunho barrou a aplicação: disco intacto');
   await arquivos(page);
   assert.ok((await editorText(page)).includes('// rascunho'), 'rascunho de termo-b continua no editor');
@@ -285,13 +280,12 @@ scenario('substituição stale: edição externa depois da prévia gera erro por
   // Prévia com o arquivo como está; depois o disco muda por fora; aplicar dá erro daquele arquivo.
   await pesquisar(page);
   await field(page).fill('marca-unica');
-  await page.getByRole('button', { name: 'Substituir', exact: true }).click();
-  await page.getByRole('textbox', { name: 'Substituir por' }).fill('novo');
-  await page.getByRole('button', { name: 'Ver substituições' }).click();
-  await previewHeader(page).filter({ hasText: '1 troca em 1 arquivo' }).waitFor();
+  await toggle(page, 'Ativar/Desativar Substituição');
+  await replaceField(page).fill('novo');
+  await page.locator('.search-hit-added', { hasText: 'novo' }).waitFor();
   await page.evaluate(() => window.__mock.external('src/stale.ts', 'marca-unica: 2 (externo)\n'));
-  await page.getByRole('button', { name: 'Substituir em 1 arquivo' }).click();
-  await page.getByRole('dialog', { name: 'Substituir em 1 arquivo?' }).getByRole('button', { name: 'Substituir', exact: true }).click();
+  await page.getByRole('button', { name: 'Substituir Tudo', exact: true }).click();
+  await confirmReplace(page, 'Substituir 1 ocorrência em 1 arquivo?');
   await page.getByRole('alert').filter({ hasText: 'O arquivo mudou desde a prévia' }).waitFor();
   assert.equal(await disk(page, 'src/stale.ts'), 'marca-unica: 2 (externo)\n', 'erro: a edição externa não foi sobrescrita');
   await page.screenshot({ path: join(OUT, 'files-search-stale.png') });
@@ -300,32 +294,69 @@ scenario('substituição stale: edição externa depois da prévia gera erro por
   assert.ok(await dirtyCount(page) >= 1, 'erro: README continua sujo');
   await pesquisar(page);
 
-  // Vazio apaga só as ocorrências vistas: "termo" inteira sai, "termo_x" fica.
+  // Vazio apaga só as ocorrências vistas: "termo" inteira sai, "termo_x" fica. Sem texto no Substituir, a lista não mostra prévia.
   await field(page).fill('termo');
   await toggle(page, 'Palavra inteira');
-  await page.getByRole('textbox', { name: 'Substituir por' }).fill('');
-  await page.getByRole('button', { name: 'Ver substituições' }).click();
-  await previewHeader(page).filter({ hasText: '2 trocas em 1 arquivo' }).waitFor();
-  await page.getByRole('button', { name: 'Substituir em 1 arquivo' }).click();
-  const confirm = page.getByRole('dialog', { name: 'Substituir em 1 arquivo?' });
-  await confirm.getByText('nada (apagar)').waitFor();
+  await replaceField(page).fill('');
+  await result(page, 'src/vazio.ts', 1, 3).waitFor();
+  assert.equal(await page.locator('.search-hit-removed').count(), 0, 'sem texto no Substituir, nada aparece riscado');
+  await page.getByRole('button', { name: 'Substituir Tudo', exact: true }).click();
+  const confirm = page.getByRole('dialog', { name: 'Substituir 2 ocorrências em 1 arquivo?' });
+  await confirm.getByText(/nada \(apagar\)/).waitFor();
   await confirm.getByRole('button', { name: 'Substituir', exact: true }).click();
-  await page.getByText('1 arquivo alterado, 2 substituições.').waitFor();
+  await statusText(page, '2 ocorrências substituídas em 1 arquivo por nada (apagadas).').waitFor();
   assert.equal(await disk(page, 'src/vazio.ts'), 'a  b termo_x  c\n', 'vazio: só as duas ocorrências inteiras saíram');
 
-  // Regex com captura: "v(\d+)" vira "$1.0" só no arquivo filtrado.
+  // Regex com captura: "v(\d+)" vira "$1.0" só no arquivo filtrado; a prévia mostra o substituto de cada ocorrência.
   await toggle(page, 'Palavra inteira');
   await toggle(page, 'Expressão regular');
   await field(page).fill('v(\\d+)');
-  await toggle(page, 'Filtros de caminho');
+  await toggle(page, 'Ativar/Desativar os Detalhes da Pesquisa');
   await page.getByRole('textbox', { name: 'Incluir caminhos' }).fill('src/versao.ts');
-  await page.getByRole('textbox', { name: 'Substituir por' }).fill('$1.0');
-  await page.getByRole('button', { name: 'Ver substituições' }).click();
-  await previewHeader(page).filter({ hasText: '2 trocas em 1 arquivo' }).waitFor();
-  await page.getByRole('button', { name: 'Substituir em 1 arquivo' }).click();
-  await page.getByRole('dialog', { name: 'Substituir em 1 arquivo?' }).getByRole('button', { name: 'Substituir', exact: true }).click();
-  await page.getByText('1 arquivo alterado, 2 substituições.').waitFor();
+  await replaceField(page).fill('$1.0');
+  await page.waitForFunction(() => document.querySelectorAll('.search-hit-added').length === 2);
+  assert.deepEqual(await added(page), ['1.0', '22.0'], 'a prévia mostra a captura aplicada em cada ocorrência');
+  await page.getByRole('button', { name: 'Substituir Tudo', exact: true }).click();
+  await confirmReplace(page, 'Substituir 2 ocorrências em 1 arquivo?');
+  await statusText(page, '2 ocorrências substituídas em 1 arquivo por “$1.0”.').waitFor();
   assert.equal(await disk(page, 'src/versao.ts'), '1.0 22.0\n', 'regex: captura $1 aplicada nas duas ocorrências');
+});
+
+scenario('árvore e editores abertos: Exibir como Árvore agrupa por pasta e recolhe a pasta; só nos editores abertos limita aos arquivos com aba', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__mock.addFolder('src/arv');
+    window.__mock.addFile('src/arv/um.ts', 'arvoremarca\n');
+    window.__mock.addFile('src/arv/dois.ts', 'arvoremarca\n');
+    window.__mock.addFile('docs/tres.md', 'arvoremarca\n');
+  });
+  await expand(page, ['src', 'arv']);
+  await treeItem(page, 'dois.ts').waitFor();
+  await treeItem(page, 'um.ts').dblclick();
+  await tabs(page).filter({ hasText: 'um.ts' }).waitFor();
+  await focusEditor(page);
+  await pesquisar(page);
+  await field(page).fill('arvoremarca');
+  await statusText(page, '3 resultados em 3 arquivos').waitFor();
+
+  // Árvore: "src/arv" vira uma linha só (pasta sem arquivo e com uma subpasta), com a contagem de baixo; recolher tira os arquivos dela.
+  await toggle(page, 'Exibir como Árvore');
+  const pasta = page.locator('button[data-result][title="src/arv"]');
+  await pasta.filter({ hasText: 'src/arv' }).waitFor();
+  assert.equal((await pasta.textContent()).replace('src/arv', '').trim(), '2', 'a pasta conta as ocorrências de dentro');
+  await page.screenshot({ path: join(OUT, 'files-search-arvore.png') });
+  await pasta.click();
+  await result(page, 'src/arv/um.ts').waitFor({ state: 'detached' });
+  await result(page, 'docs/tres.md').waitFor();
+  await toggle(page, 'Exibir como Lista');
+  await result(page, 'src/arv/um.ts').waitFor();
+
+  // Só nos editores abertos: fica só um.ts, que tem aba.
+  await toggle(page, 'Ativar/Desativar os Detalhes da Pesquisa');
+  await toggle(page, 'Pesquisar só nos editores abertos');
+  await statusText(page, '1 resultado em 1 arquivo').waitFor();
+  await result(page, 'src/arv/um.ts').waitFor();
+  await toggle(page, 'Pesquisar só nos editores abertos');
+  await statusText(page, '3 resultados em 3 arquivos').waitFor();
 });
 
 // Resultado da pesquisa pelo caminho, linha e coluna (o botão traz `caminho:linha:coluna` no título).
@@ -382,13 +413,15 @@ scenario('dispensar: linha tira a linha e o resumo diminui; cabeçalho tira o ar
   await statusText(page, '3 resultados em 2 arquivos').waitFor();
   const antes = { a: await disk(page, 'src/disp-a.ts'), b: await disk(page, 'src/disp-b.ts') };
 
-  // Dispensar a segunda linha de disp-a: ela sai, e o resumo cai para 2.
+  // Dispensar a segunda linha de disp-a (o botão aparece com o mouse sobre a linha): ela sai, e o resumo cai para 2.
+  await rowOf(page, 'src/disp-a.ts', 2).hover();
   await dismissBtn(rowOf(page, 'src/disp-a.ts', 2)).click();
   await result(page, 'src/disp-a.ts', 2).waitFor({ state: 'detached' });
   await statusText(page, '2 resultados em 2 arquivos').waitFor();
   assert.equal(await result(page, 'src/disp-a.ts', 1).count(), 1, 'dispensar uma linha não tira as outras do arquivo');
 
   // Dispensar o cabeçalho de disp-b: o arquivo inteiro sai, e o resumo cai para 1 em 1.
+  await fileOf(page, 'src/disp-b.ts').hover();
   await dismissBtn(fileOf(page, 'src/disp-b.ts')).click();
   await fileOf(page, 'src/disp-b.ts').waitFor({ state: 'detached' });
   await statusText(page, '1 resultado em 1 arquivo').waitFor();
@@ -421,18 +454,16 @@ scenario('preservar maiúsculas: a prévia põe a ocorrência em maiúsculas com
   await field(page).press('Enter');
   await result(page, 'src/caixa.ts').waitFor();
 
-  await toggle(page, 'Substituir');
-  await page.getByRole('textbox', { name: 'Substituir por' }).fill('novo');
+  await toggle(page, 'Ativar/Desativar Substituição');
+  await replaceField(page).fill('novo');
   await toggle(page, 'Preservar maiúsculas');
-  await page.getByRole('button', { name: 'Ver substituições' }).click();
-  await previewHeader(page).filter({ hasText: '3 trocas em 1 arquivo' }).waitFor();
-  await page.getByText('Novo novo NOVO', { exact: true }).waitFor();
+  await page.waitForFunction(() => [...document.querySelectorAll('.search-hit-added')].map((el) => el.textContent).join(' ') === 'Novo novo NOVO');
   assert.equal(await disk(page, 'src/caixa.ts'), 'Termo termo TERMO\n', 'a prévia não gravou nada');
   await page.screenshot({ path: join(OUT, 'files-search-preservar-caixa.png') });
 
-  await page.getByRole('button', { name: 'Substituir em 1 arquivo' }).click();
-  await page.getByRole('dialog', { name: 'Substituir em 1 arquivo?' }).getByRole('button', { name: 'Substituir', exact: true }).click();
-  await page.getByText('1 arquivo alterado, 3 substituições.').waitFor();
+  await page.getByRole('button', { name: 'Substituir Tudo', exact: true }).click();
+  await confirmReplace(page, 'Substituir 3 ocorrências em 1 arquivo?');
+  await statusText(page, '3 ocorrências substituídas em 1 arquivo por “novo”.').waitFor();
   assert.equal(await disk(page, 'src/caixa.ts'), 'Novo novo NOVO\n', 'a aplicação gravou a caixa de cada ocorrência');
 });
 
