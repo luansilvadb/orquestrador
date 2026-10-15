@@ -1,5 +1,3 @@
-<img src="src-tauri/icons/icon.svg" width="96" alt="">
-
 # Orquestrador
 
 ![Orquestrador](docs/screenshot.png)
