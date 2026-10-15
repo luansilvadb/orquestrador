@@ -466,10 +466,16 @@ fn saida_do_orquestrador_mata_os_executores_e_limpa_sessao_e_regra() {
 }
 
 #[test]
-fn pasta_fora_de_repositorio_git_e_recusada() {
+fn pasta_sem_git_abre_com_o_proprio_caminho_e_pasta_inexistente_e_recusada() {
     let b = bench("fora", "temp", Some(8));
-    let outside = PathBuf::from(std::env::var("SystemRoot").unwrap());
-    assert!(b.core.set_project(&outside).unwrap_err().contains("não está dentro de um repositório Git"));
+    let solta = std::env::temp_dir().join(format!("orq-lote-{}-solta", std::process::id()));
+    let _ = std::fs::remove_dir_all(&solta);
+    std::fs::create_dir_all(&solta).unwrap();
+    let opened = b.core.set_project(&solta).unwrap();
+    assert_eq!(opened.project, solta.display().to_string());
+    assert!(!opened.subfolder);
+    assert!(b.core.set_project(&solta.join("nao-existe")).unwrap_err().contains("não existe"));
+    let _ = std::fs::remove_dir_all(&solta);
 }
 
 /// Tarefa longa, com Unicode, aspas e barra no fim, de uns 9000 bytes.

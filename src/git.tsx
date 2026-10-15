@@ -11,7 +11,7 @@ import { HistoryPanel, type HistoryRequest, KIND, nextHistoryId, splitPath } fro
 import { usePolling } from './polling';
 import type { DiffSide, TabTarget } from './workspace-model';
 import type { GitGuard } from './git-guard';
-import type { GitBranches, GitFile, GitKind, GitStatus } from './types';
+import type { GitBranches, GitFile, GitKind, GitState, GitStatus } from './types';
 
 const LOCKED_TITLE = 'Há executores trabalhando. Espere o lote terminar.';
 
@@ -64,7 +64,7 @@ export function usePolled<T>(read: () => Promise<T>, enabled: boolean) {
   return { data, error, refresh };
 }
 
-type GitPoll = ReturnType<typeof usePolled<GitStatus>>;
+type GitPoll = ReturnType<typeof usePolled<GitState>>;
 /** Opções de abertura pedidas à tela de cima. `permanent` abre de vez (duplo clique) em vez de prévia. */
 export type OpenTargetOptions = { permanent?: boolean };
 export type GitSidebarProps = {
@@ -343,6 +343,38 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
   );
 }
 
+/**
+ * Estado vazio do painel fora do modo `repo`, no padrão do VS Code: o título e, abaixo, o que fazer. Só `no-repo` tem botão (inicializa o repositório);
+ * os outros dizem o motivo. Quando o Git muda por fora, a consulta seguinte troca o estado e o painel segue sem recarregar.
+ */
+function NoRepoPanel({ state, refresh }: { state: Exclude<GitState, { kind: 'repo' }>; refresh: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  // Com sucesso, o status relido vem como `repo` e este painel some sozinho. Erro vai em toast (`run`).
+  const init = async () => {
+    setBusy(true);
+    await run(() => backend.gitInit(), refresh);
+    setBusy(false);
+  };
+  const text = state.kind === 'no-repo'
+    ? 'A pasta aberta não tem um repositório Git. Inicialize um para usar os recursos do Git aqui: alterações, commits, branches e histórico.'
+    : state.kind === 'no-git'
+      ? 'O Git não foi encontrado neste computador. Instale o Git e abra o app de novo.'
+      : `Esta pasta está dentro do repositório ${state.root}, que não é a raiz do projeto. O painel Git só funciona com a raiz do repositório aberta como projeto.`;
+  return (
+    <Flexbox className="min-h-0" flex={1}>
+      <Flexbox paddingInline={12} paddingBlock={6}>
+        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary">Controle de versão</Text>
+      </Flexbox>
+      <Flexbox gap={12} paddingInline={12} paddingBlock={8}>
+        <Text as="p" fontSize={12} type="secondary">{text}</Text>
+        {state.kind === 'no-repo' && (
+          <Button type="primary" block loading={busy} disabled={busy} onClick={() => void init()}>Inicializar repositório</Button>
+        )}
+      </Flexbox>
+    </Flexbox>
+  );
+}
+
 /** Botão da branch atual e a escolha: lista das locais (a atual marcada) e um campo para criar e trocar. */
 function BranchPicker({ branch, locked, busy, withBusy, refresh }: {
   branch: string;
@@ -550,6 +582,7 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
 /**
  * Barra lateral do Git: o controle de versão, ou o histórico (do projeto, ou do arquivo de `historyRequest`).
  * Os dois ficam montados: alternar não perde a mensagem do commit, os recolhidos nem a lista de commits.
+ * Fora do modo `repo` não há nada disso: o painel é só o estado vazio, e nada consulta o Git.
  */
 export function GitSidebar({ git, locked, guard, active, selected, onOpenTarget, onOpenFile, historyRequest }: GitSidebarProps) {
   const [view, setView] = useState<'changes' | 'history'>('changes');
@@ -573,11 +606,18 @@ export function GitSidebar({ git, locked, guard, active, selected, onOpenTarget,
   const showChanges = () => setView('changes');
 
   const { data, error, refresh } = git;
+  if (data && data.kind !== 'repo') {
+    return (
+      <Flexbox height="100%" className="min-h-0">
+        <NoRepoPanel state={data} refresh={refresh} />
+      </Flexbox>
+    );
+  }
   return (
     <Flexbox height="100%" className="min-h-0">
       <div className={view === 'changes' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
         <ChangesPanel
-          status={data} error={error} refresh={refresh} locked={locked} guard={guard} selected={selected}
+          status={data?.status ?? null} error={error} refresh={refresh} locked={locked} guard={guard} selected={selected}
           active={active && view === 'changes'} onOpenTarget={onOpenTarget} onOpenFile={onOpenFile} onShowHistory={showHistory}
         />
       </div>

@@ -18,10 +18,16 @@ import { folderName, TitleBar } from './titlebar';
 import { pathText, relativeTo } from './file-tab-actions';
 import { isWithin, type TabTarget } from './workspace-model';
 import {
-  ORCHESTRATOR, type Choice, type ExecutorNode, type Moved, type NodeState, type Options, type UpdateStatus,
+  ORCHESTRATOR, type Choice, type ExecutorNode, type GitState, type Moved, type NodeState, type Options, type UpdateStatus,
 } from './types';
 
 const MB = 1024 * 1024;
+// Frase do aviso da janela do Orquestrador, por modo do Git que não é `repo`: diz o que falta para o registro existir.
+const NO_GIT_FIX: Record<Exclude<GitState['kind'], 'repo'>, string> = {
+  'no-repo': 'Para ter isso, inicialize o repositório no painel Git.',
+  'no-git': 'Para ter isso, instale o Git e abra o app de novo.',
+  'repo-above': 'Para ter isso, abra a raiz do repositório como projeto.',
+};
 // Larguras da linha principal: o Nav, o mínimo que cada grupo do editor mantém (vezes o número de grupos), e a faixa da árvore e da pesquisa (a inicial, que só vale sem layout guardado: a largura que o usuário dá fica guardada por projeto, no layout que a recuperação do editor leva; e a mínima).
 const NAV_WIDTH = 44;
 const CENTER_MIN_WIDTH = 240;
@@ -441,10 +447,12 @@ export function App() {
     setProjectError('');
     setRetrying(false);
     try {
-      const project = await backend.chooseProject();
-      if (!project) return;
+      const picked = await backend.chooseProject();
+      if (!picked) return;
       const options = await backend.getOptions();
-      dispatch({ type: 'project', project, options });
+      dispatch({ type: 'project', project: picked.project, options });
+      // Pasta dentro de um repositório: o projeto aberto é a raiz dele. Aviso informativo, não erro.
+      if (picked.subfolder) toast.info({ title: `Esta pasta está dentro do repositório ${picked.project}. O projeto aberto é a raiz dele.`, duration: 6000 });
     } catch (e) {
       setProjectError(message(e));
     }
@@ -613,7 +621,10 @@ export function App() {
   const counts = (['running', 'queued', 'awaiting-choice', 'awaiting-orchestrator'] as const)
     .map((state) => [count(state), STATES[state].label] as const)
     .filter(([n]) => n);
-  const changed = git.data?.files.length ?? 0;
+  // Contador da navegação, branch e Histórico Git só existem no modo `repo`.
+  const changed = git.data?.kind === 'repo' ? git.data.status.files.length : 0;
+  const branch = git.data?.kind === 'repo' ? git.data.status.branch : undefined;
+  const noGitFix = git.data && git.data.kind !== 'repo' ? NO_GIT_FIX[git.data.kind] : null;
   // Texto do fechamento: a lista de arquivos (o caminho desambigua nomes iguais) e a menção aos terminais, quando há.
   const closeFiles = closeAsk?.files ?? [];
   const closeUnsaved = closeFiles.length === 1
@@ -639,10 +650,10 @@ export function App() {
     removeMany,
     move: moveItems,
     revealDir: (dir) => void backend.revealDir(dir).catch(report),
-    history: (path) => {
+    history: git.data?.kind === 'repo' ? (path) => {
       setHistoryRequest({ path, id: nextHistoryId() });
       setRoute('git');
-    },
+    } : null,
     // Localizar na pasta: a pesquisa com o escopo da pasta (vazio é o projeto inteiro), com o campo focado.
     search: (dir = '') => {
       setScope({ path: dir, id: ++scopeSeq.current });
@@ -685,7 +696,7 @@ export function App() {
     return (
       <Screen connected={connected} description={(
         <Text as="p" type="secondary" fontSize={14}>
-          Escolha a pasta do projeto (um repositório Git). O orquestrador e os executores trabalham nela.
+          Escolha a pasta do projeto. O orquestrador e os executores trabalham nela.
         </Text>
       )}>
         {projectError && (
@@ -786,14 +797,22 @@ export function App() {
         />
       </Flexbox>
 
-      <StatusBar branch={git.data?.branch} terminalOpen={state.shellOpen} onToggleTerminal={toggleShell} />
+      <StatusBar branch={branch} terminalOpen={state.shellOpen} onToggleTerminal={toggleShell} />
 
       {/* As duas escolhas são janelas: a do orquestrador (início) e uma só para os executores. Com um executor aguardando escolha, a janela dele é a única e não fecha sem confirmar: nunca duas empilhadas. */}
       {options && (
         <>
           <ChoiceForm
             open={orchestrator?.overlay === 'start'}
-            title="Orquestrador" hint="Só lê o projeto e delega. Você conversa com ele neste terminal."
+            title="Orquestrador"
+            hint={(
+              <Flexbox gap={8}>
+                <Text as="p" type="secondary" fontSize={14}>Só lê o projeto e delega. Você conversa com ele neste terminal.</Text>
+                {noGitFix && (
+                  <Text as="p" type="secondary" fontSize={14}>{`Esta pasta não tem Git: o que os executores mudarem não fica registrado e não pode ser desfeito pelo Git. ${noGitFix}`}</Text>
+                )}
+              </Flexbox>
+            )}
             options={options} initial={options.last.orchestrator} confirmLabel="Abrir terminal"
             onCancel={() => resetOrchestrator()} onConfirm={startOrchestrator} onClosed={focusOrchestrator}
           />

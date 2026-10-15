@@ -4,6 +4,7 @@ use crate::capacity::{self, Resources};
 use crate::cli::{self, Exes};
 use crate::config::{self, Choice, Options};
 use crate::files;
+use crate::git;
 use crate::hook;
 use crate::proc;
 use crate::pty::{Buffer, Shared, Term};
@@ -85,24 +86,51 @@ pub fn title(task: &str) -> String {
     task.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(80).collect()
 }
 
+/// Quantas linhas do `git status` o resultado do lote mostra; o resto vira uma linha de contagem.
+const MAX_LINHAS_GIT: usize = 200;
+
+/// O Git do projeto no fim do lote: a saída do `git status --porcelain` (no modo com repositório), ou o modo sem Git.
+pub enum GitLote {
+    Status(String),
+    NoRepo,
+    NoGit,
+    RepoAbove(String),
+}
+
 /// A saída de um lote terminado (`delegate.rs`, entregue pelo `mcp.rs`) e o código de saída dele: 0 se todas as
 /// tarefas concluíram.
-pub fn format_result(items: &[(String, Outcome)], git: &Result<String, String>) -> (i32, String) {
+pub fn format_result(items: &[(String, Outcome)], git: &Result<GitLote, String>) -> (i32, String) {
     let mut out = String::new();
     for (i, (title, outcome)) in items.iter().enumerate() {
         out += &format!("--- EXECUTOR {}/{} ---\n{title}\n{}\n", i + 1, items.len(), outcome.text.trim_end());
         out += &format!("executor_exit: {}{}\n", outcome.exit, if outcome.ok { "" } else { " (FALHOU)" });
     }
     // O que o Git diz que está alterado agora. Não é o diff do lote: o que já estava pendente
-    // antes aparece junto.
-    out += "--- GIT ---\ngit status (tudo o que está alterado agora, inclusive o que já estava pendente antes desta delegação):\n";
+    // antes aparece junto. Sem Git, a seção diz só o motivo.
+    const CABECALHO: &str = "git status (tudo o que está alterado agora, inclusive o que já estava pendente antes desta delegação):\n";
+    out += "--- GIT ---\n";
     out += &match git {
-        Err(why) => format!("(git status falhou: {why})\n"),
-        Ok(status) if status.trim().is_empty() => "(nada)\n".to_string(),
-        Ok(status) => format!("{}\n", status.trim_end()),
+        Err(why) => format!("{CABECALHO}(git status falhou: {why})\n"),
+        Ok(GitLote::Status(status)) => format!("{CABECALHO}{}", lista(status)),
+        Ok(GitLote::NoRepo) => "(sem Git: a pasta não é um repositório Git)\n".to_string(),
+        Ok(GitLote::NoGit) => "(sem Git: o Git não foi encontrado neste computador)\n".to_string(),
+        Ok(GitLote::RepoAbove(root)) => format!("(sem Git: a pasta está dentro do repositório {root}, que não é a raiz do projeto)\n"),
     };
     out += "--- FIM ---\n";
     (if items.iter().all(|(_, o)| o.ok) { 0 } else { 1 }, out)
+}
+
+/// As linhas do `git status` para o resultado: até `MAX_LINHAS_GIT`, depois a contagem do que ficou de fora.
+fn lista(status: &str) -> String {
+    if status.trim().is_empty() {
+        return "(nada)\n".to_string();
+    }
+    let linhas: Vec<&str> = status.trim_end().lines().collect();
+    let mut out: String = linhas.iter().take(MAX_LINHAS_GIT).map(|l| format!("{l}\n")).collect();
+    if linhas.len() > MAX_LINHAS_GIT {
+        out += &format!("(… e mais {} arquivos; rode git status para ver todos)\n", linhas.len() - MAX_LINHAS_GIT);
+    }
+    out
 }
 
 /// A última resposta do executor, se `payload` é o sinal de fim da rodada dele.
@@ -189,6 +217,14 @@ impl Drop for GitExclusive {
     }
 }
 
+/// O projeto aberto. `subfolder` vale quando a pasta escolhida é uma subpasta da raiz do repositório.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Opened {
+    pub project: String,
+    pub subfolder: bool,
+}
+
 #[derive(Clone)]
 pub struct Core {
     inner: Arc<Mutex<Inner>>,
@@ -223,16 +259,28 @@ impl Core {
         self
     }
 
-    /// A raiz Git de `folder` passa a ser o projeto. Erro se não for um repositório.
-    pub fn set_project(&self, folder: &Path) -> Result<String, String> {
-        let root = proc::git_root(folder)
-            .ok_or_else(|| format!("{} não está dentro de um repositório Git. Escolha outra pasta.", folder.display()))?;
+    /// `folder` passa a ser o projeto. Dentro de um repositório, o projeto é a raiz dele; fora (ou se o Git não abre a
+    /// pasta), é a própria pasta, no caminho em que veio. Erro se a pasta não existe ou não é pasta.
+    pub fn set_project(&self, folder: &Path) -> Result<Opened, String> {
+        if !folder.exists() {
+            return Err(format!("A pasta {} não existe.", folder.display()));
+        }
+        if !folder.is_dir() {
+            return Err(format!("{} não é uma pasta.", folder.display()));
+        }
+        let (project, subfolder) = match proc::git_root(folder) {
+            Some(root) => {
+                let subfolder = !proc::mesma_pasta(folder, Path::new(&root));
+                (root, subfolder)
+            }
+            None => (folder.display().to_string(), false),
+        };
         let mut inner = self.inner.lock().unwrap();
         if inner.session.is_some() {
             return Err("Feche o orquestrador antes de trocar de projeto.".into());
         }
-        inner.project = Some(root.clone());
-        Ok(root)
+        inner.project = Some(project.clone());
+        Ok(Opened { project, subfolder })
     }
 
     /// A pasta do projeto como caminho, para os comandos que a recebem.
@@ -657,7 +705,14 @@ impl Core {
         let done = inner.batches.remove(pos);
         let items: Vec<(String, Outcome)> = done.titles.into_iter().zip(done.outcomes.into_iter().flatten()).collect();
         let project = inner.project.clone().unwrap_or_default();
-        let git = proc::git_saida(Path::new(&project), &["status", "--porcelain", "--untracked-files=all"]);
+        let dir = Path::new(&project);
+        let git = match git::modo(dir) {
+            Ok(git::Modo::Repo) => proc::git_saida(dir, &["status", "--porcelain", "--untracked-files=all"]).map(GitLote::Status),
+            Ok(git::Modo::NoRepo) => Ok(GitLote::NoRepo),
+            Ok(git::Modo::NoGit) => Ok(GitLote::NoGit),
+            Ok(git::Modo::RepoAbove(root)) => Ok(GitLote::RepoAbove(root)),
+            Err(why) => Err(why),
+        };
         let (code, text) = if items.is_empty() {
             (4, "wrapper_error: o lote chegou sem tarefas.\n--- FIM ---\n".to_string())
         } else {
@@ -693,7 +748,7 @@ mod tests {
     #[test]
     fn resultado_de_um_lote_concluido() {
         let items = [("Tarefa A".to_string(), ok("Fiz A.\ncódigo 0\n")), ("Tarefa B".to_string(), ok("Fiz B."))];
-        let (code, text) = format_result(&items, &Ok(" M a.txt\n?? b.txt\n".into()));
+        let (code, text) = format_result(&items, &Ok(GitLote::Status(" M a.txt\n?? b.txt\n".into())));
         assert_eq!(code, 0);
         assert_eq!(
             text,
@@ -711,13 +766,43 @@ mod tests {
             ("B".to_string(), Outcome { text: "interrompido pelo usuário".into(), exit: "interrompido".into(), ok: false }),
             ("C".to_string(), Outcome { text: "O executor terminou sem sinal de fim de rodada (código de saída 3).".into(), exit: "3".into(), ok: false }),
         ];
-        let (code, text) = format_result(&items, &Ok("\n".into()));
+        let (code, text) = format_result(&items, &Ok(GitLote::Status("\n".into())));
         assert_ne!(code, 0);
         assert!(text.contains("--- EXECUTOR 2/3 ---\nB\ninterrompido pelo usuário\nexecutor_exit: interrompido (FALHOU)\n"));
         assert!(text.contains("--- EXECUTOR 3/3 ---\nC\nO executor terminou sem sinal de fim de rodada (código de saída 3).\nexecutor_exit: 3 (FALHOU)\n"));
         assert!(text.ends_with("delegação):\n(nada)\n--- FIM ---\n"));
         let (_, text) = format_result(&items[..1], &Err("código 128".into()));
         assert!(text.ends_with("(git status falhou: código 128)\n--- FIM ---\n"));
+    }
+
+    #[test]
+    fn resultado_sem_git_diz_so_o_motivo_em_uma_linha() {
+        let items = [("A".to_string(), ok("feito"))];
+        let casos = [
+            (GitLote::NoRepo, "--- GIT ---\n(sem Git: a pasta não é um repositório Git)\n--- FIM ---\n"),
+            (GitLote::NoGit, "--- GIT ---\n(sem Git: o Git não foi encontrado neste computador)\n--- FIM ---\n"),
+            (
+                GitLote::RepoAbove("D:\\raiz".into()),
+                "--- GIT ---\n(sem Git: a pasta está dentro do repositório D:\\raiz, que não é a raiz do projeto)\n--- FIM ---\n",
+            ),
+        ];
+        for (git, secao) in casos {
+            let (code, text) = format_result(&items, &Ok(git));
+            assert_eq!(code, 0);
+            assert!(text.ends_with(secao), "{text}");
+            assert!(!text.contains("git status"), "sem Git não há a linha do git status: {text}");
+        }
+    }
+
+    #[test]
+    fn resultado_corta_o_git_status_em_200_linhas_e_conta_o_resto() {
+        let items = [("A".to_string(), ok("feito"))];
+        let status: String = (1..=203).map(|n| format!(" M arq{n}.txt\n")).collect();
+        let (_, text) = format_result(&items, &Ok(GitLote::Status(status)));
+        assert!(text.contains(" M arq200.txt\n(… e mais 3 arquivos; rode git status para ver todos)\n--- FIM ---\n"), "{text}");
+        assert!(!text.contains("arq201.txt"));
+        let (_, text) = format_result(&items, &Ok(GitLote::Status((1..=200).map(|n| format!(" M a{n}\n")).collect())));
+        assert!(!text.contains("e mais"), "exatamente 200 linhas não tem contagem: {text}");
     }
 
     // Os dois JSON abaixo são os que os CLIs reais entregaram na medição (encurtados).
@@ -758,12 +843,57 @@ mod tests {
         git(&["add", "-A"]);
         git(&["commit", "-q", "-m", "a"]);
         git(&["branch", "outra"]);
+        let core = core_vazio(&root, emit);
+        core.set_project(&repo).unwrap();
+        (core, root)
+    }
+
+    /// Um Core sem projeto, com CLIs falsas e a configuração e as sessões na pasta `root`.
+    fn core_vazio(root: &Path, emit: Emit) -> Core {
         let fake = String::from("fake");
         let exes = Exes { claude: fake.clone(), codex: fake.clone(), app: fake };
         let places = session::Places { temp: root.join("temp"), codex_rules: root.join("rules"), global_dirs: vec![] };
-        let core = Core::new(exes, places, root.join("config.json"), emit);
-        core.set_project(&repo).unwrap();
-        (core, root)
+        Core::new(exes, places, root.join("config.json"), emit)
+    }
+
+    #[test]
+    fn pasta_fora_de_repositorio_abre_com_o_proprio_caminho() {
+        let root = fresh("orq-core", "pasta-solta");
+        let pasta = root.join("solta");
+        std::fs::create_dir_all(&pasta).unwrap();
+        let core = core_vazio(&root, Arc::new(|_: &str, _: Value| {}));
+        let opened = core.set_project(&pasta).unwrap();
+        assert_eq!(opened, Opened { project: pasta.display().to_string(), subfolder: false });
+        assert_eq!(core.repo().unwrap(), pasta);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pasta_inexistente_ou_que_nao_e_pasta_e_recusada() {
+        let root = fresh("orq-core", "inexistente");
+        let arquivo = root.join("arquivo.txt");
+        std::fs::write(&arquivo, "x").unwrap();
+        let core = core_vazio(&root, Arc::new(|_: &str, _: Value| {}));
+        let sumida = root.join("nao-existe");
+        assert_eq!(core.set_project(&sumida).unwrap_err(), format!("A pasta {} não existe.", sumida.display()));
+        assert!(core.set_project(&arquivo).unwrap_err().ends_with("não é uma pasta."));
+        assert!(core.repo().is_err(), "nada foi aberto");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn subpasta_de_repositorio_abre_a_raiz_com_subfolder() {
+        let (core, root) = git_core("subpasta");
+        let repo = root.join("repo");
+        let sub = repo.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let opened = core.set_project(&sub).unwrap();
+        assert!(opened.subfolder);
+        assert!(proc::mesma_pasta(Path::new(&opened.project), &repo), "raiz: {}", opened.project);
+        let opened = core.set_project(&repo).unwrap();
+        assert!(!opened.subfolder);
+        assert!(proc::mesma_pasta(Path::new(&opened.project), &repo), "raiz: {}", opened.project);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

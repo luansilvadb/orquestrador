@@ -70,6 +70,73 @@ pub fn status(dir: &Path) -> Result<Status, String> {
     Ok(parse_status(proc::branch(dir)?, &out))
 }
 
+/// Como o projeto se liga ao Git. Sem repositório ou com o Git ausente, não há lista de alterações.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Modo {
+    /// O projeto é a raiz de um repositório.
+    Repo,
+    /// A pasta não está em nenhum repositório.
+    NoRepo,
+    /// O programa `git` não pôde ser executado.
+    NoGit,
+    /// A pasta está dentro de um repositório cuja raiz (com barras invertidas) não é o projeto.
+    RepoAbove(String),
+}
+
+/// O estado do Git que a tela mostra. `repo` traz o `Status`; os outros modos só dizem por que não há lista.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum Estado {
+    Repo { status: Status },
+    NoRepo,
+    NoGit,
+    RepoAbove { root: String },
+}
+
+/// Em qual modo o projeto está. `Err` só quando há `.git` acima da pasta e o Git recusa (dono diferente, repositório
+/// corrompido): o texto é o do Git, e não se oferece `git init` por cima de um repositório que existe.
+pub fn modo(dir: &Path) -> Result<Modo, String> {
+    let top = match proc::git_falha(dir, &["rev-parse", "--show-toplevel"]) {
+        Ok(top) => top.trim().to_string(),
+        Err(proc::Falha::Ausente(_)) => return Ok(Modo::NoGit),
+        Err(proc::Falha::Erro(why)) => {
+            if dir.ancestors().any(|p| p.join(".git").exists()) {
+                return Err(why);
+            }
+            return Ok(Modo::NoRepo);
+        }
+    };
+    if top.is_empty() {
+        return Err("O Git não informou a raiz do repositório.".into());
+    }
+    if proc::mesma_pasta(dir, Path::new(&top)) {
+        Ok(Modo::Repo)
+    } else {
+        Ok(Modo::RepoAbove(top.replace('/', "\\")))
+    }
+}
+
+/// O estado do Git para a tela: a lista só existe no modo `Repo`.
+pub fn estado(dir: &Path) -> Result<Estado, String> {
+    Ok(match modo(dir)? {
+        Modo::Repo => Estado::Repo { status: status(dir)? },
+        Modo::NoRepo => Estado::NoRepo,
+        Modo::NoGit => Estado::NoGit,
+        Modo::RepoAbove(root) => Estado::RepoAbove { root },
+    })
+}
+
+/// Cria o repositório na pasta do projeto, só quando ela não está em nenhum. Sem `-b` (vale a branch padrão do
+/// usuário), sem commit e sem stage. Nos outros modos, recusa sem rodar o Git.
+pub fn init(dir: &Path) -> Result<(), String> {
+    match modo(dir)? {
+        Modo::NoRepo => proc::git_saida(dir, &["init", "-q"]).map(|_| ()),
+        Modo::Repo => Err("A pasta já é um repositório Git.".into()),
+        Modo::NoGit => Err("O Git não foi encontrado neste computador.".into()),
+        Modo::RepoAbove(root) => Err(format!("A pasta está dentro do repositório {root}; não dá para criar outro aqui.")),
+    }
+}
+
 /// Lê a saída de `status --porcelain=v2 --branch -z`. Cada registro acaba em NUL; o renomeado traz o caminho
 /// de origem no registro seguinte.
 fn parse_status(branch: String, out: &str) -> Status {
@@ -2149,5 +2216,76 @@ mod tests {
         assert!(stage_hunk(&dir, &hunk).unwrap_err().contains("é uma pasta"));
         assert!(git(&dir, &["diff", "--cached", "--name-only"]).trim().is_empty());
         assert_eq!(quantos_blocos(&dir, "pasta/um.txt", false), 1, "o arquivo sozinho segue normal");
+    }
+
+    #[test]
+    fn modo_de_pasta_sem_repositorio_com_repositorio_e_com_repositorio_acima() {
+        let tmp = Tmp::new("orq-git", "modo");
+        let fora = tmp.0.join("fora");
+        fs::create_dir_all(&fora).unwrap();
+        assert_eq!(modo(&fora).unwrap(), Modo::NoRepo);
+        let dir = repo(&tmp, "r");
+        assert_eq!(modo(&dir).unwrap(), Modo::Repo);
+        let sub = dir.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        match modo(&sub).unwrap() {
+            Modo::RepoAbove(root) => assert!(proc::mesma_pasta(Path::new(&root), &dir), "raiz {root}"),
+            outro => panic!("subpasta deveria ser repo-above: {outro:?}"),
+        }
+    }
+
+    #[test]
+    fn git_init_cria_o_repositorio_e_a_pasta_vira_repo() {
+        let tmp = Tmp::new("orq-git", "init");
+        let dir = tmp.0.join("novo");
+        fs::create_dir_all(&dir).unwrap();
+        write(&dir, "a.txt", "a\n");
+        init(&dir).unwrap();
+        assert_eq!(modo(&dir).unwrap(), Modo::Repo);
+        // Sem commit e sem stage: o arquivo só aparece como não rastreado.
+        assert!(proc::git_saida(&dir, &["rev-parse", "-q", "--verify", "HEAD"]).is_err());
+        assert!(git(&dir, &["diff", "--cached", "--name-only"]).trim().is_empty());
+        assert_eq!(status(&dir).unwrap().files, vec![GitFile { path: "a.txt".into(), orig_path: None, staged: None, unstaged: Some(Kind::Untracked) }]);
+        // Repositório já criado: recusa sem rodar nada.
+        assert_eq!(init(&dir).unwrap_err(), "A pasta já é um repositório Git.");
+    }
+
+    #[test]
+    fn git_init_dentro_de_repositorio_acima_e_recusado() {
+        let tmp = Tmp::new("orq-git", "init-acima");
+        let dir = repo(&tmp, "r");
+        let sub = dir.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        let erro = init(&sub).unwrap_err();
+        assert!(erro.starts_with("A pasta está dentro do repositório ") && erro.ends_with("; não dá para criar outro aqui."), "{erro}");
+        assert!(!sub.join(".git").exists(), "nada foi criado dentro da subpasta");
+    }
+
+    #[test]
+    fn git_que_recusa_com_git_presente_da_erro_e_nao_oferece_init() {
+        let tmp = Tmp::new("orq-git", "recusa");
+        let dir = tmp.0.join("projeto");
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        // Um `.git` de arquivo que aponta para lugar nenhum: o Git recusa, mas o repositório existe.
+        fs::write(dir.join(".git"), "gitdir: nao-existe-aqui\n").unwrap();
+        assert!(modo(&dir).is_err());
+        assert!(modo(&dir.join("sub")).is_err());
+        assert!(estado(&dir).is_err());
+        assert!(init(&dir).is_err());
+        assert!(!dir.join("sub").join(".git").exists());
+    }
+
+    #[test]
+    fn estado_tem_o_formato_que_a_tela_recebe() {
+        let tmp = Tmp::new("orq-git", "estado");
+        let fora = tmp.0.join("fora");
+        fs::create_dir_all(&fora).unwrap();
+        assert_eq!(serde_json::to_value(estado(&fora).unwrap()).unwrap(), serde_json::json!({ "kind": "no-repo" }));
+        assert_eq!(serde_json::to_value(Estado::NoGit).unwrap(), serde_json::json!({ "kind": "no-git" }));
+        assert_eq!(serde_json::to_value(Estado::RepoAbove { root: "D:\\raiz".into() }).unwrap(), serde_json::json!({ "kind": "repo-above", "root": "D:\\raiz" }));
+        let dir = repo(&tmp, "r");
+        let json = serde_json::to_value(estado(&dir).unwrap()).unwrap();
+        assert_eq!(json["kind"], "repo");
+        assert_eq!(json["status"]["branch"], "main");
     }
 }

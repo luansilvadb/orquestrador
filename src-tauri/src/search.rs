@@ -1,9 +1,11 @@
 //! Pesquisa, abertura rápida e substituição de texto nos arquivos do projeto. Os candidatos são os do `git ls-files`
-//! (rastreados e não ignorados, sem `.git`). Busca, prévia e aplicação usam o mesmo motor (`regex`) e a mesma regra:
+//! (rastreados e não ignorados, sem `.git`), ou os da pasta quando não há repositório.
+//! Busca, prévia e aplicação usam o mesmo motor (`regex`) e a mesma regra:
 //! o padrão roda linha a linha, sem a quebra de linha, e o CR do fim não conta. Binário, não UTF-8, grande, o que não é
 //! arquivo comum (link, junção, submódulo) e arquivo cujo fim de linha a gravação não preservaria ficam de fora, e
 //! a resposta diz quais e por quê.
 use crate::files;
+use crate::git;
 use crate::proc;
 use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
@@ -386,18 +388,43 @@ fn glob(term: &str) -> Result<Regex, String> {
     Regex::new(&pattern).map_err(|e| format!("Filtro de caminho inválido: {}", regex_reason(&e)))
 }
 
-/// Os caminhos que a busca enxerga, em ordem: rastreados e não ignorados (`git ls-files`), depois dos filtros.
+/// Os caminhos que a busca enxerga, em ordem, depois dos filtros. Com repositório, são os do `git ls-files`
+/// (rastreados e não ignorados); sem ele, a pasta percorrida (`caminhos_da_pasta`).
 fn candidates(dir: &Path, include: &[Regex], exclude: &[Regex]) -> Result<Vec<String>, String> {
-    let out = proc::git_saida(dir, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"])?;
-    let mut paths: Vec<String> = out
-        .split('\0')
-        .filter(|p| !p.is_empty())
-        .filter(|p| include.is_empty() || include.iter().any(|r| r.is_match(p)))
-        .filter(|p| !exclude.iter().any(|r| r.is_match(p)))
-        .map(str::to_string)
-        .collect();
+    let mut paths = match git::modo(dir)? {
+        git::Modo::Repo => {
+            let out = proc::git_saida(dir, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"])?;
+            out.split('\0').filter(|p| !p.is_empty()).map(str::to_string).collect()
+        }
+        _ => caminhos_da_pasta(dir)?,
+    };
+    paths.retain(|p| include.is_empty() || include.iter().any(|r| r.is_match(p)));
+    paths.retain(|p| !exclude.iter().any(|r| r.is_match(p)));
     paths.sort();
     paths.dedup();
+    Ok(paths)
+}
+
+/// Os arquivos da pasta do projeto, como caminhos com "/" a partir dela, para quando não há repositório. Segue a
+/// mesma regra do `git ls-files --exclude-standard`: respeita `.gitignore` e `.ignore` desta pasta e das subpastas
+/// (mesmo sem repositório), mas não os de pastas acima, inclui arquivos ocultos, não entra em link nem em junção, e
+/// nunca desce em `.git` nem em `node_modules`.
+fn caminhos_da_pasta(dir: &Path) -> Result<Vec<String>, String> {
+    let mut walk = ignore::WalkBuilder::new(dir);
+    walk.hidden(false).parents(false).require_git(false).follow_links(false);
+    walk.filter_entry(|e| !matches!(e.file_name().to_str(), Some(".git" | "node_modules")));
+    // Só a raiz conta como erro: se ela não abre, a pasta não pode ser listada. Entrada ilegível é pulada.
+    std::fs::read_dir(dir).map_err(|e| format!("Não foi possível ler a pasta do projeto: {e}"))?;
+    let mut paths = Vec::new();
+    for entry in walk.build() {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let rel = entry.path().strip_prefix(dir).map_err(|e| e.to_string())?;
+        let parts: Vec<&str> = rel.components().filter_map(|c| c.as_os_str().to_str()).collect();
+        paths.push(parts.join("/"));
+    }
     Ok(paths)
 }
 
@@ -882,5 +909,35 @@ mod tests {
         let prev = preview(&t.0, &q("foo"), "bar").unwrap();
         assert_eq!(prev.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), vec!["real.txt"]);
         assert!(prev.skipped.iter().any(|s| s.path == "atalho.txt" && s.reason == SkipReason::NotFile));
+    }
+
+    #[test]
+    fn sem_repositorio_a_pesquisa_respeita_gitignore_e_pula_git_e_node_modules() {
+        let t = Tmp::new("orq-search", "sem-git");
+        write(&t.0, ".gitignore", "ignorado.txt\nbuild/\n");
+        write(&t.0, "ignorado.txt", "x");
+        write(&t.0, "build/saida.txt", "x");
+        write(&t.0, "a.txt", "x");
+        write(&t.0, "pasta/b.txt", "x");
+        write(&t.0, ".oculto", "x");
+        // Repositório aninhado: o `.git` dele fica de fora, o resto da subpasta entra.
+        write(&t.0, "sub/.git/HEAD", "ref: refs/heads/main\n");
+        write(&t.0, "sub/x.txt", "x");
+        write(&t.0, "node_modules/lib/i.txt", "x");
+        write(&t.0, "pasta/node_modules/j.txt", "x");
+        assert_eq!(candidates(&t.0, &[], &[]).unwrap(), vec![".gitignore", ".oculto", "a.txt", "pasta/b.txt", "sub/x.txt"]);
+        assert_eq!(quick_open(&t.0, "b.txt").unwrap().paths, vec!["pasta/b.txt"]);
+    }
+
+    #[test]
+    fn sem_repositorio_a_pesquisa_nao_entra_em_juncao() {
+        let fora = Tmp::new("orq-search", "sem-git-junction-fora");
+        write(&fora.0, "segredo.txt", "x\n");
+        let t = Tmp::new("orq-search", "sem-git-junction");
+        write(&t.0, "base.txt", "x\n");
+        // Junção não exige privilégio no Windows.
+        assert!(junction(&t.0.join("link"), &fora.0), "mklink /J falhou");
+        assert_eq!(candidates(&t.0, &[], &[]).unwrap(), vec!["base.txt"]);
+        assert_eq!(quick_open(&t.0, "segredo").unwrap().total, 0);
     }
 }

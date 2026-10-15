@@ -22,11 +22,26 @@ pub fn quiet(program: &str) -> Command {
     cmd
 }
 
+/// Por que o Git não deu saída: ele nem começou (não está instalado ou não está no PATH), ou respondeu com erro.
+#[derive(Debug)]
+pub enum Falha {
+    Ausente(String),
+    Erro(String),
+}
+
+impl From<Falha> for String {
+    fn from(falha: Falha) -> String {
+        match falha {
+            Falha::Ausente(texto) | Falha::Erro(texto) => texto,
+        }
+    }
+}
+
 /// Roda o Git sem nada que espere digitação: sem pedido de credencial, sem editor. `entrada` vai pela entrada
 /// padrão; sem ela, a entrada é nula. Sucesso devolve os bytes de (stdout, stderr); falha devolve o que o Git
 /// escreveu (stderr e stdout, aparados e em UTF-8 com troca de byte inválido), ou o código de saída quando ele não
 /// escreveu nada. Os caminhos são pathspec literal e o nome sai em UTF-8 sem aspas.
-fn run(dir: &Path, args: &[&str], entrada: Option<&[u8]>) -> Result<(Vec<u8>, Vec<u8>), String> {
+fn run(dir: &Path, args: &[&str], entrada: Option<&[u8]>) -> Result<(Vec<u8>, Vec<u8>), Falha> {
     let mut cmd = quiet("git");
     cmd.arg("-C")
         .arg(dir)
@@ -47,32 +62,37 @@ fn run(dir: &Path, args: &[&str], entrada: Option<&[u8]>) -> Result<(Vec<u8>, Ve
             child.wait_with_output()
         }),
     }
-    .map_err(|e| format!("git não pôde ser executado: {e}"))?;
+    .map_err(|e| Falha::Ausente(format!("git não pôde ser executado: {e}")))?;
     if out.status.success() {
         return Ok((out.stdout, out.stderr));
     }
     let why: Vec<String> = [&out.stderr, &out.stdout].into_iter().map(|bytes| String::from_utf8_lossy(bytes).trim().to_string()).filter(|s| !s.is_empty()).collect();
-    Err(if why.is_empty() { format!("código {}", out.status.code().unwrap_or(-1)) } else { why.join("\n") })
+    Err(Falha::Erro(if why.is_empty() { format!("código {}", out.status.code().unwrap_or(-1)) } else { why.join("\n") }))
 }
 
 /// A saída (stdout) do Git sem espera de digitação. Na falha, o erro traz o texto do Git.
 pub fn git_saida(dir: &Path, args: &[&str]) -> Result<String, String> {
+    git_falha(dir, args).map_err(String::from)
+}
+
+/// Igual a `git_saida`, mas a falha diz se o Git nem começou (`Ausente`) ou se ele recusou (`Erro`).
+pub fn git_falha(dir: &Path, args: &[&str]) -> Result<String, Falha> {
     run(dir, args, None).map(|(out, _)| String::from_utf8_lossy(&out).into_owned())
 }
 
 /// A saída completa do Git (stdout e stderr juntos), para mostrar na tela. Na falha, o erro traz o texto do Git.
 pub fn git_completa(dir: &Path, args: &[&str]) -> Result<String, String> {
-    run(dir, args, None).map(|(out, err)| String::from_utf8_lossy(&out).into_owned() + &String::from_utf8_lossy(&err))
+    run(dir, args, None).map(|(out, err)| String::from_utf8_lossy(&out).into_owned() + &String::from_utf8_lossy(&err)).map_err(String::from)
 }
 
 /// A saída (stdout) do Git em bytes crus, sem trocar byte inválido: para saber se um conteúdo é UTF-8. Na falha, o erro é o de `run`.
 pub fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    run(dir, args, None).map(|(out, _)| out)
+    run(dir, args, None).map(|(out, _)| out).map_err(String::from)
 }
 
 /// O Git com `entrada` pela entrada padrão, como o `git apply` que recebe o patch. Na falha, o erro é o de `run`.
 pub fn git_entrada(dir: &Path, args: &[&str], entrada: &[u8]) -> Result<(), String> {
-    run(dir, args, Some(entrada)).map(drop)
+    run(dir, args, Some(entrada)).map(drop).map_err(String::from)
 }
 
 /// Pasta -> raiz do repositório Git (com barras invertidas), ou `None` fora de um work tree.
@@ -83,6 +103,15 @@ pub fn git_root(folder: &Path) -> Option<String> {
     let top = git_saida(folder, &["rev-parse", "--show-toplevel"]).ok()?;
     let top = top.trim();
     (!top.is_empty()).then(|| top.replace('/', "\\"))
+}
+
+/// Se os dois caminhos são a mesma pasta. Compara o caminho real sem diferença de maiúsculas, porque o Git e o
+/// diálogo escrevem a mesma pasta de jeitos diferentes no Windows. Pasta que não existe não é a mesma.
+pub fn mesma_pasta(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase(),
+        _ => false,
+    }
 }
 
 /// Nome da branch atual; em HEAD destacado, o hash curto do commit. Erro se nem isso der para ler.
@@ -236,6 +265,14 @@ mod tests {
         git_saida(&dir, &["checkout", "--detach", "-q"]).unwrap();
         let hash = git_saida(&dir, &["rev-parse", "--short", "HEAD"]).unwrap();
         assert_eq!(branch(&dir).unwrap(), hash.trim());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mesma_pasta_ignora_maiusculas_e_pasta_inexistente_nao_e() {
+        let dir = fresh("orq-proc", "mesma");
+        assert!(mesma_pasta(&dir, Path::new(&dir.to_string_lossy().to_uppercase())));
+        assert!(!mesma_pasta(&dir, &dir.join("nao-existe")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -43,6 +43,16 @@ export type GitStatus = { branch: string; ahead: number; behind: number; head: s
 // `head` é o hash completo do HEAD; '' sem commit.
 // `patch` é o diff unificado do arquivo (cabeçalho e `@@`); vazio quando não há alteração.
 export type GitDiff = { binary: boolean; tooLarge: boolean; patch: string };
+// Estado do Git da pasta do projeto (retorno de `git_status`). Só `repo` tem o painel completo; os outros dizem por que não há.
+export type GitState =
+  // A raiz do projeto é um repositório: o status é o de sempre.
+  | { kind: 'repo'; status: GitStatus }
+  // A pasta não está em nenhum repositório; `git_init` cria um.
+  | { kind: 'no-repo' }
+  // O Git não foi encontrado neste computador.
+  | { kind: 'no-git' }
+  // A pasta está dentro de um repositório cuja raiz (`root`) não é o projeto.
+  | { kind: 'repo-above'; root: string };
 export type GitBranches = { current: string; local: string[] };
 
 // Revisão por bloco (contrato do backend). `revision` é a impressão digital do diff que a tela viu; um bloco é identificado por `index` e `header`.

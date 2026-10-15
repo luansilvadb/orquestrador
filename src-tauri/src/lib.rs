@@ -19,7 +19,7 @@ pub mod update;
 mod testutil;
 
 use crate::config::{Choice, Options};
-use crate::core::{Core, Snapshot};
+use crate::core::{Core, Opened, Snapshot};
 use crate::update::Gate;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -44,7 +44,7 @@ fn idle<T>(core: &Core, gate: &Gate, run: impl FnOnce(&Path) -> Result<T, String
 // no trabalho: com a versão fora de dia, nada do projeto, dos terminais ou da configuração é acessível.
 
 #[tauri::command(async)]
-fn choose_project(app: tauri::AppHandle, core: State<Core>, gate: State<Gate>) -> Result<Option<String>, String> {
+fn choose_project(app: tauri::AppHandle, core: State<Core>, gate: State<Gate>) -> Result<Option<Opened>, String> {
     gate.ensure_open()?;
     match app.dialog().file().set_title("Pasta do projeto").blocking_pick_folder() {
         None => Ok(None),
@@ -102,10 +102,17 @@ fn replace_apply(core: State<Core>, gate: State<Gate>, request: search::ApplyReq
     search::apply(&repo(&core, &gate)?, &request)
 }
 
-/// O estado do Git do projeto para o painel: branch, ahead/behind e os arquivos alterados.
+/// O estado do Git do projeto para o painel: com repositório, a branch, ahead/behind e os arquivos alterados; sem
+/// ele, só o motivo (sem repositório, sem Git, ou o repositório fica acima do projeto).
 #[tauri::command(async)]
-fn git_status(core: State<Core>, gate: State<Gate>) -> Result<git::Status, String> {
-    git::status(&repo(&core, &gate)?)
+fn git_status(core: State<Core>, gate: State<Gate>) -> Result<git::Estado, String> {
+    git::estado(&repo(&core, &gate)?)
+}
+
+/// Cria o repositório na pasta do projeto, só quando ela não está em nenhum. Sem commit e sem stage.
+#[tauri::command(async)]
+fn git_init(core: State<Core>, gate: State<Gate>) -> Result<(), String> {
+    git::init(&repo(&core, &gate)?)
 }
 
 /// Prepara os caminhos. Lista vazia prepara tudo, inclusive o não rastreado e o apagado.
@@ -429,6 +436,7 @@ pub fn run(context: tauri::Context) {
             replace_preview,
             replace_apply,
             git_status,
+            git_init,
             git_stage,
             git_unstage,
             git_commit,

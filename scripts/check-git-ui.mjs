@@ -7,7 +7,7 @@
 // Capturas em .playwright-mcp/git-ui-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { OUT, uiSuite, expand, treeItem, tabs, editorText, focusEditor } from './editor-ui-harness.mjs';
+import { BASE, OUT, uiSuite, expand, treeItem, tabs, editorText, focusEditor } from './editor-ui-harness.mjs';
 
 // Diagnóstico extra da falha: as chamadas Git que o simulado recusou explicam uma falha de fluxo melhor que a espera que estourou.
 const { scenario, run } = uiSuite('git-ui', {
@@ -52,6 +52,22 @@ const waitCount = async (page, cmd, n) => {
   for (let i = 0; i < 100 && (await calls(page, cmd)).length < n; i++) await page.waitForTimeout(50);
 };
 const cancelBtn = (page, title) => dialogBtn(page, title, 'Cancelar');
+// Reabre o app com a URL dada (o modo do Git e a pasta escolhida vêm dela) e escolhe a pasta de novo: a página recomeça do zero.
+async function reopen(page, query = '') {
+  await page.goto(`${BASE}${query}`);
+  await page.getByRole('button', { name: 'Escolher pasta do projeto' }).click();
+  await page.getByRole('navigation', { name: 'Telas' }).waitFor();
+}
+const NO_REPO_TEXT = /^A pasta aberta não tem um repositório Git\./;
+const initBtn = (page) => page.getByRole('button', { name: 'Inicializar repositório', exact: true });
+const historyItem = (page) => page.getByRole('menuitem', { name: /Histórico Git/ });
+// Menu da árvore de um arquivo de docs (docs/design-system.md), aberto pelo clique direito.
+async function openFileMenu(page) {
+  await openRoute(page, 'Arquivos');
+  await expand(page, ['docs']);
+  await treeItem(page, 'design-system.md').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /Abrir com/ }).waitFor();
+}
 // Botão dentro de um bloco do diff, pela linha de cabeçalho do bloco (texto do `@@`).
 const actIn = (page, header, name) => act(hunk(page, header), name);
 // Não há sobreposição: o centro do botão cai nele (ou num filho), e a caixa dele fica dentro do contêiner pedido.
@@ -628,5 +644,90 @@ scenario('editor: Ctrl+G vai para a linha e Ctrl+H abre a busca sem mandar a tec
   assert.equal(await editorText(page), textBefore, 'Ctrl+Z restaurou o texto');
 });
 
+
+// ---------- Git: pasta sem repositório ----------
+
+scenario('pasta sem repositório: o painel traz o texto e o botão, sem contador, branch, gráfico nem Histórico Git; Inicializar chama git_init uma vez e o painel volta ao normal', async ({ page }) => {
+  await reopen(page, '?git=no-repo');
+  await openGit(page);
+  await page.getByText(NO_REPO_TEXT).waitFor();
+  await initBtn(page).waitFor();
+  await page.screenshot({ path: join(OUT, 'git-ui-sem-repositorio.png') });
+  assert.equal(await page.getByRole('heading', { name: 'Controle de versão', exact: true }).count(), 1, 'título do painel');
+  assert.equal(await page.getByRole('button', { name: 'Atualizar status' }).count(), 0, 'sem ações do painel cheio');
+  assert.equal(await page.getByText('Publicar no GitHub').count(), 0, 'sem Publicar no GitHub');
+  assert.equal(await nav(page).getByRole('button', { name: 'Git', exact: true }).count(), 1, 'Git na navegação sem contador');
+  assert.equal(await page.locator('footer').getByText('main', { exact: true }).count(), 0, 'barra de status sem branch');
+  await openFileMenu(page);
+  assert.equal(await historyItem(page).count(), 0, 'menu da árvore sem Histórico Git');
+  await page.keyboard.press('Escape');
+  await openGit(page);
+  assert.equal((await calls(page, 'git_graph')).length + (await calls(page, 'git_history')).length, 0, 'gráfico e histórico não consultam o Git');
+  await initBtn(page).click();
+  await waitCount(page, 'git_init', 1);
+  assert.equal((await calls(page, 'git_init')).length, 1, 'git_init chamado uma vez');
+  await section(page, 'Alterações').waitFor();
+  await page.getByText(NO_REPO_TEXT).waitFor({ state: 'detached' });
+  assert.equal(await nav(page).getByRole('button', { name: /^Git \(/ }).count(), 1, 'contador da navegação volta');
+  assert.equal(await page.locator('footer').getByText('main', { exact: true }).count(), 1, 'branch na barra de status');
+  await openFileMenu(page);
+  await historyItem(page).waitFor();
+  await page.keyboard.press('Escape');
+});
+
+scenario('Git ausente e repositório acima: cada caso diz o motivo certo, sem botão e sem ações do painel', async ({ page }) => {
+  await reopen(page, '?git=no-git');
+  await openGit(page);
+  await page.getByText('O Git não foi encontrado neste computador. Instale o Git e abra o app de novo.').waitFor();
+  await page.screenshot({ path: join(OUT, 'git-ui-sem-git.png') });
+  assert.equal(await initBtn(page).count(), 0, 'sem Inicializar');
+  assert.equal(await page.getByRole('button', { name: 'Atualizar status' }).count(), 0, 'sem ações do painel');
+  await reopen(page, '?git=repo-above');
+  await openGit(page);
+  await page.getByText('Esta pasta está dentro do repositório C:\\projetos, que não é a raiz do projeto. O painel Git só funciona com a raiz do repositório aberta como projeto.').waitFor();
+  assert.equal(await initBtn(page).count(), 0, 'sem Inicializar');
+  assert.equal(await page.getByRole('button', { name: 'Atualizar status' }).count(), 0, 'sem ações do painel');
+  assert.equal(await page.getByText('Publicar no GitHub').count(), 0, 'sem Publicar no GitHub');
+});
+
+scenario('janela do Orquestrador: o aviso sem Git aparece nos modos sem repositório (com a frase de cada um) e não aparece no modo repo', async ({ page }) => {
+  const cases = [
+    ['?git=no-repo', 'Para ter isso, inicialize o repositório no painel Git.'],
+    ['?git=no-git', 'Para ter isso, instale o Git e abra o app de novo.'],
+    ['?git=repo-above', 'Para ter isso, abra a raiz do repositório como projeto.'],
+  ];
+  for (const [query, fix] of cases) {
+    await reopen(page, query);
+    await page.getByRole('button', { name: 'Abrir terminal', exact: true }).click();
+    await dialog(page, 'Orquestrador').getByText(`Esta pasta não tem Git: o que os executores mudarem não fica registrado e não pode ser desfeito pelo Git. ${fix}`).waitFor();
+    if (query === '?git=no-repo') await page.screenshot({ path: join(OUT, 'git-ui-aviso-orquestrador.png') });
+    await page.keyboard.press('Escape');
+    await dialog(page, 'Orquestrador').waitFor({ state: 'detached' });
+  }
+  await reopen(page);
+  await openGit(page);
+  await section(page, 'Alterações').waitFor();
+  await page.getByRole('button', { name: 'Abrir terminal', exact: true }).click();
+  await dialog(page, 'Orquestrador').getByText('Só lê o projeto e delega.').waitFor();
+  assert.equal(await dialog(page, 'Orquestrador').getByText(/Esta pasta não tem Git/).count(), 0, 'modo repo sem aviso');
+});
+
+scenario('pasta escolhida dentro de um repositório: toast informativo com o caminho do projeto aberto', async ({ page }) => {
+  await reopen(page, '?subfolder=1');
+  await page.getByText('Esta pasta está dentro do repositório C:\\projetos\\exemplo. O projeto aberto é a raiz dele.').waitFor();
+  await openGit(page);
+  await section(page, 'Alterações').waitFor();
+});
+
+scenario('troca em tempo de execução: o painel vai do estado vazio ao normal (e de volta) sem recarregar a página', async ({ page }) => {
+  await openGit(page);
+  await section(page, 'Alterações').waitFor();
+  await page.evaluate(() => { window.__semRecarregar = 1; window.__mock.gitMode = 'no-repo'; });
+  await page.getByText(NO_REPO_TEXT).waitFor();
+  assert.equal(await page.locator('footer').getByText('main', { exact: true }).count(), 0, 'sem branch fora do repo');
+  await page.evaluate(() => { window.__mock.gitMode = 'repo'; });
+  await section(page, 'Alterações').waitFor();
+  assert.equal(await page.evaluate(() => window.__semRecarregar), 1, 'a página não recarregou');
+});
 
 process.exitCode = await run();

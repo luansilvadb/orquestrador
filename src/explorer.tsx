@@ -51,8 +51,8 @@ export type FileActions = {
   move: (paths: string[], dest: string) => Promise<Moved[]>;
   /** Abre a pasta (a raiz, '') no Explorer do Windows. */
   revealDir: (path: string) => void;
-  /** Abre o histórico Git do arquivo ou da pasta. */
-  history: (path: string) => void;
+  /** Abre o histórico Git do arquivo ou da pasta. `null` fora do modo `repo`: o item some do menu. */
+  history: ((path: string) => void) | null;
   /** Vai para a pesquisa de todo o projeto (`dir` vazio ou omitido) ou da pasta `dir` (relativa, com "/"), com o campo focado. */
   search: (dir?: string) => void;
   /** Cola o clipboard na pasta `dir` ('' é a raiz). Rejeita com a mensagem. Devolve as origens que o recorte tirou do projeto (vazio na cópia). */
@@ -339,6 +339,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
     const single = (key: string, label: string, run: () => void, shortcut?: string) =>
       (many ? blocked(key, label, 'Escolha só um item para esta ação.') : action(key, label, run, shortcut));
     const chat = actions.addToChat;
+    const history = actions.history;
     const chatLabel = folder ? 'Adicionar Pasta ao Chat' : 'Adicionar ao Chat';
     const chatReason = 'Abra o Orquestrador para mandar ao chat.';
     const pasteDir = folder ? one : dirOf(one);
@@ -356,7 +357,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
       ]),
       single('reveal', 'Revelar no Explorador', () => (folder ? actions.revealDir(one) : actions.reveal(one)), 'Shift+Alt+R'),
       single('terminal', 'Abrir no Terminal', () => actions.openInTerminal(pasteDir)),
-      single('history', 'Histórico Git', () => actions.history(one)),
+      ...(history ? [single('history', 'Histórico Git', () => history(one))] : []),
       ...(folder ? [single('find-in', 'Localizar na Pasta...', () => actions.search(one))] : []),
     ]);
     sections.push([

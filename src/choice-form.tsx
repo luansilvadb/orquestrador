@@ -1,5 +1,5 @@
 // O formulário de ferramenta, modelo e esforço numa janela (Modal): o mesmo para o orquestrador e para os executores.
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { Flexbox } from '@lobehub/ui';
 import { Alert, Button, Modal, Segmented, Select, Text } from '@lobehub/ui/base-ui';
 import { message } from './backend';
@@ -24,7 +24,8 @@ const validEffort = (options: Options, choice: Choice) => {
 type Props = {
   open: boolean;
   title: string;
-  hint: string;
+  /** Texto da dica; um nó (vários parágrafos) entra como está. */
+  hint: ReactNode;
   options: Options;
   initial: Choice;
   confirmLabel: string;
@@ -103,7 +104,7 @@ function ChoiceFields({ hint, options, initial, confirmLabel, onConfirm, onCance
 
   return (
     <Flexbox as="form" onSubmit={submit} gap={20} width="100%">
-      <Text as="p" type="secondary" fontSize={14}>{hint}</Text>
+      {typeof hint === 'string' ? <Text as="p" type="secondary" fontSize={14}>{hint}</Text> : hint}
 
       <Flexbox gap={8} width="100%">
         <Text as="label" id={ids.tool} fontSize={14} weight={500}>Ferramenta</Text>

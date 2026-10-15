@@ -16,6 +16,10 @@
 // `paste_files_detailed` move ou copia a árvore e `TEXTS` de verdade, e nome repetido vira "nome (2)". `__mock.clipboard()` mostra o que há.
 // `rename_file` renomeia pasta também (leva os textos de dentro). `__mock.addFolder('pasta')` cria pasta de teste; `__mock.failOn = ['src/a.ts']`
 // faz colar ou mover falhar de I/O nesse item, no meio da operação: o que já saiu segue como feito (só para o check de arquivos e pesquisa).
+// Modo do Git (`?git=`): `repo` (padrão, tudo como antes), `no-repo` (pasta sem repositório; `git_init` cria e passa a `repo`), `no-git` (Git ausente)
+// e `repo-above` (pasta dentro de outro repositório, raiz `C:\projetos`). Fora de `repo`, `git_status` devolve só o `kind` (e a raiz, em `repo-above`).
+// `?subfolder=1` faz `choose_project` devolver `subfolder: true`. Em execução, `__mock.gitMode = 'no-repo'` e `__mock.subfolder = true` trocam isso
+// (por exemplo, um `git init` feito pelo terminal, que o painel vê na consulta seguinte).
 import type { Transport } from './backend';
 import { fileNameError } from './file-tab-actions';
 import {
@@ -26,6 +30,12 @@ import {
 } from './types';
 
 type Handler = (payload: never) => void;
+
+// Modo do Git e pasta escolhida: vêm da URL na carga do módulo e mudam em tempo de execução por `__mock`.
+const GIT_MODES = ['repo', 'no-repo', 'no-git', 'repo-above'] as const;
+type GitMode = (typeof GIT_MODES)[number];
+const params = new URLSearchParams(window.location.search);
+const REPO_ROOT = 'C:\\projetos';
 
 const CLAUDE = ['low', 'medium', 'high', 'xhigh', 'max'], CODEX = ['low', 'medium', 'high', 'xhigh'];
 const options: Options = {
@@ -248,6 +258,10 @@ const debug = { close: async () => {
     conflicts.set(rel, sides);
     files.push({ path: rel, origPath: null, staged: null, unstaged: 'conflicted' });
   },
+  // Modo do Git do simulado (ver o topo do arquivo). Trocar em execução simula um `git init` ou `git` removido por fora.
+  gitMode: (GIT_MODES.find((m) => m === params.get('git')) ?? 'repo') as GitMode,
+  // `choose_project` devolve a pasta como dentro de um repositório (o projeto aberto é a raiz dele).
+  subfolder: params.get('subfolder') === '1',
   // Chamadas de Git que chegaram ao simulado, com argumento, resultado e erro (só para o check conferir o payload).
   calls: [] as { cmd: string; args: unknown; result: unknown; error: string | null }[] };
 (window as unknown as { __mock: typeof debug }).__mock = debug;
@@ -750,7 +764,7 @@ function moveItems(paths: string[], dest: string): Batch<Moved> {
 const commands: Record<string, (args: any) => unknown> = {
   update_status: () => ({ phase: 'ready' }),
   retry_update: () => ({ phase: 'ready' }),
-  choose_project: () => 'C:\\projetos\\exemplo',
+  choose_project: () => ({ project: 'C:\\projetos\\exemplo', subfolder: debug.subfolder }),
   get_options: () => structuredClone(options),
   start_orchestrator: ({ choice }: { choice: Choice }) => { options.last.orchestrator = choice; },
   set_executor_choice: ({ choice }: { choice: Choice }) => { options.last.executor = choice; },
@@ -848,7 +862,18 @@ const commands: Record<string, (args: any) => unknown> = {
     if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, readOnly: false, bom: false, text: '' };
     return { binary: false, tooLarge: false, readOnly: false, bom: false, text: TEXTS[path] ?? '' };
   },
-  git_status: () => ({ branch: CURRENT, ...divergence(), head: headHash(), files: [...files].sort(byPath) }),
+  git_status: () => {
+    if (debug.gitMode === 'repo') return { kind: 'repo', status: { branch: CURRENT, ...divergence(), head: headHash(), files: [...files].sort(byPath) } };
+    if (debug.gitMode === 'repo-above') return { kind: 'repo-above', root: REPO_ROOT };
+    return { kind: debug.gitMode };
+  },
+  // Mesmas recusas do backend (`git::init`): só `no-repo` cria o repositório; nos outros, a mensagem de cada modo.
+  git_init: () => {
+    if (debug.gitMode === 'no-repo') { debug.gitMode = 'repo'; return null; }
+    if (debug.gitMode === 'repo') throw 'A pasta já é um repositório Git.';
+    if (debug.gitMode === 'no-git') throw 'O Git não foi encontrado neste computador.';
+    throw `A pasta está dentro do repositório ${REPO_ROOT}; não dá para criar outro aqui.`;
+  },
   git_stage: ({ paths }: { paths: string[] }) => { stagePaths(paths); return null; },
   git_unstage: ({ paths }: { paths: string[] }) => { unstagePaths(paths); return null; },
   git_commit: ({ message }: { message: string }) => { commitStaged(message); return null; },

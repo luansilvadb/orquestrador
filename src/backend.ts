@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
-  Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GitBranches, GitDiff, GitStatus, GraphCommit, HunkRef, Moved, Options,
+  Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GitBranches, GitDiff, GitState, GraphCommit, HunkRef, Moved, Options,
   Pasted, QuickOpen, ReplaceApplied, ReplacePreview, ReplaceQuery, ReplaceRequest, ReviewDiff, SearchFilter, SearchOptions, SearchResults, Snapshot, UpdateStatus,
 } from './types';
 
@@ -52,7 +52,8 @@ export const backend = {
   updateStatus: () => call<UpdateStatus>('update_status'),
   retryUpdate: () => call<UpdateStatus>('retry_update'),
 
-  chooseProject: () => call<string | null>('choose_project'),
+  // Pasta escolhida: `subfolder` quer dizer que ela está dentro de um repositório e o projeto é a raiz dele.
+  chooseProject: () => call<{ project: string; subfolder: boolean } | null>('choose_project'),
   getOptions: () => call<Options>('get_options'),
   startOrchestrator: (choice: Choice, cols: number, rows: number) =>
     call<void>('start_orchestrator', { choice, cols, rows }),
@@ -92,7 +93,10 @@ export const backend = {
   // Colagem, com o detalhe: `from` absoluto como estava no clipboard, `to` relativo ao projeto; `error` diz o que parou.
   pasteFilesDetailed: (dest: string, snap: ClipboardSnapshot) => call<Batch<Pasted>>('paste_files_detailed', { dest, snap }),
   // Painel Git. Caminhos relativos à raiz do projeto, com "/"; lista vazia em stage/unstage vale para tudo.
-  gitStatus: () => call<GitStatus>('git_status'),
+  // Estado do Git da pasta (ver `GitState`). Erro chega como mensagem em português.
+  gitStatus: () => call<GitState>('git_status'),
+  // Cria o repositório na pasta do projeto; só no modo `no-repo`, nos outros rejeita com a mensagem.
+  gitInit: () => call<void>('git_init'),
   gitStage: (paths: string[]) => call<void>('git_stage', { paths }),
   gitUnstage: (paths: string[]) => call<void>('git_unstage', { paths }),
   gitCommit: (message: string) => call<void>('git_commit', { message }),
