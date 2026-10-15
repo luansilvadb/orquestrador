@@ -28,7 +28,8 @@ export type UpdateStatus =
   | { phase: 'failed'; message: string };
 
 // Uma entrada de `list_dir`: um nível só. A ordem é a do backend (pastas primeiro, depois arquivos, alfabética).
-export type DirEntry = { name: string; dir: boolean };
+// `ignored`: o `.gitignore` ignora a entrada (a árvore a mostra apagada); sempre falso fora de um repositório.
+export type DirEntry = { name: string; dir: boolean; ignored: boolean };
 // Arquivos do clipboard do Windows: caminhos absolutos, na ordem, e se foram recortados (mover) ou copiados.
 export type ClipboardSnapshot = { paths: string[]; cut: boolean };
 

@@ -60,3 +60,21 @@ body {
 .xterm .xterm-viewport {
     background-color: transparent !important;
 }
+
+/* Guias de recuo da árvore de arquivos, como no VS Code: uma linha por nível, só com o ponteiro sobre a árvore. A profundidade
+   (`--depth`) vem do explorer.tsx; o recuo é de 8 px e o chevron tem 16 px, então a linha do nível i fica em i * 8 + 8. */
+.explorer-tree [role='treeitem']::before {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    left: 8px;
+    width: calc(var(--depth, 0) * 8px);
+    background: repeating-linear-gradient(to right, var(--ant-color-border-secondary) 0 1px, transparent 1px 8px);
+    opacity: 0;
+    transition: opacity 120ms;
+    pointer-events: none;
+}
+
+.explorer-tree:hover [role='treeitem']::before {
+    opacity: 1;
+}

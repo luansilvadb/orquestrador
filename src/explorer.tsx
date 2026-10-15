@@ -2,18 +2,22 @@
 // A árvore se atualiza sozinha (usePolling). O status do Git vem do App, que o usa no contador da navegação e na barra de status.
 // Arquivo e pasta da árvore têm menu de contexto (clique direito, Shift+F10 e a tecla de contexto); a área vazia do painel tem o menu da raiz do projeto.
 // Seleção com Ctrl e Shift; arrastar e soltar move para pasta ou para a raiz, com o destino mostrado e validado. As ações reais vêm do App pelo `actions`.
+// O visual segue o Explorer do Antigravity/VS Code: ícones do tema Symbols, decorações do Git (cor, letra e "•" na pasta; cinza no ignorado),
+// barra com as ações da view e a seção recolhível com o nome do projeto.
 import { type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { File, Files, Folder, FolderOpen, GitBranch, type LucideIcon, Search, SquareTerminal } from 'lucide-react';
+import { ChevronRight, ChevronsDownUp, FilePlus, Files, FolderPlus, GitBranch, type LucideIcon, RefreshCw, Search, SquareTerminal } from 'lucide-react';
 import {
   ActionIcon, Alert, Badge, Button, type ContextMenuItem, Input, Modal, ScrollArea, showContextMenu, Text, toast, Tree, type TreeDataNode,
 } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
+import { decorations, IGNORED } from './explorer-decorations';
+import { FileIcon } from './file-icon';
 import { fileNameError } from './file-tab-actions';
 import { action, blocked, DIVIDER, useChord } from './file-tabs';
 import { splitPath } from './git-history';
 import { usePolling } from './polling';
-import type { DirEntry, Moved } from './types';
+import type { DirEntry, GitStatus, Moved } from './types';
 
 export type Route = 'arquivos' | 'pesquisa' | 'git';
 
@@ -76,7 +80,7 @@ const drop = (tree: ExplorerTree, path: string): ExplorerTree => ({
   children: Object.fromEntries(Object.entries(tree.children).filter(([p]) => !under(path, p))),
 });
 const sameList = (a: DirEntry[] | undefined, b: DirEntry[]) =>
-  !!a && a.length === b.length && a.every((e, i) => e.name === b[i].name && e.dir === b[i].dir);
+  !!a && a.length === b.length && a.every((e, i) => e.name === b[i].name && e.dir === b[i].dir && e.ignored === b[i].ignored);
 
 /** Leva um caminho para onde o item (ou a pasta dele) foi parar. Caminho que não foi movido fica como está. */
 const remapPath = (path: string, moves: Moved[]) => {
@@ -182,13 +186,21 @@ function FormDialog({ open, title, busy, confirmLabel, confirmDisabled = false, 
   );
 }
 
+// Ações da barra do painel: aparecem com o ponteiro ou o foco no painel, como no VS Code.
+function HeaderAction({ icon, label, onClick }: { icon: LucideIcon; label: string; onClick: () => void }) {
+  return <ActionIcon icon={icon} size="small" variant="borderless" aria-label={label} title={label} onClick={onClick} />;
+}
+
 /** Árvore de pastas do projeto, na faixa à esquerda da tela principal. Pasta abre e fecha; arquivo abre na área do meio (prévia no clique, permanente no duplo clique e no Enter).
- * `reveal` abre as pastas de um arquivo e o seleciona (`id` novo a cada pedido). */
-export function FilesScreen({ openPath, onOpen, reveal, actions }: {
+ * `reveal` abre as pastas de um arquivo e o seleciona (`id` novo a cada pedido). `project` é o nome da pasta do projeto, título da seção.
+ * `git` é o status do repositório (null fora do modo `repo`): dá as cores e letras das linhas. */
+export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }: {
   openPath: string | null;
   onOpen: (path: string, options?: OpenOptions) => void;
   reveal?: { path: string; id: number } | null;
   actions: FileActions;
+  project: string;
+  git: GitStatus | null;
 }) {
   const [tree, setTree] = useState<ExplorerTree>({ children: {}, expanded: [] });
   const [error, setError] = useState('');
@@ -200,6 +212,8 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
   const [creating, setCreating] = useState<Creating | null>(null);
   // Arraste em curso: o destino sob o ponteiro e o motivo de não poder soltar ali.
   const [dragOver, setDrop] = useState<Drop | null>(null);
+  // Seção do projeto recolhida: a árvore some, a barra fica.
+  const [collapsed, setCollapsed] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
   // Viewport do ScrollArea (o elemento que rola de fato): o Revelar rola este, não os ancestrais.
   const viewport = useRef<HTMLDivElement>(null);
@@ -220,6 +234,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
       const key = row.dataset.id ?? '';
       const hit = !!dragOver && !provisional(key) && dragOver.dest === key;
       row.draggable = !provisional(key);
+      row.style.setProperty('--depth', String(Number(row.getAttribute('aria-level') ?? 1) - 1));
       row.style.boxShadow = hit ? `inset 0 0 0 1px var(--ant-color-${dragOver?.problem ? 'error' : 'primary'})` : '';
     });
   });
@@ -642,18 +657,28 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
 
   // O Tree só mostra seta e abre uma pasta que tem filhos. Por isso toda pasta ainda sem lista guardada recebe
   // um filho provisório (não selecionável), e a pasta não parece folha. Ele some quando a lista chega.
+  // Linha: nome na cor da decoração e, à direita, a letra (arquivo) ou "•" (pasta). Ignorado fica cinza e sem letra.
+  const decos = decorations(git?.files ?? []);
   const nodes = (dir: string): TreeDataNode[] =>
     (tree.children[dir] ?? []).map((entry): TreeDataNode => {
       const path = join(dir, entry.name);
-      const title = <Text as="span" ellipsis title={entry.name} data-tree-path={path}>{entry.name}</Text>;
+      const deco = decos.get(path) ?? (entry.ignored ? IGNORED : null);
+      const title = (
+        <span className="flex min-w-0 flex-1 items-center gap-2" style={deco ? { color: deco.color } : undefined}>
+          <Text as="span" ellipsis title={deco ? `${entry.name} · ${deco.title}` : entry.name} data-tree-path={path} className="min-w-0 flex-1" style={{ color: 'inherit' }}>{entry.name}</Text>
+          {/* Fora do nome acessível da linha (o estado vai no title do nome), para a linha se chamar só pelo nome do item. */}
+          {deco?.letter && <span aria-hidden="true" className="shrink-0 pr-1 text-xs font-medium tabular-nums">{deco.letter}</span>}
+        </span>
+      );
+      const icon = <FileIcon path={entry.name} dir={entry.dir} />;
       if (!entry.dir) {
-        return { key: path, title, isLeaf: true, icon: <File className="size-4 text-muted-foreground" /> };
+        return { key: path, title, isLeaf: true, icon };
       }
       const list = tree.children[path];
       return {
         key: path,
         title,
-        icon: tree.expanded.includes(path) ? <FolderOpen className="size-4" /> : <Folder className="size-4" />,
+        icon,
         children: list ? nodes(path) : [{
           key: `${path}/`,
           title: <Text as="span" type="secondary" fontSize={12}>Lendo a pasta…</Text>,
@@ -663,17 +688,41 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
       };
     });
 
+  // Novo Arquivo e Nova Pasta da barra: na pasta selecionada (ou na do arquivo selecionado); sem seleção única, na raiz.
+  const barDir = () => {
+    const one = selection.length === 1 ? selection[0] : '';
+    return one && isFile(one) ? dirOf(one) : one;
+  };
+
   const renameProblem = renaming && (renaming.error || fileNameError(renaming.name));
   const deleteDrafts = deleting ? actions.dirtyOf(deleting.paths) : [];
   const deleteFolders = deleting ? deleting.paths.some((p) => !isFile(p)) : false;
   return (
-    <>
-      {/* Cobre o painel inteiro: tabIndex deixa o clique na área vazia focar o painel (sem anel, para não parecer um campo). */}
+    <Flexbox height="100%" className="group/explorer min-h-0">
+      <Flexbox horizontal align="center" gap={2} height={36} paddingInline={12} flex="none">
+        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">Arquivos</Text>
+        <Flexbox horizontal gap={2} className="opacity-0 transition-opacity group-hover/explorer:opacity-100 group-focus-within/explorer:opacity-100">
+          <HeaderAction icon={FilePlus} label="Novo Arquivo..." onClick={() => startCreate('file', barDir())} />
+          <HeaderAction icon={FolderPlus} label="Nova Pasta..." onClick={() => startCreate('dir', barDir())} />
+          <HeaderAction icon={RefreshCw} label="Atualizar" onClick={() => void reloadAll()} />
+          <HeaderAction icon={ChevronsDownUp} label="Recolher Tudo" onClick={() => setTree((prev) => ({ ...prev, expanded: [] }))} />
+        </Flexbox>
+      </Flexbox>
+      {/* Seção do projeto, como a da pasta no VS Code: recolhe a árvore inteira. */}
+      <button
+        type="button" aria-expanded={!collapsed} onClick={() => setCollapsed((v) => !v)}
+        className="flex h-[22px] flex-none cursor-pointer items-center gap-1 px-1 text-left text-xs font-semibold text-foreground outline-none hover:bg-[var(--ant-color-fill-tertiary)] focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        <ChevronRight aria-hidden="true" className={`size-4 shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+        <span className="truncate" title={project}>{project}</span>
+      </button>
+      {/* Cobre o resto do painel: tabIndex deixa o clique na área vazia focar o painel (sem anel, para não parecer um campo). */}
       <Flexbox
         ref={panel}
-        height="100%"
+        flex={1}
         tabIndex={-1}
-        className="relative outline-none"
+        style={collapsed ? { display: 'none' } : undefined}
+        className="explorer-tree relative min-h-0 outline-none"
         onKeyDown={onTreeKey}
         onKeyDownCapture={(e) => { mods.current = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey }; }}
         onMouseDownCapture={onPointerMods}
@@ -687,14 +736,15 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
         onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) endChord(); }}
       >
         <ScrollArea className="h-full" disableContentFit viewportProps={{ ref: viewport }}>
-          <Flexbox paddingBlock={8}>
+          <Flexbox paddingBlock={2}>
             {error && <Text as="p" role="status" type="secondary" fontSize={12} className="px-3 py-1">{error}</Text>}
             {!tree.children[''] && !error && (
               <Text as="p" type="secondary" fontSize={12} className="px-3 py-1">Lendo a pasta…</Text>
             )}
             <Tree
               treeData={nodes('')} expandedKeys={tree.expanded} selectedKeys={shown} multiple
-              indent={16} size="small" showIcon blockNode style={{ paddingInline: 8 }}
+              indent={8} size="small" showIcon blockNode
+              styles={{ node: { height: 22, borderRadius: 0 }, switcher: { width: 16, height: 22 }, title: { paddingInline: 0 } }}
               onExpand={(keys) => {
                 // Abre o que entrou na lista e fecha o que saiu (a tecla * abre vários de uma vez).
                 keys.filter((k) => !tree.expanded.includes(k)).forEach((k) => toggle(k, false));
@@ -805,7 +855,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions }: {
           </Flexbox>
         )}
       </FormDialog>
-    </>
+    </Flexbox>
   );
 }
 

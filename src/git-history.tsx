@@ -4,7 +4,8 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { ActionIcon, Button, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { ArrowLeft, File, RefreshCw } from 'lucide-react';
+import { ArrowLeft, RefreshCw } from 'lucide-react';
+import { FileIcon } from './file-icon';
 import { backend, message } from './backend';
 import type { TabTarget } from './workspace-model';
 import type { CommitDetail, CommitFile, GitKind } from './types';
@@ -184,7 +185,7 @@ export function CommitFileList({ hash, files, selected, onOpenTarget, gutter }: 
               title={`${full}: ${word}. Ver a alteração neste commit (duplo clique abre de vez)`}
               className={`flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-sm pl-6 pr-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50${isOpen ? ' bg-muted shadow-[inset_2px_0_0_var(--ant-color-primary)]' : ''}`}
             >
-              <File className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <FileIcon path={f.path} className="size-3.5" />
               <Text as="span" fontSize={13} ellipsis className="max-w-[70%] shrink-0">{name}</Text>
               {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 flex-1">{dir}</Text>}
               <Text as="span" title={word} fontSize={12} weight={600} type="secondary" className="shrink-0 pl-1 font-mono">{letter}</Text>
@@ -298,7 +299,7 @@ export function HistoryPanel({ request, active, selected, onOpenTarget, onShowCh
       </Flexbox>
       {!inDetail && scope && (
         <Flexbox horizontal align="center" gap={6} paddingInline={12} paddingBlock={4}>
-          <File className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <FileIcon path={scope} className="size-3.5" />
           <Text as="code" code fontSize={12} ellipsis title={scope} className="min-w-0 flex-1">{splitPath(scope).name}</Text>
           <Button size="small" type="text" onClick={() => reload(null)} title="Mostrar os commits do projeto inteiro">Projeto inteiro</Button>
         </Flexbox>

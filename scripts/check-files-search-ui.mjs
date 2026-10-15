@@ -503,4 +503,59 @@ scenario('atualizar ao salvar: salvar um arquivo que deixou de ter o termo tira 
 });
 
 
+scenario('visual do Explorer: ícones do tema Symbols, cores e letras do Git (pasta herda com •), ignorado em cinza; barra com Recolher Tudo e Novo Arquivo; seção do projeto recolhe a árvore', async ({ page }) => {
+  const color = (path) => at(page, path).evaluate((el) => getComputedStyle(el).color);
+  const letter = (path) => at(page, path).evaluate((el) => el.nextElementSibling?.textContent ?? '');
+  const icon = (path) => at(page, path).evaluate((el) => el.closest('[role="treeitem"]').querySelector('img').dataset.icon);
+
+  // Status do mock: README.md modificado; em docs há conflito (o mais forte), então a pasta fica vermelha com "•".
+  // O status chega pelo polling do App, depois da árvore: espera a primeira letra aparecer.
+  await page.waitForFunction(() => document.querySelector('[data-tree-path="README.md"]')?.nextElementSibling?.textContent === 'M');
+  assert.equal(await color('README.md'), 'rgb(226, 192, 141)', 'modificado em amarelo');
+  assert.equal(await letter('README.md'), 'M');
+  assert.equal(await color('docs'), 'rgb(228, 103, 107)', 'pasta com conflito dentro herda o vermelho');
+  assert.equal(await letter('docs'), '•');
+  // `.gitignore` do mock: dist e *.log. Cinza e sem letra; o que não muda fica sem cor própria.
+  assert.equal(await color('dist'), 'rgb(140, 140, 140)');
+  assert.equal(await color('debug.log'), 'rgb(140, 140, 140)');
+  assert.equal(await letter('debug.log'), '');
+  assert.equal(await letter('package.json'), '');
+  assert.notEqual(await color('package.json'), 'rgb(140, 140, 140)');
+  // Ícones por nome de pasta e por extensão, como no Antigravity.
+  assert.equal(await icon('docs'), 'folder-blue');
+  assert.equal(await icon('src'), 'folder-orange-code');
+  assert.equal(await icon('README.md'), 'markdown');
+  assert.equal(await icon('package.json'), 'node');
+
+  // Dentro de pasta aberta: o arquivo alterado tem a letra dele; a pasta ignorada passa o cinza aos filhos (o check-ignore os marca).
+  await expand(page, ['docs', 'dist']);
+  assert.equal(await letter('docs/rascunho-painel.md'), 'U');
+  assert.equal(await color('dist/index.js'), 'rgb(140, 140, 140)');
+  // Captura com a animação de abrir já terminada e o ponteiro na árvore (mostra as guias de recuo e as ações da barra).
+  await at(page, 'docs/rascunho-painel.md').hover();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(OUT, 'files-search-explorer-visual.png') });
+
+  // Recolher Tudo fecha as pastas abertas; a barra só mostra as ações com o ponteiro no painel.
+  await page.getByRole('button', { name: 'Recolher Tudo', exact: true }).click();
+  await at(page, 'docs/rascunho-painel.md').waitFor({ state: 'hidden' });
+  assert.equal(await treeItem(page, 'docs').getAttribute('aria-expanded'), 'false');
+
+  // Novo Arquivo da barra, com só a pasta docs selecionada (o clique simples também a abre): cria dentro dela.
+  await treeItem(page, 'docs').click();
+  assert.equal(await selected(page, 'docs'), true);
+  await page.getByRole('button', { name: 'Novo Arquivo...', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Nome do novo arquivo' }).fill('pela-barra.md');
+  await dialogBtn(page, 'Novo arquivo', 'Criar').click();
+  await at(page, 'docs/pela-barra.md').waitFor();
+
+  // A seção do projeto recolhe e reabre a árvore inteira.
+  const section = page.getByRole('button', { name: 'exemplo', exact: true });
+  await section.click();
+  assert.equal(await section.getAttribute('aria-expanded'), 'false');
+  await treeItem(page, 'docs').waitFor({ state: 'hidden' });
+  await section.click();
+  await treeItem(page, 'docs').waitFor();
+});
+
 process.exitCode = await run();

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Input, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
+import { FileIcon } from './file-icon';
 import { splitPath } from './git-history';
 import type { QuickOpen as QuickOpenResult } from './types';
 
@@ -103,11 +104,12 @@ export function QuickOpen({ onClose, onOpen }: {
             return (
               <div
                 key={path} id={`quick-open-${at}`} role="option" aria-selected={selected} title={path}
-                className={`flex cursor-pointer items-baseline gap-2 rounded px-2 py-1 text-sm ${selected ? 'bg-muted' : ''}`}
+                className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm ${selected ? 'bg-muted' : ''}`}
                 onMouseEnter={() => setIndex(at)}
                 onClick={() => open(at, { permanent: false, side: false })}
                 onDoubleClick={() => open(at, { permanent: true, side: false })}
               >
+                <FileIcon path={path} />
                 <span className="shrink-0">{name}</span>
                 {folder && <span className="min-w-0 truncate text-xs text-muted-foreground">{folder}</span>}
               </div>

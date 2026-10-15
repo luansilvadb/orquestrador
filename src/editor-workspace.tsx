@@ -28,7 +28,8 @@ import {
 } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, Modal, Popover, TabsIndicator, TabsList, TabsRoot, TabsTab, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox, PatchDiff } from '@lobehub/ui';
-import { File, List, Pin, X } from 'lucide-react';
+import { List, Pin, X } from 'lucide-react';
+import { FileIcon } from './file-icon';
 import { backend, message } from './backend';
 import { usePolling } from './polling';
 import { CodeEditor, forgetEditorState, liveEditorView, type Reveal, type StartCursor } from './file-view';
@@ -959,7 +960,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
                     <TabsTab value={tab.id} title={labelOf(tab.target)} className={`h-full max-w-full flex-none gap-1.5 pr-7! pl-3${tab.preview ? ' italic' : ''}`}>
                       {tab.pinned
                         ? <Pin className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                        : <File className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+                        : <FileIcon path={tab.target.path} className="size-3.5" />}
                       <Text as="span" ellipsis className="min-w-0">{titleOf(tab.target)}</Text>
                       {details.get(tab.target.path) && (
                         <Text as="span" ellipsis type="secondary" fontSize={12} className="min-w-0">{details.get(tab.target.path)}</Text>

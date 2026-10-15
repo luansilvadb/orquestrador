@@ -37,11 +37,13 @@ pub(crate) fn fingerprint(bytes: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-/// Uma entrada da pasta listada: só o nome, o caminho é o da pasta pedida mais esse nome.
+/// Uma entrada da pasta listada: só o nome, o caminho é o da pasta pedida mais esse nome. `ignored`: o `.gitignore`
+/// a ignora (o explorador a mostra apagada); sempre falso fora de um repositório.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Entry {
     pub name: String,
     pub dir: bool,
+    pub ignored: bool,
 }
 
 /// O conteúdo de um arquivo. `text` vai sem BOM e vazio quando o arquivo é binário ou grande demais. `bom` diz se o
@@ -71,10 +73,18 @@ pub fn list(project: &Path, rel: &str) -> Result<Vec<Entry>, String> {
             }
             // `is_dir` segue link simbólico e junction; o que não dá para saber conta como arquivo.
             let dir = e.path().is_dir();
-            Some(Entry { name, dir })
+            Some(Entry { name, dir, ignored: false })
         })
         .collect();
     entries.sort_by_key(|e| (!e.dir, e.name.to_lowercase()));
+    // Fora de um repositório (ou sem Git) o check-ignore falha, e nada fica apagado.
+    let paths: Vec<String> = entries.iter().map(|e| if root { e.name.clone() } else { format!("{rel}/{}", e.name) }).collect();
+    if paths.is_empty() {
+        return Ok(entries);
+    }
+    if let Ok(ignored) = crate::proc::git_ignorados(project, &paths) {
+        entries.iter_mut().zip(&paths).for_each(|(e, p)| e.ignored = ignored.contains(p));
+    }
     Ok(entries)
 }
 
@@ -865,7 +875,7 @@ mod tests {
     use crate::testutil::{fresh, junction};
 
     fn e(name: &str, dir: bool) -> Entry {
-        Entry { name: name.into(), dir }
+        Entry { name: name.into(), dir, ignored: false }
     }
 
     /// Um projeto de teste: pastas e arquivos com nomes que misturam caixa, mais um `.git` na raiz e outro na subpasta.
@@ -894,6 +904,26 @@ mod tests {
         assert!(!list(&root, "").unwrap().iter().any(|x| x.name == ".git"));
         assert_eq!(list(&root, "sub").unwrap(), vec![e(".git", true), e("dentro", true), e("x.md", false)]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn marca_o_que_o_gitignore_ignora_na_raiz_e_na_subpasta() {
+        let tmp = crate::testutil::Tmp::new("orq-files", "ignorados");
+        let root = &tmp.0;
+        crate::testutil::git(root, &["init", "-q"]);
+        crate::testutil::write(root, ".gitignore", "node_modules/
+*.log
+src/gerado/
+");
+        for dir in ["node_modules", "src/gerado", "src/codigo"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in ["a.log", "b.txt", "src/c.log"] {
+            crate::testutil::write(root, file, "");
+        }
+        let flags = |rel: &str| list(root, rel).unwrap().into_iter().map(|x| (x.name, x.ignored)).collect::<Vec<_>>();
+        assert_eq!(flags(""), [("node_modules", true), ("src", false), (".gitignore", false), ("a.log", true), ("b.txt", false)].map(|(n, i)| (n.to_string(), i)));
+        assert_eq!(flags("src"), [("codigo", false), ("gerado", true), ("c.log", true)].map(|(n, i)| (n.to_string(), i)));
     }
 
     #[test]

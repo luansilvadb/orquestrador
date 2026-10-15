@@ -72,6 +72,7 @@ const folder = (children: Record<string, Entry> = {}): Folder => ({ dir: true, c
 const tree = folder({
   '.gitignore': file(),
   'README.md': file(),
+  'debug.log': file(),
   'package.json': file(),
   assets: folder({ 'logo.png': file() }),
   dados: folder({ 'exportacao.json': file() }),
@@ -82,7 +83,10 @@ const tree = folder({
     lib: folder({ 'utils.ts': file() }),
   }),
   tests: folder(),
+  dist: folder({ 'index.js': file() }),
 });
+// O `.gitignore` simulado: a pasta `dist` e qualquer `.log`. Só vale no modo `repo`, como o `check-ignore` do backend.
+const ignoredPath = (path: string) => debug.gitMode === 'repo' && (path === 'dist' || path.startsWith('dist/') || path.endsWith('.log'));
 
 // Lista do Git: só os arquivos alterados, com o lado preparado (`staged`) e o das alterações (`unstaged`).
 const entry = (path: string, staged: GitKind | null, unstaged: GitKind | null): GitFile => ({ path, origPath: null, staged, unstaged });
@@ -119,8 +123,8 @@ function folderAt(path: string): Folder | undefined {
   return node?.dir ? node : undefined;
 }
 // Pastas primeiro, depois arquivos, alfabética: a mesma ordem do backend.
-const listing = (dir: Folder) => Object.entries(dir.children)
-  .map(([name, entry]) => ({ name, dir: entry.dir }))
+const listing = (dir: Folder, path: string) => Object.entries(dir.children)
+  .map(([name, entry]) => ({ name, dir: entry.dir, ignored: ignoredPath(path ? `${path}/${name}` : name) }))
   .sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name, 'pt-BR'));
 // Arquivo novo no disco: a árvore o mostra.
 function addFile(dirPath: string, name: string) {
@@ -852,7 +856,7 @@ const commands: Record<string, (args: any) => unknown> = {
   list_dir: ({ path }: { path: string }) => {
     const dir = folderAt(path);
     if (!dir) throw `Pasta não encontrada: ${path}`;
-    return listing(dir);
+    return listing(dir, path);
   },
   read_file: ({ path }: { path: string }) => {
     const parts = path.split('/'), name = parts.pop()!;

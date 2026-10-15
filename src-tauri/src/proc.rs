@@ -1,6 +1,7 @@
 //! Processos: comandos sem janela, Git, o job que mata a árvore inteira e a prova de vida do dono
 //! de uma sessão.
 use std::os::windows::process::CommandExt;
+use std::collections::HashSet;
 use std::path::Path;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -42,10 +43,16 @@ impl From<Falha> for String {
 /// escreveu (stderr e stdout, aparados e em UTF-8 com troca de byte inválido), ou o código de saída quando ele não
 /// escreveu nada. Os caminhos são pathspec literal e o nome sai em UTF-8 sem aspas.
 fn run(dir: &Path, args: &[&str], entrada: Option<&[u8]>) -> Result<(Vec<u8>, Vec<u8>), Falha> {
+    run_as(dir, &["--literal-pathspecs"], args, entrada)
+}
+
+/// O `run` com as opções globais `globais` no lugar do `--literal-pathspecs`, que o `check-ignore` recusa.
+fn run_as(dir: &Path, globais: &[&str], args: &[&str], entrada: Option<&[u8]>) -> Result<(Vec<u8>, Vec<u8>), Falha> {
     let mut cmd = quiet("git");
     cmd.arg("-C")
         .arg(dir)
-        .args(["--literal-pathspecs", "-c", "core.quotepath=false"])
+        .args(globais)
+        .args(["-c", "core.quotepath=false"])
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", ":")
@@ -93,6 +100,17 @@ pub fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 /// O Git com `entrada` pela entrada padrão, como o `git apply` que recebe o patch. Na falha, o erro é o de `run`.
 pub fn git_entrada(dir: &Path, args: &[&str], entrada: &[u8]) -> Result<(), String> {
     run(dir, args, Some(entrada)).map(drop).map_err(String::from)
+}
+
+/// Dos caminhos dados (relativos a `dir`, com "/"), os que o `.gitignore` ignora, num `git check-ignore` só. O Git sai
+/// com 1 quando nenhum é ignorado: isso não é falha. Fora de um repositório, o erro é o do Git.
+pub fn git_ignorados(dir: &Path, paths: &[String]) -> Result<HashSet<String>, String> {
+    let entrada: Vec<u8> = paths.iter().flat_map(|p| p.bytes().chain([0])).collect();
+    match run_as(dir, &[], &["check-ignore", "-z", "--stdin"], Some(&entrada)) {
+        Ok((out, _)) => Ok(out.split(|&b| b == 0).filter(|p| !p.is_empty()).map(|p| String::from_utf8_lossy(p).into_owned()).collect()),
+        Err(Falha::Erro(why)) if why == "código 1" => Ok(HashSet::new()),
+        Err(falha) => Err(falha.into()),
+    }
 }
 
 /// Pasta -> raiz do repositório Git (com barras invertidas), ou `None` fora de um work tree.

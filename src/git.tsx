@@ -4,8 +4,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, DropdownMenu, Input, Popover, Text, TextArea, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, File, GitBranch, History, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, GitBranch, History, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
 import { backend, message } from './backend';
+import { FileIcon } from './file-icon';
 import { GRAPH_DEFAULT, GraphSection, type GraphRemote } from './git-graph-view';
 import { HistoryPanel, type HistoryRequest, KIND, nextHistoryId, splitPath } from './git-history';
 import { usePolling } from './polling';
@@ -543,7 +544,7 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
                       title={`${full}: ${word}. Ver alterações (duplo clique abre de vez; Ctrl+clique marca)`}
                       className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm pl-6 pr-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                     >
-                      <File className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                      <FileIcon path={f.path} className="size-3.5" />
                       <Text as="span" fontSize={13} ellipsis className="max-w-[70%] shrink-0">{name}</Text>
                       {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 flex-1">{dir}</Text>}
                     </button>

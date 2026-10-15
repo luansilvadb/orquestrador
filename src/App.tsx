@@ -734,7 +734,9 @@ export function App() {
             >
               <div className="relative h-full">
                 <div className={shown('arquivos')}>
-                  <FilesScreen openPath={activePath} onOpen={(path, options) => (options?.side ? editor.current?.openBeside(path, { permanent: options.permanent }) : editor.current?.openFile(path, { permanent: options?.permanent }))} reveal={treeReveal} actions={fileActions} />
+                  <FilesScreen openPath={activePath} onOpen={(path, options) => (options?.side ? editor.current?.openBeside(path, { permanent: options.permanent }) : editor.current?.openFile(path, { permanent: options?.permanent }))} reveal={treeReveal} actions={fileActions}
+                    project={state.project.split(/[\\/]/).filter(Boolean).pop() ?? state.project} git={git.data?.kind === 'repo' ? git.data.status : null}
+                  />
                 </div>
                 <div className={shown('pesquisa')}>
                   <SearchScreen

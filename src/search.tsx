@@ -3,10 +3,11 @@
 // Aqui ficam o cabeçalho com as ações, o campo com as três opções, os filtros de caminho, o resumo, a lista de resultados por arquivo
 // e a revisão da substituição (antes e depois, com caixa por arquivo).
 import { type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { CaseSensitive, CaseUpper, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eraser, File, ListFilter, type LucideIcon, Regex, RefreshCw, Replace, WholeWord, X } from 'lucide-react';
+import { CaseSensitive, CaseUpper, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eraser, ListFilter, type LucideIcon, Regex, RefreshCw, Replace, WholeWord, X } from 'lucide-react';
 import { ActionIcon, Alert, Button, ContextMenuTrigger, Input, Modal, ScrollArea, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
+import { FileIcon } from './file-icon';
 import { copy, splitPath } from './git-history';
 import { action, DIVIDER } from './file-tabs';
 import type { ReplacePreview, ReplaceQuery, SearchMatch, SearchOptions, SearchResults, SkipReason } from './types';
@@ -771,7 +772,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
                             {open
                               ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
                               : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
-                            <File className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                            <FileIcon path={file.path} className="size-3.5" />
                             {/* Nome e pasta dividem o espaço do grupo: o nome tem prioridade, até 70% dele; a pasta é que encolhe primeiro. Sem pasta, o nome usa tudo. */}
                             <Flexbox horizontal align="center" flex={1} gap={6} className="min-w-0">
                               <Text as="span" fontSize={13} ellipsis className={dir ? 'max-w-[70%] shrink-0' : 'min-w-0 flex-1'}>{name}</Text>
