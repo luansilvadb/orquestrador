@@ -4,9 +4,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, DropdownMenu, Input, Popover, Text, TextArea, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, GitBranch, History, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, GitBranch, History, LoaderCircle, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
 import { backend, message } from './backend';
 import { FileIcon } from './file-icon';
+import { KIND_COLOR } from './explorer-decorations';
 import { GRAPH_DEFAULT, GraphSection, type GraphRemote } from './git-graph-view';
 import { HistoryPanel, type HistoryRequest, KIND, nextHistoryId, splitPath } from './git-history';
 import { usePolling } from './polling';
@@ -263,8 +264,8 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
 
   return (
     <Flexbox className="min-h-0" flex={1}>
-      <Flexbox horizontal align="center" gap={2} paddingInline={12} paddingBlock={6}>
-        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">Controle de versão</Text>
+      <Flexbox horizontal align="center" gap={2} paddingInline={12} height={36} flex="none">
+        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">Controle do Código-Fonte</Text>
         <ActionIcon size="small" variant="borderless" icon={History} aria-label="Ver o histórico do projeto" title="Histórico do projeto" onClick={onShowHistory} />
         <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar status" title="Atualizar status do Git" onClick={() => void refresh()} />
         <DropdownMenu items={remoteMenu} placement="bottomRight">
@@ -291,7 +292,10 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
         )}
       </Flexbox>
 
-      <Flexbox className="border-y" gap={6} paddingInline={12} paddingBlock={8}>
+      {/* Mensagem e botão nas medidas do Antigravity: campo de 26 px (cresce até 4 linhas), 4 px de folga, e o botão dividido de 28 px
+          (ação com o ✓, divisor de 1 px e a seta que escolhe a ação), raio de 2 px; desabilitado fica a 40%. O texto usa o fundo do
+          app, que contrasta com a primária do tema (clara no escuro, como no botão primário do lobehub). */}
+      <Flexbox gap={4} paddingInline={12} paddingBlock={4} flex="none">
         <TextArea
           autoSize={{ minRows: 1, maxRows: 4 }} value={text} aria-label={`Mensagem do commit (Ctrl+Enter: ${MODE_LABEL[mode]})`}
           title={`Ctrl+Enter: ${MODE_LABEL[mode]}`} placeholder="Mensagem (Ctrl+Enter)"
@@ -302,24 +306,38 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
               void commit(mode);
             }
           }}
-          classNames={{ input: 'text-sm select-text' }}
+          style={{ minHeight: 26, padding: '3px 6px', borderRadius: 4, fontSize: 13, lineHeight: '18px' }}
+          classNames={{ input: 'select-text' }}
         />
-        <Flexbox horizontal align="center" gap={2}>
-          <Button
-            type="primary" size="small" className="min-w-0 flex-1!" disabled={!canCommit} loading={busy === 'commit'}
-            title={hint || MODE_LABEL[mode]} onClick={() => void commit(mode)}
+        {/* Habilitado, na cor primária com o texto escuro do fundo; sem poder commitar, cinza com o texto secundário, legível (a
+            opacidade de 40% do Antigravity some aqui, porque a primária do tema é clara e o texto escuro desaparece no fundo preto). */}
+        <div
+          className={`flex h-7 overflow-hidden rounded-[2px] ${canCommit
+            ? 'bg-[var(--ant-color-primary)] text-[var(--ant-color-bg-layout)] [--hover:var(--ant-color-primary-hover)]'
+            : 'bg-[var(--ant-color-fill-secondary)] text-[var(--ant-color-text-secondary)] [--hover:var(--ant-color-fill)]'}`}
+        >
+          <button
+            type="button" disabled={!canCommit || busy === 'commit'} title={hint || MODE_LABEL[mode]} onClick={() => void commit(mode)}
+            className="flex min-w-0 flex-1 items-center justify-center gap-1 px-1 text-[13px] outline-none hover:bg-[var(--hover)] focus-visible:ring-2 focus-visible:ring-current focus-visible:ring-inset disabled:cursor-default disabled:hover:bg-transparent"
           >
-            {MODE_LABEL[mode]}
-          </Button>
+            {busy === 'commit' ? <LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden /> : <Check className="size-4 shrink-0" aria-hidden />}
+            <span className="truncate">{MODE_LABEL[mode]}</span>
+          </button>
+          <span aria-hidden className="my-[5px] w-px bg-current opacity-40" />
           <DropdownMenu items={modeMenu} placement="bottomRight">
-            <ActionIcon size="small" variant="outlined" icon={ChevronDown} aria-label={`Escolher a ação do commit (atual: ${MODE_LABEL[mode]})`} title="Escolher a ação do commit" />
+            <button
+              type="button" aria-label={`Escolher a ação do commit (atual: ${MODE_LABEL[mode]})`} title="Escolher a ação do commit"
+              className="flex w-[26px] shrink-0 items-center justify-center outline-none hover:bg-[var(--hover)] focus-visible:ring-2 focus-visible:ring-current focus-visible:ring-inset"
+            >
+              <ChevronDown className="size-4" aria-hidden />
+            </button>
           </DropdownMenu>
-        </Flexbox>
+        </div>
         {/* Sem nada preparado, a dica fica embaixo; com arquivos, a falta da mensagem já está no placeholder e na ação. */}
         {!staged.length && <Text as="p" fontSize={12} type="secondary">{hint}</Text>}
       </Flexbox>
 
-      <Flexbox className="min-h-0 overflow-y-auto overflow-x-hidden" flex={1} paddingBlock={4} style={{ paddingRight: 12 }}>
+      <Flexbox className="min-h-0 overflow-y-auto overflow-x-hidden" flex={1}>
         {/* Sem arquivos preparados, a seção some (como no VS Code); o estado de recolhido continua no ChangesPanel. */}
         {staged.length > 0 && (
           <FileSection
@@ -364,7 +382,7 @@ function NoRepoPanel({ state, refresh }: { state: Exclude<GitState, { kind: 'rep
   return (
     <Flexbox className="min-h-0" flex={1}>
       <Flexbox paddingInline={12} paddingBlock={6}>
-        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary">Controle de versão</Text>
+        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary">Controle do Código-Fonte</Text>
       </Flexbox>
       <Flexbox gap={12} paddingInline={12} paddingBlock={8}>
         <Text as="p" fontSize={12} type="secondary">{text}</Text>
@@ -494,16 +512,17 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
   const markedHere = files.filter((f) => marked.has(keyOf(side, f.path))).length;
   return (
     <Flexbox as="section" gap={0}>
-      <Flexbox horizontal align="center" gap={2} paddingInline={4}>
+      {/* Cabeçalho de 22 px como o das seções do Antigravity: seta de 16 px com 2 px de margem, título de 12 px e o contador em pílula. */}
+      <Flexbox horizontal align="center" gap={2} height={22} className="pr-2">
         <button
           type="button" onClick={onToggle} aria-expanded={!collapsed}
-          className="flex min-w-0 flex-1 items-center gap-1 rounded-sm py-1 pl-1 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="flex h-full min-w-0 flex-1 items-center text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
         >
           {collapsed
-            ? <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-            : <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
-          <Text as="span" ellipsis weight={600} fontSize={12} className="min-w-0 shrink">{title}</Text>
-          <Text as="span" fontSize={11} type="secondary" className="ml-auto shrink-0 rounded-full bg-muted px-1.5 tabular-nums">{files.length}</Text>
+            ? <ChevronRight className="mx-0.5 size-4 shrink-0" aria-hidden />
+            : <ChevronDown className="mx-0.5 size-4 shrink-0" aria-hidden />}
+          <span className="min-w-0 shrink truncate text-[12px] font-medium">{title}</span>
+          <span className="ml-auto shrink-0 rounded-full bg-[var(--ant-color-fill-secondary)] px-[5px] text-[11px] leading-[18px] tabular-nums">{files.length}</span>
         </button>
         <ActionIcon
           size="small" variant="borderless" icon={staged ? Minus : Plus} disabled={busy || !files.length}
@@ -534,7 +553,7 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
                 <ContextMenuTrigger items={menu}>
                   {/* Linha em três partes, sem nada por cima: a área de texto, o slot das ações (sempre reservado, só aparece no hover ou foco) e a letra do estado, à direita. */}
                   <div
-                    className={`group flex h-6 items-center rounded-sm hover:bg-muted${isOpen ? ' bg-muted shadow-[inset_2px_0_0_var(--ant-color-primary)]' : ''}${isMarked ? ' ring-1 ring-inset ring-ring/40' : ''}`}
+                    className={`group flex h-[22px] items-center pr-2 hover:bg-muted${isOpen ? ' bg-muted shadow-[inset_2px_0_0_var(--ant-color-primary)]' : ''}${isMarked ? ' ring-1 ring-inset ring-ring/40' : ''}`}
                   >
                     <button
                       type="button"
@@ -542,11 +561,12 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
                       onDoubleClick={() => actions.review(f, side)}
                       aria-current={isOpen ? 'true' : undefined}
                       title={`${full}: ${word}. Ver alterações (duplo clique abre de vez; Ctrl+clique marca)`}
-                      className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm pl-6 pr-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                      className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-5 pr-1 text-left text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
                     >
-                      <FileIcon path={f.path} className="size-3.5" />
-                      <Text as="span" fontSize={13} ellipsis className="max-w-[70%] shrink-0">{name}</Text>
-                      {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 flex-1">{dir}</Text>}
+                      {/* Nome e letra na cor do tipo de alteração (gitDecoration), como no Antigravity; a pasta em tamanho menor. */}
+                      <FileIcon path={f.path} className="size-4" />
+                      <span className="max-w-[70%] shrink-0 truncate" style={{ color: KIND_COLOR[kind] }}>{name}</span>
+                      {dir && <span className="min-w-0 flex-1 truncate text-[0.9em] opacity-70">{dir}</span>}
                     </button>
                     {/* Largura fixa: o nome não salta no hover, e as ações nunca cobrem a letra. Sem pointer-events fora do hover, o clique passa; com opacity, o Tab alcança as ações. */}
                     <Flexbox
@@ -566,7 +586,7 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
                         onClick={() => actions.stage(f, side, files)}
                       />
                     </Flexbox>
-                    <Text as="span" title={word} fontSize={12} weight={600} type="secondary" className="w-5 shrink-0 pr-1 text-center font-mono">{letter}</Text>
+                    <span title={word} className="w-4 shrink-0 text-center text-[12px]" style={{ color: KIND_COLOR[kind] }}>{letter}</span>
                   </div>
                 </ContextMenuTrigger>
               </li>
@@ -574,7 +594,7 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
           })}
         </ul>
       ) : (
-        <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 24, paddingBlock: 4 }}>Nenhuma alteração.</Text>
+        <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 20, paddingBlock: 4 }}>Nenhuma alteração.</Text>
       ))}
     </Flexbox>
   );

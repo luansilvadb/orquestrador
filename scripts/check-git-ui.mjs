@@ -438,9 +438,9 @@ const H9F = '9f3a1c2b7d4e5f60718293a4b5c6d7e8f9a0b1c2';
 const H4B = '4b2e8d0a1c3f5e7b9d2a4c6e8f0b1d3a5c7e9f11';
 const HD7 = 'd7e1a9c3b5f7081a2c4e6f8a0b2d4f6e8a0c2e4b';
 const HA2 = 'a2c4e6f8b0d2e4f6a8c0b2d4e6f8a0c2e4b6d8f0';
-// Seção Gráfico: a que tem o botão de recolher com esse nome.
-const graph = (page) => page.locator('section').filter({ has: page.getByRole('button', { name: /^Gráfico\b/ }) });
-const graphToggle = (page) => graph(page).getByRole('button', { name: /^Gráfico\b/ });
+// Seção Grafo: a que tem o botão de recolher com esse nome.
+const graph = (page) => page.locator('section').filter({ has: page.getByRole('button', { name: /^Grafo\b/ }) });
+const graphToggle = (page) => graph(page).getByRole('button', { name: /^Grafo\b/ });
 const graphRows = (page) => graph(page).locator('li[data-commit]');
 const graphCommit = (page, hash) => graph(page).locator(`li[data-commit="${hash}"]`);
 const graphHeight = (page) => graph(page).evaluate((el) => el.getBoundingClientRect().height);
@@ -469,8 +469,8 @@ scenario('gráfico: o commit de merge desenha duas faixas (SVG mais largo que o 
   const lanes = (hash) => graphCommit(page, hash).locator('svg').first();
   const linear = Number(await lanes(H9F).getAttribute('width'));
   const merge = Number(await lanes(H4B).getAttribute('width'));
-  assert.equal(linear, 12, 'commit linear: uma faixa de 12 px');
-  assert.equal(merge, 24, 'merge: duas faixas de 12 px');
+  assert.equal(linear, 22, 'commit linear: uma faixa de 11 px mais a folga de 11, como no VS Code');
+  assert.equal(merge, 33, 'merge: duas faixas de 11 px mais a folga');
   assert.ok(merge > linear, 'o merge é mais largo que o linear');
   assert.ok((await graphCommit(page, H4B).locator('svg').first().locator('path').count()) >= 2, 'o merge tem as curvas das duas faixas');
 });
@@ -653,7 +653,7 @@ scenario('pasta sem repositório: o painel traz o texto e o botão, sem contador
   await page.getByText(NO_REPO_TEXT).waitFor();
   await initBtn(page).waitFor();
   await page.screenshot({ path: join(OUT, 'git-ui-sem-repositorio.png') });
-  assert.equal(await page.getByRole('heading', { name: 'Controle de versão', exact: true }).count(), 1, 'título do painel');
+  assert.equal(await page.getByRole('heading', { name: 'Controle do Código-Fonte', exact: true }).count(), 1, 'título do painel');
   assert.equal(await page.getByRole('button', { name: 'Atualizar status' }).count(), 0, 'sem ações do painel cheio');
   assert.equal(await page.getByText('Publicar no GitHub').count(), 0, 'sem Publicar no GitHub');
   assert.equal(await nav(page).getByRole('button', { name: 'Git', exact: true }).count(), 1, 'Git na navegação sem contador');

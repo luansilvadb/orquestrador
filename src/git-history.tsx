@@ -6,6 +6,7 @@ import { ActionIcon, Button, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
 import { FileIcon } from './file-icon';
+import { KIND_COLOR } from './explorer-decorations';
 import { backend, message } from './backend';
 import type { TabTarget } from './workspace-model';
 import type { CommitDetail, CommitFile, GitKind } from './types';
@@ -183,12 +184,13 @@ export function CommitFileList({ hash, files, selected, onOpenTarget, gutter }: 
               onDoubleClick={() => onOpenTarget({ kind: 'commit', hash, path: f.path }, { permanent: true })}
               aria-current={isOpen ? 'true' : undefined}
               title={`${full}: ${word}. Ver a alteração neste commit (duplo clique abre de vez)`}
-              className={`flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-sm pl-6 pr-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50${isOpen ? ' bg-muted shadow-[inset_2px_0_0_var(--ant-color-primary)]' : ''}`}
+              className={`flex h-[22px] min-w-0 flex-1 items-center gap-1.5 pl-5 pr-3 text-left text-[13px] outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset${isOpen ? ' bg-muted shadow-[inset_2px_0_0_var(--ant-color-primary)]' : ''}`}
             >
-              <FileIcon path={f.path} className="size-3.5" />
-              <Text as="span" fontSize={13} ellipsis className="max-w-[70%] shrink-0">{name}</Text>
-              {dir && <Text as="span" type="secondary" fontSize={12} ellipsis className="min-w-0 flex-1">{dir}</Text>}
-              <Text as="span" title={word} fontSize={12} weight={600} type="secondary" className="shrink-0 pl-1 font-mono">{letter}</Text>
+              {/* Como no painel do Antigravity: nome e letra na cor do tipo de alteração (gitDecoration), a pasta em tamanho menor. */}
+              <FileIcon path={f.path} className="size-4" />
+              <span className="max-w-[70%] shrink-0 truncate" style={{ color: KIND_COLOR[f.kind] }}>{name}</span>
+              {dir && <span className="min-w-0 flex-1 truncate text-[0.9em] opacity-70">{dir}</span>}
+              <span title={word} className="ml-auto shrink-0 pl-1 text-[12px]" style={{ color: KIND_COLOR[f.kind] }}>{letter}</span>
             </button>
           </li>
         );

@@ -14,6 +14,8 @@ const STYLE: Record<GitKind, { color: string; letter: string; title: string }> =
   renamed: { color: '#73C991', letter: 'R', title: 'Renomeado' },
   untracked: { color: '#73C991', letter: 'U', title: 'Não rastreado' },
 };
+// Cor de cada tipo de alteração, também usada nas listas do painel Git (nome e letra).
+export const KIND_COLOR = Object.fromEntries(Object.entries(STYLE).map(([k, v]) => [k, v.color])) as Record<GitKind, string>;
 export const IGNORED: Decoration = { color: '#8C8C8C', letter: '', title: 'Ignorado pelo .gitignore' };
 
 const stronger = (a: GitKind | undefined, b: GitKind | null): GitKind | undefined =>

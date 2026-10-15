@@ -1,28 +1,34 @@
-// Seção "Gráfico" do controle de versão: os commits do HEAD e do upstream da branch atual, no estilo do Source Control do VS Code.
+// Seção "Grafo" do controle de versão: os commits do HEAD e do upstream da branch atual, no estilo do Source Control do VS Code.
 // Cada linha tem as faixas desenhadas à esquerda (layoutGraph), o assunto, as etiquetas das refs e o autor. Clique num commit abre
 // os arquivos dele ali mesmo, e clique num arquivo abre a alteração daquele commit. Só consulta com a tela Git visível e a seção aberta.
 import { useEffect, useMemo, useRef } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, Cloud, CloudDownload, GitBranch, RefreshCw, Tag } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, Cloud, CloudDownload, GitBranch, RefreshCw, Tag, Target } from 'lucide-react';
 import { backend } from './backend';
 import { CommitFileList, copy, note, type OpenCommitTarget, PAGE, useCommitDetail, usePagedList, when } from './git-history';
 import { type GraphLine, type GraphRow, layoutGraph } from './git-graph';
 import type { TabTarget } from './workspace-model';
 import type { GitRef } from './types';
 
-// Medidas em px: o passo horizontal de uma faixa, a linha de commit e a linha de arquivo (a mesma do painel).
-const LANE = 12;
+// Medidas em px, as do grafo do Antigravity/VS Code: faixas de 11 px (a primeira começa em 11, então uma faixa ocupa 22), linha de
+// commit de 22 px e linha de arquivo (a mesma do painel).
+const LANE = 11;
 const ROW = 22;
-const FILE_ROW = 24;
+const FILE_ROW = 22;
 // Altura da seção aberta. O gráfico e a lista de arquivos não descem do mínimo ao arrastar o divisor; setas andam de 16 em 16.
 export const GRAPH_DEFAULT = 260;
 export const GRAPH_MIN = 96;
 export const FILES_MIN = 96;
 const KEY_STEP = 16;
-// Cores das faixas: variáveis do tema do antd, então acompanham o tema claro e o escuro.
-const PALETTE = ['--ant-color-primary', '--ant-color-success', '--ant-color-warning', '--ant-color-error', '--ant-color-info'].map((v) => `var(${v})`);
+// Cores das faixas, as do grafo do Antigravity (scmGraph.historyItemRefColor e scmGraph.foreground1 a 5): a primeira faixa, a da
+// branch atual, em azul; as outras em ciclo. São cores de dado, iguais nos temas claro e escuro.
+const PALETTE = ['#59a4f9', '#ffb000', '#dc267f', '#994f00', '#40b0a6', '#b66dff'];
 const colorOf = (n: number) => PALETTE[n % PALETTE.length];
+// Cores das etiquetas: branch local em azul, remota em lilás, tag em laranja (historyItemRefColor, RemoteRefColor e BaseRefColor).
+const REF_COLOR = { local: '#59a4f9', remote: '#b180d7', tag: '#ea5c00' } as const;
+// Fundo da barra lateral: o contorno dos pontos usa esta cor para cortar a linha em volta deles, como no VS Code.
+const BG = 'var(--ant-color-bg-layout)';
 // Busca de uma página do gráfico: o gráfico é do HEAD e do upstream, sem escopo de arquivo.
 const graphPage = (offset: number) => backend.gitGraph(PAGE, offset);
 
@@ -49,8 +55,9 @@ export type GraphSectionProps = {
   onRemote: (kind: GraphRemote) => void;
 };
 
-// Posição do centro de uma faixa, na coluna dela.
-const laneX = (lane: number) => lane * LANE + LANE / 2;
+// Posição do centro de uma faixa, na coluna dela; a largura do desenho tem uma faixa a mais de folga.
+const laneX = (lane: number) => (lane + 1) * LANE;
+const widthOf = (row: GraphRow) => (row.width + 1) * LANE;
 // Caminho de um segmento: reto quando a faixa não muda; curva com tangente vertical quando muda de faixa.
 function segment(x1: number, y1: number, x2: number, y2: number) {
   if (x1 === x2) return `M${x1} ${y1}V${y2}`;
@@ -62,22 +69,20 @@ function segment(x1: number, y1: number, x2: number, y2: number) {
 function CommitLanes({ row, head }: { row: GraphRow; head: boolean }) {
   const mid = ROW / 2;
   return (
-    <svg width={row.width * LANE} height={ROW} className="shrink-0" aria-hidden>
+    <svg width={widthOf(row)} height={ROW} className="shrink-0" aria-hidden>
       {row.lines.map((line: GraphLine, i) => {
         const top = line.half === 'top';
         return (
           <path
             key={i} d={segment(laneX(line.from), top ? 0 : mid, laneX(line.to), top ? mid : ROW)}
-            fill="none" strokeWidth={1.5} style={{ stroke: colorOf(line.color) }}
+            fill="none" strokeWidth={1} strokeLinecap="round" style={{ stroke: colorOf(line.color) }}
           />
         );
       })}
-      {/* O HEAD é um anel vazado; os outros commits, ponto cheio. */}
-      <circle
-        cx={laneX(row.col)} cy={mid} r={4}
-        strokeWidth={head ? 2 : 0}
-        style={head ? { fill: 'var(--ant-color-bg-container)', stroke: colorOf(row.color) } : { fill: colorOf(row.color) }}
-      />
+      {/* Como no VS Code: ponto de raio 5 com contorno de 2 px no fundo (o ponto fica com 8 px e corta a linha); o HEAD é um anel
+          de raio 7 com o miolo no fundo. */}
+      <circle cx={laneX(row.col)} cy={mid} r={head ? 7 : 5} strokeWidth={2} style={{ fill: colorOf(row.color), stroke: BG }} />
+      {head && <circle cx={laneX(row.col)} cy={mid} r={2} strokeWidth={4} style={{ fill: BG, stroke: BG }} />}
     </svg>
   );
 }
@@ -85,28 +90,31 @@ function CommitLanes({ row, head }: { row: GraphRow; head: boolean }) {
 /** Faixas que seguem para baixo, ao lado de uma linha de arquivo de um commit aberto: retas verticais de borda a borda. */
 function GapLanes({ row }: { row: GraphRow }) {
   return (
-    <svg width={row.width * LANE} height={FILE_ROW} className="shrink-0" aria-hidden>
+    <svg width={widthOf(row)} height={FILE_ROW} className="shrink-0" aria-hidden>
       {row.lines.filter((l) => l.half === 'bottom').map((l, i) => (
-        <path key={i} d={`M${laneX(l.to)} 0V${FILE_ROW}`} fill="none" strokeWidth={1.5} style={{ stroke: colorOf(l.color) }} />
+        <path key={i} d={`M${laneX(l.to)} 0V${FILE_ROW}`} fill="none" strokeWidth={1} style={{ stroke: colorOf(l.color) }} />
       ))}
     </svg>
   );
 }
 
 /**
- * Etiqueta de uma ref: branch (a atual destacada), remota com nuvem, tag com a etiqueta. Na linha estreita, as que não são a atual
- * viram só o ícone (o nome fica no title e aparece quando a linha tem espaço). A atual sempre mostra o nome, com reticências.
+ * Etiqueta de uma ref, como a do grafo do Antigravity: pílula de 18 px e raio de 10 px, na cor do tipo (branch azul, remota lilás,
+ * tag laranja), com o texto escuro de 12 px. A branch atual tem o alvo e sempre mostra o nome; as outras, na linha estreita, viram
+ * só o ícone (o nome fica no title e aparece quando a linha tem espaço).
  */
 function RefBadge({ item }: { item: GitRef }) {
-  const Icon = item.kind === 'remote' ? Cloud : item.kind === 'tag' ? Tag : GitBranch;
+  const Icon = item.current ? Target : item.kind === 'remote' ? Cloud : item.kind === 'tag' ? Tag : GitBranch;
   const kind = item.kind === 'remote' ? 'remota' : item.kind === 'tag' ? 'tag' : 'branch';
+  const color = item.kind === 'remote' ? REF_COLOR.remote : item.kind === 'tag' ? REF_COLOR.tag : REF_COLOR.local;
   return (
     <span
       title={`${item.name} (${item.current ? `${kind} atual` : kind})`}
-      className={`flex min-w-0 max-w-[9rem] shrink items-center gap-1 rounded-sm px-1${item.current ? ' bg-muted text-foreground' : ' bg-muted text-muted-foreground'}`}
+      className="flex h-[18px] min-w-0 max-w-[9rem] shrink items-center rounded-[10px] text-[#181818]"
+      style={{ backgroundColor: color }}
     >
-      <Icon className="size-3 shrink-0" aria-hidden />
-      <Text as="span" ellipsis fontSize={11} className={`min-w-0${item.current ? ' font-semibold' : ' hidden @[22rem]:inline'}`}>{item.name}</Text>
+      <Icon className="size-4 shrink-0 p-px" aria-hidden />
+      <span className={`min-w-0 truncate pr-1 text-[12px] leading-[18px]${item.current ? '' : ' hidden @[22rem]:inline'}`}>{item.name}</span>
     </span>
   );
 }
@@ -117,7 +125,7 @@ function DetailNote({ row, text, danger = false }: { row: GraphRow; text: string
     <ul>
       <li className="flex min-w-0">
         <GapLanes row={row} />
-        <Text as="p" role="status" fontSize={12} type={danger ? 'danger' : 'secondary'} className="flex h-6 min-w-0 items-center pl-6">{text}</Text>
+        <Text as="p" role="status" fontSize={12} type={danger ? 'danger' : 'secondary'} className="flex h-[22px] min-w-0 items-center pl-5">{text}</Text>
       </li>
     </ul>
   );
@@ -169,15 +177,15 @@ export function GraphSection({
   );
 
   const header = (
-    <Flexbox horizontal align="center" gap={2} paddingInline={4} className="shrink-0">
+    <Flexbox horizontal align="center" gap={2} height={22} className="shrink-0 pr-2">
       <button
         type="button" onClick={onToggle} aria-expanded={open}
-        className="flex min-w-0 flex-1 items-center gap-1 rounded-sm py-1 pl-1 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="flex h-full min-w-0 flex-1 items-center text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
       >
         {open
-          ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-          : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
-        <Text as="span" ellipsis weight={600} fontSize={12} className="min-w-0 shrink">Gráfico</Text>
+          ? <ChevronDown className="mx-0.5 size-4 shrink-0" aria-hidden />
+          : <ChevronRight className="mx-0.5 size-4 shrink-0" aria-hidden />}
+        <span className="min-w-0 shrink truncate text-[12px] font-medium">Grafo</span>
       </button>
       {remoteButton('fetch', CloudDownload)}
       {remoteButton('pull', ArrowDownToLine)}
@@ -212,13 +220,13 @@ export function GraphSection({
                     <button
                       type="button" onClick={() => toggleCommit(c.hash)} aria-expanded={isOpen}
                       title={`${c.short} — ${c.subject || '(sem mensagem)'}. ${c.author}, ${when(c.date, { dateStyle: 'short', timeStyle: 'short' })}.${names ? ` Etiquetas: ${names}.` : ''}`}
-                      className={`@container flex h-[22px] w-full min-w-0 items-center gap-2 rounded-sm pr-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50${isOpen ? ' bg-muted' : ''}`}
+                      className={`@container flex h-[22px] w-full min-w-0 items-center gap-1 pr-3 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset${isOpen ? ' bg-muted' : ''}`}
                     >
                       <CommitLanes row={row} head={isHead} />
                       {/* O assunto tem prioridade: base zero (só cresce) e piso de 6rem. Etiquetas e autor encolhem antes dele. */}
                       <Text as="span" ellipsis fontSize={13} weight={isHead ? 600 : 400} className="min-w-[6rem] flex-1">{c.subject || '(sem mensagem)'}</Text>
                       {c.refs.map((r) => <RefBadge key={`${r.kind}:${r.name}`} item={r} />)}
-                      <Text as="span" ellipsis fontSize={11} type="secondary" className="hidden min-w-0 max-w-[30%] shrink @[24rem]:inline">{c.author}</Text>
+                      <span className="hidden min-w-0 max-w-[30%] shrink truncate text-[0.9em] opacity-70 @[24rem]:inline">{c.author}</span>
                     </button>
                   </div>
                 </ContextMenuTrigger>
@@ -268,7 +276,7 @@ export function GraphSection({
       <section className="flex shrink-0 flex-col" style={open ? { height } : undefined}>
         {header}
         {open && (
-          <Flexbox className="min-h-0 overflow-y-auto overflow-x-hidden" flex={1} paddingBlock={4} style={{ paddingRight: 8 }}>
+          <Flexbox className="min-h-0 overflow-y-auto overflow-x-hidden" flex={1}>
             {list}
           </Flexbox>
         )}
