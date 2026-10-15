@@ -12,6 +12,7 @@ import { tags } from '@lezer/highlight';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
 import { showMinimap } from '@replit/codemirror-minimap';
 import { bracketColors } from './bracket-colors';
+import { listMarkers } from './list-markers';
 import { message } from './backend';
 import { action, blocked, DIVIDER } from './file-tabs';
 import type { Scroll } from './workspace-store';
@@ -20,19 +21,23 @@ import type { Scroll } from './workspace-store';
 const COLOR_LIMIT = 200_000;
 // Quantos ecos de digitação guardar: a renderização atrasada nunca passa de algumas teclas.
 const ECHO_LIMIT = 64;
-// Medidas do editor do Antigravity (Monaco), com as cores do tema do app: texto de 14 px em linhas de 19 px; à esquerda, 19 px da
-// margem de ícones, 31 px dos números (alinhados à direita) e 26 px da dobra, que só aparece com o ponteiro na medianiz; a linha
-// do cursor tem só uma borda, sem fundo. As barras de rolagem têm 14 px (vertical) e 12 px (horizontal), quadradas.
+// Medidas e cores do editor do Antigravity (Monaco), tema Dark Modern: texto de 14 px em linhas de 19 px, Consolas no Windows, sem
+// ligaduras (editor.fontLigatures é false por padrão); à esquerda, 19 px da margem de ícones, 31 px dos números (alinhados à direita)
+// e 26 px da dobra, que só aparece com o ponteiro na medianiz; a linha do cursor tem só uma borda, sem fundo. As cores são fixas (hex),
+// de dark_modern.json, dark_vs.json e do bundle do workbench (ver docs/interface.md, "Cores e fontes do editor"): não herdam os tokens
+// do antd, que mudam com o tema da interface. As barras de rolagem têm 14 px (vertical) e 12 px (horizontal), quadradas.
 const darkTheme = EditorView.theme({
   '&': {
     height: '100%',
-    color: 'var(--ant-color-text)',
-    backgroundColor: 'var(--ant-color-bg-container)',
+    color: '#CCCCCC',
+    backgroundColor: '#1F1F1F',
     fontSize: '14px',
   },
   '.cm-scroller': {
     overflow: 'auto',
-    fontFamily: 'var(--default-mono-font-family)',
+    fontFamily: "Consolas, 'Courier New', monospace",
+    fontWeight: '400',
+    fontVariantLigatures: 'none',
     lineHeight: '19px',
   },
   '.cm-scroller::-webkit-scrollbar': { width: '14px', height: '12px' },
@@ -42,21 +47,29 @@ const darkTheme = EditorView.theme({
   '.cm-scroller::-webkit-scrollbar-thumb:active': { background: 'rgb(191 191 191 / 0.4)' },
   '.cm-content': {
     padding: '0',
-    caretColor: 'var(--ant-color-text)',
+    caretColor: '#AEAFAD',
   },
   '.cm-line': { padding: '0' },
   '.cm-gutters': {
-    color: 'var(--ant-color-text-tertiary)',
-    backgroundColor: 'var(--ant-color-bg-container)',
+    color: '#6E7681',
+    backgroundColor: '#1F1F1F',
     border: 'none',
   },
   '.cm-lineNumbers .cm-gutterElement': { padding: '0 0 0 19px', minWidth: '50px', textAlign: 'right' },
   '.cm-foldGutter .cm-gutterElement': { width: '26px', paddingLeft: '6px', opacity: '0', transition: 'opacity 0.1s' },
   '.cm-gutters:hover .cm-foldGutter .cm-gutterElement': { opacity: '1' },
-  '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--ant-color-text)' },
-  '.cm-activeLine': { backgroundColor: 'transparent', boxShadow: 'inset 0 0 0 2px var(--ant-color-fill-tertiary)' },
+  '.cm-activeLineGutter': { backgroundColor: 'transparent', color: '#CCCCCC' },
+  '.cm-activeLine': { backgroundColor: 'transparent', boxShadow: 'inset 0 0 0 2px #282828' },
   '&.cm-focused': { outline: 'none' },
-  '.cm-selectionBackground': { backgroundColor: 'var(--ant-color-primary-bg)' },
+  // Seleção com foco é #264F78 e sem foco é #3A3D41 (inactiveSelectionBackground). O seletor com `&.cm-focused` precisa ser o mesmo
+  // do CodeMirror, que tem mais especificidade e venceria um seletor simples.
+  '.cm-selectionBackground': { backgroundColor: '#3A3D41' },
+  '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': { backgroundColor: '#264F78' },
+  // Par sob o cursor: fundo verde translúcido e caixa #888 (editorBracketMatch). A caixa é sombra interna, não borda: uma borda real
+  // aumentaria a largura inline do caractere em 2 px e empurraria o texto. Sem par, o `nonmatching` só muda a cor, como o vermelho.
+  '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': { backgroundColor: '#0064001A', boxShadow: 'inset 0 0 0 1px #888' },
+  '.cm-nonmatchingBracket, &.cm-focused .cm-nonmatchingBracket': { backgroundColor: 'transparent' },
+  '.cm-nonmatchingBracket, .cm-nonmatchingBracket *': { color: 'rgba(255, 18, 18, 0.8)' },
 }, { dark: true });
 
 // Minimap à direita, como o do Antigravity: 120 px, com os caracteres desenhados e a janela visível só com o ponteiro. Arquivo
@@ -90,9 +103,13 @@ const darkHighlight = HighlightStyle.define([
   { tag: [tags.operator, tags.derefOperator], color: '#d4d4d4' },
   { tag: [tags.punctuation, tags.separator], color: '#cccccc' },
   { tag: tags.invalid, color: '#f44747' },
+  // Markdown (markup.heading, markup.bold e markup.inline.raw do Dark Modern): título e negrito azuis, código inline salmão
+  // (tags.monospace é o que o Markdown usa para `código`). O marcador de lista tem cor própria (list-markers.ts): `tags.list` do
+  // parser cobre a lista inteira, então não entra aqui.
   { tag: tags.heading, color: '#569cd6', fontWeight: 'bold' },
   { tag: tags.emphasis, fontStyle: 'italic' },
-  { tag: tags.strong, fontWeight: 'bold' },
+  { tag: tags.strong, color: '#569cd6', fontWeight: 'bold' },
+  { tag: tags.monospace, color: '#ce9178' },
   { tag: tags.strikethrough, textDecoration: 'line-through' },
   { tag: [tags.link, tags.url], color: '#ce9178', textDecoration: 'underline' },
   { tag: tags.quote, color: '#6a9955' },
@@ -103,12 +120,14 @@ const basicExtensions = [
   darkTheme,
   syntaxHighlighting(darkHighlight),
   bracketColors,
+  listMarkers,
   // Guias de recuo de 1 px; a do bloco do cursor fica mais forte.
   indentationMarkers({
     thickness: 1,
+    // editorIndentGuide.background1 e activeBackground1 do dark_vs.json (o app é sempre escuro).
     colors: {
-      dark: 'var(--ant-color-border)', activeDark: 'var(--ant-color-text-tertiary)',
-      light: 'var(--ant-color-border)', activeLight: 'var(--ant-color-text-tertiary)',
+      dark: '#404040', activeDark: '#707070',
+      light: '#404040', activeLight: '#707070',
     },
   }),
 ];

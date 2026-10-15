@@ -25,11 +25,11 @@
 // comparação, resolução de conflito).
 // Recuperação: localStorage por projeto (`orquestrador.editor:<project>`), validada ao ler; nunca grava no disco.
 import {
-  forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type DragEvent, type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
+  forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent, type FocusEvent, type KeyboardEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode,
 } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownMenu, Modal, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox, PatchDiff } from '@lobehub/ui';
-import { Columns2, Ellipsis, Pin, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
 import { FileIcon } from './file-icon';
 import { Breadcrumbs } from './breadcrumbs';
 import { backend, message } from './backend';
@@ -51,6 +51,7 @@ import {
 } from './workspace-store';
 import type { GitGuard } from './git-guard';
 import type { Conflict, FileContent, GitDiff, HunkRef, ReviewDiff } from './types';
+import { blockRanges, changeKeys, compareOf, type CompareModel } from './compare-rows';
 
 export type OpenOptions = { permanent?: boolean; line?: number; col?: number; side?: GroupId };
 export type EditorWorkspaceHandle = {
@@ -1238,12 +1239,234 @@ function Note({ text, danger, onRetry }: { text: string; danger?: boolean; onRet
   );
 }
 
-// ---- Diff (preparadas e alterações), por bloco ----
+// ---- Diff (preparadas e alterações) e commit: o arquivo inteiro num comparador contínuo ----
 
-// Cabeçalho do arquivo no patch (tudo antes do primeiro `@@`). Cada bloco mostra com ele, para o PatchDiff ler o caminho.
+type ViewMode = 'split' | 'unified';
+
+// Comparador: lado a lado por padrão, com a fonte e as cores do editor (docs/interface.md). O arquivo é um PatchDiff só, com todo o
+// contexto, então não há separador entre as mudanças. `overflow: 'scroll'` mantém cada linha com a altura de uma linha. A posição das
+// unidades vem do motor (o `Continuous` mede as linhas no DOM), não de uma conta. `diffOptions` vale só para os PatchDiff daqui.
+// A grade do lado a lado (`1fr 1fr` no motor, sem vão) ganha uma trilha central de `--compare-gap` do palco (6 px): a cor dela é o fundo
+// escuro do motor (#181818), e o divisor do `Continuous` (`.compare-sash`) pinta uma linha de 2 px no centro dela. A proporção das colunas é
+// a variável `--compare-left` do palco (50% por padrão). As barras de mudança das bordas internas ficam a 2 px da linha de cada lado.
+type DiffOptions = NonNullable<ComponentProps<typeof PatchDiff>['diffOptions']>;
+const COMPARE_DIFF_OPTIONS: DiffOptions = {
+  theme: { dark: 'dark-plus', light: 'dark-plus' },
+  overflow: 'scroll',
+  unsafeCSS: `
+    :host {
+      --diffs-dark-bg: #1F1F1F;
+      --diffs-light-bg: #1F1F1F;
+      --diffs-bg-context-override: #1F1F1F;
+      --diffs-bg-context-gutter-override: #1F1F1F;
+      --diffs-bg-buffer-override: #1F1F1F;
+      --diffs-bg-separator-override: #1F1F1F;
+      --diffs-bg-addition-override: rgb(156 204 44 / 0.2);
+      --diffs-bg-deletion-override: rgb(255 0 0 / 0.2);
+      --diffs-fg-number: #6E7681;
+      --diffs-font-family: Consolas, 'Courier New', monospace;
+      --diffs-font-size: 14px;
+      --diffs-line-height: 19px;
+    }
+    [data-separator-wrapper], [data-separator] { display: none; }
+    pre[data-diff-type='split'] { --diffs-gap-inline: 1px; background-color: #181818; }
+    pre[data-diff-type='split'][data-overflow='scroll'] { grid-template-columns: minmax(0, var(--compare-left, 50%)) var(--compare-gap, 6px) minmax(0, 1fr); column-gap: 0; }
+    pre[data-diff-type='split'][data-overflow='scroll'] > [data-deletions] { grid-column: 1; }
+    pre[data-diff-type='split'][data-overflow='scroll'] > [data-additions] { grid-column: 3; }
+    [data-code] { padding-top: 0 !important; padding-bottom: 0 !important; }
+  `,
+};
+
+// Alterna lado a lado e unificado. O rótulo é o modo para onde o clique leva (lado a lado é o padrão).
+function ModeToggle({ mode, onChange }: { mode: ViewMode; onChange: (mode: ViewMode) => void }) {
+  const split = mode === 'split';
+  const label = split ? 'Unificado' : 'Lado a lado';
+  return <ActionIcon size="small" variant="borderless" icon={split ? Rows2 : Columns2} aria-label={label} title={label} onClick={() => onChange(split ? 'unified' : 'split')} />;
+}
+
+// Cabeçalho do arquivo no patch (tudo antes do primeiro `@@`). O descarte de bloco mostra o cabeçalho com o bloco.
 const fileHead = (patch: string) => {
   const at = patch.indexOf('\n@@');
   return at < 0 ? patch : patch.slice(0, at);
+};
+
+// Geometria medida no motor, em pixels do palco: cada unidade vai do topo da primeira linha de mudança dela ao fim da última. A medida
+// vem do DOM depois de cada render (`onPostRender`), então as linhas auxiliares (o aviso de fim sem quebra) entram sem estimativa.
+type Geo = { patch: string; mode: ViewMode; height: number; units: ([number, number] | null)[] };
+const sameGeo = (a: Geo, b: Geo) => a.patch === b.patch && a.mode === b.mode && a.height === b.height && JSON.stringify(a.units) === JSON.stringify(b.units);
+
+// Divisor do lado a lado: cada lado tem pelo menos 15%, no arraste e nas setas.
+const SPLIT_MIN = 15;
+const SPLIT_MAX = 85;
+const clampSplit = (pct: number) => Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct));
+
+// O arquivo inteiro numa só visão: nada separa as mudanças. A unidade atual (bloco, ou trecho no commit) tem contorno, cada unidade
+// tem uma marca na faixa da direita, e um clique numa mudança a escolhe. A rolagem vai à primeira linha da unidade atual, e só quando
+// ela, o modo ou o arquivo mudam: a atualização do diff não rola a tela. No lado a lado, um divisor entre as colunas (`.compare-sash`)
+// muda a proporção delas. A proporção é o estado daqui (vale para a aba) e chega ao motor pela variável `--compare-left` do palco: arrastar
+// não refaz o diff nem rola a tela.
+function Continuous({ patch, compare, mode, current, unitName, onPick }: {
+  patch: string; compare: CompareModel; mode: ViewMode; current: number; unitName: string; onPick: (unit: number) => void;
+}) {
+  const body = useRef<HTMLDivElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  const [geo, setGeo] = useState<Geo | null>(null);
+  const [left, setLeft] = useState(50);
+  const sash = useRef<HTMLDivElement>(null);
+  // Chave de cada linha de mudança (ver `changeKeys`) para a unidade dela. As duas visões têm as mesmas linhas de mudança.
+  const unitOfKey = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of compare.unified) for (const k of changeKeys(r)) m.set(k, r.unit);
+    return m;
+  }, [compare]);
+  // O motor chama `onPostRender` e `onLineClick` fora do render: eles leem o estado atual por esta referência. As opções do motor
+  // ficam estáveis, então um diff igual não é refeito.
+  const latest = useRef({ patch, compare, mode, onPick, unitOfKey });
+  latest.current = { patch, compare, mode, onPick, unitOfKey };
+
+  // Mede as linhas de mudança e as unidades no DOM do motor (o shadow DOM do diff). O modo é o que o motor desenhou (a `pre`), que pode
+  // ainda ser o anterior logo depois da troca. Só troca o estado quando a geometria muda.
+  const measure = () => {
+    const el = stage.current;
+    const root = el?.querySelector('diffs-container')?.shadowRoot;
+    const pre = root?.querySelector('pre[data-diff-type]');
+    // Aba escondida (outra aba ativa) não tem geometria: não mede. Ao aparecer, o `useLayoutEffect` abaixo mede.
+    if (!el || !root || !pre || el.getClientRects().length === 0) return;
+    const drawn: ViewMode = pre.getAttribute('data-diff-type') === 'split' ? 'split' : 'unified';
+    const { patch: text, compare: model } = latest.current;
+    const box = el.getBoundingClientRect();
+    const at = new Map<string, [number, number]>();
+    root.querySelectorAll('[data-line]').forEach((line) => {
+      const t = line.getAttribute('data-line-type');
+      if (t !== 'change-deletion' && t !== 'change-addition') return;
+      const r = line.getBoundingClientRect();
+      at.set((t === 'change-deletion' ? 'd' : 'a') + line.getAttribute('data-line'), [r.top - box.top, r.bottom - box.top]);
+    });
+    const rows = drawn === 'split' ? model.split : model.unified;
+    const units = model.units.map((u): [number, number] | null => {
+      const s = u[drawn];
+      if (s[0] < 0) return null;
+      const first = at.get(changeKeys(rows[s[0]])[0] ?? '');
+      const last = at.get(changeKeys(rows[s[1]])[0] ?? '');
+      return first && last ? [first[0], last[1]] : null;
+    });
+    const next: Geo = { patch: text, mode: drawn, height: box.height, units };
+    setGeo((prev) => (prev && sameGeo(prev, next) ? prev : next));
+  };
+  // A rolagem pede a primeira linha da unidade atual. Só é pedida quando a unidade, o modo ou o arquivo (pela `key`) mudam; a geometria
+  // chega depois do render do motor, então o pedido espera por ela.
+  const jump = useRef(true);
+  useEffect(() => { jump.current = true; }, [current, mode]);
+  useEffect(() => {
+    const ready = geo && geo.patch === patch && geo.mode === mode ? geo : null;
+    const s = ready?.units[current];
+    if (!jump.current || !s || !body.current) return;
+    jump.current = false;
+    body.current.scrollTop = Math.max(0, s[0] - body.current.clientHeight / 3);
+    // Um Próximo desabilitado no último bloco tira o foco da aba (depois do commit); o F8 seguinte tem de achar o corpo, não o documento.
+    setTimeout(() => { if (document.activeElement === document.body) body.current?.focus({ preventScroll: true }); }, 0);
+  }, [geo, current, mode, patch]);
+
+  // A geometria vale só para o patch e o modo que estão na tela; enquanto o motor não mediu, não há marca nem faixa.
+  const ready = geo && geo.patch === patch && geo.mode === mode ? geo : null;
+  // Sem medida válida (o patch mudou com a aba escondida, ou ainda não houve render), mede assim que a aba estiver na tela.
+  useLayoutEffect(() => { if (!ready) measure(); });
+  // Proporção nova (divisor, setas ou duplo clique): as linhas são medidas de novo, porque a largura da coluna pode mudar a altura delas.
+  useLayoutEffect(() => { measure(); }, [left]);
+  const cur = ready?.units[current] ?? null;
+  const frac = (y: number) => `${(y / (ready?.height || 1)) * 100}%`;
+  // Um clique numa linha de mudança escolhe a unidade dela, pelo número e pelo lado que o motor deu.
+  const engine = useMemo<DiffOptions>(() => ({
+    ...COMPARE_DIFF_OPTIONS,
+    onPostRender: () => measure(),
+    onLineClick: (props) => {
+      const t = props.lineType;
+      const unit = latest.current.unitOfKey.get((t === 'change-deletion' ? 'd' : t === 'change-addition' ? 'a' : '') + props.lineNumber);
+      if (unit !== undefined) latest.current.onPick(unit);
+    },
+  }), []);
+  // O motor não renderiza de novo no arraste: o pointer só troca a variável do palco e o `aria-valuenow` do divisor, pelo DOM. O estado
+  // recebe a proporção no fim. `diff` é o mesmo elemento enquanto o patch e o modo não mudam, então o React não mexe no motor.
+  const diff = useMemo(() => (
+    <PatchDiff patch={patch} viewMode={mode} showHeader={false} variant="borderless" diffOptions={engine} />
+  ), [patch, mode, engine]);
+  const drag = useRef<{ x: number; start: number; width: number; pct: number } | null>(null);
+  const paint = (pct: number) => {
+    stage.current?.style.setProperty('--compare-left', `${pct}%`);
+    sash.current?.setAttribute('aria-valuenow', String(Math.round(pct)));
+  };
+  const onSashDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    // Sem seleção de texto no arraste; o foco vai ao divisor, que é focável.
+    e.preventDefault();
+    e.currentTarget.focus();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { x: e.clientX, start: left, width: stage.current?.clientWidth || 1, pct: left };
+    e.currentTarget.setAttribute('data-dragging', '');
+    body.current?.setAttribute('data-dragging', '');
+  };
+  const onSashMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    d.pct = clampSplit(d.start + ((e.clientX - d.x) / d.width) * 100);
+    paint(d.pct);
+  };
+  const onSashUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    drag.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    e.currentTarget.removeAttribute('data-dragging');
+    body.current?.removeAttribute('data-dragging');
+    setLeft(d.pct);
+  };
+  // Setas esquerda e direita movem 2 pontos percentuais; a rolagem da tela fica parada.
+  const onSashKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    setLeft(clampSplit(left + (e.key === 'ArrowRight' ? 2 : -2)));
+  };
+  return (
+    <Flexbox flex={1} className="min-h-0 compare-view">
+      <div
+        ref={body} tabIndex={0} aria-label="Arquivo inteiro: F8 vai à próxima mudança, Shift+F8 à anterior" className="compare-body"
+      >
+        <div ref={stage} className="compare-stage" style={{ '--compare-left': `${left}%` } as CSSProperties}>
+          {diff}
+          {cur && <div className="compare-current" data-unit={current} style={{ top: cur[0], height: cur[1] - cur[0] }} />}
+          {mode === 'split' && (
+            <div
+              ref={sash} role="separator" aria-orientation="vertical" aria-label="Divisor entre o original e o modificado"
+              aria-valuemin={SPLIT_MIN} aria-valuemax={SPLIT_MAX} aria-valuenow={Math.round(left)} tabIndex={0} className="compare-sash"
+              onPointerDown={onSashDown} onPointerMove={onSashMove} onPointerUp={onSashUp} onPointerCancel={onSashUp}
+              onDoubleClick={() => setLeft(50)} onKeyDown={onSashKey}
+            />
+          )}
+        </div>
+      </div>
+      <div className="compare-ruler">
+        {ready && compare.units.map((unit, i) => {
+          const s = ready.units[i];
+          if (!s) return null;
+          return (
+            <button
+              key={i} type="button" className={`compare-mark compare-mark-${unit.kind}`} data-current={i === current || undefined}
+              style={{ top: frac(s[0]), height: `max(3px, ${frac(s[1] - s[0])})` }}
+              aria-label={`Ir para ${unitName.toLowerCase()} ${i + 1}, linha ${unit.line}`} title={`${unitName} ${i + 1}, linha ${unit.line}`}
+              onClick={() => onPick(i)}
+            />
+          );
+        })}
+      </div>
+    </Flexbox>
+  );
+}
+
+// F8 vai à próxima mudança, Shift+F8 à anterior. Vale em toda a aba, então o foco pode estar numa ação da toolbar.
+const stepKey = (e: KeyboardEvent<HTMLElement>, step: (by: number) => void) => {
+  if (e.key !== 'F8') return;
+  e.preventDefault();
+  step(e.shiftKey ? -1 : 1);
 };
 
 // `shown`: a aba é a atual do grupo. As abas escondidas ficam montadas e não consultam o Git; ao voltar, leem o diff de novo,
@@ -1252,11 +1475,12 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
   const staged = target.side === 'staged';
   const [review, setReview] = useState<ReviewDiff | null>(null);
   const [error, setError] = useState('');
-  const [mode, setMode] = useState<'split' | 'unified'>('unified');
+  const [mode, setMode] = useState<ViewMode>('split');
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
-  const holder = useRef<HTMLDivElement>(null);
+  // Bloco atual pelo índice (os blocos são os do Git, com 3 linhas de contexto). O primeiro é o atual ao abrir; trocar de arquivo volta a ele.
   const [at, setAt] = useState(0);
+  useEffect(() => setAt(0), [target.path, target.side]);
   const load = async () => {
     try {
       setReview(await backend.gitReviewDiff(target.path, staged));
@@ -1287,38 +1511,101 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
     }
   };
 
-  const hunks: PatchHunk[] = review ? patchHunks(review.diff.patch) : [];
-  const head = review ? fileHead(review.diff.patch) : '';
+  // Não rastreado: o Git não separa em blocos. O comparador mostra o arquivo novo inteiro e a ação é preparar o arquivo.
+  const untracked = review !== null && review.untracked;
+  const hunks: PatchHunk[] = review && !untracked ? patchHunks(review.diff.patch) : [];
+  // Só os campos que o comparador usa entram nas dependências: uma resposta igual à anterior (o poll) não refaz o arquivo nem a rolagem.
+  const shownPatch = review ? review.display.patch : '';
+  const shownBinary = review ? review.display.binary : false;
+  const shownLarge = review ? review.display.tooLarge : false;
+  const diffPatch = review ? review.diff.patch : '';
+  const compare = useMemo(() => (
+    shownPatch !== '' && !shownBinary && !shownLarge
+      ? compareOf(shownPatch, !untracked && diffPatch !== '' ? blockRanges(diffPatch) : null)
+      : null
+  ), [shownPatch, shownBinary, shownLarge, untracked, diffPatch]);
   const blocked_ = common.locked || busy;
   const draftOpen = common.hasDraft(target.path);
-  // Não rastreado: o Git não separa em blocos, mas o patch existe. A tela mostra o arquivo inteiro e oferece preparar tudo.
-  const untracked = review !== null && review.untracked;
-  const jump = (step: number) => {
-    if (hunks.length === 0) return;
-    const next = Math.min(Math.max(at + step, 0), hunks.length - 1);
-    setAt(next);
-    holder.current?.querySelector<HTMLElement>(`[data-hunk="${next}"]`)?.scrollIntoView({ block: 'start' });
+  const n = hunks.length;
+  // O bloco pode sumir (preparado ou descartado): o atual nunca passa do último.
+  const cur = n === 0 ? -1 : Math.min(at, n - 1);
+  const step = (by: number) => {
+    if (n === 0) return;
+    setAt(Math.min(Math.max(cur + by, 0), n - 1));
+  };
+  const block = cur >= 0 ? hunks[cur] : null;
+  const head = review ? fileHead(review.diff.patch) : '';
+  // Ações por bloco pelo índice: a barra age no bloco atual. O `HunkRef` sai do bloco visto agora.
+  const refAt = (i: number): HunkRef | null => (hunks[i] && review ? { path: target.path, index: i, header: hunks[i].header, revision: review.revision } : null);
+  const ref = cur >= 0 ? refAt(cur) : null;
+  const stageAt = (i: number) => { const r = refAt(i); if (r) run(() => backend.gitStageHunk(r)); };
+  const unstageAt = (i: number) => { const r = refAt(i); if (r) run(() => backend.gitUnstageHunk(r)); };
+  const discardAt = async (i: number) => {
+    const r = refAt(i);
+    if (!r) return;
+    // Confirma mostrando o patch capturado agora; o clique em confirmar usa este mesmo `r`, sem reler outro patch.
+    const ok = await common.ask({
+      title: 'Descartar este bloco?',
+      body: <Text as="pre" fontSize={12} className="max-h-64 overflow-auto whitespace-pre">{`${head}\n${hunks[i].text}`}</Text>,
+      actions: [{ key: 'ok', label: 'Descartar', danger: true }],
+    });
+    if (ok !== 'ok') return;
+    if (common.hasDraft(target.path)) {
+      toast.error({ title: 'Há um rascunho aberto deste arquivo. Salve ou descarte antes de descartar o bloco.', duration: 6000 });
+      return;
+    }
+    await run(() => backend.gitDiscardHunk(r));
   };
 
   if (error && !review) return <Note text={error} danger />;
   if (!review) return <Note text="Lendo as alterações…" />;
   if (review.diff.binary) return <Note text="Arquivo binário: o diff não é mostrado." />;
-  if (review.diff.tooLarge) return <Note text="Diff grande demais para mostrar aqui." />;
-  if (review.diff.patch === '') return <Note text="Não há alterações neste lado." />;
+  if (review.diff.tooLarge || review.display.tooLarge) return <Note text="Diff grande demais para mostrar aqui." />;
+  if (review.diff.patch === '' || !compare) return <Note text="Não há alterações neste lado." />;
 
+  const counter = untracked ? 'arquivo novo, não rastreado' : n === 0 ? (staged ? 'preparadas' : 'alterações') : `bloco ${cur + 1} de ${n}`;
   return (
-    <Flexbox flex={1} className="min-h-0">
-      <Flexbox horizontal align="center" wrap="wrap" gap={6} paddingInline={12} paddingBlock={4} flex="none" className="border-b">
-        <Text as="code" code type="secondary" fontSize={12} ellipsis title={target.path} className="min-w-0">{target.path}</Text>
-        <Text as="span" type="secondary" fontSize={12} className="shrink-0">{staged ? 'preparadas' : 'alterações'}</Text>
-        <Button size="small" className="ml-auto shrink-0" onClick={() => setMode(mode === 'split' ? 'unified' : 'split')}>
-          {mode === 'split' ? 'Unificado' : 'Lado a lado'}
-        </Button>
-        <Button size="small" disabled={hunks.length === 0 || at <= 0} onClick={() => jump(-1)} aria-label="Bloco anterior">Anterior</Button>
-        <Button size="small" disabled={hunks.length === 0 || at >= hunks.length - 1} onClick={() => jump(1)} aria-label="Próximo bloco">Próximo</Button>
+    <Flexbox flex={1} className="min-h-0" onKeyDown={(e) => stepKey(e, step)}>
+      <Flexbox horizontal align="center" gap={2} height={28} paddingInline={8} flex="none" className="border-b compare-toolbar">
+        <Text as="code" code type="secondary" fontSize={12} ellipsis title={target.path} className="min-w-0 flex-1">{target.path}</Text>
+        <Text as="span" type="secondary" fontSize={11} className="shrink-0 whitespace-nowrap">{counter}</Text>
+        {n > 0 && (
+          <>
+            <ActionIcon
+              size="small" variant="borderless" icon={ChevronUp} aria-label="Bloco anterior" title="Bloco anterior (Shift+F8)"
+              disabled={cur <= 0} onClick={() => step(-1)}
+            />
+            <ActionIcon
+              size="small" variant="borderless" icon={ChevronDown} aria-label="Próximo bloco" title="Próximo bloco (F8)"
+              disabled={cur >= n - 1} onClick={() => step(1)}
+            />
+          </>
+        )}
+        {ref && block && (
+          <>
+            <ActionIcon
+              size="small" variant="borderless" icon={FileText} aria-label={`Abrir bloco ${cur + 1} de ${n} no arquivo`}
+              title={`Abrir o bloco ${cur + 1} de ${n} no arquivo`} onClick={() => common.openLine(target.path, compare.units[cur].line)}
+            />
+            {staged
+              ? <ActionIcon size="small" variant="borderless" icon={Minus} aria-label={`Tirar bloco ${cur + 1} de ${n} do preparo`} title={`Tirar o bloco ${cur + 1} de ${n} do preparo`} disabled={blocked_} onClick={() => unstageAt(cur)} />
+              : <ActionIcon size="small" variant="borderless" icon={Plus} aria-label={`Preparar bloco ${cur + 1} de ${n}`} title={`Preparar o bloco ${cur + 1} de ${n}`} disabled={blocked_} onClick={() => stageAt(cur)} />}
+            {!staged && (
+              <ActionIcon
+                size="small" variant="borderless" danger icon={Undo2} aria-label={`Descartar bloco ${cur + 1} de ${n}`}
+                disabled={blocked_ || draftOpen}
+                title={draftOpen ? 'Resolva o rascunho aberto deste arquivo antes de descartar.' : `Descartar o bloco ${cur + 1} de ${n}`}
+                onClick={() => discardAt(cur)}
+              />
+            )}
+          </>
+        )}
+        {untracked && !staged && <Button size="small" disabled={blocked_} onClick={() => run(() => backend.gitStage([target.path]))}>Preparar arquivo</Button>}
+        <ModeToggle mode={mode} onChange={setMode} />
         {!staged && (
-          <Button
-            size="small" danger disabled={blocked_ || draftOpen}
+          <ActionIcon
+            size="small" variant="borderless" danger icon={Undo2} aria-label="Descartar arquivo"
+            disabled={blocked_ || draftOpen}
             title={draftOpen ? 'Resolva o rascunho aberto deste arquivo antes de descartar.' : 'Descartar todas as alterações deste arquivo'}
             onClick={async () => {
               const ok = await common.ask({
@@ -1335,90 +1622,53 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
               const captured = review.revision;
               await run(() => backend.gitDiscardFile(target.path, captured));
             }}
-          >
-            Descartar arquivo
-          </Button>
+          />
         )}
       </Flexbox>
-      <Flexbox ref={holder} flex={1} gap={8} padding={8} className="min-h-0 overflow-y-auto">
-        {untracked && (
-          <Flexbox gap={6}>
-            <Flexbox horizontal align="center" wrap="wrap" gap={6}>
-              <Text as="span" type="secondary" fontSize={12} className="min-w-0 flex-1">Arquivo novo, ainda não rastreado: o Git não separa em blocos.</Text>
-              {!staged && <Button size="small" disabled={blocked_} onClick={() => run(() => backend.gitStage([target.path]))}>Preparar arquivo</Button>}
-            </Flexbox>
-            <PatchDiff patch={review.diff.patch} viewMode={mode} showHeader={false} variant="borderless" />
-          </Flexbox>
-        )}
-        {!untracked && hunks.map((h) => {
-          const ref: HunkRef = { path: target.path, index: h.index, header: h.header, revision: review.revision };
-          return (
-            <Flexbox key={h.index} gap={4} data-hunk={h.index}>
-              <Flexbox horizontal align="center" wrap="wrap" gap={6}>
-                <Text as="code" code fontSize={12} type="secondary" className="min-w-32 flex-1 break-all">{h.header}</Text>
-                <Button size="small" onClick={() => common.openLine(target.path, h.newLine)}>Abrir no arquivo</Button>
-                {staged
-                  ? <Button size="small" disabled={blocked_} onClick={() => run(() => backend.gitUnstageHunk(ref))}>Tirar do stage</Button>
-                  : <Button size="small" disabled={blocked_} onClick={() => run(() => backend.gitStageHunk(ref))}>Preparar</Button>}
-                {!staged && (
-                  <Button
-                    size="small" danger disabled={blocked_ || draftOpen}
-                    title={draftOpen ? 'Resolva o rascunho aberto deste arquivo antes de descartar.' : 'Descartar este bloco'}
-                    onClick={async () => {
-                      // Confirma mostrando o patch capturado agora; o clique em confirmar usa este mesmo `ref`, sem reler outro patch.
-                      const ok = await common.ask({
-                        title: 'Descartar este bloco?',
-                        body: <Text as="pre" fontSize={12} className="max-h-64 overflow-auto whitespace-pre">{`${head}\n${h.text}`}</Text>,
-                        actions: [{ key: 'ok', label: 'Descartar', danger: true }],
-                      });
-                      if (ok !== 'ok') return;
-                      if (common.hasDraft(target.path)) {
-                        toast.error({ title: 'Há um rascunho aberto deste arquivo. Salve ou descarte antes de descartar o bloco.', duration: 6000 });
-                        return;
-                      }
-                      await run(() => backend.gitDiscardHunk(ref));
-                    }}
-                  >
-                    Descartar bloco
-                  </Button>
-                )}
-              </Flexbox>
-              <PatchDiff patch={`${head}\n${h.text}`} viewMode={mode} showHeader={false} variant="borderless" />
-            </Flexbox>
-          );
-        })}
-      </Flexbox>
+      <Continuous key={`${target.path}|${target.side}`} patch={review.display.patch} compare={compare} mode={mode} current={cur} unitName="Bloco" onPick={setAt} />
     </Flexbox>
   );
 }
 
 // ---- Histórico (commit): leitura imutável, sem botões de mutação ----
 
+// O commit mostra o arquivo inteiro. Sem blocos do Git, a unidade é cada trecho de mudança; a navegação é só de leitura.
 function CommitTab({ target }: { target: Extract<TabTarget, { kind: 'commit' }> }) {
   const [diff, setDiff] = useState<GitDiff | null>(null);
   const [error, setError] = useState('');
-  const [mode, setMode] = useState<'split' | 'unified'>('unified');
+  const [mode, setMode] = useState<ViewMode>('split');
+  const [at, setAt] = useState(0);
   useEffect(() => {
     if (diff) return; // histórico é imutável: lê uma vez
     backend.gitCommitDiff(target.hash, target.path).then(setDiff, (e) => setError(message(e)));
   }, [target.hash, target.path]);
+  const compare = useMemo(() => (diff && diff.patch !== '' && !diff.binary && !diff.tooLarge ? compareOf(diff.patch, null) : null), [diff]);
   if (error) return <Note text={error} danger />;
   if (!diff) return <Note text="Lendo o commit…" />;
   if (diff.binary) return <Note text="Arquivo binário: o diff não é mostrado." />;
   if (diff.tooLarge) return <Note text="Diff grande demais para mostrar aqui." />;
-  if (diff.patch === '') return <Note text="Este commit não altera o texto deste arquivo." />;
+  if (!compare) return <Note text="Este commit não altera o texto deste arquivo." />;
+  const n = compare.units.length;
+  const cur = n === 0 ? -1 : Math.min(at, n - 1);
+  const step = (by: number) => {
+    if (n === 0) return;
+    setAt(Math.min(Math.max(cur + by, 0), n - 1));
+  };
   return (
-    <Flexbox flex={1} className="min-h-0">
-      <Flexbox horizontal align="center" gap={6} height={32} flex="none" paddingInline={12} className="border-b">
-        <Text as="code" code type="secondary" fontSize={12} ellipsis title={target.path} className="min-w-0">{target.path}</Text>
-        <Text as="span" type="secondary" fontSize={12} className="shrink-0">commit {target.hash.slice(0, 7)} · somente leitura</Text>
-        <Button size="small" className="ml-auto shrink-0" onClick={() => setMode(mode === 'split' ? 'unified' : 'split')}>
-          {mode === 'split' ? 'Unificado' : 'Lado a lado'}
-        </Button>
+    <Flexbox flex={1} className="min-h-0" onKeyDown={(e) => stepKey(e, step)}>
+      <Flexbox horizontal align="center" gap={6} height={28} paddingInline={8} flex="none" className="border-b compare-toolbar">
+        <Text as="code" code type="secondary" fontSize={12} ellipsis title={target.path} className="min-w-0 flex-1">{target.path}</Text>
+        <Text as="span" type="secondary" fontSize={11} className="shrink-0 whitespace-nowrap">commit {target.hash.slice(0, 7)} · somente leitura</Text>
+        {n > 0 && (
+          <>
+            <Text as="span" type="secondary" fontSize={11} className="shrink-0 whitespace-nowrap">{`mudança ${cur + 1} de ${n}`}</Text>
+            <ActionIcon size="small" variant="borderless" icon={ChevronUp} aria-label="Mudança anterior" title="Mudança anterior (Shift+F8)" disabled={cur <= 0} onClick={() => step(-1)} />
+            <ActionIcon size="small" variant="borderless" icon={ChevronDown} aria-label="Próxima mudança" title="Próxima mudança (F8)" disabled={cur >= n - 1} onClick={() => step(1)} />
+          </>
+        )}
+        <ModeToggle mode={mode} onChange={setMode} />
       </Flexbox>
-      <Flexbox flex={1} className="min-h-0 overflow-y-auto">
-        <PatchDiff patch={diff.patch} viewMode={mode} showHeader={false} variant="borderless" />
-      </Flexbox>
+      <Continuous key={`${target.hash}|${target.path}`} patch={diff.patch} compare={compare} mode={mode} current={cur} unitName="Mudança" onPick={setAt} />
     </Flexbox>
   );
 }

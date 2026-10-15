@@ -20,6 +20,8 @@
 // e `repo-above` (pasta dentro de outro repositório, raiz `C:\projetos`). Fora de `repo`, `git_status` devolve só o `kind` (e a raiz, em `repo-above`).
 // `?subfolder=1` faz `choose_project` devolver `subfolder: true`. Em execução, `__mock.gitMode = 'no-repo'` e `__mock.subfolder = true` trocam isso
 // (por exemplo, um `git init` feito pelo terminal, que o painel vê na consulta seguinte).
+import { EDITOR_HEAD_LINES } from './mock-fixtures';
+import { parseDiffFromFile } from '@pierre/diffs';
 import type { Transport } from './backend';
 import { fileNameError } from './file-tab-actions';
 import {
@@ -78,7 +80,7 @@ const tree = folder({
   dados: folder({ 'exportacao.json': file() }),
   docs: folder({ 'design-system.md': file(), 'rascunho-painel.md': file(), 'apagado.md': file() }),
   src: folder({
-    'App.tsx': file(), 'index.css': file(), 'longo.ts': file(), 'main.tsx': file(), 'conflito.ts': file(),
+    'App.tsx': file(), 'editor-workspace.tsx': file(), 'index.css': file(), 'longo.ts': file(), 'main.tsx': file(), 'conflito.ts': file(), 'sem-quebra.ts': file(),
     components: folder({ ui: folder({ 'button.tsx': file(), 'card.tsx': file() }) }),
     lib: folder({ 'utils.ts': file() }),
   }),
@@ -96,24 +98,44 @@ const files: GitFile[] = [
   entry('docs/design-system.md', 'modified', null),
   entry('docs/rascunho-painel.md', null, 'untracked'),
   entry('src/App.tsx', 'modified', 'modified'),
+  entry('src/editor-workspace.tsx', 'modified', 'modified'),
+  entry('src/sem-quebra.ts', null, 'modified'),
   entry('dados/exportacao.json', null, 'modified'),
   entry('assets/logo.png', null, 'modified'),
   // Conflitos de merge: só o lado das alterações (como o Git e o backend), sem nada preparado. Texto em `TEXTS`, lados em `conflicts`.
   entry('src/conflito.ts', null, 'conflicted'),
   entry('docs/apagado.md', null, 'conflicted'),
 ];
+// src/editor-workspace.tsx: o HEAD é o trecho de EDITOR_HEAD_LINES; o preparado muda a linha 62 (remove ganha um parâmetro);
+// a pasta muda a linha 28 e a 32 (que ficam no mesmo bloco, a 3 linhas uma da outra) e a linha 96 (outro bloco).
+const EDITOR_HEAD = EDITOR_HEAD_LINES.join('\n') + '\n';
+const EDITOR_INDEX = EDITOR_HEAD.replace('  remove(paths: string[]): void;', '  remove(paths: string[], keep?: boolean): void;');
+const EDITOR_WORKTREE = EDITOR_INDEX
+  .replace('useLayoutEffect, useRef, useState,', 'useLayoutEffect, useMemo, useRef, useState,')
+  .replace("import { Columns2, Ellipsis, Pin, X } from 'lucide-react';", "import { ChevronDown, Columns2, Ellipsis, Pin, X } from 'lucide-react';")
+  .replace('type DiskVersion = { text: string; bom: boolean; readOnly: boolean };', 'type DiskVersion = { text: string; bom: boolean; readOnly: boolean; size: number };');
+// Fixture do comparador (src/sem-quebra.ts): 150 linhas, nada preparado. A pasta põe 4 linhas no começo, troca uma linha por duas perto
+// do fim e acaba sem quebra de linha: três blocos, com quantidades desiguais de linhas e o aviso do motor no último.
+const SEM_QUEBRA_HEAD = Array.from({ length: 150 }, (_, i) => `const v${i} = ${i};`);
+const SEM_QUEBRA_WORK = [
+  ...SEM_QUEBRA_HEAD.slice(0, 2), 'const novo1 = 1;', 'const novo2 = 2;', 'const novo3 = 3;', 'const novo4 = 4;',
+  ...SEM_QUEBRA_HEAD.slice(2, 139), 'const troca1 = 1;', 'const troca2 = 2;', ...SEM_QUEBRA_HEAD.slice(140, 149), 'const v149 = 1490;',
+].join('\n');
 // Conteúdo simulado de alguns arquivos da árvore, para a pesquisa. Linhas separadas por "\n".
 const TEXTS: Record<string, string> = {
   'README.md': '# Orquestrador\n\nUm app para Windows que põe CLIs de IA para trabalhar em papéis separados.\nO orquestrador lê o projeto e delega; os executores trabalham em paralelo.\n',
   'docs/design-system.md': '# Design system\n\nA interface usa o Lobe UI, com Tailwind CSS v4. Tema escuro fixo.\nMonoespaçado só em terminal e valores técnicos.\n',
   'src/App.tsx': 'import { useState } from \'react\';\n\nexport function App() {\n  const [route, setRoute] = useState(\'arquivos\');\n  return <main>Orquestrador {route}</main>;\n}\n',
   'src/main.tsx': 'import { createRoot } from \'react-dom/client\';\nimport { App } from \'./App\';\n\ncreateRoot(document.getElementById(\'root\')!).render(<App />);\n',
+  // Arquivo longo do comparador: o HEAD e o preparado vêm de EDITOR_HEAD_LINES (em GIT_TEXT).
+  'src/editor-workspace.tsx': EDITOR_WORKTREE,
   // Arquivo longo para conferir a rolagem: 300 linhas, linha em branco a cada 7 e uma linha bem comprida.
   'src/longo.ts': Array.from({ length: 300 }, (_, i) => (i % 7 === 6 ? '' : i === 150 ? `export const longa = '${'x'.repeat(400)}';` : `export const linha${i} = ${i * 3};`)).join('\n'),
   'src/lib/utils.ts': '// Caminho relativo com "/": a raiz é vazia.\n// 🚀 join também usa "/" no Windows.\nexport const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);\n',
   // Conflitos: o texto da pasta traz os marcadores (ou, no apagado, o lado que sobrou).
   'src/conflito.ts': '<<<<<<< ours\nexport const v = 2;\n=======\nexport const v = 3;\n>>>>>>> theirs\n',
   'docs/apagado.md': '# Rascunho\n\nAjuste.\n',
+  'src/sem-quebra.ts': SEM_QUEBRA_WORK,
 };
 
 /** Pasta pelo caminho relativo com "/" ('' é a raiz); arquivo ou caminho inexistente dá undefined. */
@@ -302,26 +324,80 @@ function shellTyped(id: string, data: string) {
 // ---------- Git com estado (simulado): blocos, descarte, histórico, commit e conflitos ----------
 
 // Um bloco do diff: a linha `@@` e as linhas do corpo, sem a quebra de linha.
-type Block = { header: string; lines: string[] };
-// Blocos de cada arquivo, separados pelo lado (preparado e alterações da pasta). Arquivo sem entrada não tem alteração.
-const hunkState: Record<string, { staged: Block[]; unstaged: Block[] }> = {
-  'README.md': { staged: [], unstaged: [{ header: '@@ -1 +1,3 @@', lines: ['-# Orquestrador', '+# Orquestrador', '+', '+Painel Git em andamento.'] }] },
-  'docs/design-system.md': { staged: [{ header: '@@ -3 +3 @@', lines: ['-Monoespaçado só em terminal.', '+Monoespaçado só em terminal e valores técnicos.'] }], unstaged: [] },
-  // Dois blocos na pasta e um preparado: a tela precisa mostrar os três e agir só no escolhido.
+// Texto de cada versão de um arquivo alterado: `head` (o commit), `index` (o preparado) e a pasta (`TEXTS`).
+// O diff sai dessas três, como o Git: o arquivo inteiro é o comparador (display) e os blocos são os de 3 linhas de contexto.
+const APP_WORKTREE = TEXTS['src/App.tsx'];
+const README_HEAD = '# Orquestrador\n\nUm app para Windows que põe CLIs de IA para trabalhar em papéis separados.\n';
+const GIT_TEXT: Record<string, { head: string; index: string }> = {
+  // Só a pasta mudou: o README ganhou o último parágrafo.
+  'README.md': { head: README_HEAD, index: README_HEAD },
+  // Preparado: a frase da linha 4 foi encurtada no HEAD; a pasta tem a versão atual.
+  'docs/design-system.md': { head: TEXTS['docs/design-system.md'].replace('terminal e valores técnicos.', 'terminal.'), index: TEXTS['docs/design-system.md'] },
+  // Preparado: `arquivos` (linha 4). Na pasta, a linha 5 perdeu o `·`.
   'src/App.tsx': {
-    staged: [{ header: '@@ -5 +5 @@', lines: ['-  return <main>Orquestrador {route}</main>;', '+  return <main>Orquestrador · {route}</main>;'] }],
-    unstaged: [
-      { header: '@@ -1 +1,2 @@', lines: ["-import { useState } from 'react';", "+import { useState, useEffect } from 'react';", '+'] },
-      { header: '@@ -7 +8 @@', lines: ["-  const [route, setRoute] = useState('arquivos');", "+  const [route, setRoute] = useState('painel');"] },
-    ],
+    head: APP_WORKTREE.replace("useState('arquivos')", "useState('painel')").replace('Orquestrador {route}', 'Orquestrador · {route}'),
+    index: APP_WORKTREE.replace('Orquestrador {route}', 'Orquestrador · {route}'),
   },
+  'src/editor-workspace.tsx': { head: EDITOR_HEAD, index: EDITOR_INDEX },
+  'src/sem-quebra.ts': { head: SEM_QUEBRA_HEAD.join('\n') + '\n', index: SEM_QUEBRA_HEAD.join('\n') + '\n' },
 };
-const sides = (path: string) => (hunkState[path] ??= { staged: [], unstaged: [] });
-const blocksOf = (path: string, staged: boolean): Block[] => (hunkState[path] ? (staged ? hunkState[path].staged : hunkState[path].unstaged) : []);
-// O diff bruto de um lado, como o Git o daria: cabeçalho do arquivo e os blocos. Vazio quando não há bloco.
-const patchOf = (path: string, blocks: Block[]) => (blocks.length === 0 ? '' :
-  `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n` + blocks.map((b) => [b.header, ...b.lines].join('\n') + '\n').join(''));
-
+type Hunk = { header: string; body: string[]; oldAt: number; oldLen: number; newAt: number; newLen: number; oldLines: string[]; newLines: string[] };
+const textLines = (text: string) => (text === '' ? [] : text.replace(/\n$/, '').split('\n'));
+const joinLines = (ls: string[]) => ls.map((l) => l + '\n').join('');
+// A marca que o Git põe depois da última linha de um lado sem quebra de linha. O motor a mostra como um aviso no próprio diff.
+const NO_EOL = '\\ No newline at end of file';
+// Início e tamanho de um trecho no cabeçalho do bloco, como o Git escreve: sem contagem quando é 1; a linha anterior quando é 0.
+const span = (at: number, len: number) => (len === 1 ? String(at + 1) : `${len === 0 ? at : at + 1},${len}`);
+// Os blocos do motor público (`parseDiffFromFile`, com `context` linhas) em linhas com sinal e nos intervalos de cada lado.
+// Os textos vêm sem a quebra final: o motor marca isso nos flags `noEOFCR*` e aqui vira a linha `NO_EOL`.
+function hunksOf(path: string, a: string, b: string, context: number): Hunk[] {
+  // O motor guarda cada linha com a quebra dela; o patch e os dados do simulado usam a linha sem ela.
+  const line = (text: string) => text.replace(/\n$/, '');
+  const meta = parseDiffFromFile({ name: path, contents: a }, { name: path, contents: b }, { context });
+  return meta.hunks.map((h) => {
+    const items: { tag: ' ' | '-' | '+'; text: string }[] = [];
+    for (const c of h.hunkContent) {
+      if (c.type === 'context') for (let i = 0; i < c.lines; i++) items.push({ tag: ' ', text: line(meta.additionLines[c.additionLineIndex + i]) });
+      else {
+        for (let i = 0; i < c.deletions; i++) items.push({ tag: '-', text: line(meta.deletionLines[c.deletionLineIndex + i]) });
+        for (let i = 0; i < c.additions; i++) items.push({ tag: '+', text: line(meta.additionLines[c.additionLineIndex + i]) });
+      }
+    }
+    // A marca vai depois da última linha de cada lado que não tem quebra. Contexto no fim marca os dois lados na mesma linha, uma vez só.
+    const lastOf = (side: '-' | '+') => items.reduce((at, it, k) => (it.tag === ' ' || it.tag === side ? k : at), -1);
+    const marks = new Set([h.noEOFCRDeletions ? lastOf('-') : -1, h.noEOFCRAdditions ? lastOf('+') : -1]);
+    const body = items.flatMap((it, k) => (marks.has(k) ? [it.tag + it.text, NO_EOL] : [it.tag + it.text]));
+    const oldLines = items.filter((it) => it.tag !== '+').map((it) => it.text);
+    const newLines = items.filter((it) => it.tag !== '-').map((it) => it.text);
+    // Com 0 linhas, o início do motor é a linha anterior (é o ponto de inserção), como no cabeçalho do Git.
+    const oldAt = oldLines.length === 0 ? h.deletionStart : h.deletionStart - 1;
+    const newAt = newLines.length === 0 ? h.additionStart : h.additionStart - 1;
+    return {
+      header: `@@ -${span(oldAt, oldLines.length)} +${span(newAt, newLines.length)} @@`, body,
+      oldAt, oldLen: oldLines.length, newAt, newLen: newLines.length, oldLines, newLines,
+    };
+  });
+}
+// O diff de um lado: o bloco com 3 linhas de contexto (o que o Git mostra e as ações usam) e o arquivo inteiro (`full`). Vazio sem diferença.
+function diffOf(path: string, a: string, b: string) {
+  if (a === b) return { patch: '', full: '', hunks: [] as Hunk[] };
+  const hunks = hunksOf(path, a, b, 3);
+  if (hunks.length === 0) return { patch: '', full: '', hunks };
+  const file = `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n`;
+  const text = (hs: Hunk[]) => hs.map((h) => h.header + '\n' + h.body.map((l) => l + '\n').join('')).join('');
+  return { patch: file + text(hunks), full: file + text(hunksOf(path, a, b, 1000000)), hunks };
+}
+// Lado do diff: o preparado contra o HEAD, ou a pasta contra o preparado. Arquivo sem texto do Git não tem diferença.
+const diffSide = (path: string, staged: boolean) => {
+  const t = GIT_TEXT[path];
+  if (!t) return { patch: '', full: '', hunks: [] as Hunk[] };
+  return staged ? diffOf(path, t.head, t.index) : diffOf(path, t.index, TEXTS[path] ?? '');
+};
+// Troca o trecho [at, at+len) de um texto pelas linhas dadas.
+const replaceLines = (text: string, at: number, len: number, put: string[]) => {
+  const ls = textLines(text);
+  return joinLines([...ls.slice(0, at), ...put, ...ls.slice(at + len)]);
+};
 // Impressão digital (djb2) de um texto: só serve para dizer se mudou. Mesma função para diff, arquivo e conflito.
 const hash = (text: string) => {
   let h = 5381;
@@ -333,60 +409,68 @@ const textOf = (path: string) => (isFile(path) ? TEXTS[path] ?? '' : '');
 // Revisão de um arquivo na pasta: a do texto, ou `ausente` quando não existe (como no backend).
 const revOf = (path: string) => (isFile(path) ? hash(textOf(path)) : 'ausente');
 
-// Recalcula a linha de `files` a partir dos blocos: sem nada de um lado, o lado some; sem nada dos dois, a linha sai.
-// Só mexe em arquivo com blocos; conflito e arquivo novo têm estado próprio.
+// Recalcula a linha de `files` a partir do texto: sem diferença de um lado, o lado some; sem nada dos dois, a linha sai.
+// Só mexe em arquivo com texto do Git; conflito e arquivo novo têm estado próprio.
 function syncEntry(path: string) {
   const i = files.findIndex((f) => f.path === path);
-  if (i < 0 || !hunkState[path]) return;
-  const staged = hunkState[path].staged.length ? 'modified' : null;
-  const unstaged = hunkState[path].unstaged.length ? 'modified' : null;
+  const t = GIT_TEXT[path];
+  if (i < 0 || !t) return;
+  const staged = t.head !== t.index ? 'modified' : null;
+  const unstaged = t.index !== (TEXTS[path] ?? '') ? 'modified' : null;
   if (!staged && !unstaged) files.splice(i, 1);
   else files[i] = { ...files[i], staged, unstaged };
 }
 
-// Diff de um lado com a revisão e se o arquivo é não rastreado (`untracked`), como o backend.
+// Diff de um lado com a revisão e se o arquivo é não rastreado (`untracked`), como o backend. `display` é o arquivo inteiro.
 function reviewDiff(path: string, staged: boolean): ReviewDiff {
-  if (path.endsWith('.png')) return { diff: { binary: true, tooLarge: false, patch: '' }, revision: hash(''), untracked: false };
-  if (path === 'dados/exportacao.json') return { diff: { binary: false, tooLarge: true, patch: '' }, revision: hash(''), untracked: false };
+  const none = { binary: false, tooLarge: false, patch: '' };
+  if (path.endsWith('.png')) return { diff: { ...none, binary: true }, display: { ...none, binary: true }, revision: hash(''), untracked: false };
+  if (path === 'dados/exportacao.json') return { diff: { ...none, tooLarge: true }, display: { ...none, tooLarge: true }, revision: hash(''), untracked: false };
   // Não rastreado: o Git não separa em blocos. O patch é o arquivo inteiro como arquivo novo.
   if (!staged && files.find((f) => f.path === path)?.unstaged === 'untracked') {
     const lines = (TEXTS[path] ?? '').split('\n');
     if (lines[lines.length - 1] === '') lines.pop();
-    const patch = `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n` + lines.map((l) => `+${l}\n`).join('');
-    return { diff: { binary: false, tooLarge: false, patch }, revision: hash(patch), untracked: true };
+    const patch = `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n` + lines.map((l) => '+' + l + '\n').join('');
+    const diff = { binary: false, tooLarge: false, patch };
+    return { diff, display: diff, revision: hash(patch), untracked: true };
   }
-  const patch = patchOf(path, blocksOf(path, staged));
-  return { diff: { binary: false, tooLarge: false, patch }, revision: hash(patch), untracked: false };
+  const d = diffSide(path, staged);
+  return {
+    diff: { binary: false, tooLarge: false, patch: d.patch }, display: { binary: false, tooLarge: false, patch: d.full },
+    revision: hash(d.patch), untracked: false,
+  };
 }
 
-// Confere a revisão do lado e o bloco antes de mexer. Qualquer diferença recusa e não muda nada.
-function takeBlocks(ref: HunkRef, staged: boolean): Block[] {
-  const blocks = blocksOf(ref.path, staged);
-  if (ref.revision !== hash(patchOf(ref.path, blocks))) throw 'O arquivo mudou desde que o diff foi lido. Nada foi feito; atualize a tela.';
-  const block = blocks[ref.index];
-  if (!block || block.header !== ref.header) throw 'O bloco não existe mais. Nada foi feito; atualize a tela.';
-  return blocks;
+// Confere a revisão do lado e devolve o bloco. Qualquer diferença recusa e não muda nada.
+function takeHunk(ref: HunkRef, staged: boolean): Hunk {
+  const d = diffSide(ref.path, staged);
+  if (ref.revision !== hash(d.patch)) throw 'O arquivo mudou desde que o diff foi lido. Nada foi feito; atualize a tela.';
+  const hunk = d.hunks[ref.index];
+  if (!hunk || hunk.header !== ref.header) throw 'O bloco não existe mais. Nada foi feito; atualize a tela.';
+  return hunk;
 }
+// Preparar: o bloco da pasta entra no preparado. Tirar: o bloco do preparado volta ao HEAD. Descartar: a pasta volta ao preparado nesse trecho.
 function stageHunk(ref: HunkRef) {
-  const [block] = takeBlocks(ref, false).splice(ref.index, 1);
-  sides(ref.path).staged.push(block);
+  const h = takeHunk(ref, false);
+  GIT_TEXT[ref.path].index = replaceLines(GIT_TEXT[ref.path].index, h.oldAt, h.oldLen, h.newLines);
   syncEntry(ref.path);
 }
 function unstageHunk(ref: HunkRef) {
-  const [block] = takeBlocks(ref, true).splice(ref.index, 1);
-  sides(ref.path).unstaged.push(block);
+  const h = takeHunk(ref, true);
+  GIT_TEXT[ref.path].index = replaceLines(GIT_TEXT[ref.path].index, h.newAt, h.newLen, h.oldLines);
   syncEntry(ref.path);
 }
 function discardHunk(ref: HunkRef) {
-  takeBlocks(ref, false).splice(ref.index, 1);
+  const h = takeHunk(ref, false);
+  TEXTS[ref.path] = replaceLines(TEXTS[ref.path], h.newAt, h.newLen, h.oldLines);
   syncEntry(ref.path);
 }
 // Descarta a alteração da pasta de um arquivo rastreado, se ele ainda está na revisão lida. Não rastreado é recusado.
 function discardFile(path: string, revision: string) {
   const entry = files.find((f) => f.path === path);
   if (!entry || entry.unstaged === 'untracked') throw `${path} não está rastreado: o Git não o descarta. Mande-o para a Lixeira pela tela.`;
-  if (revision !== hash(patchOf(path, blocksOf(path, false)))) throw 'O arquivo mudou desde que o diff foi lido. Nada foi descartado; atualize a tela.';
-  sides(path).unstaged.splice(0);
+  if (revision !== hash(diffSide(path, false).patch)) throw 'O arquivo mudou desde que o diff foi lido. Nada foi descartado; atualize a tela.';
+  if (GIT_TEXT[path]) TEXTS[path] = GIT_TEXT[path].index;
   syncEntry(path);
 }
 // `git add`: o que está na pasta vai para o preparado; arquivo novo vira `added`.
@@ -395,24 +479,20 @@ function stagePaths(paths: string[]) {
     const entry = files.find((f) => f.path === path);
     if (!entry || entry.unstaged === 'conflicted') continue;
     if (entry.unstaged === 'untracked') Object.assign(entry, { staged: 'added', unstaged: null });
-    else if (hunkState[path]) {
-      const s = sides(path);
-      s.staged.push(...s.unstaged);
-      s.unstaged.splice(0);
+    else if (GIT_TEXT[path]) {
+      GIT_TEXT[path].index = TEXTS[path];
       syncEntry(path);
     }
   }
 }
-// `git restore --staged`: o preparado volta para a pasta; arquivo novo volta a não rastreado.
+// `git restore --staged`: o preparado volta para o HEAD; arquivo novo volta a não rastreado.
 function unstagePaths(paths: string[]) {
   for (const path of paths.length ? paths : files.map((f) => f.path)) {
     const entry = files.find((f) => f.path === path);
     if (!entry) continue;
     if (entry.staged === 'added') Object.assign(entry, { staged: null, unstaged: 'untracked' });
-    else if (hunkState[path]) {
-      const s = sides(path);
-      s.unstaged.push(...s.staged);
-      s.staged.splice(0);
+    else if (GIT_TEXT[path]) {
+      GIT_TEXT[path].index = GIT_TEXT[path].head;
       syncEntry(path);
     }
   }
@@ -518,8 +598,8 @@ function commitStaged(message: string) {
   });
   refs.find((r) => r.name === CURRENT)!.hash = id;
   for (const f of staged) {
-    if (hunkState[f.path]) {
-      hunkState[f.path].staged = [];
+    if (GIT_TEXT[f.path]) {
+      GIT_TEXT[f.path].head = GIT_TEXT[f.path].index;
       syncEntry(f.path);
     } else if (f.unstaged === null) files.splice(files.indexOf(f), 1);
     else f.staged = null;
@@ -905,6 +985,7 @@ const commands: Record<string, (args: any) => unknown> = {
     return { binary: false, tooLarge: false, readOnly: false, bom: false, text: TEXTS[path] ?? '' };
   },
   git_status: () => {
+    Object.keys(GIT_TEXT).forEach(syncEntry);
     if (debug.gitMode === 'repo') return { kind: 'repo', status: { branch: CURRENT, ...divergence(), head: headHash(), files: [...files].sort(byPath) } };
     if (debug.gitMode === 'repo-above') return { kind: 'repo-above', root: REPO_ROOT };
     return { kind: debug.gitMode };

@@ -130,3 +130,117 @@ body {
 [role='menu'] > [role='separator'] {
   margin: 5px 0;
 }
+
+/* Comparador do Git (DiffTab e CommitTab, em editor-workspace.tsx): o arquivo inteiro num fluxo só, sem separador entre as mudanças.
+   Toolbar de 28 px numa linha. Fundo, números e cores das linhas ficam no `unsafeCSS` de COMPARE_DIFF_OPTIONS (Shadow DOM). */
+.compare-toolbar {
+  overflow: hidden;
+}
+.compare-toolbar button:focus-visible {
+  outline: 1px solid #007fd4;
+  outline-offset: -1px;
+}
+.compare-view {
+  position: relative;
+}
+.compare-body {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background: #1f1f1f;
+  outline: none;
+}
+.compare-body:focus-visible {
+  box-shadow: inset 0 0 0 1px #007fd4;
+}
+/* Ao menos a altura visível: o divisor pega do topo ao fim da área, mesmo com o arquivo mais curto que ela. A trilha do meio do motor
+   (a largura de `--compare-gap`) é lida também pelo motor, que herda a variável; o divisor se centra nela. */
+.compare-stage {
+  position: relative;
+  min-height: 100%;
+  --compare-gap: 6px;
+}
+/* A unidade atual: uma barra azul à esquerda do trecho, sem véu (o vermelho e o verde das linhas continuam visíveis). Não toma o clique. */
+.compare-current {
+  position: absolute;
+  left: 0;
+  width: 3px;
+  pointer-events: none;
+  background: #007fd4;
+}
+/* Divisor do lado a lado: um pipe único no vão entre as colunas. O vão é a trilha do meio do motor (`--compare-gap`, 6 px, de fundo #181818,
+   em COMPARE_DIFF_OPTIONS); a linha de 2 px #6E6E6E fica no centro dele, e as barras de mudança das bordas internas ficam 2 px de cada lado.
+   A proporção é a variável `--compare-left` do palco, que o grid do motor também lê; arrastar só troca essa variável, sem refazer o diff.
+   A área de pegar tem 8 px e ocupa o palco todo, então pega em qualquer ponto da rolagem. O hover põe a linha azul de 4 px depois de 300 ms;
+   arrastar e o foco, na hora. */
+.compare-sash {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--compare-left, 50%) + var(--compare-gap, 6px) / 2);
+  width: 8px;
+  margin-left: -4px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.compare-sash::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: #6e6e6e;
+  transition: width 0s, background-color 0s;
+}
+.compare-sash:hover::after {
+  width: 4px;
+  background: #007fd4;
+  transition-delay: 0.3s;
+}
+.compare-sash[data-dragging]::after,
+.compare-sash:focus-visible::after {
+  width: 4px;
+  background: #007fd4;
+}
+.compare-body[data-dragging] {
+  cursor: col-resize;
+  user-select: none;
+}
+/* Faixa de visão geral à direita: o arquivo inteiro cabe na altura, com uma marca por unidade. */
+.compare-ruler {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  pointer-events: none;
+}
+.compare-mark {
+  position: absolute;
+  right: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  pointer-events: auto;
+  cursor: pointer;
+}
+/* Cor da marca pelo que a unidade muda, como no diff: verde para inclusão, vermelho para remoção, e nas trocas as duas faixas (vermelho em
+   cima, verde embaixo). A atual mantém a cor e ganha só um contorno claro. */
+.compare-mark-add {
+  background: #9ccc2c;
+}
+.compare-mark-del {
+  background: #ff4d4d;
+}
+.compare-mark-mod {
+  background: linear-gradient(to bottom, #ff4d4d 50%, #9ccc2c 50%);
+}
+.compare-mark[data-current] {
+  box-shadow: 0 0 0 1px #ffffff;
+}
+.compare-mark:focus-visible {
+  outline: 1px solid #007fd4;
+}

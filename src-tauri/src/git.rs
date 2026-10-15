@@ -219,13 +219,18 @@ fn snapshot(dir: &Path, rel: &str, staged: bool) -> Result<Lido, String> {
         let diff = untracked(&guarded(dir, rel)?, rel)?;
         return Ok(Lido { raw: diff.patch.clone(), diff, untracked: true });
     }
-    let raw = raw_diff(dir, rel, staged)?;
+    let raw = raw_diff(dir, rel, staged, CONTEXTO_BLOCO)?;
     Ok(Lido { diff: read_diff(&raw), raw, untracked: false })
 }
 
+/// Contexto do diff que vira bloco: o padrão do Git. A revisão e as ações por bloco dependem dele.
+const CONTEXTO_BLOCO: &str = "-U3";
+/// Contexto do arquivo inteiro: só o comparador o mostra (`ReviewDiff::display`) e o histórico, que é imutável.
+const CONTEXTO_TODO: &str = "-U1000000";
+
 /// O diff bruto de `rel`, como o Git escreve (sem `read_diff`). Sua impressão digital é a revisão que a UI devolve.
-fn raw_diff(dir: &Path, rel: &str, staged: bool) -> Result<String, String> {
-    let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "-U3"];
+fn raw_diff(dir: &Path, rel: &str, staged: bool, contexto: &str) -> Result<String, String> {
+    let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", contexto];
     if staged {
         args.push("--cached");
     }
@@ -426,11 +431,13 @@ pub struct HunkRef {
 }
 
 /// O diff de um arquivo com a revisão. A UI devolve `revision` e o `index`/`header` do bloco. `untracked` diz que o
-/// arquivo não é rastreado: ele não tem bloco, só o patch de arquivo novo.
+/// arquivo não é rastreado: ele não tem bloco, só o patch de arquivo novo. `display` é o arquivo inteiro, com todas as
+/// linhas antes, entre e depois das mudanças: só o comparador o mostra. Os blocos (`diff`) e a revisão seguem o `-U3`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewDiff {
     pub diff: Diff,
+    pub display: Diff,
     pub revision: String,
     pub untracked: bool,
 }
@@ -505,10 +512,23 @@ fn block_header(block: &str) -> &str {
     block.split('\n').next().unwrap_or("").trim_end_matches('\r')
 }
 
-/// O diff de `rel` com a revisão. A UI guarda a revisão e manda de volta com o `index` do bloco.
+/// O diff de `rel` com a revisão e o arquivo inteiro. A UI guarda a revisão e manda de volta com o `index` do bloco.
+/// O arquivo inteiro vem de outra leitura do Git: se o diff de blocos mudou entre as duas, não bate com a revisão. Então
+/// lê de novo, uma vez; se ainda muda, recusa, e a tela relê.
 pub fn review_diff(dir: &Path, rel: &str, staged: bool) -> Result<ReviewDiff, String> {
-    let lido = snapshot(dir, spec(rel)?, staged)?;
-    Ok(ReviewDiff { revision: files::fingerprint(lido.raw.as_bytes()), diff: lido.diff, untracked: lido.untracked })
+    let rel = spec(rel)?;
+    for _ in 0..2 {
+        let lido = snapshot(dir, rel, staged)?;
+        let revision = files::fingerprint(lido.raw.as_bytes());
+        if lido.untracked || lido.diff.binary || lido.diff.too_large {
+            return Ok(ReviewDiff { revision, display: lido.diff.clone(), diff: lido.diff, untracked: lido.untracked });
+        }
+        let display = read_diff(&raw_diff(dir, rel, staged, CONTEXTO_TODO)?);
+        if files::fingerprint(raw_diff(dir, rel, staged, CONTEXTO_BLOCO)?.as_bytes()) == revision {
+            return Ok(ReviewDiff { revision, display, diff: lido.diff, untracked: false });
+        }
+    }
+    Err(stale(rel))
 }
 
 /// Os caminhos do índice, com `-z`: nome com quebra de linha não vira duas linhas. Pathspec literal, como em `proc`.
@@ -588,7 +608,7 @@ pub fn discard_file(dir: &Path, rel: &str, revision_seen: &str) -> Result<(), St
     if !tracked_file(dir, rel)? {
         return Err(format!("{rel} não está rastreado: o Git não o descarta. Mande-o para a Lixeira pela tela."));
     }
-    if files::fingerprint(raw_diff(dir, rel, false)?.as_bytes()) != revision_seen {
+    if files::fingerprint(raw_diff(dir, rel, false, CONTEXTO_BLOCO)?.as_bytes()) != revision_seen {
         return Err(stale(rel));
     }
     proc::git_saida(dir, &["restore", "--worktree", "--", rel]).map(|_| ())
@@ -780,8 +800,8 @@ fn commit_files(dir: &Path, hash: &str) -> Result<Vec<CommitFile>, String> {
     Ok(files)
 }
 
-/// O diff de um commit, ou só de um caminho dele. Em renomeação, o caminho de origem entra junto, para o diff
-/// mostrar a mudança inteira. Diff grande vira só o aviso, como no diff do arquivo.
+/// O diff de um commit, ou só de um caminho dele, com o arquivo inteiro (o commit não muda, então a tela mostra tudo).
+/// Em renomeação, o caminho de origem entra junto, para o diff mostrar a mudança inteira. Diff grande vira só o aviso.
 pub fn commit_diff(dir: &Path, id: &str, path: Option<&str>) -> Result<Diff, String> {
     let hash = resolve_commit(dir, id)?;
     let mut specs: Vec<String> = Vec::new();
@@ -793,7 +813,7 @@ pub fn commit_diff(dir: &Path, id: &str, path: Option<&str>) -> Result<Diff, Str
         }
     }
     let mut args = vec![
-        "diff-tree", "--root", "-r", "-p", "-M", "--no-commit-id", "--no-color", "--no-ext-diff", "--no-textconv", "-U3",
+        "diff-tree", "--root", "-r", "-p", "-M", "--no-commit-id", "--no-color", "--no-ext-diff", "--no-textconv", CONTEXTO_TODO,
         "--diff-merges=first-parent", &hash,
     ];
     if !specs.is_empty() {
@@ -1713,6 +1733,37 @@ mod tests {
         let why = discard_file(&dir, "novo.txt", "x").unwrap_err();
         assert!(why.contains("não está rastreado") && why.contains("Lixeira"), "{why}");
         assert!(dir.join("novo.txt").is_file(), "não rastreado nunca é apagado pelo descarte");
+    }
+
+    #[test]
+    fn comparador_recebe_o_arquivo_inteiro_e_os_blocos_seguem_o_contexto_de_tres() {
+        let tmp = Tmp::new("orq-git", "display");
+        let dir = repo(&tmp, "r");
+        write(&dir, "f.txt", &texto(30));
+        commit_all(&dir, "base");
+        write(&dir, "f.txt", &texto(30).replace("linha 2
+", "dois
+").replace("linha 28
+", "vinte e oito
+"));
+        let r = review_diff(&dir, "f.txt", false).unwrap();
+        // O arquivo inteiro: as linhas antes, entre e depois das duas mudanças, num bloco só.
+        for linha in ["linha 1
+", "linha 15
+", "linha 30
+"] {
+            assert!(r.display.patch.contains(linha), "{linha} sumiu do arquivo inteiro");
+        }
+        assert_eq!(split_hunks(&r.display.patch).1.len(), 1, "o arquivo inteiro é um bloco só");
+        // Os blocos seguem o -U3: as duas mudanças são blocos separados e a linha 15 fica fora deles.
+        assert_eq!(split_hunks(&r.diff.patch).1.len(), 2);
+        assert!(!r.diff.patch.contains("linha 15
+"));
+        // Não rastreado: o arquivo inteiro já é o patch, e não há bloco.
+        write(&dir, "novo.txt", "n
+");
+        let novo = review_diff(&dir, "novo.txt", false).unwrap();
+        assert!(novo.untracked && novo.display == novo.diff);
     }
 
     #[test]

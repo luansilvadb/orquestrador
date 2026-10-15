@@ -1,22 +1,23 @@
 // Barra de título própria: a janela não tem mais a barra nativa do Windows. Arrastar e o duplo clique vêm do
 // atributo data-tauri-drag-region, que vale só para o elemento que o tem; por isso botões e campos não o levam.
-import { Children, useEffect, useState, type ReactNode } from 'react';
-import { Copy, Minus, Square, X, type LucideIcon } from 'lucide-react';
+import { Children, useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { Flexbox } from '@lobehub/ui';
 import { Text, Tooltip } from '@lobehub/ui/base-ui';
 import { host } from './backend';
+import { CloseIcon, MaximizeIcon, MinimizeIcon, RestoreIcon } from './window-icons';
 
 // O Tooltip clona o botão e entrega o ref; bottomRight alinha a dica à borda direita, então ela não corta na janela.
-function WindowButton({ label, icon: Icon, disabled, onClick }: {
-  label: string; icon: LucideIcon; disabled: boolean; onClick: () => void;
+// Referência do Antigravity: hover branco a 10% nos três, e o Fechar vai ao vermelho com o X branco. Sem transição nem estado ativo.
+function WindowButton({ label, icon: Icon, danger, disabled, onClick }: {
+  label: string; icon: ComponentType<{ className?: string }>; danger?: boolean; disabled: boolean; onClick: () => void;
 }) {
   return (
     <Tooltip title={label} placement="bottomRight">
       <button
         type="button" aria-label={label} disabled={disabled} onClick={onClick}
-        className="flex h-full w-[46px] shrink-0 items-center justify-center text-muted-foreground outline-none transition-colors duration-[120ms] motion-reduce:transition-none hover:bg-muted hover:text-foreground active:bg-muted/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:opacity-40"
+        className={`flex h-full w-[46px] shrink-0 items-center justify-center text-[#cccccc] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:opacity-40 ${danger ? 'hover:bg-[#e81123e6] hover:text-white' : 'hover:bg-[#ffffff1a]'}`}
       >
-        <Icon className="size-3.5" strokeWidth={1.5} />
+        <Icon className="size-4" />
       </button>
     </Tooltip>
   );
@@ -76,12 +77,12 @@ export function TitleBar({ connected, project, children }: { connected: boolean;
         <Flexbox data-tauri-drag-region horizontal align="center" gap={12} paddingInline={12} flex="0 1 auto" allowShrink className="min-w-0 max-w-1/2">{children}</Flexbox>
       )}
       <Flexbox horizontal height="100%" flex="none">
-        <WindowButton label="Minimizar" icon={Minus} disabled={!connected} onClick={() => host().minimize()} />
+        <WindowButton label="Minimizar" icon={MinimizeIcon} disabled={!connected} onClick={() => host().minimize()} />
         <WindowButton
-          label={maximized ? 'Restaurar' : 'Maximizar'} icon={maximized ? Copy : Square}
+          label={maximized ? 'Restaurar' : 'Maximizar'} icon={maximized ? RestoreIcon : MaximizeIcon}
           disabled={!connected} onClick={() => host().toggleMaximize()}
         />
-        <WindowButton label="Fechar" icon={X} disabled={!connected} onClick={() => host().close()} />
+        <WindowButton label="Fechar" icon={CloseIcon} danger disabled={!connected} onClick={() => host().close()} />
       </Flexbox>
     </Flexbox>
   );
