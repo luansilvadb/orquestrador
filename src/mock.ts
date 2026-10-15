@@ -8,7 +8,7 @@
 // conflitos (resolver e aceitar remoção). Branches, fetch, pull e push são respostas fixas; as refs são fixas, exceto a `main`, que anda com o commit. Regex da pesquisa e da substituição usa a
 // sintaxe do JavaScript (o backend usa a do Rust); o texto de busca e de substituição é o mesmo nos dois.
 // Na pesquisa (Ctrl+Shift+F), `search` filtra de verdade, mas só os arquivos de `TEXTS` têm linhas; os demais não casam nada.
-// Ao abrir um arquivo, `read_file` devolve o texto de `TEXTS`; `write_file_checked` (a gravação do editor) atualiza esse texto. `.png` vem binário, `dados/exportacao.json` vem grande demais, e os demais começam vazios.
+// Ao abrir um arquivo, `read_file` devolve o texto de `TEXTS`; `write_file_checked` (a gravação do editor) atualiza esse texto. `.png` vem binário, `dados/exportacao.json` vem grande demais, e os demais começam vazios. `read_media` (aba de imagem e áudio) devolve um PNG 32×32 e um WAV de 2 s em silêncio para `.png` e `.wav`; `__mock.failRead = ['caminho']` faz a leitura falhar, e `__mock.corruptRead = ['caminho']` devolve bytes que o navegador não decodifica.
 // Menu do arquivo na árvore: `rename_file` e `delete_files` mudam a árvore e `TEXTS` de verdade (com as mesmas recusas do backend); `reveal_file` e
 // `open_with` só conferem que o arquivo existe, porque o Explorer, o diálogo e a Lixeira são do Windows. `start_shell` aceita `cwd`.
 // Área vazia da árvore: `create_file` e `create_dir` criam de verdade na raiz (com as mesmas recusas); `reveal_dir` só confere a pasta.
@@ -253,6 +253,10 @@ const debug = { close: async () => {
   addFolder: (rel: string) => { const { dir, name } = split(rel); const parent = folderAt(dir); if (parent && !parent.children[name]) parent.children[name] = folder(); },
   // Falha de I/O simulada: colar ou mover para quando chega num destes caminhos de origem (relativos), como um disco que recusa um item.
   failOn: [] as string[],
+  // Falha de leitura de mídia (`read_media`) nestes caminhos, como um disco que não entrega o arquivo.
+  failRead: [] as string[],
+  // Bytes que não são imagem nem áudio nestes caminhos: a leitura chega, mas o navegador recusa a decodificação.
+  corruptRead: [] as string[],
   // Latência de I/O por comando (ms, somada à base): a gravação demora e o usuário pode digitar enquanto ela não chega.
   delay: {} as Record<string, number>,
   // Conflito de fixture (só o check de Git): lados `base/ours/theirs` e o texto da pasta (`null` = arquivo ausente).
@@ -771,7 +775,35 @@ function moveItems(paths: string[], dest: string): Batch<Moved> {
   });
 }
 
+// Mídia simulada: `read_media` devolve bytes válidos de um PNG 32×32 (`.png`) e de um WAV de 2 s em silêncio (`.wav`), para arquivos
+// que estão na árvore. Outras extensões e caminhos fora da árvore recusam como o backend.
+const MOCK_PNG = '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';
+const mockBytes = (path: string): ArrayBuffer => {
+  if (debug.failRead.includes(path)) throw `Falha de leitura simulada em “${path}”.`;
+  if (debug.corruptRead.includes(path)) return Uint8Array.of(0, 1, 2, 3).buffer;
+  const { dir, name } = split(path);
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  if (!folderAt(dir)?.children[name] || folderAt(dir)?.children[name].dir) throw `Arquivo não encontrado: ${path}`;
+  if (ext === 'png') return Uint8Array.from(atob(MOCK_PNG), (c) => c.charCodeAt(0)).buffer;
+  if (ext === 'wav') return wavSilence(2);
+  throw `Tipo de arquivo não aberto como mídia: ${path}`;
+};
+// WAV PCM 8 bits mono a 8 kHz, em silêncio (128 é o zero do formato): cabeçalho de 44 bytes.
+function wavSilence(seconds: number): ArrayBuffer {
+  const rate = 8000, n = seconds * rate;
+  const buf = new ArrayBuffer(44 + n), view = new DataView(buf);
+  const ascii = (at: number, text: string) => [...text].forEach((c, i) => view.setUint8(at + i, c.charCodeAt(0)));
+  ascii(0, 'RIFF'); view.setUint32(4, 36 + n, true); ascii(8, 'WAVE'); ascii(12, 'fmt ');
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate, true); view.setUint16(32, 1, true); view.setUint16(34, 8, true);
+  ascii(36, 'data'); view.setUint32(40, n, true);
+  new Uint8Array(buf, 44).fill(128);
+  return buf;
+}
+
 const commands: Record<string, (args: any) => unknown> = {
+  read_media: ({ path }: { path: string }) => mockBytes(path),
   update_status: () => ({ phase: 'ready' }),
   retry_update: () => ({ phase: 'ready' }),
   choose_project: () => ({ project: 'C:\\projetos\\exemplo', subfolder: debug.subfolder }),

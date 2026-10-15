@@ -1,5 +1,6 @@
-// Área central do editor: até dois grupos de abas lado a lado. Cada aba é um arquivo (CodeMirror), um diff staged/unstaged,
-// um commit do histórico (só leitura) ou um conflito de merge. Buffers e rascunhos são do arquivo (`docId`), não da aba.
+// Área central do editor: até dois grupos de abas lado a lado. Cada aba é um arquivo (CodeMirror), uma imagem ou um áudio (só leitura,
+// `media-view.tsx`), um diff staged/unstaged, um commit do histórico (só leitura) ou um conflito de merge. Buffers e rascunhos são do arquivo (`docId`), não da aba;
+// mídia não tem buffer.
 //
 // API para o App (ref do componente, `EditorWorkspaceHandle`):
 //   openFile(path, { permanent?, line?, col?, side? })  Abre o arquivo. Sem `permanent`, vira prévia (um clique). `line`/`col` (1-based, UTF-16) põem o cursor.
@@ -34,6 +35,7 @@ import { Breadcrumbs } from './breadcrumbs';
 import { backend, message } from './backend';
 import { usePolling } from './polling';
 import { CodeEditor, forgetEditorState, liveEditorView, type Reveal, type StartCursor } from './file-view';
+import { MediaView, mediaOf } from './media-view';
 import { action, blocked, DIVIDER, fileName, useChord } from './file-tabs';
 import { pathText } from './file-tab-actions';
 import { copy, splitPath } from './git-history';
@@ -429,6 +431,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const tab = allTabs().find((t) => t.target.kind === 'file' && t.target.docId === docId);
     if (!tab || tab.target.kind !== 'file' || saving.current.has(docId)) return;
     const path = tab.target.path;
+    // Mídia não tem texto: a aba lê o próprio arquivo (`MediaView`) e não cria buffer, então nada aqui a grava ou a torna suja.
+    if (mediaOf(path)) return;
     let file: FileContent;
     try {
       file = await backend.readFile(path);
@@ -839,6 +843,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         />
       );
     }
+    if (mediaOf(target.path)) return <MediaView path={target.path} shown={shown} />;
     return (
       <FileBody
         groupActive={groupActive}

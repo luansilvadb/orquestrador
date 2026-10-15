@@ -103,6 +103,36 @@ pub fn read(project: &Path, rel: &str) -> Result<Content, String> {
     Ok(Content { binary: false, too_large: false, read_only: std::str::from_utf8(text).is_err(), bom: text.len() != bytes.len(), text: String::from_utf8_lossy(text).into_owned() })
 }
 
+/// Extensões (minúsculas) que a aba de mídia abre: imagem e áudio. SVG e HTML ficam de fora de propósito, porque viram
+/// documento ativo; eles seguem como texto. Os tipos MIME ficam em `src/media-view.tsx`, que é quem monta o blob.
+const MEDIA_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "mp3", "wav", "ogg", "oga", "flac", "m4a"];
+/// Mídia acima disto não é lida: a aba mostra o erro. Os bytes inteiros passam pela memória do app.
+pub(crate) const MAX_MEDIA: u64 = 32 * 1_048_576;
+
+/// Os bytes do arquivo de imagem ou áudio `rel` do projeto, para a aba de mídia. A extensão precisa estar em `MEDIA_EXTS`;
+/// o caminho passa por `plain` (sem `.git`, sem link em nenhuma parte, sem sair do projeto); e o arquivo não pode passar
+/// de `MAX_MEDIA`. Não há sniff de conteúdo: o navegador é quem decodifica (e recusa o que não for imagem ou áudio).
+pub fn read_media(project: &Path, rel: &str) -> Result<Vec<u8>, String> {
+    let ext = Path::new(rel).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if !MEDIA_EXTS.contains(&ext.as_str()) {
+        return Err(format!("Tipo de arquivo não aberto como mídia: {rel}"));
+    }
+    let file = plain(project, rel, false)?;
+    let grande = || format!("Arquivo grande demais para abrir aqui (limite de 32 MiB): {rel}");
+    let erro = |e: std::io::Error| format!("Não foi possível ler o arquivo: {e}");
+    // Um handle só: o tamanho checado é o do arquivo que se lê. O `take` corta o que crescer depois do `metadata`.
+    let handle = File::open(&file).map_err(erro)?;
+    if handle.metadata().map_err(erro)?.len() > MAX_MEDIA {
+        return Err(grande());
+    }
+    let mut bytes = Vec::new();
+    handle.take(MAX_MEDIA + 1).read_to_end(&mut bytes).map_err(erro)?;
+    if bytes.len() as u64 > MAX_MEDIA {
+        return Err(grande());
+    }
+    Ok(bytes)
+}
+
 /// Grava `text` em `rel` só se o arquivo ainda é `base` (o texto que a tela leu) e ainda tem o mesmo BOM (`base_bom`).
 /// Se mudou, sumiu, virou link, mudou de lugar, não é UTF-8 ou é binário, recusa e não grava nada. A decisão é deste
 /// backend, não da tela.
@@ -1002,6 +1032,59 @@ src/gerado/
         let root = fixture("ler-inexistente");
         assert_eq!(read(&root, "nao-existe.md").unwrap_err(), "Arquivo não encontrado: nao-existe.md");
         assert_eq!(read(&root, "sub").unwrap_err(), "Não é um arquivo: sub");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn midia_devolve_os_bytes_de_imagem_e_audio_sem_olhar_o_conteudo() {
+        let root = fixture("midia-ok");
+        let png = [0x89, b'P', b'N', b'G', 0, 0, 0, 0];
+        std::fs::write(root.join("sub/logo.PNG"), png).unwrap();
+        std::fs::write(root.join("sub/tom.wav"), b"RIFF\0\0\0\0WAVEfmt ").unwrap();
+        assert_eq!(read_media(&root, "sub/logo.PNG").unwrap(), png);
+        assert_eq!(read_media(&root, "sub/tom.wav").unwrap(), b"RIFF\0\0\0\0WAVEfmt ");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn midia_recusa_extensao_fora_da_lista_e_arquivo_sem_extensao() {
+        let root = fixture("midia-ext");
+        for name in ["x.svg", "x.html", "x.exe", "x.txt", "sem-ext", ".png"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+            let got = read_media(&root, name).unwrap_err();
+            assert_eq!(got, format!("Tipo de arquivo não aberto como mídia: {name}"), "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn midia_recusa_caminho_que_sai_do_projeto_entra_no_git_ou_passa_por_link() {
+        let root = fixture("midia-caminho");
+        let outside = fresh("orq-files-fora", "midia");
+        std::fs::write(outside.join("segredo.png"), b"x").unwrap();
+        std::fs::write(root.join(".git/x.png"), b"x").unwrap();
+        std::fs::write(root.join("sub/.git/y.png"), b"x").unwrap();
+        for rel in ["../x.png", "sub/../../x.png", "/etc/x.png", "C:/x.png", ".git/x.png", "sub/.git/y.png", "sub\\x.png", "nao-existe.png", "sub.png"] {
+            assert!(read_media(&root, rel).is_err(), "{rel} deveria ser recusado");
+        }
+        let absoluto = outside.join("segredo.png").to_string_lossy().into_owned();
+        assert!(read_media(&root, &absoluto).is_err());
+        // Junction não pede privilégio. Se o `mklink` não criar, só esta parte não roda.
+        if junction(&root.join("alias"), &outside) && junction(&root.join("git-alias"), &root.join(".git")) {
+            assert!(read_media(&root, "alias/segredo.png").is_err());
+            assert!(read_media(&root, "git-alias/x.png").is_err());
+        } else {
+            eprintln!("sem junction: parte do teste pulada");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn midia_acima_do_limite_e_recusada_com_mensagem() {
+        let root = fixture("midia-grande");
+        std::fs::write(root.join("grande.png"), vec![0u8; (MAX_MEDIA + 1) as usize]).unwrap();
+        assert_eq!(read_media(&root, "grande.png").unwrap_err(), "Arquivo grande demais para abrir aqui (limite de 32 MiB): grande.png");
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -77,13 +77,15 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &s
         args.extend(codex_mcp(&exes.app, &dir));
         (exes.codex.clone(), args)
     } else {
-        // Sem sandbox, as ferramentas são a parede: --restricted deixa só as nomeadas, ignora os
-        // settings do usuário e confina Read ao projeto e às pastas globais; dontAsk nega todo
-        // comando que não seja o git, um programa de skill, uma ferramenta do orquestrador ou o que o
-        // Claude Code toma por somente leitura. O modo restrito descarta as skills do usuário, então .agents
-        // volta como plugin (medido: as skills carregam como ".agents:nome"). --strict-mcp-config faz valer só
-        // o servidor do --mcp-config da sessão.
-        let mut args = strs(&["--restricted", "--strict-mcp-config", "--mcp-config"]);
+        // Sem sandbox, as ferramentas são a parede: --tools deixa só as nomeadas (Bash, Write e Edit ficam de
+        // fora) e dontAsk nega todo comando que não seja liberado pelas regras da sessão (git, programa de skill,
+        // ferramenta do orquestrador) ou pelas configurações normais de usuário e de projeto, salvo o que o Claude
+        // Code toma por somente leitura. Sem --restricted e sem --strict-mcp-config, o Claude carrega os MCPs do
+        // usuário e do projeto como no shell; o --mcp-config da sessão soma o servidor do orquestrador a eles.
+        // (Medido no 2.1.300: com --restricted, nenhum MCP de usuário ou de projeto conecta, e com
+        // --setting-sources também não.) As skills globais continuam vindo
+        // como plugin de .agents (medido: as skills carregam como ".agents:nome").
+        let mut args = strs(&["--mcp-config"]);
         args.push(session.dir.join("mcp.json").to_string_lossy().to_string());
         args.extend(strs(&["--tools", "Read,Glob,Grep,PowerShell,Skill", "--settings"]));
         args.push(session.dir.join("claude-settings.json").to_string_lossy().to_string());
@@ -217,7 +219,7 @@ mod tests {
         assert_eq!(
             got.args,
             [
-                "--restricted", "--strict-mcp-config", "--mcp-config", &s.dir.join("mcp.json").to_string_lossy(),
+                "--mcp-config", &s.dir.join("mcp.json").to_string_lossy(),
                 "--tools", "Read,Glob,Grep,PowerShell,Skill",
                 "--settings", &s.dir.join("claude-settings.json").to_string_lossy(),
                 "--permission-mode", "dontAsk",
@@ -248,9 +250,9 @@ mod tests {
         assert!(got.args.contains(&format!("mcp_servers.orquestrador.args=[{},{}]", toml("--mcp"), toml(&dir))));
         assert!(dir.contains("temp com espaço, açaí e it's"));
         let claude = orchestrator(&exes, &Choice::new("claude", "", ""), &s, r"C:\proj");
-        assert_eq!(claude.args[2], "--mcp-config");
-        assert_eq!(claude.args[3], s.dir.join("mcp.json").to_string_lossy());
-        assert!(claude.args[3].contains("it's"));
+        assert_eq!(claude.args[0], "--mcp-config");
+        assert_eq!(claude.args[1], s.dir.join("mcp.json").to_string_lossy());
+        assert!(claude.args[1].contains("it's"));
         s.remove();
         discard(&p);
     }

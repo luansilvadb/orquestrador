@@ -7,7 +7,7 @@
 import { type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, ChevronsDownUp, FilePlus, Files, FolderPlus, Info, LoaderCircle, type LucideIcon, RefreshCw, Search, SquareTerminal, X } from 'lucide-react';
 import {
-  ActionIcon, Alert, Badge, type ContextMenuItem, Input, Modal, ScrollArea, showContextMenu, Text, toast, Tree, type TreeDataNode,
+  ActionIcon, Alert, Badge, type ContextMenuItem, Modal, ScrollArea, showContextMenu, Text, toast, Tree, type TreeDataNode,
 } from '@lobehub/ui/base-ui';
 import { createPortal } from 'react-dom';
 import { Flexbox } from '@lobehub/ui';
@@ -38,7 +38,7 @@ export class BatchError<T> extends Error {
 
 /** O que o menu e os atalhos da árvore pedem ao App. Erros chegam como exceção (Renomear, Excluir, Mover, Colar) ou viram toast no App (o resto). */
 export type FileActions = {
-  /** Dos caminhos dados (arquivos ou pastas), os que têm alteração não salva, pastas incluídas. Renomear recusa; Excluir avisa antes. */
+  /** Dos caminhos dados (arquivos ou pastas), os que têm alteração não salva, pastas incluídas. Excluir avisa antes. */
   dirtyOf: (paths: string[]) => string[];
   /** Copia os caminhos de uma lista, um por linha, no formato absoluto ou relativo. Lista com um caminho só copia esse. */
   copyPaths: (kind: 'relative' | 'absolute', paths: string[]) => void;
@@ -158,7 +158,7 @@ const LIST_MAX = 10;
 const DIALOG_BUTTON = 'flex h-7 min-w-[64px] items-center justify-center gap-1.5 rounded-[2px] border border-[var(--ant-color-fill-tertiary)] px-2.5 text-[13px] outline-none focus:ring-1 focus:ring-[var(--ant-color-primary)] focus:ring-offset-2 focus:ring-offset-[var(--ant-color-bg-elevated)] disabled:cursor-default disabled:opacity-40';
 
 /**
- * Casco dos diálogos de Renomear, Criar e Excluir, no formato do diálogo do Antigravity/VS Code: caixa de 522 px com raio de 3 px e
+ * Casco do diálogo de Excluir, no formato do diálogo do Antigravity/VS Code (Renomear e Criar são inline): caixa de 522 px com raio de 3 px e
  * borda de 1 px, o X no canto, o ícone de 48 px à esquerda (quando há), a pergunta em 18 px, o detalhe em 13 px e os botões à direita,
  * o de confirmar primeiro e o Cancelar depois. Esc, o X e Cancelar não fecham com o pedido rodando; clicar fora não fecha.
  */
@@ -239,18 +239,23 @@ function FormDialog({ open, title, detail, icon, busy, confirmLabel, confirmDisa
 }
 
 /**
- * Campo do nome do item novo, dentro da linha da árvore, como o do Explorer do Antigravity: 22 px, borda de 1 px, raio de 4 px e o
- * contorno de foco de 1 px; com nome inválido, a borda fica vermelha e o motivo aparece embaixo. Enter cria; Esc cancela; sair do
- * campo cria se o nome é válido e cancela se não é. As teclas não vão para a árvore.
+ * Campo do nome, dentro da linha da árvore, como o do Explorer do Antigravity: 22 px, borda de 1 px, raio de 4 px e o contorno de foco
+ * de 1 px; com nome inválido, a borda fica vermelha e o motivo aparece embaixo. Serve a Criar e a Renomear. Enter confirma; Esc cancela;
+ * sair do campo confirma se o nome é válido e cancela se não é. As teclas não vão para a árvore.
  */
-function NewItemInput({ kind, name, busy, error, onChange, onSubmit, onCancel }: {
+function NewItemInput({ kind, label, selectBase = false, name, busy, error, onChange, onSubmit, onCancel }: {
   kind: 'file' | 'dir';
+  /** Nome acessível do campo; sem ele, o do campo de criar. */
+  label?: string;
+  /** Seleciona só o nome sem a extensão (Renomear de arquivo); senão, o nome todo. */
+  selectBase?: boolean;
   name: string;
   busy: boolean;
   error: string;
   onChange: (name: string) => void;
-  onSubmit: () => void;
-  onCancel: () => void;
+  /** `leaving`: saiu do campo (clique fora), então o foco não volta para a linha. */
+  onSubmit: (leaving?: boolean) => void;
+  onCancel: (leaving?: boolean) => void;
 }) {
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
   // O menu de contexto, ao fechar, devolve o foco à árvore logo depois de o campo aparecer: essa saída do campo não conta, e o foco volta.
@@ -270,23 +275,38 @@ function NewItemInput({ kind, name, busy, error, onChange, onSubmit, onCancel }:
       window.removeEventListener('resize', place);
     };
   }, [error]);
+  // Foco e seleção: no arquivo, o nome sem a última extensão (".gitignore" fica inteiro). Também vale quando o menu devolve o foco.
+  const place = (input: HTMLInputElement) => {
+    input.focus({ preventScroll: true });
+    const dot = selectBase ? name.lastIndexOf('.') : -1;
+    input.setSelectionRange(0, dot > 0 ? dot : name.length);
+  };
+  useLayoutEffect(() => {
+    if (field.current) place(field.current);
+  }, []);
+  // Depois de um pedido que falhou (o campo fica desabilitado enquanto roda), o foco volta para ele se ninguém o pegou.
+  useEffect(() => {
+    if (!busy && (!document.activeElement || document.activeElement === document.body)) field.current?.focus({ preventScroll: true });
+  }, [busy]);
   const blur = (input: HTMLInputElement) => {
     if (busy) return;
-    if (performance.now() - born.current < 300) return void requestAnimationFrame(() => input.focus());
-    if (error || !name.trim()) onCancel();
-    else onSubmit();
+    if (performance.now() - born.current < 300) return void requestAnimationFrame(() => place(input));
+    if (error || !name.trim()) onCancel(true);
+    else onSubmit(true);
   };
   return (
     <span className="relative flex min-w-0 flex-1" onClick={stop} onDoubleClick={stop} onContextMenu={stop} onMouseDown={stop}>
       <input
         ref={field} autoFocus spellCheck={false} value={name} disabled={busy}
-        aria-label={kind === 'dir' ? 'Nome da nova pasta' : 'Nome do novo arquivo'} aria-invalid={!!error || undefined}
+        aria-label={label ?? (kind === 'dir' ? 'Nome da nova pasta' : 'Nome do novo arquivo')} aria-invalid={!!error || undefined}
         className={`h-[22px] min-w-0 flex-1 rounded-[4px] border bg-[var(--ant-color-fill-tertiary)] px-1 text-[13px] text-[var(--ant-color-text)] outline-none ${error
           ? 'border-[var(--ant-color-error)]'
           : 'border-[var(--ant-color-border)] focus:border-[var(--ant-color-primary)]'}`}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
           e.stopPropagation();
+          // Com composição de IME (acentos, ideogramas), Enter e Esc são do IME.
+          if (e.nativeEvent.isComposing) return;
           if (e.key === 'Enter') {
             e.preventDefault();
             onSubmit();
@@ -330,7 +350,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
   const [error, setError] = useState('');
   // Seleção própria da árvore. Vazia, o arquivo aberto aparece marcado.
   const [selection, setSelection] = useState<string[]>([]);
-  // Diálogos de Renomear, Excluir e Criar. Cada um guarda o que o usuário digitou (ou o motivo de recusa) e se a ação está rodando.
+  // Estados do formulário inline de Renomear e Criar, e do diálogo de Excluir. Cada um guarda o que o usuário digitou (ou o motivo de recusa) e se a ação está rodando.
   const [renaming, setRenaming] = useState<Renaming | null>(null);
   const [deleting, setDeleting] = useState<Deleting | null>(null);
   const [creating, setCreating] = useState<Creating | null>(null);
@@ -357,7 +377,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     panel.current?.querySelectorAll<HTMLElement>('[role="treeitem"][data-id]').forEach((row) => {
       const key = row.dataset.id ?? '';
       const hit = !!dragOver && !provisional(key) && dragOver.dest === key;
-      row.draggable = !provisional(key);
+      row.draggable = !provisional(key) && renaming?.path !== key;
       row.style.setProperty('--depth', String(Number(row.getAttribute('aria-level') ?? 1) - 1));
       row.style.boxShadow = hit ? `inset 0 0 0 1px var(--ant-color-${dragOver?.problem ? 'error' : 'primary'})` : '';
     });
@@ -742,14 +762,34 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     setDrop(null);
   };
 
-  // Renomear: valida aqui para mostrar o motivo; o App e o backend conferem de novo (alterações não salvas, colisão, nome).
-  // Pasta renomeia sem checar alterações: o App cuida dos rascunhos de dentro dela.
-  async function submitRename() {
-    if (!renaming || renaming.busy) return;
+  // Renomear é inline: a própria linha vira o campo (nome base selecionado). Motivo de recusa ('' se pode), com as mensagens do Antigravity:
+  // vazio, nome inválido (sem trim: espaço na borda recusa, como lá), ou nome que já existe na pasta (sem contar o próprio item, sem
+  // diferença de caixa). Mostra junto ao campo; o App e o backend conferem de novo.
+  const renameIssue = (r: Renaming) => {
+    if (!r.name.trim()) return 'É necessário fornecer um nome de arquivo ou pasta.';
+    const clash = (tree.children[dirOf(r.path)] ?? []).some((e) => e.name !== nameOf(r.path) && e.name.toLowerCase() === r.name.toLowerCase());
+    return fileNameError(r.name) || (clash ? `Um arquivo ou pasta ${r.name} já existe nesta localização. Escolha um nome diferente.` : '');
+  };
+  // Foco na linha da árvore (ou no painel, se a linha não aceita foco): depois do menu, do Enter ou do Esc, a tecla volta ao item.
+  const focusRow = (path: string) => {
+    const row = panel.current?.querySelector<HTMLElement>(`[role="treeitem"][data-id="${CSS.escape(path)}"]`);
+    (row ?? panel.current)?.focus({ preventScroll: true });
+  };
+  // Sai do campo sem renomear. `leaving`: foi clique fora, então o foco não volta à linha.
+  const endRename = (path: string, leaving: boolean) => {
+    setRenaming(null);
+    if (!leaving) requestAnimationFrame(() => focusRow(path));
+  };
+  // Pasta renomeia sem checar alterações: o App cuida dos rascunhos de dentro dela. `renamingNow` barra o segundo envio já no mesmo
+  // instante (o `busy` do estado só chega no redesenho): Enter repetido ou clique fora durante o pedido não renomeiam duas vezes.
+  const renamingNow = useRef(false);
+  async function submitRename(leaving = false) {
+    if (!renaming || renaming.busy || renamingNow.current) return;
     const { path, name } = renaming;
-    if (name === nameOf(path)) return setRenaming(null);
-    const problem = fileNameError(name);
+    if (name === nameOf(path)) return endRename(path, leaving);
+    const problem = renameIssue(renaming);
     if (problem) return setRenaming({ ...renaming, error: problem });
+    renamingNow.current = true;
     setRenaming({ ...renaming, error: '', busy: true });
     const folder = !isFile(path);
     const wasOpen = tree.expanded.includes(path);
@@ -757,10 +797,14 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
       const next = await actions.rename(path, name);
       setRenaming(null);
       settle([dirOf(path)], folder ? [path] : [], [{ from: path, to: next }]);
+      setSelection([next]);
+      if (!leaving) requestAnimationFrame(() => focusRow(next));
       if (folder && wasOpen) await openDir(next);
       toast.success({ title: folder ? 'Pasta renomeada' : 'Arquivo renomeado', duration: 3000 });
     } catch (e) {
       setRenaming((prev) => prev && { ...prev, busy: false, error: message(e) });
+    } finally {
+      renamingNow.current = false;
     }
   }
 
@@ -793,7 +837,15 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
   const nodes = (dir: string): TreeDataNode[] => withNewItem(dir, (tree.children[dir] ?? []).map((entry): TreeDataNode => {
       const path = join(dir, entry.name);
       const deco = decos.get(path) ?? (entry.ignored ? IGNORED : null);
-      const title = (
+      const title = renaming?.path === path ? (
+        <NewItemInput
+          kind={entry.dir ? 'dir' : 'file'} label="Novo nome" selectBase={!entry.dir}
+          name={renaming.name} busy={renaming.busy} error={renaming.error || renameIssue(renaming)}
+          onChange={(name) => setRenaming((prev) => prev && { ...prev, name, error: '' })}
+          onSubmit={(leaving) => void submitRename(leaving)}
+          onCancel={(leaving) => endRename(path, !!leaving)}
+        />
+      ) : (
         <span className="flex min-w-0 flex-1 items-center gap-2" style={deco ? { color: deco.color } : undefined}>
           <Text as="span" ellipsis title={deco ? `${entry.name} · ${deco.title}` : entry.name} data-tree-path={path} className="min-w-0 flex-1" style={{ color: 'inherit' }}>{entry.name}</Text>
           {/* Fora do nome acessível da linha (o estado vai no title do nome), para a linha se chamar só pelo nome do item. */}
@@ -846,7 +898,6 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     return one && isFile(one) ? dirOf(one) : one;
   };
 
-  const renameProblem = renaming && (renaming.error || fileNameError(renaming.name));
   const deleteDrafts = deleting ? actions.dirtyOf(deleting.paths) : [];
   const deleteFolders = deleting ? deleting.paths.some((p) => !isFile(p)) : false;
   // Textos do VS Code: a pergunta com o nome (ou a contagem) e o detalhe de que dá para restaurar da Lixeira.
@@ -933,30 +984,6 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
           </Text>
         )}
       </Flexbox>
-
-      {/* Renomear: só o nome dentro da pasta. Enter confirma; Cancelar e Esc não mexem em nada. */}
-      <FormDialog
-        open={!!renaming}
-        title={renaming && !isFile(renaming.path) ? 'Renomear pasta' : 'Renomear arquivo'}
-        busy={!!renaming?.busy}
-        confirmLabel="Renomear"
-        confirmDisabled={!!renameProblem}
-        onClose={() => setRenaming(null)}
-        onConfirm={submitRename}
-      >
-        {renaming && (
-          <Flexbox gap={8}>
-            <Text as="p" type="secondary" fontSize={12} code ellipsis title={renaming.path}>{renaming.path}</Text>
-            <Input
-              autoFocus aria-label="Novo nome" value={renaming.name} disabled={renaming.busy}
-              onChange={(e) => setRenaming((prev) => prev && { ...prev, name: e.target.value, error: '' })}
-              onFocus={(e) => e.currentTarget.select()}
-              onPressEnter={submitRename}
-            />
-            {renameProblem && <Text as="p" type="danger" fontSize={12} role="alert">{renameProblem}</Text>}
-          </Flexbox>
-        )}
-      </FormDialog>
 
       {/* Excluir: vai para a Lixeira do Windows. A pergunta e o detalhe são os do VS Code; com mais de um item, a lista do que vai; e o
           aviso das alterações não salvas (que se perdem e fecham as abas). */}

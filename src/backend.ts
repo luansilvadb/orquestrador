@@ -72,6 +72,8 @@ export const backend = {
   listDir: (path: string) => call<DirEntry[]>('list_dir', { path }),
   // Conteúdo de um arquivo, com o mesmo caminho de `listDir`. Erro chega como mensagem em português.
   readFile: (path: string) => call<FileContent>('read_file', { path }),
+  // Bytes de uma imagem ou áudio (extensão na lista de `files.rs`), como `ArrayBuffer`. Erro chega como mensagem em português; limite de 32 MiB.
+  readMedia: (path: string) => call<ArrayBuffer>('read_media', { path }),
   // Grava só se o arquivo ainda é `base` (o texto lido, sem BOM) e ainda tem o BOM `bom`; senão rejeita sem gravar.
   writeFileChecked: (path: string, text: string, base: string, bom: boolean) => call<void>('write_file_checked', { path, text, base, bom }),
   // Ações de um arquivo da árvore, com o caminho relativo ao projeto. Erro vem como mensagem em português.

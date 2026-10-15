@@ -30,8 +30,6 @@ const added = (page) => page.locator('.search-hit-added').allTextContents();
 const confirmReplace = (page, title) => page.getByRole('dialog', { name: title }).getByRole('button', { name: 'Substituir', exact: true }).click();
 const toggle = (page, label) => page.getByRole('button', { name: label, exact: true }).click();
 const save = async (page) => { await focusEditor(page); await page.keyboard.press('Control+s'); };
-// Diálogo de confirmação de Renomear/Criar/Excluir: o botão com o nome dado dentro do diálogo com o título dado.
-const dialogBtn = (page, title, name) => page.getByRole('dialog', { name: title }).getByRole('button', { name, exact: true });
 
 // ---------- cenários ----------
 
@@ -71,13 +69,16 @@ scenario('pasta e arquivo criados dentro de pasta por clique direito; renomear p
   // Renomear a pasta com o arquivo sujo aberto: não pede para salvar antes.
   await rightClick(page, 'projeto');
   await menu(page, 'Renomear...').click();
-  await page.getByRole('textbox', { name: 'Novo nome' }).fill('projeto-novo');
-  await dialogBtn(page, 'Renomear pasta', 'Renomear').click();
+  const renameField = page.getByRole('tree').getByRole('textbox', { name: 'Novo nome' });
+  await renameField.waitFor();
+  assert.equal(await page.getByRole('dialog', { name: /Renomear/ }).count(), 0, 'renomear não abre diálogo');
+  await renameField.fill('projeto-novo');
+  await renameField.press('Enter');
   await at(page, 'docs/projeto-novo/marcador.md').waitFor();
   assert.equal(await at(page, 'docs/projeto').count(), 0, 'a pasta antiga saiu da árvore');
   assert.ok(await dirtyCount(page) >= 1, 'o texto continua sujo depois de renomear a pasta');
   assert.ok((await editorText(page)).includes('MARCADOR-1'), 'o texto digitado continua no editor');
-  await page.getByRole('dialog', { name: 'Renomear pasta' }).waitFor({ state: 'detached' });
+  await renameField.waitFor({ state: 'detached' });
   await page.screenshot({ path: join(OUT, 'files-search-arvore-renomear.png') });
 
   // Salvar agora vai para o caminho novo; o antigo não reaparece.
@@ -100,6 +101,89 @@ scenario('pasta e arquivo criados dentro de pasta por clique direito; renomear p
   assert.ok((await editorText(page)).includes('MARCADOR-2'), 'exclusão cancelada: o rascunho continua no editor');
   assert.ok(await dirtyCount(page) >= 1, 'exclusão cancelada: o rascunho continua sujo');
   assert.equal(await disk(page, 'docs/projeto-novo/marcador.md'), 'MARCADOR-1', 'exclusão cancelada: o disco não recebeu o rascunho');
+});
+
+scenario('renomear inline: F2 e menu abrem o campo na própria linha, com o nome base selecionado; Esc e nome igual cancelam; colisão e nome inválido mostram o motivo sem fechar; Enter renomeia, e o foco volta à linha', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__mock.addFile('docs/ren-a.md', 'A\n');
+    window.__mock.addFile('docs/ren-b.md', 'B\n');
+    window.__mock.addFile('docs/.ren-oculto', 'O\n');
+    window.__mock.addFolder('docs/rn-pasta');
+  });
+  await expand(page, ['docs']);
+  const field = page.getByRole('tree').getByRole('textbox', { name: 'Novo nome' });
+  const sel = () => field.evaluate((el) => el.value.slice(el.selectionStart, el.selectionEnd));
+  const alert = (text) => page.getByRole('alert').filter({ hasText: text });
+
+  // F2 no arquivo: o campo entra na linha, sem diálogo, com "ren-a" selecionado (sem ".md").
+  await treeItem(page, 'ren-a.md').click();
+  await page.keyboard.press('F2');
+  await field.waitFor();
+  assert.equal(await page.getByRole('dialog', { name: /Renomear/ }).count(), 0, 'F2 não abre diálogo');
+  assert.equal(await sel(), 'ren-a', 'seleção inicial: só o nome base');
+  assert.equal(await page.getByRole('tree').getByRole('textbox', { name: 'Novo nome' }).evaluate((el) => el === document.activeElement), true, 'o campo tem o foco');
+
+  // Esc cancela: o nome não muda e o foco volta à linha.
+  await field.press('Escape');
+  await field.waitFor({ state: 'detached' });
+  assert.equal(await at(page, 'docs/ren-a.md').count(), 1, 'Esc não renomeia');
+  await page.waitForFunction(() => !!document.activeElement?.closest('.explorer-tree'));
+
+  // Colisão: "ren-b.md" já existe na pasta. O motivo aparece junto ao campo e o campo continua aberto.
+  await rightClick(page, 'ren-a.md');
+  await menu(page, 'Renomear...').click();
+  await field.waitFor();
+  assert.equal(await sel(), 'ren-a', 'o menu de contexto também seleciona o nome base');
+  await field.fill('ren-b.md');
+  await alert('Um arquivo ou pasta ren-b.md já existe nesta localização.').waitFor();
+  await field.press('Enter');
+  assert.equal(await field.count(), 1, 'colisão não fecha o campo');
+  assert.equal(await disk(page, 'docs/ren-a.md'), 'A\n', 'colisão não renomeia (origem intacta)');
+  assert.equal(await disk(page, 'docs/ren-b.md'), 'B\n', 'colisão não toca o item que já existe');
+
+  // Nome inválido: o motivo do Windows aparece e o campo segue aberto.
+  await field.fill('a:b');
+  await alert('caractere que o Windows não aceita').waitFor();
+  await field.press('Enter');
+  assert.equal(await field.count(), 1, 'nome inválido não fecha o campo');
+  // Espaço nas bordas recusa, sem trim silencioso: o nome digitado é o que vai ao disco (ou é recusado).
+  await field.fill(' ren-a2.md ');
+  await alert('espaço, nem terminar com ponto').waitFor();
+  await field.press('Enter');
+  assert.equal(await field.count(), 1, 'nome com espaço na borda não fecha o campo');
+  assert.equal(await disk(page, 'docs/ren-a.md'), 'A\n', 'nome com espaço na borda não renomeia');
+  await field.press('Escape');
+  await field.waitFor({ state: 'detached' });
+
+  // Enter com nome novo renomeia; a seleção vai para o item novo e o foco fica na linha dele.
+  await treeItem(page, 'ren-a.md').click();
+  await page.keyboard.press('F2');
+  await field.waitFor();
+  await field.fill('ren-c.md');
+  await field.press('Enter');
+  await at(page, 'docs/ren-c.md').waitFor();
+  assert.equal(await at(page, 'docs/ren-a.md').count(), 0, 'o nome antigo saiu da árvore');
+  assert.equal(await selected(page, 'ren-c.md'), true, 'o item renomeado fica selecionado');
+  await page.waitForFunction(() => !!document.activeElement?.closest('.explorer-tree'));
+
+  // Arquivo sem extensão de nome composto: ".ren-oculto" fica inteiro selecionado (o ponto é o começo do nome).
+  await treeItem(page, '.ren-oculto').click();
+  await page.keyboard.press('F2');
+  await field.waitFor();
+  assert.equal(await sel(), '.ren-oculto', 'arquivo que começa com "." tem o nome inteiro selecionado');
+  await field.press('Escape');
+  await field.waitFor({ state: 'detached' });
+
+  // Pasta: o nome inteiro selecionado; Enter renomeia a pasta.
+  await treeItem(page, 'rn-pasta').click();
+  await page.keyboard.press('F2');
+  await field.waitFor();
+  assert.equal(await sel(), 'rn-pasta', 'pasta: o nome inteiro selecionado');
+  await field.fill('rn-nova');
+  await field.press('Enter');
+  await at(page, 'docs/rn-nova').waitFor();
+  assert.equal(await at(page, 'docs/rn-pasta').count(), 0, 'a pasta antiga saiu da árvore');
+  await page.screenshot({ path: join(OUT, 'files-search-renomear-inline.png') });
 });
 
 scenario('excluir: Delete e o menu abrem o diálogo com o foco em Mover para a Lixeira, e Enter confirma (a árvore não rouba a tecla)', async ({ page }) => {

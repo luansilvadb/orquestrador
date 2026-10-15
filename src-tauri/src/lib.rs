@@ -70,6 +70,13 @@ fn read_file(core: State<Core>, gate: State<Gate>, path: String) -> Result<files
     files::read(&repo(&core, &gate)?, &path)
 }
 
+/// Bytes de uma imagem ou áudio do projeto para a aba de mídia. `path` é relativo ao projeto. Vai como bytes crus (o
+/// frontend recebe `ArrayBuffer`), sem JSON nem base64; o tipo é o da extensão, decidido na tela.
+#[tauri::command(async)]
+fn read_media(core: State<Core>, gate: State<Gate>, path: String) -> Result<tauri::ipc::Response, String> {
+    files::read_media(&repo(&core, &gate)?, &path).map(tauri::ipc::Response::new)
+}
+
 /// Grava `text` só se o arquivo ainda é `base` (o texto lido, sem BOM) e ainda tem o BOM `bom`. Recusa sem gravar
 /// se mudou por fora.
 #[tauri::command(async)]
@@ -419,6 +426,7 @@ pub fn run(context: tauri::Context) {
             get_options,
             list_dir,
             read_file,
+            read_media,
             write_file_checked,
             rename_file,
             delete_files,

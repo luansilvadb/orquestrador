@@ -2,7 +2,7 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
-# Chave privada de assinatura do updater: fica fora do repositório (ver README, seção 8).
+# Chave privada de assinatura do updater: fica fora do repositório (ver docs/atualizacao.md).
 *.key
 # Capturas e logs do Playwright MCP, usados só na conferência local da interface.
 .playwright-mcp/
