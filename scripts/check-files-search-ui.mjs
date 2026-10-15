@@ -37,16 +37,29 @@ const dialogBtn = (page, title, name) => page.getByRole('dialog', { name: title 
 
 scenario('pasta e arquivo criados dentro de pasta por clique direito; renomear pasta com rascunho mantém o texto sujo e salva no caminho novo; excluir cancelado preserva arquivo e rascunho', async ({ page }) => {
   await expand(page, ['docs']);
-  // Criar dentro da pasta, não na raiz: o diálogo diz onde será criado, e o caminho confirma.
+  // Criar dentro da pasta, não na raiz, sem diálogo: o campo do nome aparece numa linha da árvore, como no Antigravity. Esc cancela;
+  // nome inválido mostra o motivo embaixo; Enter cria, e o caminho confirma.
   await rightClick(page, 'docs');
   await menu(page, 'Nova Pasta...').click();
-  await page.getByRole('textbox', { name: 'Nome da nova pasta' }).fill('projeto');
-  await dialogBtn(page, 'Nova pasta', 'Criar').click();
+  const folderName = page.getByRole('tree').getByRole('textbox', { name: 'Nome da nova pasta' });
+  await folderName.waitFor();
+  await page.waitForTimeout(400);
+  assert.equal(await page.getByRole('dialog').count(), 0, 'criar não abre diálogo');
+  assert.equal(await folderName.evaluate((el) => el === document.activeElement), true, 'o campo fica com o foco depois de o menu fechar');
+  await folderName.press('Escape');
+  await folderName.waitFor({ state: 'detached' });
+  await rightClick(page, 'docs');
+  await menu(page, 'Nova Pasta...').click();
+  await folderName.fill('a:b');
+  await page.getByRole('alert').filter({ hasText: 'caractere que o Windows não aceita' }).waitFor();
+  await folderName.fill('projeto');
+  assert.equal(await page.getByRole('alert').filter({ hasText: 'caractere que o Windows não aceita' }).count(), 0, 'nome válido tira o motivo');
+  await folderName.press('Enter');
   await at(page, 'docs/projeto').waitFor();
   await rightClick(page, 'projeto');
   await menu(page, 'Novo Arquivo...').click();
   await page.getByRole('textbox', { name: 'Nome do novo arquivo' }).fill('marcador.md');
-  await dialogBtn(page, 'Novo arquivo', 'Criar').click();
+  await page.getByRole('textbox', { name: 'Nome do novo arquivo' }).press('Enter');
   await at(page, 'docs/projeto/marcador.md').waitFor();
 
   // Marcador digitado no arquivo: sujo, sem salvar.
@@ -79,7 +92,7 @@ scenario('pasta e arquivo criados dentro de pasta por clique direito; renomear p
   await page.locator('[aria-label="Alteração não salva"]').first().waitFor();
   await rightClick(page, 'projeto-novo');
   await menu(page, 'Excluir...').click();
-  const ask = page.getByRole('dialog', { name: 'Excluir pasta?' });
+  const ask = page.getByRole('dialog', { name: "Tem certeza de que deseja excluir 'projeto-novo' e o conteúdo dela?" });
   await ask.waitFor();
   await ask.getByRole('button', { name: 'Cancelar', exact: true }).click();
   await ask.waitFor({ state: 'detached' });
@@ -87,6 +100,29 @@ scenario('pasta e arquivo criados dentro de pasta por clique direito; renomear p
   assert.ok((await editorText(page)).includes('MARCADOR-2'), 'exclusão cancelada: o rascunho continua no editor');
   assert.ok(await dirtyCount(page) >= 1, 'exclusão cancelada: o rascunho continua sujo');
   assert.equal(await disk(page, 'docs/projeto-novo/marcador.md'), 'MARCADOR-1', 'exclusão cancelada: o disco não recebeu o rascunho');
+});
+
+scenario('excluir: Delete e o menu abrem o diálogo com o foco em Mover para a Lixeira, e Enter confirma (a árvore não rouba a tecla)', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__mock.addFile('apagar-a.md', 'A');
+    window.__mock.addFile('apagar-b.md', 'B');
+  });
+  await page.getByRole('button', { name: 'Atualizar', exact: true }).click();
+  const confirm = page.getByRole('button', { name: 'Mover para a Lixeira', exact: true });
+  for (const [name, open] of [['apagar-a.md', 'Delete'], ['apagar-b.md', 'menu']]) {
+    await treeItem(page, name).click();
+    if (open === 'Delete') await page.keyboard.press('Delete');
+    else {
+      await rightClick(page, name);
+      await menu(page, 'Excluir...').click();
+    }
+    await page.getByRole('dialog', { name: `Tem certeza de que deseja excluir '${name}'?` }).waitFor();
+    await page.waitForTimeout(300);
+    assert.equal(await confirm.evaluate((el) => el === document.activeElement), true, `${open}: foco no confirmar`);
+    await page.keyboard.press('Enter');
+    await confirm.waitFor({ state: 'detached' });
+    await at(page, name).waitFor({ state: 'detached' });
+  }
 });
 
 scenario('seleção por Shift e Ctrl; recortar e colar em outra pasta com rascunho aberto (remapeado); cópia; arraste; falha de I/O no meio reconcilia só o que saiu', async ({ page }) => {
@@ -577,7 +613,7 @@ scenario('visual do Explorer: ícones do tema Symbols, cores e letras do Git (pa
   assert.equal(await selected(page, 'docs'), true);
   await page.getByRole('button', { name: 'Novo Arquivo...', exact: true }).click();
   await page.getByRole('textbox', { name: 'Nome do novo arquivo' }).fill('pela-barra.md');
-  await dialogBtn(page, 'Novo arquivo', 'Criar').click();
+  await page.getByRole('textbox', { name: 'Nome do novo arquivo' }).press('Enter');
   await at(page, 'docs/pela-barra.md').waitFor();
 
   // A seção do projeto recolhe e reabre a árvore inteira.

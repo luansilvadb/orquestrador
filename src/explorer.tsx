@@ -5,10 +5,11 @@
 // O visual segue o Explorer do Antigravity/VS Code: ícones do tema Symbols, decorações do Git (cor, letra e "•" na pasta; cinza no ignorado),
 // barra com as ações da view e a seção recolhível com o nome do projeto.
 import { type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronRight, ChevronsDownUp, FilePlus, Files, FolderPlus, GitBranch, type LucideIcon, RefreshCw, Search, SquareTerminal } from 'lucide-react';
+import { ChevronRight, ChevronsDownUp, FilePlus, Files, FolderPlus, Info, LoaderCircle, type LucideIcon, RefreshCw, Search, SquareTerminal, X } from 'lucide-react';
 import {
-  ActionIcon, Alert, Badge, Button, type ContextMenuItem, Input, Modal, ScrollArea, showContextMenu, Text, toast, Tree, type TreeDataNode,
+  ActionIcon, Alert, Badge, type ContextMenuItem, Input, Modal, ScrollArea, showContextMenu, Text, toast, Tree, type TreeDataNode,
 } from '@lobehub/ui/base-ui';
+import { createPortal } from 'react-dom';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
 import { decorations, IGNORED } from './explorer-decorations';
@@ -152,38 +153,160 @@ type Drop = { dest: string; problem: string | null };
 // Quantos itens o diálogo de excluir lista antes de resumir.
 const LIST_MAX = 10;
 
-// Casco dos diálogos de formulário (Renomear, Criar e Excluir): Esc, clique fora e Cancelar não fecham com o pedido rodando, e o botão de confirmar mostra o carregamento.
-function FormDialog({ open, title, busy, confirmLabel, confirmDisabled = false, danger = false, onClose, onConfirm, children }: {
+// Botões do diálogo, nas medidas do Antigravity: 28 px, raio de 2 px, 10 px de respiro e 13 px de texto; o principal na cor primária do
+// tema (texto escuro do fundo), o secundário no preenchimento.
+const DIALOG_BUTTON = 'flex h-7 min-w-[64px] items-center justify-center gap-1.5 rounded-[2px] border border-[var(--ant-color-fill-tertiary)] px-2.5 text-[13px] outline-none focus:ring-1 focus:ring-[var(--ant-color-primary)] focus:ring-offset-2 focus:ring-offset-[var(--ant-color-bg-elevated)] disabled:cursor-default disabled:opacity-40';
+
+/**
+ * Casco dos diálogos de Renomear, Criar e Excluir, no formato do diálogo do Antigravity/VS Code: caixa de 522 px com raio de 3 px e
+ * borda de 1 px, o X no canto, o ícone de 48 px à esquerda (quando há), a pergunta em 18 px, o detalhe em 13 px e os botões à direita,
+ * o de confirmar primeiro e o Cancelar depois. Esc, o X e Cancelar não fecham com o pedido rodando; clicar fora não fecha.
+ */
+function FormDialog({ open, title, detail, icon, busy, confirmLabel, confirmDisabled = false, focusConfirm = false, onClose, onConfirm, children }: {
   open: boolean;
+  /** A pergunta: é também o nome acessível do diálogo. */
   title: string;
+  detail?: ReactNode;
+  icon?: LucideIcon;
   busy: boolean;
   confirmLabel: string;
   /** Desabilita o confirmar além de `busy` (ex.: nome inválido). */
   confirmDisabled?: boolean;
-  danger?: boolean;
+  /** Foco inicial no confirmar (diálogo sem campo), como no VS Code: Enter confirma. */
+  focusConfirm?: boolean;
   onClose: () => void;
   onConfirm: () => void;
-  children: ReactNode;
+  children?: ReactNode;
 }) {
+  const Icon = icon;
+  const close = () => !busy && onClose();
+  const body = useRef<HTMLDivElement>(null);
+  const confirm = useRef<HTMLButtonElement>(null);
+  // O foco fica no diálogo enquanto ele está aberto: o menu de contexto, ao fechar, devolve o foco à árvore logo depois de o diálogo
+  // abrir; aqui ele volta ao ponto de partida (o confirmar ou o primeiro campo), para Enter e a digitação irem ao diálogo.
+  useEffect(() => {
+    if (!open) return;
+    const keep = (e: FocusEvent) => {
+      const dialog = body.current?.closest('[role="dialog"]');
+      if (!dialog || !(e.target instanceof Node) || dialog.contains(e.target)) return;
+      ((focusConfirm ? null : dialog.querySelector('input')) ?? confirm.current)?.focus();
+    };
+    document.addEventListener('focusin', keep);
+    return () => document.removeEventListener('focusin', keep);
+  }, [open, focusConfirm]);
   return (
     <Modal
-      open={open}
-      title={title}
-      closable={false}
-      keyboard
-      maskClosable
-      onCancel={() => !busy && onClose()}
+      open={open} title={title} closable={false} draggable={false} keyboard maskClosable={false} width={522} onCancel={close}
+      className="rounded-[3px]! border border-[var(--ant-color-border-secondary)] p-2.5 shadow-[0_0_8px_rgba(0,0,0,0.36)]!"
+      classNames={{ header: 'sr-only', body: 'p-0!', footer: 'gap-2.5! px-[15px]! pt-6! pb-[14px]!' }}
       footer={(
-        <Flexbox horizontal justify="flex-end" gap={8}>
-          <Button onClick={onClose} disabled={busy}>Cancelar</Button>
-          <Button type="primary" danger={danger} onClick={onConfirm} disabled={confirmDisabled || busy} loading={busy}>
+        <>
+          <button
+            ref={confirm} type="button" autoFocus={focusConfirm} disabled={confirmDisabled || busy} onClick={onConfirm}
+            className={`${DIALOG_BUTTON} bg-[var(--ant-color-primary)] text-[var(--ant-color-bg-layout)] enabled:hover:bg-[var(--ant-color-primary-hover)]`}
+          >
+            {busy && <LoaderCircle className="size-3.5 animate-spin" aria-hidden />}
             {confirmLabel}
-          </Button>
-        </Flexbox>
+          </button>
+          <button
+            type="button" disabled={busy} onClick={onClose}
+            className={`${DIALOG_BUTTON} bg-[var(--ant-color-fill-secondary)] text-[var(--ant-color-text)] enabled:hover:bg-[var(--ant-color-fill)]`}
+          >
+            Cancelar
+          </button>
+        </>
       )}
     >
-      {children}
+      <div ref={body} />
+      <Flexbox horizontal justify="flex-end" className="h-[26px] pb-1">
+        <button
+          type="button" aria-label="Fechar" title="Fechar" disabled={busy} onClick={close}
+          className="flex size-[22px] items-center justify-center rounded-[5px] outline-none hover:bg-[var(--ant-color-fill)] focus-visible:ring-2 focus-visible:ring-[var(--ant-color-primary)]"
+        >
+          <X className="size-4" aria-hidden />
+        </button>
+      </Flexbox>
+      <Flexbox horizontal className="px-2.5 text-[13px] leading-[22px]">
+        {Icon && <Icon className="size-12 shrink-0 text-[var(--ant-color-info)]" strokeWidth={1.5} aria-hidden />}
+        <Flexbox className={`min-w-0 flex-1${Icon ? ' pl-6' : ''}`}>
+          <p className="mb-2 flex min-h-12 items-center text-[18px] font-normal leading-[22px] [overflow-wrap:anywhere]">{title}</p>
+          {detail && <p>{detail}</p>}
+          {children}
+        </Flexbox>
+      </Flexbox>
     </Modal>
+  );
+}
+
+/**
+ * Campo do nome do item novo, dentro da linha da árvore, como o do Explorer do Antigravity: 22 px, borda de 1 px, raio de 4 px e o
+ * contorno de foco de 1 px; com nome inválido, a borda fica vermelha e o motivo aparece embaixo. Enter cria; Esc cancela; sair do
+ * campo cria se o nome é válido e cancela se não é. As teclas não vão para a árvore.
+ */
+function NewItemInput({ kind, name, busy, error, onChange, onSubmit, onCancel }: {
+  kind: 'file' | 'dir';
+  name: string;
+  busy: boolean;
+  error: string;
+  onChange: (name: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
+  // O menu de contexto, ao fechar, devolve o foco à árvore logo depois de o campo aparecer: essa saída do campo não conta, e o foco volta.
+  const born = useRef(performance.now());
+  // O motivo vai fora da linha (ela corta o que passa dela), preso embaixo do campo, no painel (onde valem as cores do tema);
+  // acompanha a rolagem e o tamanho.
+  const field = useRef<HTMLInputElement>(null);
+  const [at, setAt] = useState<DOMRect | null>(null);
+  useLayoutEffect(() => {
+    if (!error) return setAt(null);
+    const place = () => field.current && setAt(field.current.getBoundingClientRect());
+    place();
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [error]);
+  const blur = (input: HTMLInputElement) => {
+    if (busy) return;
+    if (performance.now() - born.current < 300) return void requestAnimationFrame(() => input.focus());
+    if (error || !name.trim()) onCancel();
+    else onSubmit();
+  };
+  return (
+    <span className="relative flex min-w-0 flex-1" onClick={stop} onDoubleClick={stop} onContextMenu={stop} onMouseDown={stop}>
+      <input
+        ref={field} autoFocus spellCheck={false} value={name} disabled={busy}
+        aria-label={kind === 'dir' ? 'Nome da nova pasta' : 'Nome do novo arquivo'} aria-invalid={!!error || undefined}
+        className={`h-[22px] min-w-0 flex-1 rounded-[4px] border bg-[var(--ant-color-fill-tertiary)] px-1 text-[13px] text-[var(--ant-color-text)] outline-none ${error
+          ? 'border-[var(--ant-color-error)]'
+          : 'border-[var(--ant-color-border)] focus:border-[var(--ant-color-primary)]'}`}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            onSubmit();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        onBlur={(e) => blur(e.currentTarget)}
+      />
+      {error && at && createPortal(
+        <span
+          role="alert" style={{ left: at.left, top: at.bottom, width: at.width }}
+          className="fixed z-[1000] rounded-b-[4px] border border-t-0 border-[var(--ant-color-error)] bg-[color-mix(in_srgb,var(--ant-color-error)_25%,var(--ant-color-bg-elevated))] px-1.5 py-1 text-[12px] leading-[17px] text-[var(--ant-color-text)]"
+        >
+          {error}
+        </span>,
+        field.current?.closest('.explorer-tree') ?? document.body,
+      )}
+    </span>
   );
 }
 
@@ -345,7 +468,12 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     setRenaming({ path, name: nameOf(path), error: '', busy: false });
   };
   const startDelete = (paths: string[]) => setDeleting({ paths, error: '', busy: false });
-  const startCreate = (kind: 'file' | 'dir', dir: string) => setCreating({ kind, dir, name: '', error: '', busy: false });
+  // Criar abre a pasta de destino (a linha do nome entra nela) e põe ali a linha editável, como no VS Code.
+  const startCreate = (kind: 'file' | 'dir', dir: string) => {
+    setCollapsed(false);
+    setCreating({ kind, dir, name: '', error: '', busy: false });
+    if (dir && !tree.expanded.includes(dir)) void openDir(dir);
+  };
 
   // Item (ou seleção) da árvore: uma ação real por item de menu. Vários itens: as que só servem a um ficam desabilitadas com o motivo.
   const itemMenu = (paths: string[], hasFiles: boolean): ContextMenuItem[] => {
@@ -463,11 +591,13 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     else toast.success({ title: `${count} movido${done.length === 1 ? '' : 's'} para ${where(dest)}`, duration: 3000 });
   }
 
-  // Criar: o nome é checado aqui para mostrar o motivo; o backend confere de novo e nunca sobrescreve. Erro fica no diálogo.
+  // Criar: o nome é checado aqui para mostrar o motivo; o backend confere de novo e nunca sobrescreve. Erro fica embaixo do campo.
   // Arquivo novo abre no editor; pasta nova só aparece na árvore, sem fechar as abas.
   async function submitCreate() {
     if (!creating || creating.busy) return;
-    const { kind, name, dir } = creating;
+    const { kind, dir } = creating;
+    const name = creating.name.trim();
+    if (!name) return setCreating(null);
     const problem = fileNameError(name);
     if (problem) return setCreating({ ...creating, error: problem });
     setCreating({ ...creating, error: '', busy: true });
@@ -660,8 +790,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
   // um filho provisório (não selecionável), e a pasta não parece folha. Ele some quando a lista chega.
   // Linha: nome na cor da decoração e, à direita, a letra (arquivo) ou "•" (pasta). Ignorado fica cinza e sem letra.
   const decos = decorations(git?.files ?? []);
-  const nodes = (dir: string): TreeDataNode[] =>
-    (tree.children[dir] ?? []).map((entry): TreeDataNode => {
+  const nodes = (dir: string): TreeDataNode[] => withNewItem(dir, (tree.children[dir] ?? []).map((entry): TreeDataNode => {
       const path = join(dir, entry.name);
       const deco = decos.get(path) ?? (entry.ignored ? IGNORED : null);
       const title = (
@@ -687,7 +816,29 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
           selectable: false,
         }],
       };
-    });
+    }));
+
+  // A linha do nome do item novo, na pasta de destino já lida: pasta nova no topo, arquivo novo depois das pastas (a ordem do VS Code).
+  // A chave termina em "/", como a do nó provisório: sem seleção, menu nem atalhos da árvore.
+  function withNewItem(dir: string, list: TreeDataNode[]): TreeDataNode[] {
+    if (!creating || creating.dir !== dir || (dir && !tree.children[dir])) return list;
+    const row: TreeDataNode = {
+      key: `${join(dir, ' novo')}/`,
+      isLeaf: true,
+      selectable: false,
+      icon: <FileIcon path={creating.name.trim() || (creating.kind === 'dir' ? 'pasta' : 'arquivo')} dir={creating.kind === 'dir'} />,
+      title: (
+        <NewItemInput
+          kind={creating.kind} name={creating.name} busy={creating.busy} error={creating.error || (creating.name.trim() && fileNameError(creating.name.trim())) || ''}
+          onChange={(name) => setCreating((prev) => prev && { ...prev, name, error: '' })}
+          onSubmit={() => void submitCreate()}
+          onCancel={() => setCreating(null)}
+        />
+      ),
+    };
+    const at = creating.kind === 'dir' ? 0 : (tree.children[dir] ?? []).filter((e) => e.dir).length;
+    return [...list.slice(0, at), row, ...list.slice(at)];
+  }
 
   // Novo Arquivo e Nova Pasta da barra: na pasta selecionada (ou na do arquivo selecionado); sem seleção única, na raiz.
   const barDir = () => {
@@ -698,6 +849,14 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
   const renameProblem = renaming && (renaming.error || fileNameError(renaming.name));
   const deleteDrafts = deleting ? actions.dirtyOf(deleting.paths) : [];
   const deleteFolders = deleting ? deleting.paths.some((p) => !isFile(p)) : false;
+  // Textos do VS Code: a pergunta com o nome (ou a contagem) e o detalhe de que dá para restaurar da Lixeira.
+  const deleteOne = deleting?.paths.length === 1 ? splitPath(deleting.paths[0]).name : '';
+  const deleteQuestion = !deleting ? '' : deleteOne
+    ? `Tem certeza de que deseja excluir '${deleteOne}'${deleteFolders ? ' e o conteúdo dela' : ''}?`
+    : `Tem certeza de que deseja excluir os ${deleting.paths.length} ${deleteFolders ? 'arquivos/pastas' : 'arquivos'} a seguir${deleteFolders ? ' e o conteúdo deles' : ''}?`;
+  const deleteDetail = deleteOne
+    ? `Você pode restaurar ${deleteFolders ? 'essa pasta' : 'esse arquivo'} da Lixeira.`
+    : 'Você pode restaurar esses itens da Lixeira.';
   return (
     <Flexbox height="100%" className="group/explorer min-h-0">
       <Flexbox horizontal align="center" gap={2} height={36} paddingInline={12} flex="none">
@@ -799,53 +958,29 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
         )}
       </FormDialog>
 
-      {/* Novo arquivo e Nova pasta, na pasta escolhida (ou na raiz). Enter cria; Cancelar e Esc não criam nada. Nome que existe é recusado pelo backend, sem sobrescrever. */}
-      <FormDialog
-        open={!!creating}
-        title={creating?.kind === 'dir' ? 'Nova pasta' : 'Novo arquivo'}
-        busy={!!creating?.busy}
-        confirmLabel="Criar"
-        onClose={() => setCreating(null)}
-        onConfirm={submitCreate}
-      >
-        {creating && (
-          <Flexbox gap={8}>
-            <Text as="p" type="secondary" fontSize={12}>Será criado {creating.dir ? <>em <Text as="span" code fontSize={12}>{creating.dir}</Text></> : 'na raiz do projeto'}.</Text>
-            <Input
-              autoFocus aria-label={creating.kind === 'dir' ? 'Nome da nova pasta' : 'Nome do novo arquivo'} value={creating.name} disabled={creating.busy}
-              placeholder={creating.kind === 'dir' ? 'Nome da pasta' : 'Nome do arquivo, com extensão'}
-              onChange={(e) => setCreating((prev) => prev && { ...prev, name: e.target.value, error: '' })}
-              onPressEnter={submitCreate}
-            />
-            {creating.error && <Text as="p" type="danger" fontSize={12} role="alert">{creating.error}</Text>}
-          </Flexbox>
-        )}
-      </FormDialog>
-
-      {/* Excluir: vai para a Lixeira do Windows, com a lista do que vai e das alterações não salvas (que se perdem e fecham as abas). */}
+      {/* Excluir: vai para a Lixeira do Windows. A pergunta e o detalhe são os do VS Code; com mais de um item, a lista do que vai; e o
+          aviso das alterações não salvas (que se perdem e fecham as abas). */}
       <FormDialog
         open={!!deleting}
-        title={deleting && deleting.paths.length > 1 ? `Excluir ${deleting.paths.length} itens?` : deleteFolders ? 'Excluir pasta?' : 'Excluir arquivo?'}
+        icon={Info}
+        title={deleteQuestion}
+        detail={deleteDetail}
         busy={!!deleting?.busy}
         confirmLabel="Mover para a Lixeira"
-        danger
+        focusConfirm
         onClose={() => setDeleting(null)}
         onConfirm={submitDelete}
       >
         {deleting && (
-          <Flexbox gap={8}>
-            <Text as="p" fontSize={14}>
-              {deleting.paths.length > 1 ? 'Estes itens vão para a Lixeira do Windows:' : 'Este item vai para a Lixeira do Windows:'}
-              {deleteFolders && ' As pastas levam tudo o que está dentro delas.'}
-            </Text>
-            <Flexbox gap={2} style={{ maxHeight: 180, overflow: 'auto' }}>
-              {deleting.paths.slice(0, LIST_MAX).map((p) => (
-                <Text key={p} as="span" code fontSize={12} ellipsis title={p}>{p}</Text>
-              ))}
-              {deleting.paths.length > LIST_MAX && (
-                <Text as="span" type="secondary" fontSize={12}>e mais {deleting.paths.length - LIST_MAX}</Text>
-              )}
-            </Flexbox>
+          <Flexbox gap={8} className="mt-2 empty:hidden">
+            {deleting.paths.length > 1 && (
+              <Flexbox style={{ maxHeight: 180, overflow: 'auto' }}>
+                {deleting.paths.slice(0, LIST_MAX).map((p) => (
+                  <span key={p} title={p} className="truncate">{p}</span>
+                ))}
+                {deleting.paths.length > LIST_MAX && <span className="opacity-70">e mais {deleting.paths.length - LIST_MAX}</span>}
+              </Flexbox>
+            )}
             {deleteDrafts.length > 0 && (
               <Alert
                 type="warning"
@@ -860,27 +995,49 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
   );
 }
 
-/** Barra de status fina embaixo da tela principal: a branch atual do projeto e o botão do painel Terminal (marcado quando aberto). */
-export function StatusBar({ branch, terminalOpen, onToggleTerminal }: {
-  branch: string | undefined;
+// Item da barra de status, nas medidas do Antigravity: 22 px de altura, 5 px de respiro dos lados e 12 px de texto da interface.
+const STATUS_ITEM = 'flex h-full shrink-0 items-center gap-1 px-[5px] text-[12px] outline-none hover:bg-[var(--ant-color-fill)] focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:cursor-default disabled:hover:bg-transparent';
+
+/**
+ * Barra de status embaixo da tela principal, como a do Antigravity: à esquerda, a branch atual (abre o Controle do Código-Fonte) e
+ * o Sincronizar, que recebe e envia (com os commits a receber e a enviar ao lado do ícone, quando há); à direita, o painel Terminal.
+ */
+export function StatusBar({ git, terminalOpen, onToggleTerminal, onOpenGit, onSync }: {
+  /** Branch e contadores do repositório; sem repositório, a barra só tem o Terminal. */
+  git: { branch: string; ahead: number; behind: number; syncing: boolean } | undefined;
   terminalOpen: boolean;
   onToggleTerminal: () => void;
+  onOpenGit: () => void;
+  onSync: () => void;
 }) {
+  const counts = git && (git.ahead || git.behind) ? `${git.behind}↓ ${git.ahead}↑` : '';
   return (
-    <Flexbox as="footer" horizontal align="center" gap={6} height={25} flex="none" paddingInline={12} className="border-t bg-card">
-      {branch && (
+    <Flexbox as="footer" horizontal align="stretch" height={22} flex="none" className="border-t bg-card px-[3px]">
+      {git && (
         <>
-          <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-          <Text as="span" code fontSize={12} ellipsis title={branch}>{branch}</Text>
+          <button
+            type="button" className={`${STATUS_ITEM} min-w-0 shrink`} onClick={onOpenGit}
+            aria-label={`${git.branch}, branch atual. Abrir o Controle do Código-Fonte`} title={`${git.branch}, branch atual`}
+          >
+            <span className="truncate">{git.branch}</span>
+          </button>
+          <button
+            type="button" className={STATUS_ITEM} onClick={onSync} disabled={git.syncing}
+            aria-label={`Sincronizar as alterações${counts ? ` (${git.behind} a receber, ${git.ahead} a enviar)` : ''}`}
+            title={git.syncing ? 'Sincronizando…' : `Sincronizar as alterações${counts ? ` (${counts})` : ''}`}
+          >
+            <RefreshCw className={`size-3.5 shrink-0${git.syncing ? ' animate-spin' : ''}`} aria-hidden />
+            {counts && <span>{counts}</span>}
+          </button>
         </>
       )}
-      <Button
-        type="text" size="small" icon={SquareTerminal} aria-pressed={terminalOpen}
-        title="Painel Terminal (Ctrl+`)" className={`ml-auto shrink-0${terminalOpen ? ' bg-muted' : ''}`}
-        onClick={onToggleTerminal}
+      <button
+        type="button" aria-pressed={terminalOpen} title="Painel Terminal (Ctrl+`)" onClick={onToggleTerminal}
+        className={`${STATUS_ITEM} ml-auto${terminalOpen ? ' bg-[var(--ant-color-fill-secondary)]' : ''}`}
       >
+        <SquareTerminal className="size-3.5 shrink-0" aria-hidden />
         Terminal
-      </Button>
+      </button>
     </Flexbox>
   );
 }

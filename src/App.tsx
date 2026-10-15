@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { Block, Center, Flexbox } from '@lobehub/ui';
-import { Alert, Button, DraggablePanel, Modal, Progress, Text, toast } from '@lobehub/ui/base-ui';
+import { Alert, Button, DraggablePanel, Modal, Progress, setActiveScope, Text, toast } from '@lobehub/ui/base-ui';
 import { backend, connect, host, message } from './backend';
 import { ChoiceForm } from './choice-form';
 import { EditorWorkspace, type EditorWorkspaceHandle } from './editor-workspace';
@@ -208,6 +208,8 @@ export function App() {
   const editor = useRef<EditorWorkspaceHandle>(null);
   // Trava das operações Git da UI: a barra lateral e o editor dividem a mesma.
   const [gitGuard] = useState(createGitGuard);
+  // Sincronizar da barra de status em curso: o ícone gira e o botão fica parado.
+  const [syncing, setSyncing] = useState(false);
   // Alvo da aba ativa do editor: a barra Git marca o diff (ou conflito) que está aberto.
   const [activeTarget, setActiveTarget] = useState<TabTarget | null>(null);
   const [activePath, setActivePath] = useState<string | null>(null);
@@ -426,6 +428,16 @@ export function App() {
     }
   }
 
+  // A árvore do Lobe UI ouve as teclas na janela inteira (Enter, setas, Home, End) enquanto é o escopo de foco ativo, e só deixa de
+  // ser quando o foco vai para outro escopo. Diálogo não é escopo: sem isto, o Enter num botão do diálogo ia para a árvore.
+  useEffect(() => {
+    const leave = (e: FocusEvent) => {
+      if (e.target instanceof Element && e.target.closest('[role="dialog"], [role="alertdialog"]')) setActiveScope(null);
+    };
+    document.addEventListener('focusin', leave, true);
+    return () => document.removeEventListener('focusin', leave, true);
+  }, []);
+
   useEffect(() => {
     void boot();
   }, []);
@@ -608,6 +620,29 @@ export function App() {
     return () => window.removeEventListener('keydown', listener, true);
   }, []);
 
+  // Sincronizar da barra de status, como o do VS Code: recebe e, havendo commits a enviar, envia. Com executores trabalhando o
+  // backend recusa o recebimento, então nem começa; a trava compartilhada impede duas operações do Git ao mesmo tempo.
+  async function sync() {
+    if (state.executors.some((e) => !FINISHED.includes(e.state))) {
+      toast.warning({ title: 'Há executores trabalhando. Espere o lote terminar.', duration: 4000 });
+      return;
+    }
+    if (!gitGuard.enter()) return;
+    setSyncing(true);
+    try {
+      await backend.gitPull();
+      const now = await backend.gitStatus();
+      if (now.kind === 'repo' && now.status.ahead > 0) await backend.gitPush();
+      toast.success({ title: 'Alterações sincronizadas', duration: 3000 });
+    } catch (e) {
+      report(e);
+    } finally {
+      gitGuard.leave();
+      setSyncing(false);
+      void git.refresh();
+    }
+  }
+
   // ---------- derivados ----------
 
   const { update, orchestrator, executors, options } = state;
@@ -623,7 +658,7 @@ export function App() {
     .filter(([n]) => n);
   // Contador da navegação, branch e Histórico Git só existem no modo `repo`.
   const changed = git.data?.kind === 'repo' ? git.data.status.files.length : 0;
-  const branch = git.data?.kind === 'repo' ? git.data.status.branch : undefined;
+  const repoStatus = git.data?.kind === 'repo' ? git.data.status : undefined;
   const noGitFix = git.data && git.data.kind !== 'repo' ? NO_GIT_FIX[git.data.kind] : null;
   // Texto do fechamento: a lista de arquivos (o caminho desambigua nomes iguais) e a menção aos terminais, quando há.
   const closeFiles = closeAsk?.files ?? [];
@@ -800,7 +835,10 @@ export function App() {
         />
       </Flexbox>
 
-      <StatusBar branch={branch} terminalOpen={state.shellOpen} onToggleTerminal={toggleShell} />
+      <StatusBar
+        git={repoStatus && { branch: repoStatus.branch, ahead: repoStatus.ahead, behind: repoStatus.behind, syncing }}
+        terminalOpen={state.shellOpen} onToggleTerminal={toggleShell} onOpenGit={() => setRoute('git')} onSync={() => void sync()}
+      />
 
       {/* As duas escolhas são janelas: a do orquestrador (início) e uma só para os executores. Com um executor aguardando escolha, a janela dele é a única e não fecha sem confirmar: nunca duas empilhadas. */}
       {options && (

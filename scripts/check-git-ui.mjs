@@ -675,6 +675,22 @@ scenario('pasta sem repositório: o painel traz o texto e o botão, sem contador
   await page.keyboard.press('Escape');
 });
 
+scenario('barra de status: 22 px, branch abre o Controle do Código-Fonte; Sincronizar mostra 0↓ 1↑, recebe e envia uma vez', async ({ page }) => {
+  const footer = page.locator('footer');
+  const branch = footer.getByRole('button', { name: /^main, branch atual/ });
+  await branch.waitFor();
+  assert.equal(Math.round((await footer.boundingBox()).height), 22, 'altura da barra');
+  const sync = footer.getByRole('button', { name: /^Sincronizar as alterações/ });
+  assert.equal((await sync.innerText()).trim(), '0↓ 1↑', 'contadores ao lado do ícone');
+  await branch.click();
+  await page.getByRole('heading', { name: 'Controle do Código-Fonte', exact: true }).waitFor();
+  await sync.click();
+  await waitCount(page, 'git_push', 1);
+  assert.equal((await calls(page, 'git_pull')).length, 1, 'git_pull uma vez');
+  assert.equal((await calls(page, 'git_push')).length, 1, 'git_push uma vez, porque havia commit a enviar');
+  await page.screenshot({ path: join(OUT, 'git-ui-barra-de-status.png'), clip: { x: 0, y: (await footer.boundingBox()).y - 10, width: 400, height: 32 } });
+});
+
 scenario('Git ausente e repositório acima: cada caso diz o motivo certo, sem botão e sem ações do painel', async ({ page }) => {
   await reopen(page, '?git=no-git');
   await openGit(page);
