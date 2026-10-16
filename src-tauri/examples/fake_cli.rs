@@ -14,6 +14,10 @@ fn main() {
     let stop = settings.as_ref().map(|v| v["hooks"]["Stop"][0]["hooks"][0].clone());
     let notify: Option<Vec<String>> = args.iter().find_map(|a| a.strip_prefix("notify=")).map(|v| serde_json::from_str(v).unwrap());
 
+    // Só o orquestrador recebe o servidor MCP do app: `--mcp-config` no Claude, `mcp_servers.` no Codex.
+    if args.iter().any(|a| a == "--mcp-config" || a.starts_with("mcp_servers.")) {
+        orchestrator(&args, settings.as_ref());
+    }
     if prompt.contains("FALHAR") {
         std::process::exit(3);
     }
@@ -37,16 +41,40 @@ fn main() {
         child.stdin.take().unwrap().write_all(json.to_string().as_bytes()).unwrap();
         child.wait().unwrap();
         println!("{answer}");
-    } else {
-        // Orquestrador: ecoa o que for digitado; "sair" termina com código 7.
-        println!("orquestrador falso pronto");
-        for line in std::io::stdin().lock().lines() {
-            let line = line.unwrap_or_default();
-            if line.trim() == "sair" {
-                std::process::exit(7);
-            }
-            println!("eco:{}", line.trim());
+    }
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3600));
+    }
+}
+
+/// O orquestrador: ecoa o que for digitado; "sair" termina com código 7. Cada linha é uma rodada, marcada pelos
+/// hooks `UserPromptSubmit` e `Stop` como os CLIs reais fazem: no Claude, os do settings (forma `args`); no Codex,
+/// o comando de `-c hooks.<evento>`, rodado no PowerShell como o Codex faz.
+fn orchestrator(args: &[String], settings: Option<&serde_json::Value>) -> ! {
+    let hook = |event: &str| {
+        let json = serde_json::json!({ "hook_event_name": event }).to_string();
+        let mut child = if let Some(h) = settings.map(|v| v["hooks"][event][0]["hooks"][0].clone()).filter(|h| h["command"].is_string()) {
+            let hook_args: Vec<String> = serde_json::from_value(h["args"].clone()).unwrap();
+            Command::new(h["command"].as_str().unwrap()).args(hook_args).stdin(Stdio::piped()).spawn().unwrap()
+        } else if let Some(value) = args.iter().find_map(|a| a.strip_prefix(&format!("hooks.{event}="))) {
+            let rest = &value[value.find("command=").unwrap() + "command=".len()..];
+            let command: String = serde_json::Deserializer::from_str(rest).into_iter().next().unwrap().unwrap();
+            Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &command]).stdin(Stdio::piped()).spawn().unwrap()
+        } else {
+            return;
+        };
+        child.stdin.take().unwrap().write_all(json.as_bytes()).unwrap();
+        child.wait().unwrap();
+    };
+    println!("orquestrador falso pronto");
+    for line in std::io::stdin().lock().lines() {
+        let line = line.unwrap_or_default();
+        if line.trim() == "sair" {
+            std::process::exit(7);
         }
+        hook("UserPromptSubmit");
+        println!("eco:{}", line.trim());
+        hook("Stop");
     }
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));

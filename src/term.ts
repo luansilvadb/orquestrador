@@ -95,6 +95,15 @@ export class TermView {
     }
   }
 
+  /**
+   * Um texto de várias linhas como um paste só, sem Enter: fica no rascunho do CLI. Com o bracketed paste ligado, vai direto ao PTY
+   * entre as marcas, com as quebras `\n` (o paste do xterm trocaria por `\r`, que o CLI leria como Enter). Sem ele, segue pelo paste do xterm.
+   */
+  async pasteText(text: string) {
+    if (!this.term.modes.bracketedPasteMode) return this.term.paste(text);
+    await backend.termWrite(this.id, `\x1b[200~${text}\x1b[201~`);
+  }
+
   fit() {
     if (this.term.element?.offsetParent) this.fitAddon.fit();
   }

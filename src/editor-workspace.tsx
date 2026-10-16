@@ -18,18 +18,21 @@
 //   flushRecovery(): void                               Grava a recuperação agora (antes de fechar o app).
 //   selectedText(): string                              Texto da seleção principal no arquivo da aba ativa do grupo focado. Sem seleção, a palavra sob o cursor.
 //                                                        Vazio se não há aba de arquivo, se a seleção tem quebra de linha ou se não há palavra. Não mexe no editor.
+//   openIssues(): void                                  Abre ou ativa a aba Issues (no máximo uma por grupo): a do grupo focado, senão a de outro grupo.
+//   openNewIssue(seed?): void                           Abre ou ativa a aba Nova issue (uma só no app). Com `seed`, preenche se ela está vazia;
+//                                                        senão só ativa e avisa por toast. O texto dela não vai para a recuperação.
 // Props: `project` (raiz absoluta, chave da recuperação), `locked` (executores vivos: bloqueia mutações Git), `guard` (trava compartilhada
 // com a barra do Git), `refreshGit` (chamado após mutação), `onActivePath`/`onActiveTarget` (avisos da aba ativa), `layout` (texto opaco do
 // layout externo, salvo na recuperação), `onRestoreLayout` (chamado uma vez na montagem com o layout salvo), `onReveal` (revelar no Explorer),
 // `onGroupCount` (1 ou 2 grupos), `onSaved()` (chamada depois de cada gravação bem-sucedida no disco pelo editor: Ctrl+S, salvar tudo,
-// comparação, resolução de conflito).
+// comparação, resolução de conflito), `startIssue` (cola a issue no orquestrador; null sem ele aberto), lido pela página Issues.
 // Recuperação: localStorage por projeto (`orquestrador.editor:<project>`), validada ao ler; nunca grava no disco.
 import {
   forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent, type FocusEvent, type KeyboardEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode,
 } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownMenu, Modal, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox, PatchDiff } from '@lobehub/ui';
-import { ArrowRight, ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, ChevronUp, CircleDot, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
 import { FileIcon } from './file-icon';
 import { Breadcrumbs } from './breadcrumbs';
 import { backend, message } from './backend';
@@ -40,9 +43,12 @@ import { action, blocked, DIVIDER, fileName, useChord } from './file-tabs';
 import { pathText } from './file-tab-actions';
 import { copy, splitPath } from './git-history';
 import {
-  activate, closeTabs, createWorkspace, isDirty, isWithin, joinGroups, loadWorkspace, markEdited, moveTab, navigate, openPermanent, openPreview,
-  planClose, remapPath, reopenClosed, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
+  activate, closeTabs, createWorkspace, isDirty, isWithin, joinGroups, loadWorkspace, markEdited, moveTab, navigate, NEW_ISSUE_DIRTY, openPermanent, openPreview,
+  pathOf, planClose, remapPath, reopenClosed, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
 } from './workspace-model';
+import { IssuesPage } from './issues-page';
+import type { StartIssue } from './issue-ui';
+import { draftFilled, EMPTY_DRAFT, NewIssueForm, type IssueDraft } from './new-issue';
 import { revealTab, wheelToScroll } from './tab-strip';
 import {
   blockCount, type Buffer, type Choice, type ConflictDraft, decodeRecovery, dirtyKeys, dropData, encodeRecovery, hasDraftAt,
@@ -73,6 +79,10 @@ export type EditorWorkspaceHandle = {
   flushRecovery(): void;
   /** Texto da seleção principal (ou a palavra sob o cursor) no arquivo da aba ativa do grupo focado. Vazio se não há o que pesquisar. */
   selectedText(): string;
+  /** Abre ou ativa a aba Issues. */
+  openIssues(): void;
+  /** Abre ou ativa a aba Nova issue; com `seed`, preenche se ela está vazia (senão avisa que já há uma em edição). */
+  openNewIssue(seed?: IssueDraft): void;
 };
 export type EditorWorkspaceProps = {
   project: string;
@@ -90,12 +100,14 @@ export type EditorWorkspaceProps = {
   onGroupCount?: (count: number) => void;
   /** Chamada após cada gravação bem-sucedida no disco feita pelo editor. */
   onSaved?: () => void;
+  /** Iniciar da página Issues: cola a issue no orquestrador. null (ou ausente) quando ele não está aberto. */
+  startIssue?: StartIssue;
 };
 
 type Status = { error?: string; binary?: boolean; large?: boolean };
 // Versão do disco que difere de um rascunho sujo: a tela oferece usar o disco ou salvar sobre ele, nunca troca sozinha.
 type DiskVersion = { text: string; bom: boolean; readOnly: boolean };
-type Ask = { title: string; body: ReactNode; actions: { key: string; label: string; danger?: boolean }[] };
+type Ask = { title: string; body: ReactNode; actions: { key: string; label: string; danger?: boolean }[]; cancelLabel?: string };
 // Comparação antes de gravar sobre o disco (ou de usar o disco): as duas versões são as que a tela tinha quando o usuário pediu.
 type Compare = { docId: string; path: string; mode: 'keep' | 'use'; disk: DiskVersion; draft: string };
 type Common = {
@@ -119,7 +131,10 @@ function detailsOf(paths: string[]) {
   for (const path of paths) count.set(fileName(path), (count.get(fileName(path)) ?? 0) + 1);
   return new Map(paths.map((path) => [path, (count.get(fileName(path)) ?? 0) > 1 ? splitPath(path).dir || 'raiz' : '']));
 }
-const tabPath = (target: TabTarget) => target.path;
+// Abas sem arquivo (as das Issues) têm nome próprio, sem caminho.
+const PAGE_NAMES = { issues: 'Issues', 'new-issue': 'Nova issue' } as const;
+// Nome curto da aba nos avisos: o nome do arquivo, ou o da página.
+const nameOf = (target: TabTarget) => (target.kind === 'issues' || target.kind === 'new-issue' ? PAGE_NAMES[target.kind] : fileName(target.path));
 
 // Texto de uma aba para a lista e os avisos: arquivo e pasta, ou o rótulo do diff/commit/conflito.
 function labelOf(target: TabTarget): string {
@@ -128,13 +143,21 @@ function labelOf(target: TabTarget): string {
     case 'diff': return `${target.path} (${target.side === 'staged' ? 'preparadas' : 'alterações'})`;
     case 'commit': return `${target.path} @ ${target.hash.slice(0, 7)}`;
     case 'conflict': return `${target.path} (conflito)`;
+    case 'issues':
+    case 'new-issue': return PAGE_NAMES[target.kind];
   }
 }
+
+// Ícone da aba: o do tipo de arquivo, ou o da issue nas páginas das Issues.
+const tabIcon = (target: TabTarget) => {
+  const path = pathOf(target);
+  return path === null ? <CircleDot className="size-4 shrink-0 text-[var(--ant-color-text-secondary)]" aria-hidden /> : <FileIcon path={path} className="size-4" />;
+};
 
 function emptyData(): EditorData { return { buffers: {}, conflicts: {} }; }
 
 export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(props, handle) {
-  const { project, locked, guard, refreshGit, onActivePath, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
+  const { project, locked, guard, refreshGit, onActivePath, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved, startIssue = null } = props;
   // Ref para que as gravações antigas (ainda em await) avisem com a prop atual.
   const savedRef = useRef(onSaved);
   savedRef.current = onSaved;
@@ -193,6 +216,22 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const splitRef = useRef(split);
   const dragId = useRef<string | null>(null);
   const splitDrag = useRef<{ startX: number; start: number; width: number } | null>(null);
+  // Texto da aba Nova issue: fica aqui, e não no formulário, para mover a aba de grupo sem perder nada. Não vai para a recuperação.
+  const [issueDraft, setIssueDraftState] = useState<IssueDraft>(EMPTY_DRAFT);
+  const issueDraftRef = useRef(issueDraft);
+  // Sobe a cada abertura da aba Nova issue: o título recebe o foco.
+  const [issueFocus, setIssueFocus] = useState(0);
+
+  const setIssueDraft = (next: IssueDraft) => {
+    issueDraftRef.current = next;
+    setIssueDraftState(next);
+  };
+  // Sujos: rascunhos de arquivo e de conflito, e a issue nova com texto (chave `new-issue`).
+  const dirtyNow = (d: EditorData = dataRef.current, draft: IssueDraft = issueDraftRef.current) => {
+    const keys = dirtyKeys(d);
+    if (draftFilled(draft)) keys.add(NEW_ISSUE_DIRTY);
+    return keys;
+  };
 
   const setWs = (next: WorkspaceState) => {
     wsRef.current = next;
@@ -253,7 +292,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   };
 
   const openTarget = (target: TabTarget, options: Pick<OpenOptions, 'permanent' | 'side'> = {}) => {
-    const dirty = dirtyKeys(dataRef.current);
+    const dirty = dirtyNow();
     const group: GroupId = options.side ?? wsRef.current.focus;
     const base = groupWithDefault(wsRef.current, group);
     setWs(options.permanent ? openPermanent(base, group, target) : openPreview(base, group, target, dirty));
@@ -272,18 +311,64 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     openFile(path, { ...options, side });
   };
 
+  // Páginas das Issues. A lista: a do grupo focado, senão a de outro grupo; sem nenhuma, abre no grupo focado.
+  const openIssues = () => {
+    const state = wsRef.current;
+    const focused = state.groups.find((g) => g.id === state.focus);
+    const found = focused?.tabs.find((t) => t.target.kind === 'issues') ?? allTabs().find((t) => t.target.kind === 'issues');
+    if (found) setWs(activate(state, found.id));
+    else openTarget({ kind: 'issues' }, { permanent: true });
+  };
+  // O formulário é um só no app: abrir de novo ativa o que existe. O conteúdo vindo da faixa só entra se ele está vazio.
+  const openNewIssue = (seed?: IssueDraft) => {
+    const found = allTabs().find((t) => t.target.kind === 'new-issue');
+    if (seed) {
+      if (found && draftFilled(issueDraftRef.current)) toast.info({ title: 'Já há uma issue em edição.', duration: 4000 });
+      else setIssueDraft({ title: seed.title, body: seed.body, labels: [...seed.labels] });
+    } else if (!found) {
+      setIssueDraft(EMPTY_DRAFT);
+    }
+    if (found) setWs(activate(wsRef.current, found.id));
+    else openTarget({ kind: 'new-issue' }, { permanent: true });
+    setIssueFocus((n) => n + 1);
+  };
+  // Criada: o formulário fecha sem perguntar (o texto já foi para o store) e a lista ganha o foco.
+  const issueCreated = () => {
+    setIssueDraft(EMPTY_DRAFT);
+    const found = allTabs().find((t) => t.target.kind === 'new-issue');
+    if (found) setWs(closeTabs(wsRef.current, [found.id]));
+    openIssues();
+  };
+  const closeNewIssue = () => {
+    const found = allTabs().find((t) => t.target.kind === 'new-issue');
+    if (found) void closeFlow({ kind: 'one', tabId: found.id });
+  };
+
   // ---- Fechar (decisão de rascunho antes de qualquer mudança) ----
   const closeFlow = async (scope: CloseScope): Promise<boolean> => {
-    const plan = planClose(wsRef.current, scope, dirtyKeys(dataRef.current));
+    const plan = planClose(wsRef.current, scope, dirtyNow());
     if (plan.tabIds.length === 0) return true;
     const closing = new Set(plan.tabIds);
     const stay = new Set(allTabs().filter((t) => !closing.has(t.id)).map((t) => targetKey(t.target)));
     const byId = new Map(allTabs().map((t) => [t.id, t] as const));
     // Vista que continua aberta (no mesmo grupo ou no outro) não perde o buffer: essas abas não entram na pergunta.
-    const unsavedTabs = plan.unsaved.map((id) => byId.get(id)).filter((t): t is EditorTab => !!t && !stay.has(targetKey(t.target)));
+    const unsavedAll = plan.unsaved.map((id) => byId.get(id)).filter((t): t is EditorTab => !!t && !stay.has(targetKey(t.target)));
+    // A issue nova com texto tem a pergunta própria (não há o que salvar: continuar editando ou descartar), antes da dos arquivos.
+    const issueTab = unsavedAll.find((t) => t.target.kind === 'new-issue');
+    const unsavedTabs = unsavedAll.filter((t) => t !== issueTab);
+    if (issueTab) {
+      const choice = await ask({
+        title: 'Descartar esta issue?',
+        body: 'O título e a descrição escritos nesta aba serão perdidos.',
+        cancelLabel: 'Continuar editando',
+        actions: [{ key: 'discard', label: 'Descartar', danger: true }],
+      });
+      if (choice !== 'discard') return false;
+      setIssueDraft(EMPTY_DRAFT);
+    }
     let decision: string | null = null;
     if (unsavedTabs.length > 0) {
-      const names = unsavedTabs.map((t) => fileName(tabPath(t.target))).join(', ');
+      const names = unsavedTabs.map((t) => nameOf(t.target)).join(', ');
       const choice = await ask({
         title: 'Fechar com alterações não salvas?',
         body: `Há alterações não salvas em ${names}. Salvar antes de fechar, descartar ou cancelar?`,
@@ -294,27 +379,30 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       if (choice === 'save') {
         for (const tab of unsavedTabs) {
           if (!(await saveTab(tab.target))) {
-            setNotice(`Não foi possível salvar ${fileName(tabPath(tab.target))}. Nada foi fechado.`);
+            setNotice(`Não foi possível salvar ${nameOf(tab.target)}. Nada foi fechado.`);
             return false;
           }
         }
       }
     }
     // Estado pode ter mudado durante a pergunta e o salvamento (digitação nova): a lista é refeita e o que ainda está sujo não fecha sem decisão.
-    const again = planClose(wsRef.current, scope, dirtyKeys(dataRef.current));
+    // A issue nova descartada acima já está vazia (o ref muda na hora), então não volta a contar como suja aqui.
+    const again = planClose(wsRef.current, scope, dirtyNow());
     // Descartar já foi decidido para as abas de `unsavedTabs`; salvar não garante nada se houve digitação durante o save.
-    const dirtyNow = dirtyKeys(dataRef.current);
+    const dirtyAfter = dirtyNow();
     const discarded = new Set(decision === 'discard' ? unsavedTabs.map((t) => t.id) : []);
     const pendingNew = again.tabIds
       .map((id) => allTabs().find((t) => t.id === id))
-      .filter((t): t is EditorTab => !!t && isDirty(t.target, dirtyNow) && !discarded.has(t.id) && !stay.has(targetKey(t.target)));
+      .filter((t): t is EditorTab => !!t && isDirty(t.target, dirtyAfter) && !discarded.has(t.id) && !stay.has(targetKey(t.target)));
     if (pendingNew.length > 0) {
-      setNotice(`Ainda há alterações não salvas em ${pendingNew.map((t) => fileName(tabPath(t.target))).join(', ')}. Nada foi fechado.`);
+      setNotice(`Ainda há alterações não salvas em ${pendingNew.map((t) => nameOf(t.target)).join(', ')}. Nada foi fechado.`);
       return false;
     }
     const next = closeTabs(wsRef.current, again.tabIds);
     setWs(next);
     pruneData(next);
+    // O formulário da issue nova que fechou vazio (ou descartado) não deixa texto para a próxima abertura.
+    if (!next.groups.some((g) => g.tabs.some((t) => t.target.kind === 'new-issue'))) setIssueDraft(EMPTY_DRAFT);
     return true;
   };
 
@@ -493,7 +581,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   useEffect(() => {
     const group = ws.groups.find((g) => g.id === ws.focus);
     const tab = group?.tabs.find((t) => t.id === group.active);
-    onActivePath?.(tab ? tabPath(tab.target) : null);
+    onActivePath?.(tab ? pathOf(tab.target) : null);
     onActiveTarget?.(tab ? tab.target : null);
   }, [ws]);
 
@@ -555,8 +643,10 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const activateTab = (tabId: string) => setWs(activate(wsRef.current, tabId));
   // Copia o caminho pedido (relativo, absoluto ou de navegação); sucesso e erro vêm do helper `copy`.
   const copyPath = (kind: 'relative' | 'absolute' | 'navigation', target: TabTarget) => {
+    const path = pathOf(target);
+    if (path === null) return;
     const cursor = target.kind === 'file' ? cursors.current[target.docId] : undefined;
-    const text = pathText(kind, target.path, project, cursor);
+    const text = pathText(kind, path, project, cursor);
     if (text === null) return;
     void copy(text, 'Caminho copiado');
   };
@@ -579,7 +669,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const remove = (paths: string[]) => {
     const hit = (p: string) => paths.some((base) => isWithin(p, base));
     // Abas de commit (histórico) leem blobs imutáveis: continuam abertas mesmo quando o arquivo some da pasta.
-    const ids = allTabs().filter((t) => t.target.kind !== 'commit' && hit(tabPath(t.target))).map((t) => t.id);
+    const ids = allTabs().filter((t) => { const path = pathOf(t.target); return t.target.kind !== 'commit' && path !== null && hit(path); }).map((t) => t.id);
     const next = closeTabs(wsRef.current, ids);
     setWs(next);
     setData(dropData(dataRef.current, paths));
@@ -683,7 +773,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     hasDraft: (path: string) => hasDraftAt(dataRef.current, path),
     unsaved: () => dirtyList(),
     saveAll,
-    openPaths: () => [...new Set(allTabs().map((t) => tabPath(t.target)))],
+    openPaths: () => [...new Set(allTabs().flatMap((t) => pathOf(t.target) ?? []))],
     refresh: () => {
       const ids = new Set(allTabs().flatMap((t) => (t.target.kind === 'file' ? [t.target.docId] : [])));
       ids.forEach((id) => void syncFile(id));
@@ -702,6 +792,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       const text = state.sliceDoc(range.from, range.to);
       return text.includes('\n') ? '' : text;
     },
+    openIssues,
+    openNewIssue,
     discardAll: () => {
       const current = dataRef.current;
       const buffers: Record<string, Buffer> = {};
@@ -775,7 +867,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
 
   const tabMenu = (tab: EditorTab): ContextMenuItem[] => {
     const target = tab.target;
-    const dirtySet = dirtyKeys(dataRef.current);
+    const dirtySet = dirtyNow();
     const dirty = isDirty(target, dirtySet);
     const buffer = target.kind === 'file' ? dataRef.current.buffers[target.docId] : undefined;
     const groupOf = wsRef.current.groups.find((g) => g.tabs.some((t) => t.id === tab.id));
@@ -784,7 +876,9 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const saved = groupOf ? groupOf.tabs.filter((t) => !t.pinned && !isDirty(t.target, dirtySet)).length : 0;
     const all = groupOf ? groupOf.tabs.filter((t) => !t.pinned).length : 0;
     const closeBatch = (scope: CloseScope) => void closeFlow(scope);
-    const saveBlock = target.kind === 'diff' || target.kind === 'commit'
+    const path = pathOf(target);
+    const noPath = 'Esta aba não é de um arquivo.';
+    const saveBlock = target.kind !== 'file' && target.kind !== 'conflict'
       ? blocked('save', 'Salvar', 'Esta aba não tem texto para salvar.')
       : !dirty ? blocked('save', 'Salvar', 'Não há alterações não salvas nesta aba.')
         : buffer?.readOnly ? blocked('save', 'Salvar', 'Arquivo somente leitura.')
@@ -805,7 +899,11 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         all > 0 ? action('close-all', 'Fechar Todas', () => closeBatch({ kind: 'all', group: groupOf?.id ?? 'A' }), 'Ctrl+K W')
           : blocked('close-all', 'Fechar Todas', 'Não há abas para fechar. As fixadas ficam abertas.'),
       ],
-      [
+      path === null ? [
+        blocked('copy-relative', 'Copiar Caminho Relativo', noPath),
+        blocked('copy-path', 'Copiar o Caminho', noPath),
+        blocked('copy-navigation', 'Copiar Caminho de Navegação', noPath),
+      ] : [
         action('copy-relative', 'Copiar Caminho Relativo', () => void copyPath('relative', target), 'Ctrl+K Ctrl+Shift+C'),
         action('copy-path', 'Copiar o Caminho', () => void copyPath('absolute', target), 'Shift+Alt+C'),
         target.kind === 'file' && cursors.current[target.docId]
@@ -813,14 +911,16 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           : blocked('copy-navigation', 'Copiar Caminho de Navegação', 'Abra o arquivo para ter a posição do cursor.'),
       ],
       [
-        action('split', 'Dividir à Direita', () => split_(tab.id), 'Ctrl+\\'),
+        target.kind === 'new-issue'
+          ? blocked('split', 'Dividir à Direita', 'Só há uma issue nova em edição.')
+          : action('split', 'Dividir à Direita', () => split_(tab.id), 'Ctrl+\\'),
         action('move', 'Mover para o Outro Grupo', () => moveToOther(tab.id)),
         groupOf && wsRef.current.groups.length === 2 ? action('join', 'Unir Grupos', join_) : blocked('join', 'Unir Grupos', 'Só há um grupo.'),
         wsRef.current.closed.length > 0 ? action('reopen', 'Reabrir Fechada', reopen, 'Ctrl+Shift+T') : blocked('reopen', 'Reabrir Fechada', 'Não há aba fechada para reabrir.'),
       ],
       [
         action('pin', tab.pinned ? 'Desafixar' : 'Fixar', () => setWs(togglePin(wsRef.current, tab.id)), 'Ctrl+K Shift+Enter'),
-        action('reveal', 'Revelar no Explorer', () => onReveal(target.path)),
+        path === null ? blocked('reveal', 'Revelar no Explorer', noPath) : action('reveal', 'Revelar no Explorer', () => onReveal(path)),
       ],
     ];
     return sections.flatMap((items, i) => (i ? [DIVIDER, ...items] : items));
@@ -828,6 +928,14 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
 
   const bodyOf = (tab: EditorTab, groupActive: boolean, shown: boolean): ReactNode => {
     const target = tab.target;
+    if (target.kind === 'issues') return <IssuesPage start={startIssue} onNew={() => openNewIssue()} />;
+    if (target.kind === 'new-issue') {
+      return (
+        <NewIssueForm
+          draft={issueDraft} onChange={setIssueDraft} focusKey={issueFocus} onCreated={issueCreated} onClose={closeNewIssue}
+        />
+      );
+    }
     if (target.kind === 'diff') return <DiffTab target={target} common={common} shown={shown} />;
     if (target.kind === 'commit') return <CommitTab target={target} />;
     if (target.kind === 'conflict') {
@@ -882,13 +990,14 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   };
 
   // ---- Grupos ----
-  const dirty = dirtyKeys(data);
+  const dirty = dirtyNow(data, issueDraft);
   const activeTabOf = (g: { active: string | null; tabs: EditorTab[] }) => g.tabs.find((t) => t.id === g.active) ?? null;
   const titleOf = (target: TabTarget) => {
     if (target.kind === 'file') return fileName(target.path);
     if (target.kind === 'diff') return `${fileName(target.path)} · ${target.side === 'staged' ? 'preparadas' : 'alterações'}`;
     if (target.kind === 'commit') return `${target.hash.slice(0, 7)} · ${fileName(target.path)}`;
-    return `${fileName(target.path)} · conflito`;
+    if (target.kind === 'conflict') return `${fileName(target.path)} · conflito`;
+    return PAGE_NAMES[target.kind];
   };
   const isDirtyTab = (target: TabTarget) => isDirty(target, dirty);
 
@@ -931,7 +1040,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (!group) return null;
     const current = activeTabOf(group);
     const focusedHere = ws.focus === groupId;
-    const details = detailsOf(ws.groups.flatMap((g) => g.tabs.map((t) => t.target.path)));
+    const details = detailsOf(ws.groups.flatMap((g) => g.tabs.flatMap((t) => pathOf(t.target) ?? [])));
     // Setas andam entre as abas da faixa (a ativação é no clique, Enter ou Espaço), como uma lista de abas.
     const onTabKey = (e: KeyboardEvent<HTMLButtonElement>) => {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return;
@@ -946,7 +1055,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const pinnedFree = group.tabs.filter((t) => !t.pinned);
     const groupMenu = (): ContextMenuItem[] => [
       ...group.tabs.map((tab) => ({
-        key: `tab-${tab.id}`, label: labelOf(tab.target), icon: <FileIcon path={tab.target.path} className="size-4" />,
+        key: `tab-${tab.id}`, label: labelOf(tab.target), icon: tabIcon(tab.target),
         onClick: () => activateTab(tab.id),
       })),
       DIVIDER,
@@ -1002,10 +1111,10 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
                   >
                     {tab.pinned
                       ? <Pin className="size-4 shrink-0 text-[var(--ant-color-text-secondary)]" aria-hidden />
-                      : <FileIcon path={tab.target.path} className="size-4" />}
+                      : tabIcon(tab.target)}
                     <span className="min-w-0 truncate">{titleOf(tab.target)}</span>
-                    {details.get(tab.target.path) && (
-                      <span className="min-w-0 truncate text-[12px] text-[var(--ant-color-text-secondary)]">{details.get(tab.target.path)}</span>
+                    {details.get(pathOf(tab.target) ?? '') && (
+                      <span className="min-w-0 truncate text-[12px] text-[var(--ant-color-text-secondary)]">{details.get(pathOf(tab.target) ?? '')}</span>
                     )}
                     {tab.pinned && <span className="sr-only">(fixada)</span>}
                     {tab.preview && <span className="sr-only">(prévia)</span>}
@@ -1121,7 +1230,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         onCancel={() => { askState?.resolve(null); setAskState(null); }}
         footer={askState && (
           <Flexbox horizontal wrap="wrap" justify="flex-end" gap={8} width="100%">
-            <Button onClick={() => { askState.resolve(null); setAskState(null); }}>Cancelar</Button>
+            <Button onClick={() => { askState.resolve(null); setAskState(null); }}>{askState.cancelLabel ?? 'Cancelar'}</Button>
             {askState.actions.map((item) => (
               <Button key={item.key} type={item.danger ? undefined : 'fill'} danger={item.danger} onClick={() => { askState.resolve(item.key); setAskState(null); }}>
                 {item.label}

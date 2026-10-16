@@ -26,3 +26,5 @@ regex = "1"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_UI_Shell"] }
 tauri-plugin-updater = "2"
 ignore = "0.4.33"
+# Cliente HTTP da API do GitHub (issues), síncrono, com o TLS padrão dele (rustls).
+ureq = "3.4.2"

@@ -15,6 +15,14 @@ Um app para Windows (Tauri) que põe CLIs de IA para trabalhar em papéis separa
 7. Se o CLI de um executor parar num pedido de confirmação, a aba e a barra dela passam a `aguardando orquestrador`, e o executor continua ocupando o seu lugar no teto de simultâneos. Quem responde é o orquestrador, não você: ele recebe a pergunta com a ferramenta e o comando e aceita, ou recusa com um motivo que vai ao executor (ver [delegação](delegacao.md)). Você não precisa agir na aba. O botão `parar` continua valendo ali e encerra o executor como interrompido.
 8. Fechar o app com alterações não salvas abre a confirmação: Salvar (grava tudo; se algo falhar ou sobrar texto novo, o app não fecha), Descartar (joga a edição fora e fecha) ou Cancelar (nada muda). Com terminais vivos, a confirmação também encerra todos, os shells do painel Terminal inclusive; os shells não contam para a confirmação. Nada de shell ou CLI é restaurado na próxima abertura. As abas, o layout e os rascunhos que ficam (quando não houve descarte) voltam; o que já mudou nos arquivos fica no projeto.
 
+## Issues do GitHub
+
+A tela Issues é opcional e só ela precisa do GitHub CLI (`gh`) instalado e logado (`gh auth login`), como os CLIs `claude` e `codex`: o app não tem login próprio. O repositório é o do remoto `origin`, que precisa estar no GitHub. Sem isso, o resto do app funciona normalmente e a tela diz o que falta (ver [interface](interface.md#issues)).
+
+1. Enquanto o orquestrador trabalha, abra Issues na coluna de ícones (ou `Ctrl+Shift+I`) e anote a ideia em “Anotar uma ideia…”; Enter cria a issue no GitHub.
+2. Quando quiser começar uma, clique em Iniciar na linha dela. O título, o link e a descrição vão para o prompt do orquestrador, sem enviar: revise e envie. Com o orquestrador ocupado, escolha entre colar agora ou iniciar quando ele terminar; nesse caso, ela é colada sozinha no fim da rodada, também sem enviar.
+3. Terminada a tarefa, Concluir fecha a issue no GitHub. Uma fechada por engano volta com Reabrir, em Fechadas recentes.
+
 ## Configuração
 
 A última escolha de cada papel fica em `%LOCALAPPDATA%\orquestrador\config.json`. O projeto não é salvo.

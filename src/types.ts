@@ -126,8 +126,25 @@ export type Events = {
   'node-added': ExecutorNode;
   'node-state': NodeStateEvent;
   'orchestrator-exit': { code: number | null };
+  // A cada mudança: `busy` com a rodada do orquestrador em andamento; livre esperando o usuário ou com o orquestrador fechado.
+  'orchestrator-turn': { busy: boolean };
   'shell-exit': { id: string; code: number | null };
   'update-status': UpdateStatus;
 };
 
 export const ORCHESTRATOR = 'orchestrator';
+
+// Issues do GitHub do repositório aberto (contrato do backend, via GitHub CLI). O GitHub é a única fonte das issues.
+// `unavailable` diz por que não há issues; `message` vem pronta para a tela, em português.
+export type GhStatus =
+  | { kind: 'ready'; owner: string; repo: string; login: string }
+  | { kind: 'unavailable'; reason: 'no-gh' | 'no-login' | 'no-remote' | 'no-access' | 'issues-disabled' | 'offline'; message: string };
+// `color` é hex sem `#`. Datas em ISO 8601; `closedAt` é null na aberta.
+export type IssueLabel = { name: string; color: string };
+export type Issue = {
+  number: number; title: string; body: string; state: 'open' | 'closed'; labels: IssueLabel[]; author: string; comments: number;
+  createdAt: string; updatedAt: string; closedAt: string | null; url: string;
+};
+export type Label = { name: string; color: string; description: string };
+// Retorno de `github_issues`: `data: null` quer dizer que nada mudou desde a `version` pedida. Traz as abertas e as 50 fechadas mais recentes.
+export type IssuesSnapshot = { version: number; data: null | { issues: Issue[]; labels: Label[] } };

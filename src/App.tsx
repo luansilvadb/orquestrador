@@ -7,6 +7,10 @@ import { EditorWorkspace, type EditorWorkspaceHandle } from './editor-workspace'
 import { BatchError, FilesScreen, Nav, StatusBar, type FileActions, type Route } from './explorer';
 import { createGitGuard } from './git-guard';
 import { GitSidebar, usePolled } from './git';
+import { issuePrompt } from './issue-text';
+import { START_OFF, type StartIssue } from './issue-ui';
+import { IssuesSidebar } from './issues-sidebar';
+import { IssuesProvider, useIssuesStore } from './issues-store';
 import { copy, type HistoryRequest, nextHistoryId, splitPath } from './git-history';
 import { QuickOpen } from './quick-open';
 import { SearchScreen } from './search';
@@ -18,7 +22,7 @@ import { folderName, TitleBar } from './titlebar';
 import { pathText, relativeTo } from './file-tab-actions';
 import { isWithin, type TabTarget } from './workspace-model';
 import {
-  ORCHESTRATOR, type Choice, type ExecutorNode, type GitState, type Moved, type NodeState, type Options, type UpdateStatus,
+  ORCHESTRATOR, type Choice, type ExecutorNode, type GitState, type Issue, type Moved, type NodeState, type Options, type UpdateStatus,
 } from './types';
 
 const MB = 1024 * 1024;
@@ -232,9 +236,29 @@ export function App() {
   const [step, setStep] = useState<{ dir: 1 | -1; id: number } | null>(null);
   const stepSeq = useRef(0);
   const [quickOpen, setQuickOpen] = useState(false);
+  // Sobe a cada Ctrl+Shift+I: a faixa Issues foca a captura. O ref guarda a tela e o elemento com o foco antes do atalho, para o Esc
+  // da captura vazia voltar para lá; sair da tela Issues por outro caminho esquece.
+  const [captureRequest, setCaptureRequest] = useState(0);
+  const captureReturn = useRef<{ route: Route; focus: Element | null } | null>(null);
+  useEffect(() => {
+    if (route !== 'issues') captureReturn.current = null;
+  }, [route]);
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
   // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
   const git = usePolled(() => backend.gitStatus(), state.update.phase === 'ready' && !!state.project);
+  // Issues do GitHub do projeto: um store só, lido pela faixa Issues e pelas abas da área central (pelo IssuesProvider).
+  const issues = useIssuesStore(state.project);
+  // O store da renderização mais recente, para as escutas registradas uma vez no `boot`.
+  const issuesRef = useRef(issues);
+  useLayoutEffect(() => {
+    issuesRef.current = issues;
+  });
+  // Rodada do orquestrador em andamento (evento `orchestrator-turn`). O ref é o último estado recebido: um evento repetido não é transição.
+  const [orchestratorBusy, setOrchestratorBusy] = useState(false);
+  const busyRef = useRef(false);
+  const turnEvents = useRef(0);
+  // A colagem automática da próxima em curso: uma por vez.
+  const takingNext = useRef(false);
   const [connected, setConnected] = useState(false);
   const [fatal, setFatal] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -359,6 +383,61 @@ export function App() {
     if (!view || !text) return report(new Error('O Orquestrador não está aberto.'));
     void view.pasteFiles([text]).then(() => view.term.focus()).catch(report);
   }
+  // Iniciar uma issue: o título, o link e a descrição vão ao rascunho do Orquestrador como um paste só, sem Enter (o usuário envia), e ela
+  // vira a em andamento (a anterior volta à fila). `focus` leva o foco ao terminal (o Iniciar do usuário; a próxima automática não rouba o foco).
+  async function pasteIssue(issue: Issue, focus: boolean) {
+    const view = terminals.get(ORCHESTRATOR);
+    if (!view || !stateRef.current.orchestrator?.choice) throw new Error(START_OFF);
+    const store = issuesRef.current;
+    await view.pasteText(issuePrompt(issue));
+    if (focus) view.term.focus();
+    store.setActive(issue.number);
+    toast.success({ title: `Issue #${issue.number} colada no orquestrador`, duration: 3000 });
+  }
+  const startIssue = (issue: Issue) => void pasteIssue(issue, true).catch(report);
+  // Com o orquestrador ocupado: a issue vira a próxima (substitui a que era), colada quando ele terminar a rodada. null tira a marca.
+  function startLater(issue: Issue | null) {
+    issuesRef.current.setNext(issue?.number ?? null);
+    if (issue) toast.info({ title: `#${issue.number} será colada quando o orquestrador terminar`, duration: 4000 });
+  }
+  // Mudança de rodada do orquestrador, uma vez por transição (evento repetido não conta). Ocupado → livre: atualiza as issues e, se a
+  // próxima continua aberta, cola-a e faz dela a em andamento. Sem o orquestrador aberto, a próxima espera.
+  function orchestratorTurn(busy: boolean) {
+    turnEvents.current++;
+    if (busy === busyRef.current) return;
+    busyRef.current = busy;
+    setOrchestratorBusy(busy);
+    if (!busy && !takingNext.current) {
+      takingNext.current = true;
+      void takeNext().finally(() => {
+        takingNext.current = false;
+      });
+    }
+  }
+  async function takeNext() {
+    const store = issuesRef.current;
+    await store.refresh();
+    const { next, issues: list } = store.latest();
+    const issue = list.find((i) => i.number === next && i.state === 'open');
+    // Projeto trocado no meio, ou outra rodada já começou: fica para a próxima transição.
+    if (!issue || issuesRef.current.latest !== store.latest || busyRef.current || !stateRef.current.orchestrator?.choice) return;
+    await pasteIssue(issue, false).catch(report);
+  }
+  // Issues troca a faixa e também abre (ou ativa) a aba central Issues.
+  function go(to: Route) {
+    setRoute(to);
+    if (to === 'issues') editor.current?.openIssues();
+  }
+  // Esc na captura vazia aberta pelo Ctrl+Shift+I: a tela de antes e o foco de antes (se o elemento ainda está na página).
+  function dismissCapture() {
+    const back = captureReturn.current;
+    captureReturn.current = null;
+    if (!back) return;
+    setRoute(back.route);
+    requestAnimationFrame(() => {
+      if (back.focus instanceof HTMLElement && back.focus.isConnected) back.focus.focus();
+    });
+  }
 
   async function boot() {
     try {
@@ -381,8 +460,12 @@ export function App() {
             dispatch({ type: 'removed', ids: [id] });
           }
         }),
-        host().listen('orchestrator-exit', ({ code }) =>
-          resetOrchestrator(`O orquestrador terminou (${code === null ? 'sem código de saída' : `código de saída ${code}`}).`)),
+        host().listen('orchestrator-exit', ({ code }) => {
+          resetOrchestrator(`O orquestrador terminou (${code === null ? 'sem código de saída' : `código de saída ${code}`}).`);
+          // Fechado conta como livre.
+          orchestratorTurn(false);
+        }),
+        host().listen('orchestrator-turn', ({ busy }) => orchestratorTurn(busy)),
         // `exit` num shell: o backend já o encerrou, então só a aba dele sai (a última fecha o painel).
         host().listen('shell-exit', ({ id }) => dropShell(id)),
         host().onCloseRequested(async () => {
@@ -415,6 +498,11 @@ export function App() {
       // Depois de escutar os eventos: o estado atual cobre o que saiu antes do registro. Se um evento chegou
       // enquanto ele vinha, o evento é mais novo e a resposta não se aplica.
       // Se a resposta falha depois de um evento novo, a falha é da resposta velha e o evento vale.
+      // A rodada do orquestrador do mesmo jeito: a resposta só vale se nenhum evento chegou enquanto ela vinha. Sem resposta, fica livre.
+      const turns = turnEvents.current;
+      void backend.orchestratorBusy().then((busy) => {
+        if (turnEvents.current === turns) orchestratorTurn(busy);
+      }, () => {});
       const seen = updateEvents.current;
       try {
         const status = await backend.updateStatus();
@@ -569,7 +657,7 @@ export function App() {
     terminals.get(state.shellActive)?.term.focus();
   }, [state.shellOpen, state.shellActive]);
 
-  // Atalhos de projeto (pesquisa, F4, arquivo rápido) valem só com o projeto aberto e o app pronto.
+  // Atalhos de projeto (pesquisa, F4, arquivo rápido, issues) valem só com o projeto aberto e o app pronto.
   const canShortcut = () => !!stateRef.current.project && stateRef.current.update.phase === 'ready';
 
   // Atalhos de janela num listener só, no window em captura (antes do xterm, que não recebe a tecla). Chama sempre o da última renderização.
@@ -603,6 +691,17 @@ export function App() {
         e.stopPropagation();
         setRoute('pesquisa');
         setStep({ dir: e.shiftKey ? -1 : 1, id: ++stepSeq.current });
+        return;
+      }
+      // Ctrl+Shift+I vai para a tela Issues e foca a captura, de qualquer lugar menos do terminal (xterm). Dentro de um campo de texto
+      // também vale: é um atalho de navegação. Não abre a aba central Issues (o editor da tela de antes continua onde estava). O
+      // `preventDefault` tenta segurar o DevTools do WebView2, que usa a mesma tecla no `tauri dev`.
+      if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.code === 'KeyI' && canShortcut() && !target?.closest?.('.xterm')) {
+        e.preventDefault();
+        e.stopPropagation();
+        captureReturn.current ??= { route, focus: document.activeElement };
+        setRoute('issues');
+        setCaptureRequest((n) => n + 1);
         return;
       }
       // Ctrl+P abre o arquivo rápido. Não consome o atalho dentro do terminal (xterm) nem dos campos de texto: ali a tecla segue como antes.
@@ -698,6 +797,10 @@ export function App() {
     paste: pasteInto,
   };
 
+  // Iniciar só com o Orquestrador rodando (o mesmo critério do Adicionar ao Chat); sem ele, a tela desabilita o botão com o motivo.
+  // O mesmo ponto para a faixa e a página: livre cola na hora; ocupado, o botão abre o menu (colar agora ou quando ele terminar).
+  const issueStart: StartIssue = orchestrator?.choice ? { busy: orchestratorBusy, now: startIssue, later: startLater } : null;
+
   // ---------- telas ----------
 
   if (!ready) {
@@ -756,8 +859,9 @@ export function App() {
       </TitleBar>
 
       <Flexbox ref={rowRef} horizontal flex={1} className="min-h-0">
-        <Nav route={route} changed={changed} onGo={setRoute} />
+        <Nav route={route} changed={changed} onGo={go} />
         <main className="relative min-h-0 min-w-0 flex-1">
+          <IssuesProvider value={issues}>
           <Flexbox horizontal height="100%">
             {/* Faixa da esquerda: árvore, pesquisa ou Git, todas montadas; só a da rota aparece. A borda direita arrasta a largura. */}
             <DraggablePanel
@@ -788,6 +892,14 @@ export function App() {
                     onOpenFile={(path, options) => editor.current?.openFile(path, options)}
                   />
                 </div>
+                <div className={shown('issues')}>
+                  <IssuesSidebar
+                    start={issueStart}
+                    onOpenPage={() => editor.current?.openIssues()}
+                    onOpenEditor={(seed) => editor.current?.openNewIssue(seed)}
+                    captureRequest={captureRequest} onCaptureDismiss={dismissCapture}
+                  />
+                </div>
               </div>
             </DraggablePanel>
             {/* Coluna central: o editor (grupos, abas, diffs e conflitos) em cima e o painel Terminal embaixo. Sempre montada. */}
@@ -799,6 +911,7 @@ export function App() {
                   refreshGit={() => git.refresh()} onSaved={() => setSaveTick((n) => n + 1)}
                   onActivePath={setActivePath} onActiveTarget={setActiveTarget}
                   onGroupCount={setGroupCount}
+                  startIssue={issueStart}
                   layout={layoutText}
                   onRestoreLayout={(text) => {
                     const saved = readLayout(text);
@@ -819,6 +932,7 @@ export function App() {
               />
             </Flexbox>
           </Flexbox>
+          </IssuesProvider>
         </main>
         {/* Painel do Orquestrador, à direita de tudo e em todas as telas: nenhuma rota o desmonta nem muda o tamanho dele. */}
         <TerminalsScreen

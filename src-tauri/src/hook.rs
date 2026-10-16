@@ -1,4 +1,5 @@
-//! Os modos `--hook`, `--guard` e `--ask` do executável, sem janela, chamados pelos CLIs dos executores.
+//! Os modos `--hook`, `--guard` e `--ask` do executável, sem janela, chamados pelos CLIs dos executores (e o
+//! `--hook` também pelo orquestrador, no início e no fim de cada rodada).
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -13,7 +14,8 @@ const CANCELLED: &str = "O executor foi encerrado antes de o orquestrador respon
 const NO_ANSWER: &str = "O orquestrador ainda não respondeu a este pedido de confirmação. Não tente outro caminho: repita exatamente o mesmo comando para continuar esperando a resposta.";
 
 /// `orquestrador.exe --hook <pasta> [json]`: o sinal de fim de rodada. O Claude Code entrega o
-/// JSON do hook `Stop` por stdin; o Codex, como último argumento do `notify`. Grava o que recebeu,
+/// JSON do hook `Stop` por stdin; o Codex, como último argumento do `notify`. No orquestrador, os
+/// hooks `UserPromptSubmit` e `Stop` dos dois CLIs entregam por stdin. Grava o que recebeu,
 /// sem interpretar, num arquivo novo da pasta (publicado por renomeação); quem lê é o app.
 /// Um arquivo por chamada: medido no Codex 0.162, o `notify` também dispara para a rodada interna
 /// que gera o título da conversa, e uma chamada não pode apagar a outra.

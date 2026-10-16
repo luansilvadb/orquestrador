@@ -20,6 +20,13 @@
 // e `repo-above` (pasta dentro de outro repositório, raiz `C:\projetos`). Fora de `repo`, `git_status` devolve só o `kind` (e a raiz, em `repo-above`).
 // `?subfolder=1` faz `choose_project` devolver `subfolder: true`. Em execução, `__mock.gitMode = 'no-repo'` e `__mock.subfolder = true` trocam isso
 // (por exemplo, um `git init` feito pelo terminal, que o painel vê na consulta seguinte).
+// Issues do GitHub (`?gh=`): `ready` (padrão; repositório `luansilvadb/orquestrador`, login `luansilvadb`, issues em memória), e os indisponíveis
+// `no-gh`, `no-login`, `no-remote`, `issues-disabled` e `offline`, em que `github_status` volta `unavailable` com a mensagem do backend.
+// `create-fails` deixa tudo pronto, mas `github_create_issue` rejeita com "Sem conexão com o GitHub." (para ver a criação guardada que falhou).
+// Os comandos `github_*` demoram ~300 ms. Em execução, `__mock.ghMode = 'offline'` troca o modo.
+// Rodada do orquestrador: um Enter no terminal do orquestrador (`term_write` com só `"\r"`; colar não conta) emite `orchestrator-turn` com
+// `busy: true` e, 8 s depois, `busy: false`, com uma linha curta no terminal em cada ponta. `orchestrator_busy` responde o estado, e abrir o
+// orquestrador começa livre. `__mock.orchestratorTurn(true)` (ou `false`) força o estado na hora, sem o fim automático.
 import { EDITOR_HEAD_LINES } from './mock-fixtures';
 import { parseDiffFromFile } from '@pierre/diffs';
 import type { Transport } from './backend';
@@ -28,7 +35,7 @@ import {
   type Batch, type Choice, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
   type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type Pasted, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
-  type SearchResults, type SkipReason,
+  type SearchResults, type SkipReason, type GhStatus, type Issue, type IssuesSnapshot, type Label,
 } from './types';
 
 type Handler = (payload: never) => void;
@@ -37,6 +44,8 @@ type Handler = (payload: never) => void;
 const GIT_MODES = ['repo', 'no-repo', 'no-git', 'repo-above'] as const;
 type GitMode = (typeof GIT_MODES)[number];
 const params = new URLSearchParams(window.location.search);
+const GH_MODES = ['ready', 'no-gh', 'no-login', 'no-remote', 'issues-disabled', 'offline', 'create-fails'] as const;
+type GhMode = (typeof GH_MODES)[number];
 const REPO_ROOT = 'C:\\projetos';
 
 const CLAUDE = ['low', 'medium', 'high', 'xhigh', 'max'], CODEX = ['low', 'medium', 'high', 'xhigh'];
@@ -317,13 +326,29 @@ const debug = { close: async () => {
   },
   // Modo do Git do simulado (ver o topo do arquivo). Trocar em execução simula um `git init` ou `git` removido por fora.
   gitMode: (GIT_MODES.find((m) => m === params.get('git')) ?? 'repo') as GitMode,
+  // Modo das Issues do GitHub (ver o topo do arquivo).
+  ghMode: (GH_MODES.find((m) => m === params.get('gh')) ?? 'ready') as GhMode,
   // `choose_project` devolve a pasta como dentro de um repositório (o projeto aberto é a raiz dele).
   subfolder: params.get('subfolder') === '1',
+  // Força a rodada do orquestrador (ver o topo do arquivo): `true` ocupado até chamar com `false`.
+  orchestratorTurn: (busy: boolean) => orchestratorTurn(busy),
   // Chamadas de Git que chegaram ao simulado, com argumento, resultado e erro (só para o check conferir o payload).
   calls: [] as { cmd: string; args: unknown; result: unknown; error: string | null }[] };
 (window as unknown as { __mock: typeof debug }).__mock = debug;
 
 const SHELL_PROMPT = 'PS C:\\projetos\\exemplo> ';
+// Rodada do orquestrador simulado: ocupado do Enter até o fim automático (8 s) ou até `__mock.orchestratorTurn(false)`.
+let orchestratorBusy = false;
+let turnTimer: ReturnType<typeof setTimeout> | undefined;
+const TURN_MS = 8000;
+function orchestratorTurn(busy: boolean, quiet = false) {
+  clearTimeout(turnTimer);
+  if (busy === orchestratorBusy) return;
+  orchestratorBusy = busy;
+  if (!quiet) out('orchestrator', busy ? '\r\n[simulado] rodada iniciada…\r\n' : '[simulado] rodada concluída.\r\n');
+  emit('orchestrator-turn', { busy });
+}
+
 function shellTyped(id: string, data: string) {
   const shell = shells.get(id)!;
   for (const char of data) {
@@ -910,13 +935,102 @@ function wavSilence(seconds: number): ArrayBuffer {
   return buf;
 }
 
+// ---- Issues do GitHub (em memória). `ghVersion` sobe a cada mudança; `github_issues` com a mesma versão devolve `data: null`. ----
+const GH_OWNER = 'luansilvadb', GH_REPO = 'orquestrador', GH_LOGIN = 'luansilvadb';
+const GH_UNAVAILABLE: Partial<Record<GhMode, Extract<GhStatus, { kind: 'unavailable' }>>> = {
+  'no-gh': { kind: 'unavailable', reason: 'no-gh', message: 'O GitHub CLI (gh) não foi encontrado neste computador. Instale o gh e rode `gh auth login`.' },
+  'no-login': { kind: 'unavailable', reason: 'no-login', message: 'O GitHub CLI não está logado. Rode `gh auth login` num terminal e tente de novo.' },
+  'no-remote': { kind: 'unavailable', reason: 'no-remote', message: 'O remoto `origin` deste repositório não está no GitHub.' },
+  'issues-disabled': { kind: 'unavailable', reason: 'issues-disabled', message: `As issues estão desligadas em ${GH_OWNER}/${GH_REPO}.` },
+  offline: { kind: 'unavailable', reason: 'offline', message: 'Sem conexão com o GitHub.' },
+};
+const GH_LABELS: Label[] = [
+  { name: 'bug', color: 'd73a4a', description: "Something isn't working" },
+  { name: 'documentation', color: '0075ca', description: 'Improvements or additions to documentation' },
+  { name: 'duplicate', color: 'cfd3d7', description: 'This issue or pull request already exists' },
+  { name: 'enhancement', color: 'a2eeef', description: 'New feature or request' },
+  { name: 'good first issue', color: '7057ff', description: 'Good for newcomers' },
+  { name: 'help wanted', color: '008672', description: 'Extra attention is needed' },
+  { name: 'invalid', color: 'e4e669', description: "This doesn't seem right" },
+  { name: 'question', color: 'd876e3', description: 'Further information is requested' },
+  { name: 'wontfix', color: 'ffffff', description: 'This will not be worked on' },
+  { name: 'accessibility', color: '0e8a16', description: 'Acessibilidade: teclado, leitor de tela e contraste' },
+];
+const ghLabels = (names: string[]) => names.map((name) => ({ name, color: GH_LABELS.find((l) => l.name === name)?.color ?? 'ededed' }));
+const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+// [número, título, descrição, labels, autor, comentários, criada há (horas), fechada há (horas; null = aberta)]
+type GhSeed = [number, string, string, string[], string, number, number, number | null];
+const GH_SEED: GhSeed[] = [
+  [1, 'Tela inicial sem projeto escolhido', 'Ao abrir o app pela primeira vez, a tela fica vazia.\n\n- Mostrar o botão **Escolher pasta**\n- Lembrar o último projeto', ['enhancement'], 'luansilvadb', 3, 24 * 200, 24 * 180],
+  [2, 'Terminal não redimensiona ao maximizar', 'Depois de maximizar a janela, o xterm continua com o tamanho antigo até digitar algo.\n\nPassos: abrir o painel Terminal e maximizar.', ['bug'], 'luansilvadb', 5, 24 * 150, 24 * 140],
+  [3, 'Documentar os modos do simulado', 'Listar em `docs/arquitetura.md` os parâmetros de URL do `mock.ts`.\n\nHoje só `?git=` e `?subfolder=` aparecem lá.', ['documentation', 'good first issue'], 'ana-dev', 1, 24 * 120, 24 * 90],
+  [4, 'Ícone duplicado na coluna', 'O ícone do Git aparecia duas vezes depois de trocar de projeto.\n\nMesmo problema da #2? Parece que não.', ['bug', 'duplicate'], 'carlosm', 2, 24 * 60, 24 * 58],
+  [5, 'Suporte a Linux', 'Dá para rodar no Linux?\n\nPor enquanto o app é só para Windows (ConPTY, Lixeira, clipboard).', ['question', 'wontfix'], 'visitante42', 4, 24 * 45, 24 * 40],
+  [6, 'Atalho para abrir a pesquisa nos arquivos', 'Hoje só dá pelo ícone. Proposta: `Ctrl+Shift+F`, como no VS Code.\n\nTambém seria bom focar o campo ao abrir.', ['enhancement'], 'luansilvadb', 0, 24 * 30, null],
+  [7, 'Contraste baixo nas abas inativas', 'O texto das abas inativas fica abaixo de 4,5:1 no tema escuro.\n\n| Elemento | Contraste |\n| --- | --- |\n| Aba inativa | 3,1:1 |', ['accessibility', 'bug'], 'ana-dev', 2, 24 * 21, null],
+  [8, 'Histórico do Git lento em repositórios grandes', 'Com mais de 50 mil commits, a aba de histórico leva uns 4 s para abrir.\n\nTalvez paginar já na primeira consulta.', ['bug', 'help wanted'], 'carlosm', 7, 24 * 14, null],
+  [9, 'Escolher o modelo do executor por tarefa', 'Hoje o executor usa sempre a última escolha.\n\nSeria útil o orquestrador **sugerir** o modelo conforme a tarefa.', ['enhancement', 'question'], 'luansilvadb', 1, 24 * 9, null],
+  [10, 'Guia de contribuição', 'Falta um `CONTRIBUTING.md` explicando:\n\n1. Como rodar em desenvolvimento (`npm run dev`)\n2. Como rodar os checks em `scripts/`\n3. O estilo dos comentários', ['documentation', 'good first issue', 'help wanted'], 'visitante42', 0, 24 * 5, null],
+  [11, 'Leitor de tela não anuncia a aba ativa', 'O NVDA lê só "aba", sem o nome do arquivo.\n\nFalta `aria-selected` e o rótulo na faixa de abas.', ['accessibility'], 'ana-dev', 3, 26, null],
+  [12, 'Mensagem de erro em inglês ao fazer push', 'Quando o push é recusado, aparece a saída crua do Git em inglês.\n\n```\n! [rejected] main -> main (fetch first)\n```', ['invalid'], 'carlosm', 1, 5, null],
+  [13, 'Mostrar o progresso dos executores na barra de título', 'Algo como `2/5 executores` ao lado do nome do projeto.\n\nSó quando houver um lote rodando.', [], 'luansilvadb', 0, 0.2, null],
+];
+let ghVersion = 1;
+const ghUrl = (number: number) => `https://github.com/${GH_OWNER}/${GH_REPO}/issues/${number}`;
+const ghIssues: Issue[] = GH_SEED.map(([number, title, body, labels, author, comments, created, closed]) => ({
+  number, title, body, state: closed === null ? 'open' : 'closed', labels: ghLabels(labels), author, comments,
+  createdAt: hoursAgo(created), updatedAt: hoursAgo(closed ?? created / 2), closedAt: closed === null ? null : hoursAgo(closed), url: ghUrl(number),
+}));
+// Fora de `ready` e `create-fails`, os comandos de issue recusam com a mensagem do status, como o backend sem acesso.
+const ghReady = () => {
+  const off = GH_UNAVAILABLE[debug.ghMode];
+  if (off) throw off.message;
+};
+function ghSnapshot(sinceVersion: number): IssuesSnapshot {
+  ghReady();
+  if (sinceVersion === ghVersion) return { version: ghVersion, data: null };
+  // Todas as abertas e as 50 fechadas mais recentes, mais nova primeiro (como a página de Issues do GitHub).
+  const open = ghIssues.filter((i) => i.state === 'open').sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const closed = ghIssues.filter((i) => i.state === 'closed').sort((a, b) => b.closedAt!.localeCompare(a.closedAt!)).slice(0, 50);
+  return { version: ghVersion, data: structuredClone({ issues: [...open, ...closed], labels: GH_LABELS }) };
+}
+function ghCreate(title: string, body: string, labels: string[]): Issue {
+  ghReady();
+  if (debug.ghMode === 'create-fails') throw 'Sem conexão com o GitHub.';
+  if (!title.trim()) throw 'A issue precisa de um título.';
+  const now = new Date().toISOString(), number = Math.max(0, ...ghIssues.map((i) => i.number)) + 1;
+  const issue: Issue = {
+    number, title, body, state: 'open', labels: ghLabels(labels), author: GH_LOGIN, comments: 0, createdAt: now, updatedAt: now, closedAt: null, url: ghUrl(number),
+  };
+  ghIssues.push(issue);
+  ghVersion++;
+  return structuredClone(issue);
+}
+function ghSetState(number: number, open: boolean): Issue {
+  ghReady();
+  const issue = ghIssues.find((i) => i.number === number);
+  if (!issue) throw `A issue #${number} não existe em ${GH_OWNER}/${GH_REPO}.`;
+  if ((issue.state === 'open') !== open) {
+    const now = new Date().toISOString();
+    issue.state = open ? 'open' : 'closed';
+    issue.closedAt = open ? null : now;
+    issue.updatedAt = now;
+    ghVersion++;
+  }
+  return structuredClone(issue);
+}
+
 const commands: Record<string, (args: any) => unknown> = {
   read_media: ({ path }: { path: string }) => mockBytes(path),
   update_status: () => ({ phase: 'ready' }),
   retry_update: () => ({ phase: 'ready' }),
   choose_project: () => ({ project: 'C:\\projetos\\exemplo', subfolder: debug.subfolder }),
   get_options: () => structuredClone(options),
-  start_orchestrator: ({ choice }: { choice: Choice }) => { options.last.orchestrator = choice; },
+  start_orchestrator: ({ choice }: { choice: Choice }) => {
+    options.last.orchestrator = choice;
+    orchestratorTurn(false, true);
+  },
+  orchestrator_busy: () => orchestratorBusy,
   set_executor_choice: ({ choice }: { choice: Choice }) => { options.last.executor = choice; },
   start_shell: ({ id, cwd }: { id: string; cwd?: string }) => {
     // Pasta do projeto (relativa); sem ela, ou com '', é a raiz, como no backend. Pasta que não existe é recusada antes de abrir.
@@ -998,6 +1112,12 @@ const commands: Record<string, (args: any) => unknown> = {
     // Marcas de colagem entre aspas (bracketed paste) não são texto: o simulado só põe o conteúdo no rascunho.
     const text = data.replace(/\x1b\[20[01]~/g, '');
     if (shells.has(id)) shellTyped(id, text);
+    // No orquestrador, um Enter sozinho (a tecla, não uma colagem) começa uma rodada simulada, que termina sozinha em 8 s. O resto o simulado
+    // só mostra (a colagem de uma issue, por exemplo), com as quebras de linha do texto (LF no bracketed paste, CR no paste do xterm).
+    else if (id === 'orchestrator' && data === '\r') {
+      orchestratorTurn(true);
+      turnTimer = setTimeout(() => orchestratorTurn(false), TURN_MS);
+    } else if (id === 'orchestrator') out(id, text.replace(/\r\n?|\n/g, '\r\n'));
   },
   list_dir: ({ path }: { path: string }) => {
     const dir = folderAt(path);
@@ -1053,6 +1173,12 @@ const commands: Record<string, (args: any) => unknown> = {
   },
   git_accept_deletion: ({ path, revision }: { path: string; revision: string }) => { acceptDeletion(path, revision); return null; },
   search: ({ query }: { query: ReplaceQuery }): SearchResults => searchText(query),
+  github_status: (): GhStatus => GH_UNAVAILABLE[debug.ghMode] ?? { kind: 'ready', owner: GH_OWNER, repo: GH_REPO, login: GH_LOGIN },
+  github_issues: ({ sinceVersion }: { sinceVersion: number }): IssuesSnapshot => ghSnapshot(sinceVersion),
+  github_create_issue: ({ title, body, labels }: { title: string; body: string; labels: string[] }): Issue => ghCreate(title, body, labels),
+  github_set_issue_state: ({ number, open }: { number: number; open: boolean }): Issue => ghSetState(number, open),
+  // Sem navegador para abrir: só registra no console.
+  github_open: ({ url }: { url: string }) => void console.info(`[mock] github_open ${url}`),
   term_resize: () => undefined,
   term_snapshot: ({ id }: { id: string }) => {
     const term = terms.get(id);
@@ -1078,7 +1204,7 @@ export const mock: Transport = {
       if (log) log.error = String(e);
       reject(e);
     }
-  }, (cmd === 'term_snapshot' ? 100 : 15) + (debug.delay[cmd] ?? 0))),
+  }, (cmd === 'term_snapshot' ? 100 : cmd.startsWith('github_') ? 300 : 15) + (debug.delay[cmd] ?? 0))),
   listen: async (event, handler) => void handlers.set(event, [...(handlers.get(event) ?? []), handler as Handler]),
   onCloseRequested: async (mayClose) => { closeHandler = mayClose; },
   // Janela simulada: minimizar e maximizar não fazem nada; fechar segue o mesmo caminho de `__mock.close()`.

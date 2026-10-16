@@ -7,6 +7,8 @@
 //   escolhido pelo integrador e nunca trocado. O `path` é só onde o arquivo está agora: `remapPath` o atualiza sem mexer no docId.
 //   Por isso renomear/mover não desmonta o buffer, e duas abas com o mesmo docId (em grupos diferentes) compartilham o buffer.
 // - Diff é identificado por lado + path (`staged`/`unstaged`); histórico, por hash + path; conflito, por path.
+// - As abas das Issues não têm path: `issues` (a lista, no máximo uma por grupo) e `new-issue` (o formulário, uma só no app: dividir
+//   não a copia, fechar não a guarda para reabrir, e `loadWorkspace` não a restaura).
 // - Dentro de um grupo, uma identidade aparece no máximo uma vez: abrir de novo só ativa a que já existe.
 // - Ordem do grupo: fixadas primeiro, depois as demais. No máximo uma prévia por grupo. Fixada nunca é prévia.
 // - Cada operação devolve um estado novo; o argumento não muda. Operação inválida (grupo ou aba inexistente) devolve o mesmo estado.
@@ -28,7 +30,9 @@ export type TabTarget =
   | { kind: 'file'; docId: string; path: string }
   | { kind: 'diff'; side: DiffSide; path: string }
   | { kind: 'commit'; hash: string; path: string }
-  | { kind: 'conflict'; path: string };
+  | { kind: 'conflict'; path: string }
+  | { kind: 'issues' }
+  | { kind: 'new-issue' };
 export type EditorTab = { id: string; target: TabTarget; pinned: boolean; preview: boolean };
 export type EditorGroup = { id: GroupId; tabs: EditorTab[]; active: string | null };
 export type ClosedTab = { group: GroupId; target: TabTarget };
@@ -60,8 +64,13 @@ export function targetKey(target: TabTarget): string {
     case 'diff': return `diff:${target.side}:${target.path.toLowerCase()}`;
     case 'commit': return `commit:${target.hash.toLowerCase()}:${target.path.toLowerCase()}`;
     case 'conflict': return `conflict:${target.path.toLowerCase()}`;
+    case 'issues': return 'issues';
+    case 'new-issue': return 'new-issue';
   }
 }
+
+/** Caminho do alvo, ou null nas abas sem arquivo (as das Issues). */
+export const pathOf = (target: TabTarget): string | null => ('path' in target ? target.path : null);
 
 /** Abre (ou ativa) uma prévia no grupo. Substitui a prévia limpa; se a prévia atual está suja (`dirty`, docIds), ela vira permanente e a nova entra depois. */
 export function openPreview(state: WorkspaceState, group: GroupId, target: TabTarget, dirty: ReadonlySet<string>): WorkspaceState {
@@ -120,7 +129,7 @@ export function closeTabs(state: WorkspaceState, tabIds: readonly string[]): Wor
   const closing = new Set(tabIds);
   const closed: ClosedTab[] = [];
   const groups = state.groups.map((group) => {
-    for (const tab of group.tabs) if (closing.has(tab.id)) closed.push({ group: group.id, target: tab.target });
+    for (const tab of group.tabs) if (closing.has(tab.id) && tab.target.kind !== 'new-issue') closed.push({ group: group.id, target: tab.target });
     return dropFromGroup(group, closing);
   });
   return tidy({
@@ -181,7 +190,7 @@ export function reorderTab(state: WorkspaceState, tabId: string, index: number):
 export function splitTab(state: WorkspaceState, tabId: string): WorkspaceState {
   const found = locate(state, tabId);
   const otherId = GROUP_IDS.find((id) => id !== found?.group.id);
-  if (!found || !otherId) return state;
+  if (!found || !otherId || found.tab.target.kind === 'new-issue') return state;
   const base = state.groups.some((g) => g.id === otherId)
     ? state
     : { ...state, groups: [...state.groups, { id: otherId, tabs: [], active: null }] };
@@ -212,7 +221,7 @@ export function remapPath(state: WorkspaceState, from: string, to: string): Work
   if (!isSafePath(from) || !isSafePath(to)) return state;
   const move = (path: string) => (isWithin(path, from) ? to + path.slice(from.length) : path);
   // Histórico é imutável: o path de um commit é o do próprio commit e não muda. Abrir o arquivo atual sai de outro localizador.
-  const retarget = (target: TabTarget): TabTarget => (target.kind === 'commit' ? target : { ...target, path: move(target.path) });
+  const retarget = (target: TabTarget): TabTarget => (target.kind === 'commit' || !('path' in target) ? target : { ...target, path: move(target.path) });
   return tidy({
     ...state,
     groups: state.groups.map((g) => ({ ...g, tabs: g.tabs.map((t) => ({ ...t, target: retarget(t.target) })) })),
@@ -242,6 +251,8 @@ export function loadWorkspace(text: string): Loaded {
     groupIds.add(group.id);
     const tabs: EditorTab[] = [];
     for (const tab of asArray(group.tabs)) {
+      // O formulário da issue nova não é restaurado (o texto dele não fica guardado): sai sem aviso.
+      if (isRecord(tab) && isRecord(tab.target) && tab.target.kind === 'new-issue') continue;
       if (!isRecord(tab) || typeof tab.id !== 'string' || tab.id === '' || tab.id.length > 64 || tabIds.has(tab.id) || !isSafeTarget(tab.target)) {
         notes.push('Aba inválida descartada.');
         continue;
@@ -253,6 +264,7 @@ export function loadWorkspace(text: string): Loaded {
   }
   const closed: ClosedTab[] = [];
   for (const entry of asArray(raw.closed)) {
+    if (isRecord(entry) && isRecord(entry.target) && entry.target.kind === 'new-issue') continue;
     if (isRecord(entry) && isGroupId(entry.group) && isSafeTarget(entry.target)) closed.push({ group: entry.group, target: entry.target });
     else notes.push('Aba fechada inválida descartada.');
   }
@@ -379,6 +391,7 @@ export function isSafePath(path: unknown): path is string {
 }
 
 function isSafeTarget(value: unknown): value is TabTarget {
+  if (isRecord(value) && value.kind === 'issues') return true;
   if (!isRecord(value) || !isSafePath(value.path)) return false;
   switch (value.kind) {
     case 'file': return typeof value.docId === 'string' && value.docId !== '' && value.docId.length <= 128;
@@ -397,9 +410,12 @@ export function isWithin(path: string, base: string): boolean {
 }
 
 // Sujo: buffer de arquivo com draft (`docId`) ou rascunho de resolução de conflito (`conflict:<path>`, sem diferença de caixa).
-// Quem integra mantém essas chaves no conjunto `dirty`.
+// A issue nova com título ou descrição escritos é suja pela chave `new-issue`. Quem integra mantém essas chaves no conjunto `dirty`.
+export const NEW_ISSUE_DIRTY = 'new-issue';
 export const isDirty = (target: TabTarget, dirty: ReadonlySet<string>) =>
-  target.kind === 'file' ? dirty.has(target.docId) : target.kind === 'conflict' ? dirty.has(`conflict:${target.path.toLowerCase()}`) : false;
+  target.kind === 'file' ? dirty.has(target.docId)
+    : target.kind === 'conflict' ? dirty.has(`conflict:${target.path.toLowerCase()}`)
+      : target.kind === 'new-issue' ? dirty.has(NEW_ISSUE_DIRTY) : false;
 const isGroupId = (value: unknown): value is GroupId => value === 'A' || value === 'B';
 export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 export const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);

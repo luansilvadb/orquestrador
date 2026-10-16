@@ -431,6 +431,24 @@ fn caminhos_com_espaco_acento_e_apostrofo_funcionam() {
     assert!(!is_error && out.starts_with("--- EXECUTOR 1/1 ---\nSó uma: coração\nfeito: Só uma: coração\nexecutor_exit: 0\n--- GIT ---\n"), "{out}");
 }
 
+/// Cada prompt do orquestrador é uma rodada: os hooks de início e fim, pelo `--hook` de verdade, viram
+/// `orchestrator-turn` ocupado e depois livre. Nos dois CLIs, com a sessão numa pasta com espaço, acento e
+/// apóstrofo (no Codex o comando do hook passa pelo PowerShell).
+#[test]
+fn rodada_do_orquestrador_vira_ocupado_e_livre_nos_dois_clis() {
+    for tool in ["claude", "codex"] {
+        let b = bench(&format!("turno-{tool}"), "temp com espaço, açaí e it's", Some(8));
+        b.core.start_orchestrator(Choice::new(tool, "", ""), 100, 30).unwrap();
+        until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
+        assert!(!b.core.orchestrator_busy(), "{tool}: começa livre");
+        b.core.term_write(ORCHESTRATOR, "oi\r");
+        assert_eq!(b.wait("ocupado", |e, _| e == "orchestrator-turn")["busy"], true, "{tool}");
+        assert_eq!(b.wait("livre", |e, _| e == "orchestrator-turn")["busy"], false, "{tool}");
+        assert!(!b.core.orchestrator_busy());
+        until("a pasta dos sinais esvaziar", || std::fs::read_dir(b.core.session_dir().unwrap().join("orch-hook")).unwrap().count() == 0);
+    }
+}
+
 #[test]
 fn saida_do_orquestrador_mata_os_executores_e_limpa_a_sessao() {
     let b = bench("saida", "temp", Some(8));

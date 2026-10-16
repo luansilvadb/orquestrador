@@ -78,12 +78,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Checks do projeto: build do frontend, pontos de tabs e de release, e os testes Rust.
+      # Checks do projeto: build do frontend, pontos de tabs, de issues e de release, e os testes Rust.
       - name: Rodar os checks
         shell: bash
         run: |
           npm run build
           node scripts/check-file-tabs.mjs
+          node scripts/check-issues.mjs
           node scripts/check-release.mjs
           cargo test --manifest-path src-tauri/Cargo.toml
 

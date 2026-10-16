@@ -391,3 +391,52 @@ check('Id no limite do inteiro seguro não trava o mint e não repete aba', () =
   const ids = state.groups.flatMap((g) => g.tabs.map((t) => t.id));
   assert.equal(new Set(ids).size, ids.length);
 });
+
+const issues = { kind: 'issues' };
+const newIssue = { kind: 'new-issue' };
+
+check('Aba Issues: uma por grupo, sem path; move de grupo, sai do remapeamento e volta pela recuperação', () => {
+  let s = openPermanent(createWorkspace(), 'A', file('d1', 'src/a.ts'));
+  s = openPermanent(s, 'A', issues);
+  s = openPermanent(s, 'A', issues);
+  assertConsistent(s);
+  assert.equal(tabsOf(s, 'A').filter((t) => t.target.kind === 'issues').length, 1, 'abrir de novo só ativa');
+  const id = tabsOf(s, 'A').find((t) => t.target.kind === 'issues').id;
+  s = splitTab(s, id);
+  assertConsistent(s);
+  assert.equal(tabsOf(s, 'B').filter((t) => t.target.kind === 'issues').length, 1, 'no outro grupo pode haver outra');
+  s = remapPath(s, 'src', 'lib');
+  assert.deepEqual(tabsOf(s, 'A').find((t) => t.id === id).target, issues, 'sem path, o remapeamento não mexe');
+  const { state, notes } = loadWorkspace(JSON.stringify(s));
+  assert.deepEqual(notes, []);
+  assert.equal(state.groups.flatMap((g) => g.tabs).filter((t) => t.target.kind === 'issues').length, 2, 'restaurada nos dois grupos');
+  const closed = closeTabs(s, [id]);
+  assert.deepEqual(closed.closed.at(-1).target, issues, 'fechada vai para a pilha e reabre');
+  assert.equal(tabsOf(reopenClosed(closed), 'A').filter((t) => t.target.kind === 'issues').length, 1);
+  const moved = moveTab(closeTabs(s, [tabsOf(s, 'B').find((t) => t.target.kind === 'issues').id]), id, 'B');
+  assertConsistent(moved);
+  assert.ok(tabsOf(moved, 'B').some((t) => t.id === id), 'move para o outro grupo com o mesmo id');
+});
+
+check('Aba Nova issue: não se divide, não vai para as fechadas e não é restaurada', () => {
+  let s = openPermanent(createWorkspace(), 'A', file('d1', 'a.ts'));
+  s = openPermanent(s, 'A', newIssue);
+  const id = tabsOf(s, 'A').find((t) => t.target.kind === 'new-issue').id;
+  assert.equal(splitTab(s, id), s, 'dividir não copia o formulário');
+  const { state, notes } = loadWorkspace(JSON.stringify(s));
+  assert.deepEqual(notes, [], 'sai sem aviso');
+  assert.deepEqual(names(state, 'A'), ['a.ts']);
+  const closed = closeTabs(s, [id]);
+  assert.equal(closed.closed.length, 0, 'fechar não guarda para reabrir');
+  const tampered = { ...s, closed: [{ group: 'A', target: newIssue }, { group: 'A', target: issues }] };
+  assert.deepEqual(loadWorkspace(JSON.stringify(tampered)).state.closed.map((c) => c.target.kind), ['issues'], 'nem pela pilha salva');
+});
+
+check('Nova issue com texto conta como suja no fechamento (chave new-issue); vazia, não', () => {
+  let s = openPermanent(createWorkspace(), 'A', newIssue);
+  s = openPermanent(s, 'A', file('d1', 'a.ts'));
+  const id = tabsOf(s, 'A').find((t) => t.target.kind === 'new-issue').id;
+  assert.deepEqual(planClose(s, { kind: 'one', tabId: id }, new Set(['new-issue'])).unsaved, [id]);
+  assert.deepEqual(planClose(s, { kind: 'one', tabId: id }, NONE).unsaved, []);
+  assert.deepEqual(planClose(s, { kind: 'saved', group: 'A' }, new Set(['new-issue'])).tabIds.length, 1, 'Fechar Salvas deixa a issue com texto');
+});

@@ -3,7 +3,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
-  Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GitBranches, GitDiff, GitState, GraphCommit, HunkRef, Moved, Options,
+  Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GhStatus, GitBranches, GitDiff, GitState, GraphCommit, HunkRef, Issue,
+  IssuesSnapshot, Moved, Options,
   Pasted, QuickOpen, ReplaceApplied, ReplacePreview, ReplaceQuery, ReplaceRequest, ReviewDiff, SearchFilter, SearchOptions, SearchResults, Snapshot, UpdateStatus,
 } from './types';
 
@@ -64,6 +65,8 @@ export const backend = {
   // Mata o shell de `id` sem gerar evento de saída.
   closeShell: (id: string) => call<void>('close_shell', { id }),
   setExecutorChoice: (choice: Choice) => call<void>('set_executor_choice', { choice }),
+  // Rodada do orquestrador em andamento agora (o evento `orchestrator-turn` traz as mudanças). Fechado conta como livre.
+  orchestratorBusy: () => call<boolean>('orchestrator_busy'),
   termWrite: (id: string, data: string) => call<void>('term_write', { id, data }),
   termResize: (id: string, cols: number, rows: number) => call<void>('term_resize', { id, cols, rows }),
   termSnapshot: (id: string) => call<Snapshot>('term_snapshot', { id }),
@@ -136,6 +139,15 @@ export const backend = {
   // Prévia da substituição: não grava. A aplicação só toca nos arquivos escolhidos da prévia, com a revisão que ela mostrou; erros voltam por arquivo.
   replacePreview: (query: ReplaceQuery, replacement: string) => call<ReplacePreview>('replace_preview', { query, replacement }),
   replaceApply: (request: ReplaceRequest) => call<ReplaceApplied>('replace_apply', { request }),
+  // Issues do GitHub do repositório aberto, pelo GitHub CLI. Erro chega como mensagem em português (ex.: sem conexão).
+  githubStatus: () => call<GhStatus>('github_status'),
+  // Abertas e as 50 fechadas mais recentes; `data: null` se nada mudou desde `sinceVersion`.
+  githubIssues: (sinceVersion: number) => call<IssuesSnapshot>('github_issues', { sinceVersion }),
+  // Devolve a issue criada (ou com o estado novo), já com número e URL.
+  githubCreateIssue: (title: string, body: string, labels: string[]) => call<Issue>('github_create_issue', { title, body, labels }),
+  githubSetIssueState: (number: number, open: boolean) => call<Issue>('github_set_issue_state', { number, open }),
+  // Abre no navegador padrão um endereço `https://github.com/...` (a issue, ou a lista de issues do repositório). Outro endereço é recusado.
+  githubOpen: (url: string) => call<void>('github_open', { url }),
 };
 
 /** Erros do backend já chegam como mensagem em português. */

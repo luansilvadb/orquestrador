@@ -38,6 +38,16 @@ pub(crate) fn toml(s: &str) -> String {
     serde_json::to_string(s).unwrap()
 }
 
+/// Texto entre aspas simples do PowerShell, que é onde o Codex roda o comando de um hook.
+fn ps(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// Um hook de comando do Codex como valor TOML de `-c`: o app, chamado pelo PowerShell com `args`.
+fn codex_hook(app: &str, args: &str) -> String {
+    format!("[{{hooks=[{{type=\"command\",command={}}}]}}]", toml(&format!("& {} {args}", ps(app))))
+}
+
 /// Medido no Codex 0.162: sem isto o CLI interativo abre "Trust this folder?" e fica parado. A
 /// forma `projects.'caminho'.trust_level=...` não é aceita por `-c`; a tabela inteira é, vale só
 /// para este processo e nada é gravado no config.toml do usuário.
@@ -66,7 +76,9 @@ fn codex_mcp(app: &str, dir: &str) -> Vec<String> {
 /// próprio app (`delegar`, `aguardar`, `responder`). O papel de líder técnico que não edita código vem do texto de
 /// `roles::ORCHESTRATOR` e dessas ferramentas, não de uma trava do app: não há sandbox, lista de ferramentas nem
 /// regra de comando específica de um CLI. Ao contrário do executor, não recebe o hook de guarda (stage, commit e
-/// push são dele, quando o usuário pede) nem o de confirmação (quem responderia é ele mesmo).
+/// push são dele, quando o usuário pede) nem o de confirmação (quem responderia é ele mesmo). Recebe os hooks de
+/// início e fim de rodada (`UserPromptSubmit` e `Stop`), gravando em `session.turn_dir()`: no Claude pelo settings
+/// da sessão (`session.rs`), no Codex aqui.
 pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &str) -> Spawn {
     let dir = session.dir.to_string_lossy().to_string();
     let (program, mut args) = if choice.tool == "codex" {
@@ -74,9 +86,17 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &s
         // orquestrador continua com `approve` em `codex_mcp`: com `never` ele era obrigatório (medido no 0.162.1);
         // se o bypass o dispensa não foi medido, então fica.
         // --no-daemon: o agente roda neste processo, então matar o processo mata o agente.
-        let mut args = strs(&["--no-daemon", "-C", &dir, "--dangerously-bypass-approvals-and-sandbox"]);
+        // Medido no Codex 0.162.1, no CLI interativo: `-c hooks.UserPromptSubmit` e `-c hooks.Stop` disparam uma vez
+        // por rodada, com `hook_event_name`, e somam aos do `hooks.json` do usuário; o `notify` do usuário fica
+        // intocado. A rodada interna que gera o título da conversa não dispara hook (só o `notify`). Sem
+        // --dangerously-bypass-hook-trust, o CLI abre "2 hooks are new or changed" e espera, como no executor.
+        let mut args = strs(&["--no-daemon", "-C", &dir, "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"]);
         args.extend(codex_trust(&dir));
         args.extend(codex_mcp(&exes.app, &dir));
+        let turn = format!("--hook {}", ps(&session.turn_dir().to_string_lossy()));
+        for event in ["UserPromptSubmit", "Stop"] {
+            args.extend(["-c".to_string(), format!("hooks.{event}={}", codex_hook(&exes.app, &turn))]);
+        }
         (exes.codex.clone(), args)
     } else {
         // bypassPermissions com todas as ferramentas, como o executor: o contrato é o mesmo nos dois CLIs. O aviso
@@ -134,9 +154,8 @@ pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, pr
         spawn.args = strs(&["--no-daemon", "-C", project, "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"]);
         spawn.args.extend(codex_trust(project));
         let notify = [exes.app.as_str(), "--hook", &hook_dir].map(toml).join(",");
-        let guard = toml(&format!("& '{}' --guard", exes.app.replace('\'', "''")));
         spawn.args.extend(["-c".to_string(), format!("notify=[{notify}]")]);
-        spawn.args.extend(["-c".to_string(), format!("hooks.PreToolUse=[{{hooks=[{{type=\"command\",command={guard}}}]}}]")]);
+        spawn.args.extend(["-c".to_string(), format!("hooks.PreToolUse={}", codex_hook(&exes.app, "--guard"))]);
         // Sem hook de confirmação: medido no 0.162.1, com o bypass nenhuma confirmação chega ao CLI e o evento
         // `PermissionRequest` não dispara.
         None
@@ -194,15 +213,22 @@ mod tests {
         assert_eq!(got.cwd, r"C:\proj");
         let trust = format!("projects={{{}={{trust_level=\"trusted\"}}}}", serde_json::to_string(&dir).unwrap());
         let mcp_args = format!("mcp_servers.orquestrador.args=[\"--mcp\",{}]", serde_json::to_string(&dir).unwrap());
+        // O app tem apóstrofo: no PowerShell ele vai dobrado dentro das aspas simples.
+        let hook = |event: &str| {
+            let command = format!(r"& 'C:\Program Files\Orq\o''rq.exe' --hook '{dir}\orch-hook'");
+            format!("hooks.{event}=[{{hooks=[{{type=\"command\",command={}}}]}}]", serde_json::to_string(&command).unwrap())
+        };
         assert_eq!(
             got.args,
             [
-                "--no-daemon", "-C", &dir, "--dangerously-bypass-approvals-and-sandbox",
+                "--no-daemon", "-C", &dir, "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust",
                 "-c", &trust,
                 "-c", r#"mcp_servers.orquestrador.command="C:\\Program Files\\Orq\\o'rq.exe""#,
                 "-c", &mcp_args,
                 "-c", r#"mcp_servers.orquestrador.default_tools_approval_mode="approve""#,
                 "-c", "mcp_servers.orquestrador.tool_timeout_sec=900",
+                "-c", &hook("UserPromptSubmit"),
+                "-c", &hook("Stop"),
                 "-m", "gpt-5.5", "-c", "model_reasoning_effort=high",
             ]
         );
@@ -248,6 +274,9 @@ mod tests {
         assert!(got.args.contains(&format!("mcp_servers.orquestrador.command={}", toml(app))));
         assert!(got.args.contains(&format!("mcp_servers.orquestrador.args=[{},{}]", toml("--mcp"), toml(&dir))));
         assert!(dir.contains("temp com espaço, açaí e it's"));
+        // No comando do hook, que o Codex roda no PowerShell, cada apóstrofo vai dobrado dentro das aspas simples.
+        let stop = format!("& '{}' --hook '{}'", app.replace('\'', "''"), s.turn_dir().to_string_lossy().replace('\'', "''"));
+        assert!(got.args.contains(&format!("hooks.Stop=[{{hooks=[{{type=\"command\",command={}}}]}}]", toml(&stop))));
         let claude = orchestrator(&exes, &Choice::new("claude", "", ""), &s, r"C:\proj");
         assert_eq!(claude.args[0], "--mcp-config");
         assert_eq!(claude.args[1], s.dir.join("mcp.json").to_string_lossy());

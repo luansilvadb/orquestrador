@@ -152,6 +152,30 @@ pub fn turn_end(payload: &str, prompt: &str) -> Option<String> {
     None
 }
 
+/// O que um sinal da pasta `orch-hook` diz da rodada do orquestrador.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OrchTurn {
+    Start,
+    End,
+    Ignore,
+}
+
+/// Classifica o JSON que o `--hook` gravou para o orquestrador. Os dois CLIs mandam o mesmo formato, com
+/// `hook_event_name` (medido no Claude Code 2.1.301 e no Codex 0.162.1): `UserPromptSubmit` começa a rodada e
+/// `Stop` a termina. O resto (JSON quebrado, outro evento, um `notify`) não muda nada.
+pub fn orchestrator_turn(payload: &str) -> OrchTurn {
+    let v: Value = serde_json::from_str(payload).unwrap_or_default();
+    match v["hook_event_name"].as_str() {
+        Some("UserPromptSubmit") => OrchTurn::Start,
+        Some("Stop") => OrchTurn::End,
+        _ => OrchTurn::Ignore,
+    }
+}
+
+/// O Esc sozinho, como o terminal manda a tecla. Medido no Claude Code 2.1.301 e no Codex 0.162.1: com a rodada
+/// em andamento, o Esc a interrompe e nenhum dos dois dispara `Stop` (nem o `notify`, no Codex).
+const ESC: &str = "\x1b";
+
 struct Slot {
     buffer: Shared,
     term: Option<Term>,
@@ -194,6 +218,8 @@ struct Inner {
     epoch: u64,
     /// Uma operação do Git (`git_idle`) roda sem o lock: enquanto esta marca estiver ligada, nenhum lote novo é aceito.
     git_exclusive: bool,
+    /// O orquestrador está numa rodada: do prompt do usuário até o fim dela. Sem orquestrador, livre.
+    busy: bool,
 }
 
 impl Inner {
@@ -248,6 +274,7 @@ impl Core {
             counter: 0,
             epoch: 0,
             git_exclusive: false,
+            busy: false,
         };
         Core { inner: Arc::new(Mutex::new(inner)), emit }
     }
@@ -403,8 +430,45 @@ impl Core {
         if id != ORCHESTRATOR && !is_shell(id) {
             return;
         }
-        if let Some(term) = self.inner.lock().unwrap().slots.get_mut(id).and_then(|s| s.term.as_mut()) {
+        let mut inner = self.inner.lock().unwrap();
+        // A rodada interrompida não manda sinal de fim (ver `ESC`): o Esc no orquestrador ocupado conta como fim.
+        if id == ORCHESTRATOR && data == ESC {
+            self.set_busy(&mut inner, false);
+        }
+        if let Some(term) = inner.slots.get_mut(id).and_then(|s| s.term.as_mut()) {
             term.write(data.as_bytes());
+        }
+    }
+
+    /// Se o orquestrador está numa rodada agora. A tela lê isto ao montar e depois acompanha `orchestrator-turn`.
+    pub fn orchestrator_busy(&self) -> bool {
+        self.inner.lock().unwrap().busy
+    }
+
+    /// Troca o estado da rodada do orquestrador e, só se mudou, emite `orchestrator-turn`.
+    fn set_busy(&self, inner: &mut Inner, busy: bool) {
+        if inner.busy != busy {
+            inner.busy = busy;
+            (self.emit)("orchestrator-turn", json!({ "busy": busy }));
+        }
+    }
+
+    /// Lê os sinais de início e fim de rodada do orquestrador, na ordem em que chegaram (o nome é cronológico), e
+    /// apaga cada um depois de lido. Cada troca de estado sai como evento, mesmo que início e fim cheguem juntos.
+    fn orchestrator_turns(&self, inner: &mut Inner) {
+        let Some(dir) = inner.session.as_ref().map(Session::turn_dir) else { return };
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).collect();
+        files.retain(|f| f.extension().is_some_and(|e| e == "json"));
+        files.sort();
+        for file in files {
+            // Um arquivo que não abre agora fica, com os seguintes, para a próxima volta: a ordem não se perde.
+            let Ok(payload) = std::fs::read_to_string(&file) else { break };
+            let _ = std::fs::remove_file(&file);
+            match orchestrator_turn(&payload) {
+                OrchTurn::Start => self.set_busy(inner, true),
+                OrchTurn::End => self.set_busy(inner, false),
+                OrchTurn::Ignore => {}
+            }
         }
     }
 
@@ -462,6 +526,8 @@ impl Core {
         inner.batches.clear();
         inner.seen.clear();
         inner.choice = None;
+        // Orquestrador encerrado conta como livre.
+        self.set_busy(inner, false);
         if let Some(warning) = inner.session.take().and_then(|s| s.remove()) {
             eprintln!("{warning}");
         }
@@ -514,7 +580,8 @@ impl Core {
         }
     }
 
-    /// Laço da sessão: recebe os lotes pedidos pelo comando de delegação e os sinais de fim de rodada.
+    /// Laço da sessão: recebe os lotes pedidos pelo comando de delegação, os sinais de fim de rodada dos executores
+    /// e os de início e fim de rodada do orquestrador.
     fn pump(&self, epoch: u64) {
         // A memória livre muda sozinha, então a fila é reavaliada a cada 1 s (cinco voltas), e só quando há nó na fila.
         let mut turns = 0u32;
@@ -524,6 +591,7 @@ impl Core {
             if inner.epoch != epoch {
                 return;
             }
+            self.orchestrator_turns(&mut inner);
             self.accept_batches(&mut inner);
             for i in 0..inner.nodes.len() {
                 if inner.nodes[i].info.state.is_live() {
@@ -823,6 +891,79 @@ mod tests {
             "last-assistant-message": "{\"title\":\"Responda OK\"}" });
         assert_eq!(turn_end(&real.to_string(), prompt).as_deref(), Some("OK"));
         assert_eq!(turn_end(&title.to_string(), prompt), None);
+    }
+
+    // Os JSON abaixo são os que os hooks do orquestrador gravaram na medição (caminhos e ids encurtados).
+    #[test]
+    fn rodada_do_orquestrador_claude() {
+        let start = r#"{"session_id":"7506e422","transcript_path":"C:\\Users\\x\\.claude\\projects\\p\\7506e422.jsonl","cwd":"C:\\proj","prompt_id":"063ae18d","permission_mode":"bypassPermissions","hook_event_name":"UserPromptSubmit","prompt":"responda apenas OK"}"#;
+        let end = r#"{"session_id":"7506e422","transcript_path":"C:\\Users\\x\\.claude\\projects\\p\\7506e422.jsonl","cwd":"C:\\proj","prompt_id":"063ae18d","permission_mode":"bypassPermissions","effort":{"level":"medium"},"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"OK","background_tasks":[],"session_crons":[]}"#;
+        assert_eq!(orchestrator_turn(start), OrchTurn::Start);
+        assert_eq!(orchestrator_turn(end), OrchTurn::End);
+    }
+
+    #[test]
+    fn rodada_do_orquestrador_codex() {
+        let start = r#"{"session_id":"01a14323","turn_id":"01a14323-357a","transcript_path":"C:\\Users\\x\\.codex\\sessions\\r.jsonl","cwd":"C:\\proj","hook_event_name":"UserPromptSubmit","model":"gpt-6.1-sol","permission_mode":"bypassPermissions","prompt":"responda apenas OK"}"#;
+        let end = r#"{"session_id":"01a14323","turn_id":"01a14323-357a","transcript_path":"C:\\Users\\x\\.codex\\sessions\\r.jsonl","cwd":"C:\\proj","hook_event_name":"Stop","model":"gpt-6.1-sol","permission_mode":"bypassPermissions","stop_hook_active":false,"last_assistant_message":"OK"}"#;
+        assert_eq!(orchestrator_turn(start), OrchTurn::Start);
+        assert_eq!(orchestrator_turn(end), OrchTurn::End);
+        // O `notify` da rodada do título não chega a esta pasta (a rodada do título não dispara hook), mas, se
+        // chegasse, não mudaria nada.
+        let title = r#"{"type":"agent-turn-complete","thread-id":"01a14323-3c09","client":"codex-tui","input-messages":["Generate a concise, single-line task title of at most 36 characters.\n\nUser prompt:\nresponda apenas OK"],"last-assistant-message":"{\"title\":\"Responder OK\"}"}"#;
+        assert_eq!(orchestrator_turn(title), OrchTurn::Ignore);
+        for other in [r#"{"hook_event_name":"SessionStart"}"#, r#"{"hook_event_name":"PreToolUse"}"#, "", "{quebrado", "[]"] {
+            assert_eq!(orchestrator_turn(other), OrchTurn::Ignore, "{other}");
+        }
+    }
+
+    /// Os eventos `orchestrator-turn` que o gravador recebeu, na ordem.
+    fn turnos(eventos: &Arc<Mutex<Vec<(String, Value)>>>) -> Vec<bool> {
+        eventos.lock().unwrap().iter().filter(|(ev, _)| ev == "orchestrator-turn").map(|(_, p)| p["busy"].as_bool().unwrap()).collect()
+    }
+
+    #[test]
+    fn sinais_do_orquestrador_mudam_o_estado_em_ordem_e_saem_da_pasta() {
+        let (emit, eventos) = gravador();
+        let root = fresh("orq-core", "turnos");
+        let core = core_vazio(&root, emit);
+        let session = Session { dir: root.join("sessao"), global_dirs: vec![] };
+        std::fs::create_dir_all(session.turn_dir()).unwrap();
+        let put = |name: &str, event: &str| std::fs::write(session.turn_dir().join(name), json!({ "hook_event_name": event }).to_string()).unwrap();
+        // Início e fim na mesma volta saem como dois eventos; um início repetido não repete o evento.
+        put("1.json", "UserPromptSubmit");
+        put("2.json", "UserPromptSubmit");
+        put("3.json", "SessionStart");
+        put("4.json", "Stop");
+        put("5.json.tmp", "UserPromptSubmit");
+        let mut inner = core.inner.lock().unwrap();
+        inner.session = Some(session);
+        core.orchestrator_turns(&mut inner);
+        assert!(!inner.busy);
+        let dir = inner.session.as_ref().unwrap().turn_dir();
+        let left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(left, ["5.json.tmp"], "os lidos saem; o que ainda está sendo publicado fica");
+        std::fs::write(dir.join("6.json"), json!({ "hook_event_name": "UserPromptSubmit" }).to_string()).unwrap();
+        core.orchestrator_turns(&mut inner);
+        assert!(inner.busy);
+        drop(inner);
+        assert!(core.orchestrator_busy());
+        assert_eq!(turnos(&eventos), [true, false, true]);
+        // O Esc no orquestrador ocupado conta como fim; outra tecla, ou o Esc num shell, não.
+        core.term_write(ORCHESTRATOR, "\x1b[A");
+        core.term_write("shell-1", ESC);
+        assert!(core.orchestrator_busy());
+        core.term_write(ORCHESTRATOR, ESC);
+        assert!(!core.orchestrator_busy());
+        core.term_write(ORCHESTRATOR, ESC);
+        assert_eq!(turnos(&eventos), [true, false, true, false], "livre de novo não repete o evento");
+        // Encerrar o orquestrador ocupado volta a livre, com o evento.
+        core.inner.lock().unwrap().busy = true;
+        core.shutdown();
+        assert!(!core.orchestrator_busy());
+        assert_eq!(turnos(&eventos), [true, false, true, false, false]);
+        assert!(!dir.exists(), "a pasta dos sinais sai com a sessão");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Um Core com um repositório de teste (branch `main` e `outra`), sem CLI real nem configuração.
