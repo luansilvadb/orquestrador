@@ -239,13 +239,6 @@ export function App() {
   const [step, setStep] = useState<{ dir: 1 | -1; id: number } | null>(null);
   const stepSeq = useRef(0);
   const [quickOpen, setQuickOpen] = useState(false);
-  // Sobe a cada Ctrl+Shift+I: a faixa Issues foca a captura. O ref guarda a tela e o elemento com o foco antes do atalho, para o Esc
-  // da captura vazia voltar para lá; sair da tela Issues por outro caminho esquece.
-  const [captureRequest, setCaptureRequest] = useState(0);
-  const captureReturn = useRef<{ route: Route; focus: Element | null } | null>(null);
-  useEffect(() => {
-    if (route !== 'issues') captureReturn.current = null;
-  }, [route]);
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
   // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
   const git = usePolled(() => backend.gitStatus(), state.update.phase === 'ready' && !!state.project);
@@ -479,16 +472,6 @@ export function App() {
     // Projeto trocado no meio, ou outra rodada já começou: fica para a próxima transição.
     if (!issue || issuesRef.current.latest !== store.latest || busyRef.current || !stateRef.current.orchestrator?.choice) return;
     await pasteIssue(issue, false).catch(report);
-  }
-  // Esc na captura vazia aberta pelo Ctrl+Shift+I: a tela de antes e o foco de antes (se o elemento ainda está na página).
-  function dismissCapture() {
-    const back = captureReturn.current;
-    captureReturn.current = null;
-    if (!back) return;
-    setRoute(back.route);
-    requestAnimationFrame(() => {
-      if (back.focus instanceof HTMLElement && back.focus.isConnected) back.focus.focus();
-    });
   }
 
   async function boot() {
@@ -755,15 +738,15 @@ export function App() {
         setStep({ dir: e.shiftKey ? -1 : 1, id: ++stepSeq.current });
         return;
       }
-      // Ctrl+Shift+I vai para a tela Issues e foca a captura, de qualquer lugar menos do terminal (xterm). Dentro de um campo de texto
-      // também vale: é um atalho de navegação. O editor da tela de antes continua onde estava, só escondido. O
-      // `preventDefault` tenta segurar o DevTools do WebView2, que usa a mesma tecla no `tauri dev`.
+      // Ctrl+Shift+I vai para a tela Issues e abre a aba Nova issue com o foco no Título, de qualquer lugar menos do terminal (xterm).
+      // Dentro de um campo de texto também vale: é um atalho de navegação. A rota e a aba mudam na mesma renderização, e o formulário foca
+      // depois da pintura, com a área já visível. O editor da tela de antes continua onde estava, só escondido. O `preventDefault` tenta
+      // segurar o DevTools do WebView2, que usa a mesma tecla no `tauri dev`.
       if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.code === 'KeyI' && canShortcut() && !target?.closest?.('.xterm')) {
         e.preventDefault();
         e.stopPropagation();
-        captureReturn.current ??= { route, focus: document.activeElement };
         setRoute('issues');
-        setCaptureRequest((n) => n + 1);
+        issuesArea.current?.openNewIssue();
         return;
       }
       // Ctrl+P abre o arquivo rápido. Não consome o atalho dentro do terminal (xterm) nem dos campos de texto: ali a tecla segue como antes.
@@ -958,8 +941,7 @@ export function App() {
                   <IssuesSidebar
                     start={issueStart}
                     onShowDetail={(focus) => issuesArea.current?.showDetail(focus)}
-                    onOpenEditor={(seed) => issuesArea.current?.openNewIssue(seed)}
-                    captureRequest={captureRequest} onCaptureDismiss={dismissCapture}
+                    onNewIssue={() => issuesArea.current?.openNewIssue()}
                   />
                 </div>
               </div>

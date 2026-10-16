@@ -6,7 +6,7 @@
 // O detalhe não tem estado do App além do store: os executores vivos e o foco no orquestrador chegam por props e descem direto para ele.
 //
 // API para o App (ref, `IssuesAreaHandle`):
-//   openNewIssue(seed?)  Abre ou ativa a aba Nova issue. Com `seed` (vindo da faixa), só preenche se o formulário está vazio; senão avisa por toast.
+//   openNewIssue()       Abre ou ativa a aba Nova issue (o Título ganha o foco). Com uma edição alterada, só ativa a aba e avisa.
 //   openEdit(issue)      Abre a issue no formulário (a aba Editar #N). Com outra edição ou uma Nova issue com texto, só ativa a aba e avisa.
 //   showDetail(focus?)   Ativa a aba Issues (o detalhe). Com `focus`, o foco vai para o detalhe; sem ele, fica onde estava (a faixa).
 //   dirty()              O nome da aba do formulário, se ela tem alteração (o App conta isso ao fechar a janela); senão null.
@@ -22,7 +22,7 @@ import { draftFilled, EMPTY_DRAFT, NewIssueForm, sameDraft, type IssueDraft } fr
 import type { ExecutorNode, Issue } from './types';
 
 export type IssuesAreaHandle = {
-  openNewIssue(seed?: IssueDraft): void;
+  openNewIssue(): void;
   openEdit(issue: Issue): void;
   showDetail(focus?: boolean): void;
   dirty(): string | null;
@@ -79,11 +79,11 @@ export const IssuesArea = forwardRef<IssuesAreaHandle, IssuesAreaProps>(function
   };
   const busy = () => formOpenRef.current && formDirty(formRef.current);
 
-  const openNewIssue = (seed?: IssueDraft) => {
-    const { editing, draft } = formRef.current;
-    // Com alteração na edição, ou com texto na Nova issue e algo vindo da faixa, nada é trocado: só a aba aparece.
-    if (formOpenRef.current && (editing !== null ? busy() : seed && draftFilled(draft))) toast.info({ title: 'Já há uma issue em edição.', duration: 4000 });
-    else if (seed || editing !== null || !formOpenRef.current) setForm({ editing: null, draft: seed ? { ...seed, labels: [...seed.labels] } : EMPTY_DRAFT, base: EMPTY_DRAFT });
+  const openNewIssue = () => {
+    const { editing } = formRef.current;
+    // Com alteração na edição, nada é trocado: só a aba aparece. Uma Nova issue já aberta fica com o texto dela.
+    if (editing !== null && busy()) toast.info({ title: 'Já há uma issue em edição.', duration: 4000 });
+    else if (editing !== null || !formOpenRef.current) setForm(EMPTY_FORM);
     activateForm();
   };
   const openEdit = (issue: Issue) => {
