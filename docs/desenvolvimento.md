@@ -18,7 +18,7 @@ npm run tauri build    # gera o instalador assinado em src-tauri\target\release\
 
 `npm run dev` sobe só o front-end (Vite), com um backend simulado em `src/mock.ts`, fora do Tauri. Os modos sem Git ficam nas URLs `?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1`.
 
-As Issues simuladas ficam em memória, com o repositório `luansilvadb/orquestrador` pronto e os comandos `github_*` demorando cerca de 300 ms. Os outros modos ficam em `?gh=no-gh`, `no-login`, `no-remote`, `issues-disabled` e `offline`, em que `github_status` volta indisponível com a mensagem do backend, e `?gh=create-fails`, em que tudo funciona menos a criação, que falha com “Sem conexão com o GitHub.”. No console, `__mock.ghMode = 'offline'` (ou outro modo) troca o modo em execução. No orquestrador simulado, um Enter sozinho (não uma colagem) começa uma rodada, que termina sozinha em 8 s, com o evento `orchestrator-turn` nas duas pontas; `__mock.orchestratorTurn(true)` (ou `false`) força o estado na hora, sem o fim automático.
+As Issues simuladas ficam em memória, como no arquivo do projeto: 13 issues, abertas e fechadas, e a em andamento e a próxima junto. `?issues=empty` começa sem nenhuma, e `?issues=broken` faz `issues_load` e as mudanças falharem com a mensagem do arquivo ilegível, como o backend. No console, `__mock.issuesMode = 'broken'` (ou `'seed'`) troca o modo em execução; o Tentar de novo relê. No orquestrador simulado, um Enter sozinho (não uma colagem) começa uma rodada, que termina sozinha em 8 s, com o evento `orchestrator-turn` nas duas pontas; `__mock.orchestratorTurn(true)` (ou `false`) força o estado na hora, sem o fim automático.
 
 ## Checagens sem dependências
 

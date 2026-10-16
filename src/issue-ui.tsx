@@ -1,27 +1,24 @@
-// Peças de interface comuns à faixa Issues (`issues-sidebar.tsx`), ao detalhe da issue (`issues-page.tsx`) e à aba Nova issue (`new-issue.tsx`):
-// as cores de estado do GitHub (só nos ícones), o ícone de estado, a bolinha e o chip neutro de label, o seletor de labels,
-// as marcas de estado (`Tag` com ícone: aberta, fechada, em andamento, próxima), o botão Colar no orquestrador (com o menu quando ele está
-// ocupado), as ações de estado da issue (Concluir, Voltar às abertas, Reabrir: o cartão Em andamento e o detalhe usam as mesmas) e as
-// ações de uma criação que falhou. E o relógio único das telas das Issues (`useNow`, `Ago`).
+// Peças de interface comuns à faixa Issues (`issues-sidebar.tsx`), ao detalhe da issue (`issues-page.tsx`) e à aba do formulário
+// (`new-issue.tsx`): as cores de estado (só nos ícones), o ícone de estado, a bolinha e o chip neutro de label, o seletor de labels (com a
+// criação de uma nova), as marcas de estado (`Tag` com ícone: aberta, fechada, em andamento, próxima), o botão Colar no orquestrador (com
+// o menu quando ele está ocupado) e as ações de estado da issue (Concluir, Voltar às abertas, Reabrir: o cartão Em andamento e o detalhe
+// usam as mesmas). E o relógio único das telas das Issues (`useNow`, `Ago`).
 import { lazy, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { Activity, Check, CircleAlert, CircleCheck, CircleDot, ClipboardPaste, Clock, Copy, LoaderCircle, Plus, RotateCcw, RotateCw, Trash2, Undo2 } from 'lucide-react';
+import { Activity, Check, CircleCheck, CircleDot, ClipboardPaste, Clock, Plus, RotateCcw, Undo2 } from 'lucide-react';
 import { Flexbox } from '@lobehub/ui';
-import { ActionIcon, Button, DropdownMenu, Modal, Tag, Text, toast, type DropdownItem } from '@lobehub/ui/base-ui';
+import { ActionIcon, Button, DropdownMenu, Input, Modal, Tag, Text, toast, type DropdownItem } from '@lobehub/ui/base-ui';
 import { message } from './backend';
-import { commandIn, pendingRetrying, relativeTime, splitCode, topLabels } from './issue-text';
-import { useIssues, type ActiveIssue, type PendingIssue } from './issues-store';
-import type { Issue, IssueLabel, Label } from './types';
+import { allLabels, LABEL_MAX, labelColor, pickLabel, relativeTime, topLabels } from './issue-text';
+import { useIssues } from './issues-store';
+import type { ActiveIssue, Issue } from './types';
 
-// O Markdown do Lobe UI (com os plugins dele) dobra o pacote principal: só carrega na primeira vez que alguém o mostra (a aba Visualizar da
-// Nova issue, a descrição e os comentários do detalhe), e é um pedaço só. É o mesmo `Markdown` de `@lobehub/ui`, pelo caminho do módulo
-// dele (`es/Markdown/index`), para o Vite separar o pedaço. Quem usa envolve em `Suspense`.
+// O Markdown do Lobe UI (com os plugins dele) dobra o pacote principal: só carrega na primeira vez que alguém o mostra (a aba Visualizar do
+// formulário e a descrição do detalhe), e é um pedaço só. É o mesmo `Markdown` de `@lobehub/ui`, pelo caminho do módulo dele
+// (`es/Markdown/index`), para o Vite separar o pedaço. Quem usa envolve em `Suspense`.
 export const IssueMarkdown = lazy(() => import('@lobehub/ui/es/Markdown/index'));
 
-/** Lista de issues do repositório no GitHub (o cabeçalho da faixa usa este link). */
-export const issuesUrl = (owner: string, repo: string) => `https://github.com/${owner}/${repo}/issues`;
-
-/** Cores de estado do GitHub (modo escuro), só para ícones: aberta, fechada, falha e o âmbar da issue em andamento. Texto e botões usam os tokens do tema. */
-export const GH = { open: '#3fb950', closed: '#a371f7', failed: '#f85149', amber: '#d29922' } as const;
+/** Cores de estado das issues, as do GitHub no modo escuro, só para ícones: aberta, fechada e o âmbar da issue em andamento. Texto e botões usam os tokens do tema. */
+export const GH = { open: '#3fb950', closed: '#a371f7', amber: '#d29922' } as const;
 
 // O relógio das telas das Issues: um intervalo só, de 1 s, ligado enquanto alguém o lê. A faixa e o detalhe leem o mesmo `Date.now()`,
 // e os tempos relativos iguais dizem o mesmo nos dois lugares.
@@ -71,30 +68,17 @@ export type StartIssue = {
   later(issue: Issue | null): void;
 } | null;
 
-export type IssueIconKind = 'open' | 'closed' | 'sending' | 'failed' | 'waiting';
+export type IssueIconKind = 'open' | 'closed';
 const ICONS = {
   open: { icon: CircleDot, color: GH.open, label: 'Aberta' },
   closed: { icon: CircleCheck, color: GH.closed, label: 'Fechada' },
-  sending: { icon: LoaderCircle, color: undefined, label: 'Enviando' },
-  failed: { icon: CircleAlert, color: GH.failed, label: 'Falhou' },
-  waiting: { icon: Clock, color: undefined, label: 'Guardada' },
 } as const;
 
-/** Ícone de estado da issue, com o nome do estado para leitores de tela: aberta (verde), fechada (roxo), enviando (anel girando) e falhou (vermelho). */
+/** Ícone de estado da issue, com o nome do estado para leitores de tela: aberta (verde) e fechada (roxo). */
 export function IssueIcon({ kind, size = 16 }: { kind: IssueIconKind; size?: number }) {
   const { icon: Icon, color, label } = ICONS[kind];
-  return (
-    <Icon
-      role="img" aria-label={label} size={size}
-      className={`shrink-0${kind === 'sending' ? ' animate-spin text-[var(--ant-color-text-tertiary)]' : kind === 'waiting' ? ' text-[var(--ant-color-text-tertiary)]' : ''}`}
-      style={color ? { color } : undefined}
-    />
-  );
+  return <Icon role="img" aria-label={label} size={size} className="shrink-0" style={{ color }} />;
 }
-
-export const pendingKind = (p: PendingIssue): IssueIconKind => (p.status === 'sending' ? 'sending' : p.status === 'waiting' ? 'waiting' : 'failed');
-/** O que a lista diz de uma criação guardada sem o GitHub. */
-export const WAITING_TEXT = 'guardada; será criada quando o GitHub estiver disponível';
 
 export type ConfirmOptions = { title: string; body: string; confirmLabel: string; cancelLabel?: string };
 /** As escolhas de uma pergunta (`useChoice`), depois do Cancelar e nesta ordem; `danger` é a destrutiva. */
@@ -164,22 +148,22 @@ export function useConfirm() {
   return { confirm, dialog, afterClose };
 }
 
-/** Bolinha com a cor da label e o nome, para a faixa e as listas de escolha. */
-export function LabelDot({ label }: { label: IssueLabel }) {
+/** Bolinha com a cor da label (`labelColor`) e o nome, para a faixa e as listas de escolha. */
+export function LabelDot({ name }: { name: string }) {
   return (
     <span className="inline-flex min-w-0 items-center gap-1">
-      <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: `#${label.color}` }} />
-      <span className="truncate">{label.name}</span>
+      <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: `#${labelColor(name)}` }} />
+      <span className="truncate">{name}</span>
     </span>
   );
 }
 
 /** Chip neutro da label: fundo de preenchimento do tema, a bolinha na cor dela e o nome em texto primário. */
-export function LabelPill({ label }: { label: IssueLabel }) {
+export function LabelPill({ name }: { name: string }) {
   return (
     <span className="inline-flex h-5 shrink-0 items-center gap-1 rounded-[4px] bg-[var(--ant-color-fill-secondary)] px-1.5 text-[12px] leading-[18px] whitespace-nowrap text-[var(--ant-color-text)]">
-      <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: `#${label.color}` }} />
-      {label.name}
+      <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: `#${labelColor(name)}` }} />
+      {name}
     </span>
   );
 }
@@ -188,61 +172,103 @@ export function LabelPill({ label }: { label: IssueLabel }) {
 const LABEL_ITEM = '[&_[role=menuitemcheckbox]]:h-[26px]! [&_[role=menuitemcheckbox]]:min-h-[26px]! [&_[role=menuitemcheckbox]]:py-0! [&_[role=menuitemcheckbox]]:px-[26px]! [&_[role=menuitemcheckbox]]:text-[13px]! [&_[role=menuitemcheckbox]]:leading-[26px]!';
 
 /**
- * Lista das labels do repositório para marcar e desmarcar (o "+" da captura, o seletor da aba Nova issue e o filtro da página),
- * com a bolinha de cor de cada uma. A lista fica aberta enquanto se marca; Esc ou clique fora fecha.
+ * Lista das labels em uso no projeto para marcar e desmarcar (o "+" da captura e do formulário), com a bolinha de cor de cada uma, e,
+ * no fim, "Nova label…" (`onNew`). A lista fica aberta enquanto se marca; Esc ou clique fora fecha.
  */
-export function LabelMenu({ labels, selected, onChange, children }: {
-  labels: readonly IssueLabel[];
+export function LabelMenu({ labels, selected, onChange, onNew, children }: {
+  labels: readonly string[];
   selected: readonly string[];
   onChange: (next: string[]) => void;
+  onNew: () => void;
   children: ReactNode;
 }) {
-  const items: DropdownItem[] = labels.length
-    ? labels.map((label) => ({
-      type: 'checkbox' as const, key: label.name, label: <LabelDot label={label} />, checked: selected.includes(label.name), closeOnClick: false,
-      onCheckedChange: (checked: boolean) => onChange(checked ? [...selected, label.name] : selected.filter((n) => n !== label.name)),
-    }))
-    : [{ key: 'none', label: 'O repositório não tem labels.', disabled: true }];
+  const items: DropdownItem[] = [
+    ...labels.map((name) => ({
+      type: 'checkbox' as const, key: name, label: <LabelDot name={name} />, checked: selected.includes(name), closeOnClick: false,
+      onCheckedChange: (checked: boolean) => onChange(checked ? [...selected, name] : selected.filter((n) => n !== name)),
+    })),
+    ...(labels.length ? [{ type: 'divider' as const, key: 'divider' }] : []),
+    { key: 'new', icon: Plus, label: 'Nova label…', onClick: onNew },
+  ];
   return <DropdownMenu items={items} placement="bottomLeft" popupProps={{ className: LABEL_ITEM }}>{children}</DropdownMenu>;
 }
 
 /**
- * O seletor de labels da captura e da aba Nova issue: as 3 mais usadas como chips que marcam e desmarcam (marcados, com fundo preenchido e borda),
- * as outras marcadas pelo "+" também como chips, e o "+" que abre a lista de todas as labels do repositório.
+ * O seletor de labels da captura e do formulário: as 3 mais usadas no projeto como chips que marcam e desmarcam (marcados, com fundo
+ * preenchido e borda), as outras marcadas também como chips, e o "+", que abre a lista de todas as labels em uso e o "Nova label…" (sem
+ * nenhuma label no projeto, o "+" vai direto para o campo). O campo da label nova fica ao lado do "+": Enter marca a label (a grafia de
+ * uma que já existe vale, sem diferenciar maiúsculas) e devolve o foco ao "+"; Esc desiste; sair do campo também.
  */
-export function LabelChips({ issues, labels, selected, onChange }: {
+export function LabelChips({ issues, selected, onChange }: {
   issues: readonly Issue[];
-  labels: readonly Label[];
   selected: readonly string[];
   onChange: (next: string[]) => void;
 }) {
-  const top = topLabels([...issues], [...labels], 3);
-  const shown = [...top, ...labels.filter((l) => selected.includes(l.name) && !top.some((t) => t.name === l.name))];
+  const all = allLabels(issues);
+  const top = topLabels(issues, 3);
+  const shown = [...top, ...selected.filter((name) => !top.includes(name))];
   const toggle = (name: string) => onChange(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
+  const [adding, setAdding] = useState(false);
+  const [text, setText] = useState('');
+  // O "+" é achado pelo grupo: um `ref` no gatilho do menu passaria pelo `element.ref`, que o React 19 não tem mais.
+  const group = useRef<HTMLDivElement>(null);
+  const field = useRef<HTMLInputElement>(null);
+  // O menu devolve o foco ao "+" quando fecha pelo "Nova label…": o campo o pega no quadro seguinte.
+  useEffect(() => {
+    if (!adding) return;
+    const frame = requestAnimationFrame(() => field.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [adding]);
+  const close = () => {
+    // O foco vai ao "+" antes de o campo sumir: ele não sai do cartão da captura, que recolheria.
+    group.current?.querySelector<HTMLElement>('[data-label-plus]')?.focus();
+    setText('');
+    setAdding(false);
+  };
+  const add = () => {
+    const name = pickLabel([...all, ...selected], text);
+    if (name && !selected.includes(name)) onChange([...selected, name]);
+    close();
+  };
+  const plusButton = (
+    <ActionIcon
+      data-label-plus icon={Plus} size={{ size: 14, blockSize: 20, borderRadius: 10 }} variant="outlined" className={FOCUS_RING}
+      aria-label={all.length ? 'Marcar labels ou criar uma nova' : 'Criar uma label'} title={all.length ? 'Labels' : 'Nova label'}
+      onClick={all.length ? undefined : () => setAdding(true)}
+    />
+  );
   return (
-    <div role="group" aria-label="Labels da nova issue" className="flex flex-wrap items-center gap-1">
-      {shown.map((label) => (
-        <LabelToggle key={label.name} label={label} on={selected.includes(label.name)} onToggle={() => toggle(label.name)} />
-      ))}
-      <LabelMenu labels={labels} selected={selected} onChange={onChange}>
-        <ActionIcon
-          icon={Plus} size={{ size: 14, blockSize: 20, borderRadius: 10 }} variant="outlined"
-          aria-label="Todas as labels do repositório" title="Todas as labels" className={FOCUS_RING}
+    <div ref={group} role="group" aria-label="Labels" className="flex flex-wrap items-center gap-1">
+      {shown.map((name) => <LabelToggle key={name} name={name} on={selected.includes(name)} onToggle={() => toggle(name)} />)}
+      {all.length ? <LabelMenu labels={all} selected={selected} onChange={onChange} onNew={() => setAdding(true)}>{plusButton}</LabelMenu> : plusButton}
+      {adding && (
+        <Input
+          ref={field} size="small" value={text} maxLength={LABEL_MAX} placeholder="Nova label" aria-label="Nome da nova label" autoComplete="off"
+          onChange={(e) => setText(e.target.value)} onBlur={() => setAdding(false)}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing || (e.key !== 'Enter' && e.key !== 'Escape')) return;
+            // Enter e Esc são só do campo: nem criam a issue nem limpam a captura.
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.key === 'Enter') add();
+            else close();
+          }}
+          className={`h-5! w-36! text-[12px]! ${FIELD_FOCUS}`}
         />
-      </LabelMenu>
+      )}
     </div>
   );
 }
 
-/** Chip de label que marca e desmarca (`aria-pressed`): bolinha e nome; marcado, com fundo preenchido, borda clara e o ✓ (não só cor). A captura e o filtro da faixa usam. */
-export function LabelToggle({ label, on, onToggle }: { label: IssueLabel; on: boolean; onToggle: () => void }) {
+/** Chip de label que marca e desmarca (`aria-pressed`): bolinha e nome; marcado, com fundo preenchido, borda clara e o ✓ (não só cor). A captura, o formulário e o filtro da faixa usam. */
+export function LabelToggle({ name, on, onToggle }: { name: string; on: boolean; onToggle: () => void }) {
   return (
     <Button
       size="small" shape="round" aria-pressed={on} onClick={onToggle}
       className={`h-5! gap-1! px-2! text-[12px]! ${FOCUS_RING}${on ? ' bg-[var(--ant-color-fill)]! border-[var(--ant-color-text-secondary)]!' : ''}`}
     >
       {on && <Check aria-hidden className="size-3 shrink-0" />}
-      <LabelDot label={label} />
+      <LabelDot name={name} />
     </Button>
   );
 }
@@ -361,7 +387,7 @@ export function StartButton({ issue, start, variant = 'row' }: { issue: Issue; s
 const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
 
 /**
- * Ações de estado de uma issue, as mesmas no detalhe e no cartão Em andamento da faixa: na em andamento, Concluir (fecha no GitHub) e
+ * Ações de estado de uma issue, as mesmas no detalhe e no cartão Em andamento da faixa: na em andamento, Concluir (fecha a issue) e
  * Voltar às abertas; na fechada, Reabrir. A aberta comum não tem nenhuma (o Colar é à parte). Concluir sem rodada do orquestrador desde o
  * Colar pergunta antes; fechada, o aviso oferece Desfazer. Com o texto dela no rascunho do orquestrador, a pergunta e os avisos dizem que ele
  * continua lá. Cada ação seleciona a issue antes: depois de Concluir ela continua no detalhe,
@@ -378,34 +404,34 @@ export function IssueActions({ issue, size, onDone }: { issue: Issue; size?: 'sm
   const drafted = store.draft.includes(number);
   const icon = size === 'small' ? 'size-3.5' : 'size-4';
   const undo = (prev: ActiveIssue) => store.undoFinish(prev).then(
-    () => toast.success({ title: `#${prev.number} reaberta no GitHub e de volta a Em andamento`, duration: 3000 }), report,
+    () => toast.success({ title: `#${prev.number} reaberta e de volta a Em andamento`, duration: 3000 }), report,
   );
-  // Sem rodada do orquestrador desde o Colar, fechar é escrever no GitHub uma issue em que ele ainda não trabalhou: pergunta antes.
+  // Sem rodada do orquestrador desde o Colar, fechar é dar por feita uma issue em que ele ainda não trabalhou: pergunta antes.
   const finish = async (prev: ActiveIssue) => {
     store.select(number);
     if (!prev.turned && !await confirm({
       title: `Concluir a #${number} sem o orquestrador ter trabalhado nela?`,
-      body: `A #${number} será fechada no GitHub, mas o orquestrador ainda não trabalhou nela: o texto foi colado e nenhuma rodada começou depois.${drafted ? ' O texto colado continua no rascunho do orquestrador: apague-o lá, para não enviar uma issue já fechada.' : ''}`,
-      confirmLabel: 'Fechar no GitHub', cancelLabel: 'Não fechar',
+      body: `A #${number} será fechada, mas o orquestrador ainda não trabalhou nela: o texto foi colado e nenhuma rodada começou depois.${drafted ? ' O texto colado continua no rascunho do orquestrador: apague-o lá, para não enviar uma issue já fechada.' : ''}`,
+      confirmLabel: 'Fechar', cancelLabel: 'Não fechar',
     })) return;
     done();
     await store.finish(number).then(() => toast.success({
-      title: drafted ? `#${number} fechada no GitHub. Apague o texto colado no rascunho do orquestrador.` : `#${number} fechada no GitHub`, duration: 8000,
+      title: drafted ? `#${number} fechada. Apague o texto colado no rascunho do orquestrador.` : `#${number} fechada`, duration: 8000,
       actions: [{ label: 'Desfazer', variant: 'text', onClick: () => void undo(prev) }],
     }), report);
   };
   const reopen = () => {
     store.select(number);
     done();
-    store.setState(number, true).then(() => toast.success({ title: `#${number} reaberta no GitHub`, duration: 3000 }), report);
+    store.setState(number, true).then(() => toast.success({ title: `#${number} reaberta`, duration: 3000 }), report);
   };
   return (
     <>
       {since && (
         <>
           <Button
-            size={size} className={FOCUS_RING} icon={<Check className={icon} />} title="Fecha a issue no GitHub"
-            aria-label={`Concluir a issue #${number} (fecha no GitHub)`} onClick={() => void finish(since)}
+            size={size} className={FOCUS_RING} icon={<Check className={icon} />} title="Fecha a issue"
+            aria-label={`Concluir a issue #${number} (fecha a issue)`} onClick={() => void finish(since)}
           >
             Concluir
           </Button>
@@ -427,7 +453,7 @@ export function IssueActions({ issue, size, onDone }: { issue: Issue; size?: 'sm
         </>
       )}
       {issue.state === 'closed' && (
-        <Button size={size} className={FOCUS_RING} icon={<RotateCcw className={icon} />} aria-label={`Reabrir a issue #${number}`} title="Reabre no GitHub" onClick={reopen}>
+        <Button size={size} className={FOCUS_RING} icon={<RotateCcw className={icon} />} aria-label={`Reabrir a issue #${number}`} title="Reabre a issue" onClick={reopen}>
           Reabrir
         </Button>
       )}
@@ -437,42 +463,7 @@ export function IssueActions({ issue, size, onDone }: { issue: Issue; size?: 'sm
 }
 
 /**
- * Mensagem do GitHub (indisponível etc.): os trechos entre crases viram código inline (mono, valor técnico) e, quando ela traz um
- * comando para rodar, o botão Copiar comando. Um ponto só para a faixa (`size` 12) e a página (14).
- */
-export function GithubMessage({ message, size, block = false, children }: { message: string; size: 12 | 14; block?: boolean; children?: ReactNode }) {
-  const command = commandIn(message);
-  const copy = async () => {
-    try {
-      if (!navigator.clipboard) throw new Error('A área de transferência não está disponível aqui.');
-      await navigator.clipboard.writeText(command!);
-      toast.success({ title: 'Comando copiado', duration: 3000 });
-    } catch (e) {
-      toast.error({ title: e instanceof Error ? e.message : String(e), duration: 7000 });
-    }
-  };
-  const copyButton = command && (
-    <Button size="small" block={block && !children} className={FOCUS_RING} icon={<Copy className="size-3.5" />} aria-label={`Copiar comando: ${command}`} onClick={() => void copy()}>
-      Copiar comando
-    </Button>
-  );
-  return (
-    <Flexbox gap={8} align={block ? 'stretch' : 'center'}>
-      <Text as="p" role="status" fontSize={size} lineHeight={1.5} style={{ ...SECONDARY, margin: 0, overflowWrap: 'anywhere', textAlign: block ? 'left' : 'center' }}>
-        {splitCode(message).map((p, i) => (p.code
-          ? <code key={i} className="rounded-sm bg-[var(--ant-color-fill-secondary)] px-1 font-mono text-[12px] text-[var(--ant-color-text)]">{p.text}</code>
-          : <span key={i}>{p.text}</span>))}
-      </Text>
-      {children ? (
-        // `children`: ações ao lado do Copiar, se houver (o detalhe põe o Rodar no Terminal e o Tentar de novo).
-        <Flexbox horizontal wrap="wrap" gap={8} justify={block ? 'flex-start' : 'center'}>{copyButton}{children}</Flexbox>
-      ) : copyButton}
-    </Flexbox>
-  );
-}
-
-/**
- * Marcas de estado da issue: `Tag` do Lobe UI com ícone e rótulo (estado nunca só por cor, nem na forma de uma label do GitHub). `small`
+ * Marcas de estado da issue: `Tag` do Lobe UI com ícone e rótulo (estado nunca só por cor, nem na forma do chip de label). `small`
  * (20 px) é a das linhas da faixa; `middle` a do cabeçalho do detalhe. A variante é `outlined` (o filete do tema, sem preenchimento): o
  * chip de label (`LabelPill`) é preenchido, e lado a lado no detalhe as duas formas não se confundem.
  */
@@ -488,7 +479,7 @@ const MARK_ICON = { small: 'size-3', middle: 'size-3.5' } as const;
  */
 const MARK_TEXT = { color: 'var(--ant-color-text)', background: 'transparent' } as const;
 
-/** Aberta (ícone verde de aberta do GitHub) ou fechada (ícone roxo de fechada); o rótulo é texto primário. */
+/** Aberta (ícone verde de aberta) ou fechada (ícone roxo de fechada); o rótulo é texto primário. */
 export function StateMark({ closed, size = 'small' }: { closed: boolean; size?: MarkSize }) {
   const Icon = closed ? CircleCheck : CircleDot;
   return (
@@ -507,61 +498,3 @@ export function NextMark({ size = 'small' }: { size?: MarkSize }) {
 export function ActiveMark({ size = 'small' }: { size?: MarkSize }) {
   return <Tag size={size} variant="outlined" icon={<Activity className={MARK_ICON[size]} style={{ color: GH.amber }} />} className="shrink-0" style={MARK_TEXT}>Em andamento</Tag>;
 }
-
-/**
- * Ações de uma criação que não chegou ao GitHub: reenviar (só a que falhou) e descartar, que pergunta antes (o texto escrito se perde).
- * Durante uma nova tentativa da que falhou, os dois continuam no lugar, desabilitados (a linha não muda de altura); o Tentar de novo
- * deixa o foco na linha antes de se desabilitar. `compact` (a faixa estreita) mostra só os ícones, com o nome no `title`.
- */
-export function FailedActions({ pending, retry: send, discard, compact = false }: {
-  pending: PendingIssue; retry: (id: string) => void; discard: (id: string) => void; compact?: boolean;
-}) {
-  const { confirm, dialog } = useConfirm();
-  const busy = pendingRetrying(pending), failed = pending.status === 'failed' || busy;
-  const retry = (e: { currentTarget: HTMLElement }) => {
-    e.currentTarget.closest<HTMLElement>('[data-row]')?.focus();
-    send(pending.localId);
-  };
-  const drop = async () => {
-    const filled = pending.title.trim() !== '' || pending.body.trim() !== '';
-    if (!filled || await confirm({
-      title: 'Descartar esta criação?',
-      body: 'O título e a descrição escritos nesta criação serão perdidos. A issue não foi criada no GitHub.',
-      confirmLabel: 'Descartar', cancelLabel: 'Manter',
-    })) discard(pending.localId);
-  };
-  if (compact) {
-    return (
-      <>
-        {failed && (
-          <ActionIcon
-            size="small" variant="borderless" icon={RotateCw} className={FOCUS_RING} title="Tentar de novo"
-            aria-label={`Tentar de novo: ${pending.title}`} disabled={busy} onClick={retry}
-          />
-        )}
-        <ActionIcon
-          size="small" variant="borderless" icon={Trash2} className={FOCUS_RING} title="Descartar"
-          aria-label={`Descartar: ${pending.title}`} disabled={busy} onClick={() => void drop()}
-        />
-        {dialog}
-      </>
-    );
-  }
-  return (
-    <>
-      {failed && (
-        <Button size="small" className={FOCUS_RING} icon={<RotateCw className="size-3.5" />} aria-label={`Tentar de novo: ${pending.title}`} disabled={busy} onClick={retry}>
-          Tentar de novo
-        </Button>
-      )}
-      <Button size="small" className={FOCUS_RING} icon={<Trash2 className="size-3.5" />} aria-label={`Descartar: ${pending.title}`} disabled={busy} onClick={() => void drop()}>
-        Descartar
-      </Button>
-      {dialog}
-    </>
-  );
-}
-
-/** As labels de uma criação, com a cor do repositório (cinza quando a label não está mais lá). */
-export const pendingLabels = (names: readonly string[], repo: readonly IssueLabel[]): IssueLabel[] =>
-  names.map((name) => repo.find((l) => l.name === name) ?? { name, color: '8b949e' });

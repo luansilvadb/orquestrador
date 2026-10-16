@@ -249,7 +249,7 @@ export function App() {
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
   // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
   const git = usePolled(() => backend.gitStatus(), state.update.phase === 'ready' && !!state.project);
-  // Issues do GitHub do projeto: um store só, lido pela faixa Issues e pela área das Issues (pelo IssuesProvider).
+  // Issues do projeto (só neste computador): um store só, lido pela faixa Issues e pela área das Issues (pelo IssuesProvider).
   const issues = useIssuesStore(state.project);
   // O store da renderização mais recente, para as escutas registradas uma vez no `boot`.
   const issuesRef = useRef(issues);
@@ -390,7 +390,7 @@ export function App() {
     if (!view || !text) return report(new Error('O Orquestrador não está aberto.'));
     void view.pasteFiles([text]).then(() => view.term.focus()).catch(report);
   }
-  // Colar uma issue: o título, o link e a descrição vão ao rascunho do Orquestrador como um paste só, sem Enter (o usuário envia), e ela
+  // Colar uma issue: o número, o título e a descrição vão ao rascunho do Orquestrador como um paste só, sem Enter (o usuário envia), e ela
   // vira a em andamento (a anterior volta à fila). `focus` é o Colar do usuário: leva o foco ao terminal e pergunta quando o rascunho já tem
   // outras issues; a próxima automática não rouba o foco nem pergunta (com outras no rascunho, ela espera).
   // Já no rascunho (colada e ainda não enviada): não cola de novo (duplicaria), só vira a em andamento.
@@ -464,14 +464,12 @@ export function App() {
       });
     }
   }
-  // A rodada que começou é da issue em andamento? O texto enviado traz a URL dela ou a cabeça `Issue #N:` do `issuePrompt`.
+  // A rodada que começou é da issue em andamento? O texto enviado traz a cabeça `Issue #N:` do `issuePrompt`.
   function turnIsActive(prompt?: string | null) {
     if (prompt === null) return false;
     if (prompt === undefined) return true;
-    const store = issuesRef.current;
-    const number = store.latest().active?.number;
-    const issue = store.latest().issues.find((i) => i.number === number);
-    return number !== undefined && (prompt.includes(`Issue #${number}:`) || (!!issue && prompt.includes(issue.url)));
+    const number = issuesRef.current.latest().active?.number;
+    return number !== undefined && prompt.includes(`Issue #${number}:`);
   }
   async function takeNext() {
     const store = issuesRef.current;
@@ -525,9 +523,9 @@ export function App() {
         host().onCloseRequested(async () => {
           try {
             const running = await backend.hasRunning();
-            // A Nova issue com texto também conta (não há o que salvar: só continuar ou descartar).
-            const issueDirty = issuesArea.current?.dirty() ?? false;
-            const unsaved = [...(editor.current?.unsaved() ?? []), ...(issueDirty ? ['Nova issue'] : [])];
+            // A aba do formulário das Issues com alteração também conta (Nova issue ou Editar #N; não há o que salvar daqui: só continuar ou descartar).
+            const issueDirty = issuesArea.current?.dirty() ?? null;
+            const unsaved = [...(editor.current?.unsaved() ?? []), ...(issueDirty ? [issueDirty] : [])];
             if (unsaved.length > 0) {
               // Três respostas: salvar tudo (só fecha se tudo gravou e nada novo ficou sujo), descartar (a recuperação é gravada
               // antes do encerramento), ou cancelar, que mantém a janela e tudo como está.
@@ -539,8 +537,9 @@ export function App() {
                   report(new Error('Não foi possível salvar tudo. Nada foi fechado.'));
                   return false;
                 }
-                if (issuesArea.current?.dirty()) {
-                  report(new Error('A Nova issue não pode ser salva: descarte-a ou crie-a. Nada foi fechado.'));
+                const form = issuesArea.current?.dirty();
+                if (form) {
+                  report(new Error(`A aba ${form} não pode ser salva daqui: termine-a ou descarte-a. Nada foi fechado.`));
                   return false;
                 }
               } else {
@@ -690,23 +689,6 @@ export function App() {
     if (shellOpen) return dispatch({ type: 'shellOpen', open: false });
     if (shells.length === 0) return addShell();
     dispatch({ type: 'shellOpen', open: true });
-  }
-
-  // "Rodar no Terminal" da indisponibilidade do GitHub: abre o painel Terminal (cria um shell se não há), cola o comando no shell ativo sem
-  // Enter (o usuário confirma) e leva o foco a ele. Um shell novo só aceita o texto depois de o backend o iniciar (`program` preenchido).
-  async function runInTerminal(command: string) {
-    if (!stateRef.current.shellOpen || stateRef.current.shells.length === 0) toggleShell();
-    for (let i = 0; i < 100; i++) {
-      const { shells, shellActive } = stateRef.current;
-      const view = terminals.get(shellActive);
-      if (view && shells.find((s) => s.id === shellActive)?.program) {
-        await view.pasteText(command);
-        view.term.focus();
-        return;
-      }
-      await new Promise((done) => setTimeout(done, 50));
-    }
-    throw new Error('O terminal não abriu a tempo. Tente de novo.');
   }
 
   // Primeiro terminal de cada aba: inicia o shell com as colunas e linhas do xterm. Se falhar, mostra o erro e a aba sai.
@@ -987,7 +969,7 @@ export function App() {
               {/* Editor e área das Issues, os dois sempre montados: só um aparece, conforme a rota (como as faixas da esquerda). */}
               <div className="relative min-h-0 flex-1">
                 <div className={shown('issues', true)}>
-                  <IssuesArea key={state.project} ref={issuesArea} start={issueStart} executors={executors} onFocusOrchestrator={focusOrchestrator} onRunInTerminal={(command) => void runInTerminal(command).catch(report)} />
+                  <IssuesArea key={state.project} ref={issuesArea} start={issueStart} executors={executors} onFocusOrchestrator={focusOrchestrator} />
                 </div>
                 <div className={shown('issues', false)}>
                   <Flexbox height="100%" flex={1} className="min-h-0">

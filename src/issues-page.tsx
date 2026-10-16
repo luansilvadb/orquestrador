@@ -1,89 +1,77 @@
 // Detalhe da issue na aba Issues da área central: a issue escolhida na faixa (ou, sem escolha, a em andamento, a próxima ou a primeira aberta;
-// ver `detailIssue`). Cabeçalho com o título em toda a largura, o estado em `Tag`, "autor abriu há X", os comentários e as labels, e, numa
-// linha abaixo, a barra de ações (Colar no orquestrador como ação principal, Concluir e Voltar às abertas só quando não há o painel, Reabrir,
-// Abrir no GitHub); na issue em andamento, o painel "Com o orquestrador" (o que ele está fazendo, os executores agora e as ações Ir ao
-// orquestrador, Concluir e Voltar às abertas); na próxima, uma linha com o Não colar depois; depois, a descrição em Markdown e os
-// comentários carregados do GitHub. É também o único lugar da indisponibilidade do GitHub: título, mensagem, Tentar de novo e, quando a
-// mensagem traz um comando, o Rodar no Terminal. A faixa é a fila e o único lugar de lista, busca e filtro: esta tela não tem nada disso.
-// O estado vem do store único do App (`useIssues`); os executores e as ações de terminal vêm por props.
+// ver `detailIssue`). Cabeçalho com o título em toda a largura, o estado em `Tag`, "criada há X", as labels, Editar e Excluir, e, numa
+// linha abaixo, a barra de ações (Colar no orquestrador como ação principal, Reabrir na fechada); na issue em andamento, o painel "Com o
+// orquestrador" (o que ele está fazendo, os executores agora e as ações Ir ao orquestrador, Concluir e Voltar às abertas); na próxima, uma
+// linha com o Não colar depois; depois, a descrição em Markdown. Sem conseguir ler o arquivo das issues, o motivo e o Tentar de novo.
+// A faixa é a fila e o único lugar de lista, busca e filtro: esta tela não tem nada disso.
+// O estado vem do store único do App (`useIssues`); os executores e as ações de terminal e do formulário vêm por props.
 import { Suspense, useEffect, useId, useRef, useState } from 'react';
-import { Clock, ExternalLink, MessageSquare, SquareTerminal } from 'lucide-react';
+import { Clock, Pencil, SquareTerminal, Trash2 } from 'lucide-react';
 import { ActionIcon, Button, Text, toast } from '@lobehub/ui/base-ui';
 import { Center } from '@lobehub/ui';
-import { backend, message } from './backend';
-import { commandIn, issueList } from './issue-text';
+import { message } from './backend';
+import { issueList } from './issue-text';
 import {
-  Ago, FOCUS_RING, GH, GithubMessage, IssueActions, IssueMarkdown, LabelPill, MARKDOWN_FOCUS, NextMark, SECONDARY, StartButton, StateMark, ActiveMark, type StartIssue,
+  Ago, FOCUS_RING, GH, IssueActions, IssueMarkdown, LabelPill, MARKDOWN_FOCUS, NextMark, SECONDARY, StartButton, StateMark, ActiveMark, useConfirm,
+  type StartIssue,
 } from './issue-ui';
 import { useDetailIssue, useIssues } from './issues-store';
 import { FINISHED, STATES } from './terminal-screen';
-import type { ExecutorNode, Issue, IssueComment, NodeState } from './types';
+import type { ExecutorNode, Issue, NodeState } from './types';
 
 const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
-const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-// Medida de leitura da descrição e dos comentários.
+// Medida de leitura da descrição.
 const MEASURE = 'max-w-[72ch]';
 
-export function IssuesPage({ start, onNew, focusKey, executors, onFocusOrchestrator, onRunInTerminal }: {
+export function IssuesPage({ start, onNew, onEdit, focusKey, executors, onFocusOrchestrator }: {
   start: StartIssue;
   /** Abre a aba Nova issue (o botão do estado vazio). */
   onNew: () => void;
+  /** Abre a issue no formulário, para editar. */
+  onEdit: (issue: Issue) => void;
   /** Sobe a cada pedido de foco no detalhe (duplo clique ou Enter com a linha já selecionada na faixa): a rolagem da tela recebe o foco. */
   focusKey: number;
   /** Executores vivos do App, resumidos no painel "Com o orquestrador". */
   executors: readonly ExecutorNode[];
   /** Leva o foco ao terminal do orquestrador. */
   onFocusOrchestrator: () => void;
-  /** Abre o Terminal e cola o comando no shell ativo, sem Enter. */
-  onRunInTerminal: (command: string) => void;
 }) {
   const store = useIssues();
-  const { status } = store;
   const issue = useDetailIssue();
-  const command = status?.kind === 'unavailable' ? commandIn(status.message) : null;
   const root = useRef<HTMLDivElement>(null);
+  const [retrying, setRetrying] = useState(false);
   useEffect(() => {
     if (focusKey === 0) return;
     const frame = requestAnimationFrame(() => root.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
   }, [focusKey]);
-  // Concluir, Voltar às abertas, Reabrir e Não colar depois tiram o próprio botão da tela: o foco vem para o detalhe, que segue com a issue.
+  // Concluir, Voltar às abertas, Reabrir, Excluir e Não colar depois tiram o próprio botão da tela: o foco vem para o detalhe.
   const focusDetail = () => root.current?.focus({ preventScroll: true });
+  const retry = () => {
+    setRetrying(true);
+    void store.refresh().finally(() => setRetrying(false));
+  };
 
   return (
     <div ref={root} tabIndex={-1} className="@container h-full min-h-0 overflow-x-hidden overflow-y-auto outline-none">
       <div className="mx-auto w-full max-w-[928px] min-w-0 p-3 @[30rem]:p-6">
-        {status?.kind === 'ready' ? (
+        {store.loaded ? (
           issue ? (
-            <IssueDetail issue={issue} start={start} executors={executors} onFocusOrchestrator={onFocusOrchestrator} onDone={focusDetail} />
+            <IssueDetail issue={issue} start={start} executors={executors} onEdit={onEdit} onFocusOrchestrator={onFocusOrchestrator} onDone={focusDetail} />
           ) : (
             <Center gap={12} padding={32}>
               <Text as="p" fontSize={14} style={{ ...SECONDARY, margin: 0 }}>Nenhuma issue aberta.</Text>
               <Button className={FOCUS_RING} onClick={onNew}>Nova issue</Button>
             </Center>
           )
-        ) : status ? (
-          // A indisponibilidade só é dita aqui (a faixa mostra uma linha curta com "Ver detalhes").
+        ) : store.error && (
+          // O arquivo das issues não abriu (ilegível, de uma versão mais nova, disco recusando): o motivo inteiro só aqui.
           <Center gap={12} padding={32}>
-            <Text as="h1" fontSize={20} weight={600} lineHeight="28px" style={{ margin: 0 }}>GitHub indisponível</Text>
-            {/* As ações ficam juntas sob a mensagem: com comando, o Rodar no Terminal é a principal; sem, o Tentar de novo. */}
-            <GithubMessage message={status.message} size={14}>
-              {command && (
-                <Button type="primary" size="small" className={FOCUS_RING} icon={<SquareTerminal className="size-3.5" />} onClick={() => onRunInTerminal(command)}>
-                  Rodar no Terminal
-                </Button>
-              )}
-              <Button
-                type={command ? undefined : 'primary'} size="small" className={FOCUS_RING} loading={store.refreshing} disabled={store.refreshing}
-                onClick={() => void store.refresh()}
-              >
-                Tentar de novo
-              </Button>
-            </GithubMessage>
-          </Center>
-        ) : (
-          <Center gap={12} padding={32}>
-            <Text as="p" role="status" fontSize={14} style={{ ...SECONDARY, margin: 0, textAlign: 'center' }}>Conectando ao GitHub…</Text>
+            <Text as="h1" fontSize={20} weight={600} lineHeight="28px" style={{ margin: 0 }}>Não foi possível abrir as issues</Text>
+            <Text as="p" role="status" fontSize={14} lineHeight={1.5} style={{ ...SECONDARY, margin: 0, overflowWrap: 'anywhere', textAlign: 'center' }}>
+              {store.error}
+            </Text>
+            <Button type="primary" size="small" className={FOCUS_RING} loading={retrying} disabled={retrying} onClick={retry}>Tentar de novo</Button>
           </Center>
         )}
       </div>
@@ -92,19 +80,31 @@ export function IssuesPage({ start, onNew, focusKey, executors, onFocusOrchestra
 }
 
 /**
- * Cabeçalho (título, estado, quem abriu, comentários, labels e as ações), descrição e comentários de uma issue. Os tempos ("há X") vêm do
- * relógio das Issues pelo `Ago`: só eles se atualizam, sem renderizar de novo a descrição e os comentários. `onDone` leva o foco ao detalhe
- * depois de uma ação que some com o próprio botão.
+ * Cabeçalho (título, estado, quando foi criada, as labels, Editar, Excluir e as ações) e a descrição de uma issue. Os tempos ("há X")
+ * vêm do relógio das Issues pelo `Ago`: só eles se atualizam, sem renderizar de novo a descrição. `onDone` leva o foco ao detalhe depois de
+ * uma ação que some com o próprio botão. Excluir pergunta antes; com o texto da issue no rascunho do orquestrador, a pergunta lembra dele.
  */
-function IssueDetail({ issue, start, executors, onFocusOrchestrator, onDone }: {
-  issue: Issue; start: StartIssue; executors: readonly ExecutorNode[]; onFocusOrchestrator: () => void; onDone: () => void;
+function IssueDetail({ issue, start, executors, onEdit, onFocusOrchestrator, onDone }: {
+  issue: Issue; start: StartIssue; executors: readonly ExecutorNode[]; onEdit: (issue: Issue) => void; onFocusOrchestrator: () => void; onDone: () => void;
 }) {
   const store = useIssues();
+  const { confirm, dialog, afterClose } = useConfirm();
   const isOpen = issue.state === 'open';
   const isActive = isOpen && store.active?.number === issue.number;
   const isNext = isOpen && store.next === issue.number;
   const body = issue.body.trim();
   const hasBar = isOpen ? !(isActive && store.draft.includes(issue.number)) : true;
+  const remove = async () => {
+    const { number } = issue;
+    const drafted = store.draft.includes(number);
+    if (!await confirm({
+      title: `Excluir a #${number}?`,
+      body: `A #${number} será apagada deste computador, com o título e a descrição. Não dá para desfazer.${drafted ? ' O texto dela continua no rascunho do orquestrador: apague-o lá.' : ''}`,
+      confirmLabel: 'Excluir',
+    })) return;
+    afterClose(onDone);
+    await store.remove(number).then(() => toast.success({ title: `#${number} excluída`, duration: 3000 }), report);
+  };
   return (
     <article aria-label={`Issue #${issue.number}`} className="@container flex min-w-0 flex-col">
       <header className="flex flex-col gap-3 border-b pb-4">
@@ -117,20 +117,14 @@ function IssueDetail({ issue, start, executors, onFocusOrchestrator, onDone }: {
             {isActive ? <ActiveMark size="middle" /> : <StateMark closed={!isOpen} size="middle" />}
             {isNext && <NextMark size="middle" />}
             <span>
-              {`${issue.author} abriu `}<Ago iso={issue.createdAt} />
+              {'criada '}<Ago iso={issue.createdAt} />
               {!isOpen && <>{' · fechada '}<Ago iso={issue.closedAt ?? issue.updatedAt} /></>}
             </span>
-            {issue.comments > 0 && (
-              <span className="inline-flex items-center gap-1">
-                <MessageSquare aria-hidden className="size-3.5" />
-                {count(issue.comments, 'comentário', 'comentários')}
-              </span>
-            )}
-            {issue.labels.map((l) => <LabelPill key={l.name} label={l} />)}
-            <ActionIcon
-              size="small" icon={ExternalLink} className={FOCUS_RING} aria-label={`Abrir a issue #${issue.number} no GitHub`} title="Abrir no GitHub"
-              onClick={() => void backend.githubOpen(issue.url).catch(report)}
-            />
+            {issue.labels.map((name) => <LabelPill key={name} name={name} />)}
+            <span className="inline-flex items-center gap-0.5">
+              <ActionIcon size="small" icon={Pencil} className={FOCUS_RING} aria-label={`Editar a issue #${issue.number}`} title="Editar" onClick={() => onEdit(issue)} />
+              <ActionIcon size="small" icon={Trash2} className={FOCUS_RING} aria-label={`Excluir a issue #${issue.number}`} title="Excluir" onClick={() => void remove()} />
+            </span>
           </div>
         </div>
         {/* Os botões fluem numa linha abaixo do título e quebram só quando preciso; a dica do Colar (`order-last basis-full`) fica numa linha
@@ -171,8 +165,7 @@ function IssueDetail({ issue, start, executors, onFocusOrchestrator, onDone }: {
           </Suspense>
         ) : <Text as="p" fontSize={14} style={{ ...SECONDARY, margin: 0 }}>Sem descrição.</Text>}
       </div>
-
-      {issue.comments > 0 && <Comments issue={issue} />}
+      {dialog}
     </article>
   );
 }
@@ -234,67 +227,6 @@ function OrchestratorPanel({ issue, start, executors, onFocusOrchestrator, onDon
         </Button>
         <IssueActions issue={issue} onDone={onDone} />
       </div>
-    </section>
-  );
-}
-
-type Loaded = { number: number; items: IssueComment[] | null; error: string | null; loading: boolean };
-
-/**
- * Comentários da issue, do mais antigo ao mais novo, carregados do GitHub. Recarrega quando a issue muda e quando a contagem dela muda
- * (alguém comentou); a resposta de um pedido que já não vale (outra issue, ou outra contagem no meio) é descartada. Com a lista já na tela,
- * o recarregamento não a troca por "Carregando".
- */
-function Comments({ issue }: { issue: Issue }) {
-  const [view, setView] = useState<Loaded>({ number: issue.number, items: null, error: null, loading: true });
-  const [attempt, setAttempt] = useState(0);
-  const headingId = useId();
-  useEffect(() => {
-    let current = true;
-    // Os comentários da issue anterior não valem para esta.
-    const keep = (v: Loaded) => (v.number === issue.number ? v.items : null);
-    setView((v) => ({ number: issue.number, items: keep(v), error: null, loading: true }));
-    backend.githubIssueComments(issue.number).then(
-      (items) => current && setView({ number: issue.number, items, error: null, loading: false }),
-      (e) => current && setView((v) => ({ number: issue.number, items: keep(v), error: message(e), loading: false })),
-    );
-    return () => {
-      current = false;
-    };
-  }, [issue.number, issue.comments, attempt]);
-  const mine = view.number === issue.number ? view : null;
-  const items = mine?.items ?? null;
-  return (
-    <section aria-labelledby={headingId} className="mt-8 border-t pt-4">
-      <Text as="h2" id={headingId} fontSize={14} weight={600} style={{ margin: 0 }}>
-        Comentários
-        <span className="ml-2 font-normal tabular-nums" style={SECONDARY}>{issue.comments}</span>
-      </Text>
-      {(!mine || (mine.loading && !items)) && (
-        <Text as="p" role="status" fontSize={14} style={{ ...SECONDARY, margin: '12px 0 0' }}>Carregando comentários…</Text>
-      )}
-      {mine?.error && (
-        <div className="mt-3 flex flex-col items-start gap-2">
-          <GithubMessage message={mine.error} size={14} block />
-          <Button size="small" className={FOCUS_RING} loading={mine.loading} onClick={() => setAttempt((n) => n + 1)}>Tentar de novo</Button>
-        </div>
-      )}
-      {items && !items.length && <Text as="p" fontSize={14} style={{ ...SECONDARY, margin: '12px 0 0' }}>Nenhum comentário.</Text>}
-      {items && items.length > 0 && (
-        <ul className={`${MEASURE} mt-1 divide-y`}>
-          {items.map((c) => (
-            <li key={c.id} className="py-4">
-              <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 text-[12px]">
-                <span className="text-[14px] font-semibold">{c.author}</span>
-                <span style={SECONDARY}><Ago iso={c.createdAt} /></span>
-              </div>
-              <Suspense fallback={null}>
-                <div className={MARKDOWN_FOCUS}><IssueMarkdown fontSize={14}>{c.body}</IssueMarkdown></div>
-              </Suspense>
-            </li>
-          ))}
-        </ul>
-      )}
     </section>
   );
 }

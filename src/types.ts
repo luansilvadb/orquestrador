@@ -135,19 +135,14 @@ export type Events = {
 
 export const ORCHESTRATOR = 'orchestrator';
 
-// Issues do GitHub do repositório aberto (contrato do backend, via GitHub CLI). O GitHub é a única fonte das issues.
-// `unavailable` diz por que não há issues; `message` vem pronta para a tela, em português.
-export type GhStatus =
-  | { kind: 'ready'; owner: string; repo: string; login: string }
-  | { kind: 'unavailable'; reason: 'no-gh' | 'no-login' | 'no-remote' | 'no-access' | 'issues-disabled' | 'offline'; message: string };
-// `color` é hex sem `#`. Datas em ISO 8601; `closedAt` é null na aberta.
-export type IssueLabel = { name: string; color: string };
+// Issues do projeto, só neste computador (contrato do backend, `issues.rs`). As labels são só nomes; a cor sai do nome (`labelColor`).
+// Datas em ISO 8601; `closedAt` é null na aberta.
 export type Issue = {
-  number: number; title: string; body: string; state: 'open' | 'closed'; labels: IssueLabel[]; author: string; comments: number;
-  createdAt: string; updatedAt: string; closedAt: string | null; url: string;
+  number: number; title: string; body: string; state: 'open' | 'closed'; labels: string[];
+  createdAt: string; updatedAt: string; closedAt: string | null;
 };
-export type Label = { name: string; color: string; description: string };
-// Comentário de uma issue (`github_issue_comments`): `id` estável do GitHub, `author` é o login, datas em ISO 8601, `body` em Markdown.
-export type IssueComment = { id: number; author: string; body: string; createdAt: string; updatedAt: string; url: string };
-// Retorno de `github_issues`: `data: null` quer dizer que nada mudou desde a `version` pedida. Traz as abertas e as 50 fechadas mais recentes.
-export type IssuesSnapshot = { version: number; data: null | { issues: Issue[]; labels: Label[] } };
+// A issue com o orquestrador e desde quando (`Date.now()`). `turned`: uma rodada do orquestrador começou com ela depois do Colar; falso é
+// "colada, aguardando envio" (o Colar só cola).
+export type ActiveIssue = { number: number; since: number; turned: boolean };
+// Retorno de `issues_load`: as issues do projeto (abertas e fechadas, na ordem de criação), a em andamento e a próxima.
+export type IssuesData = { issues: Issue[]; active: ActiveIssue | null; next: number | null };

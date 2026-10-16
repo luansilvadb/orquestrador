@@ -1,32 +1,38 @@
 // Área das Issues da coluna central: aparece no lugar do editor só com a rota Issues ativa (o App a mantém montada e escondida nas outras,
 // como as faixas da esquerda). Tem a faixa de abas no visual da do editor: "Issues" (fixa, o detalhe da issue escolhida na faixa) e, quando
-// aberta, "Nova issue" (fecha com a confirmação de descarte se tiver texto). O rascunho da Nova issue e a rolagem do detalhe moram aqui e
-// sobrevivem a trocar de rota; a issue escolhida mora no store (`selected`). Nada disto vai para a recuperação do editor.
-// O detalhe não tem estado do App além do store: os executores vivos, o foco no orquestrador e o "Rodar no Terminal" (a indisponibilidade
-// do GitHub é resolvida no detalhe) chegam por props e descem direto para ele.
+// aberta, a aba do formulário, uma só no app: "Nova issue" ou "Editar #N" (fecha com a confirmação de descarte se tiver alteração). O texto
+// do formulário e a rolagem do detalhe moram aqui e sobrevivem a trocar de rota; a issue escolhida mora no store (`selected`). Nada disto
+// vai para a recuperação do editor. Excluída a issue em edição, a aba fecha sozinha.
+// O detalhe não tem estado do App além do store: os executores vivos e o foco no orquestrador chegam por props e descem direto para ele.
 //
 // API para o App (ref, `IssuesAreaHandle`):
 //   openNewIssue(seed?)  Abre ou ativa a aba Nova issue. Com `seed` (vindo da faixa), só preenche se o formulário está vazio; senão avisa por toast.
+//   openEdit(issue)      Abre a issue no formulário (a aba Editar #N). Com outra edição ou uma Nova issue com texto, só ativa a aba e avisa.
 //   showDetail(focus?)   Ativa a aba Issues (o detalhe). Com `focus`, o foco vai para o detalhe; sem ele, fica onde estava (a faixa).
-//   dirty(): boolean     A Nova issue tem texto (o App conta isso ao fechar a janela).
-//   discard(): void      Joga o rascunho fora e fecha a aba Nova issue.
-import { forwardRef, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+//   dirty()              O nome da aba do formulário, se ela tem alteração (o App conta isso ao fechar a janela); senão null.
+//   discard(): void      Joga a alteração fora e fecha a aba do formulário.
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ActionIcon, Button, Modal, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { CircleDot, X } from 'lucide-react';
 import { FOCUS_RING_INSET, SECONDARY, type StartIssue } from './issue-ui';
+import { useIssues } from './issues-store';
 import { IssuesPage } from './issues-page';
-import { draftFilled, EMPTY_DRAFT, NewIssueForm, type IssueDraft } from './new-issue';
-import type { ExecutorNode } from './types';
+import { draftFilled, EMPTY_DRAFT, NewIssueForm, sameDraft, type IssueDraft } from './new-issue';
+import type { ExecutorNode, Issue } from './types';
 
 export type IssuesAreaHandle = {
   openNewIssue(seed?: IssueDraft): void;
+  openEdit(issue: Issue): void;
   showDetail(focus?: boolean): void;
-  dirty(): boolean;
+  dirty(): string | null;
   discard(): void;
 };
 
-type View = 'detail' | 'new';
+type View = 'detail' | 'form';
+// O formulário: `editing` é o número da issue em edição (null na Nova issue) e `base` o texto dela quando a aba abriu.
+type Form = { editing: number | null; draft: IssueDraft; base: IssueDraft };
+const EMPTY_FORM: Form = { editing: null, draft: EMPTY_DRAFT, base: EMPTY_DRAFT };
 
 export type IssuesAreaProps = {
   start: StartIssue;
@@ -34,71 +40,89 @@ export type IssuesAreaProps = {
   executors: readonly ExecutorNode[];
   /** Leva o foco ao terminal do orquestrador (o "Ir ao orquestrador" do detalhe). */
   onFocusOrchestrator: () => void;
-  /** Abre o painel Terminal, cola o comando no shell ativo sem Enter e leva o foco a ele (o "Rodar no Terminal" da indisponibilidade). */
-  onRunInTerminal: (command: string) => void;
 };
 
-export const IssuesArea = forwardRef<IssuesAreaHandle, IssuesAreaProps>(function IssuesArea({ start, executors, onFocusOrchestrator, onRunInTerminal }, handle) {
+const formTitle = (form: Form) => (form.editing === null ? 'Nova issue' : `Editar #${form.editing}`);
+// A Nova issue tem alteração quando tem texto; a edição, quando o texto mudou desde que a aba abriu.
+const formDirty = (form: Form) => (form.editing === null ? draftFilled(form.draft) : !sameDraft(form.draft, form.base));
+
+export const IssuesArea = forwardRef<IssuesAreaHandle, IssuesAreaProps>(function IssuesArea({ start, executors, onFocusOrchestrator }, handle) {
+  const store = useIssues();
   const [view, setView] = useState<View>('detail');
-  const [newOpen, setNewOpen] = useState(false);
-  // Texto da Nova issue: fica aqui, e não no formulário, para o formulário poder remontar sem perder nada.
-  const [draft, setDraftState] = useState<IssueDraft>(EMPTY_DRAFT);
-  const draftRef = useRef(draft);
-  const newOpenRef = useRef(false);
-  // Sobe a cada abertura da Nova issue: o título recebe o foco. E a cada pedido de foco no detalhe.
-  const [issueFocus, setIssueFocus] = useState(0);
+  const [formOpen, setFormOpen] = useState(false);
+  // Texto do formulário: fica aqui, e não no formulário, para o formulário poder remontar sem perder nada.
+  const [form, setFormState] = useState<Form>(EMPTY_FORM);
+  const formRef = useRef(form);
+  const formOpenRef = useRef(false);
+  // Sobe a cada abertura do formulário: o título recebe o foco. E a cada pedido de foco no detalhe.
+  const [formFocus, setFormFocus] = useState(0);
   const [detailFocus, setDetailFocus] = useState(0);
   const [confirm, setConfirm] = useState<((discard: boolean) => void) | null>(null);
   // Descartada pela pergunta: o foco vai ao detalhe só depois de a janela fechar (antes, ela o devolveria à aba que já saiu).
   const focusAfterConfirm = useRef(false);
+  // A issue da pergunta (null na Nova issue): o texto da janela não muda enquanto ela fecha, com o formulário já vazio.
+  const asked = useRef<number | null>(null);
   const tablist = useRef<HTMLDivElement>(null);
 
-  const setDraft = (next: IssueDraft) => {
-    draftRef.current = next;
-    setDraftState(next);
+  const setForm = (next: Form) => {
+    formRef.current = next;
+    setFormState(next);
   };
   const setOpen = (open: boolean) => {
-    newOpenRef.current = open;
-    setNewOpen(open);
+    formOpenRef.current = open;
+    setFormOpen(open);
   };
+  const activateForm = () => {
+    setOpen(true);
+    setView('form');
+    setFormFocus((n) => n + 1);
+  };
+  const busy = () => formOpenRef.current && formDirty(formRef.current);
 
   const openNewIssue = (seed?: IssueDraft) => {
-    if (seed) {
-      if (newOpenRef.current && draftFilled(draftRef.current)) toast.info({ title: 'Já há uma issue em edição.', duration: 4000 });
-      else setDraft({ title: seed.title, body: seed.body, labels: [...seed.labels] });
-    } else if (!newOpenRef.current) {
-      setDraft(EMPTY_DRAFT);
+    const { editing, draft } = formRef.current;
+    // Com alteração na edição, ou com texto na Nova issue e algo vindo da faixa, nada é trocado: só a aba aparece.
+    if (formOpenRef.current && (editing !== null ? busy() : seed && draftFilled(draft))) toast.info({ title: 'Já há uma issue em edição.', duration: 4000 });
+    else if (seed || editing !== null || !formOpenRef.current) setForm({ editing: null, draft: seed ? { ...seed, labels: [...seed.labels] } : EMPTY_DRAFT, base: EMPTY_DRAFT });
+    activateForm();
+  };
+  const openEdit = (issue: Issue) => {
+    if (!(formOpenRef.current && formRef.current.editing === issue.number)) {
+      if (busy()) {
+        toast.info({ title: 'Já há uma issue em edição.', duration: 4000 });
+      } else {
+        const draft = { title: issue.title, body: issue.body, labels: [...issue.labels] };
+        setForm({ editing: issue.number, draft, base: draft });
+      }
     }
-    setOpen(true);
-    setView('new');
-    setIssueFocus((n) => n + 1);
+    activateForm();
   };
   const showDetail = (focus = false) => {
     setView('detail');
     if (focus) setDetailFocus((n) => n + 1);
   };
-  // Criada: o formulário fecha sem perguntar (o texto já foi para o store) e o detalhe ganha o foco. A issue criada passa a ser a mostrada
-  // quando o GitHub devolve o número (`NewIssueForm`); até lá, o detalhe segue com a de antes.
-  const created = () => {
-    setDraft(EMPTY_DRAFT);
+  // Gravada: o formulário fecha sem perguntar e o detalhe ganha o foco, com a issue escolhida (o formulário já a escolheu).
+  const saved = () => {
+    setForm(EMPTY_FORM);
     setOpen(false);
     showDetail(true);
   };
   const finishClose = () => {
-    setDraft(EMPTY_DRAFT);
+    setForm(EMPTY_FORM);
     setOpen(false);
     setView('detail');
   };
-  // Fechar a Nova issue: com texto, pergunta antes (não há o que salvar: continuar editando ou descartar). Fechada, a aba Issues fica ativa
-  // com o foco no detalhe (a aba e o campo que tinham o foco saem da tela).
-  const closeNew = () => {
-    if (!newOpenRef.current) return;
-    if (!draftFilled(draftRef.current)) {
+  // Fechar o formulário: com alteração, pergunta antes (não há o que salvar: continuar editando ou descartar). Fechado, a aba Issues fica
+  // ativa com o foco no detalhe (a aba e o campo que tinham o foco saem da tela).
+  const closeForm = () => {
+    if (!formOpenRef.current) return;
+    if (!busy()) {
       finishClose();
       showDetail(true);
       return;
     }
     if (confirm) return;
+    asked.current = formRef.current.editing;
     setConfirm(() => (discard: boolean) => {
       setConfirm(null);
       if (!discard) return;
@@ -107,24 +131,31 @@ export const IssuesArea = forwardRef<IssuesAreaHandle, IssuesAreaProps>(function
     });
   };
 
+  // A issue em edição foi excluída (aqui ou em outra janela): a aba não tem mais o que salvar.
+  const gone = store.loaded && formOpen && form.editing !== null && !store.issues.some((i) => i.number === form.editing);
+  useEffect(() => {
+    if (gone) finishClose();
+  }, [gone]);
+
   useImperativeHandle(handle, () => ({
     openNewIssue,
+    openEdit,
     showDetail,
-    dirty: () => newOpenRef.current && draftFilled(draftRef.current),
+    dirty: () => (busy() ? formTitle(formRef.current) : null),
     discard: finishClose,
   }));
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'F4' && e.ctrlKey && view === 'new') {
+    if (e.key === 'F4' && e.ctrlKey && view === 'form') {
       e.preventDefault();
-      closeNew();
+      closeForm();
     }
   };
   // Setas, Home e End na faixa de abas: o foco anda entre as abas (← e → dão a volta, como nas abas do painel do Orquestrador) e a aba focada
   // fica ativa. A parada de Tab é uma só, na aba ativa.
   const onTabsKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.target as HTMLElement).getAttribute('role') !== 'tab') return;
-    const keys: View[] = newOpen ? ['detail', 'new'] : ['detail'];
+    const keys: View[] = formOpen ? ['detail', 'form'] : ['detail'];
     const at = keys.indexOf(view);
     const to = e.key === 'ArrowRight' ? (at + 1) % keys.length
       : e.key === 'ArrowLeft' ? (at - 1 + keys.length) % keys.length
@@ -132,13 +163,13 @@ export const IssuesArea = forwardRef<IssuesAreaHandle, IssuesAreaProps>(function
     if (to === null) return;
     e.preventDefault();
     if (keys[to] === 'detail') showDetail();
-    else setView('new');
+    else setView('form');
     tablist.current?.querySelector<HTMLElement>(`[data-tab="${keys[to]}"] [role="tab"]`)?.focus();
   };
 
   const tab = (key: View, title: string, closable: boolean): ReactNode => {
     const active = view === key;
-    const dirty = key === 'new' && draftFilled(draft);
+    const dirty = key === 'form' && formDirty(form);
     return (
       <div
         data-tab={key}
@@ -148,7 +179,7 @@ export const IssuesArea = forwardRef<IssuesAreaHandle, IssuesAreaProps>(function
         {active && <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-px" style={{ background: 'var(--ant-color-primary)' }} />}
         <button
           type="button" role="tab" aria-selected={active} tabIndex={active ? 0 : -1} title={title}
-          onClick={() => (key === 'detail' ? showDetail() : setView('new'))}
+          onClick={() => (key === 'detail' ? showDetail() : setView('form'))}
           className={`flex h-full min-w-0 items-center gap-1.5 pl-2.5 text-left text-[13px] outline-none ${FOCUS_RING_INSET} ${closable ? 'pr-7' : 'pr-3'} ${active ? 'text-[var(--ant-color-text)]' : 'text-[var(--ant-color-text-secondary)]'}`}
         >
           <CircleDot className="size-4 shrink-0 text-[var(--ant-color-text-secondary)]" aria-hidden />
@@ -167,7 +198,7 @@ export const IssuesArea = forwardRef<IssuesAreaHandle, IssuesAreaProps>(function
             variant="borderless" icon={X} size={{ size: 16, blockSize: 20, borderRadius: 5 }}
             aria-label={`Fechar ${title}`} title="Fechar (Ctrl+F4)"
             className={`absolute! top-1/2 right-1 z-10 -translate-y-1/2! focus-visible:opacity-100 group-hover/tab:opacity-100 ${active && !dirty ? 'opacity-100' : 'opacity-0'}`}
-            onClick={closeNew}
+            onClick={closeForm}
           />
         )}
       </div>
@@ -183,25 +214,28 @@ export const IssuesArea = forwardRef<IssuesAreaHandle, IssuesAreaProps>(function
           className="@container relative flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none]!"
         >
           {tab('detail', 'Issues', false)}
-          {newOpen && tab('new', 'Nova issue', true)}
+          {formOpen && tab('form', formTitle(form), true)}
         </div>
       </div>
       <Flexbox flex={1} className="min-h-0 relative">
         <div className="absolute inset-0 flex flex-col min-h-0" style={{ display: view === 'detail' ? 'flex' : 'none' }} data-body="detail">
           <IssuesPage
-            start={start} onNew={() => openNewIssue()} focusKey={detailFocus}
-            executors={executors} onFocusOrchestrator={onFocusOrchestrator} onRunInTerminal={onRunInTerminal}
+            start={start} onNew={() => openNewIssue()} onEdit={openEdit} focusKey={detailFocus}
+            executors={executors} onFocusOrchestrator={onFocusOrchestrator}
           />
         </div>
-        {newOpen && (
-          <div className="absolute inset-0 flex flex-col min-h-0" style={{ display: view === 'new' ? 'flex' : 'none' }} data-body="new">
-            <NewIssueForm draft={draft} onChange={setDraft} focusKey={issueFocus} onCreated={created} onClose={closeNew} />
+        {formOpen && (
+          <div className="absolute inset-0 flex flex-col min-h-0" style={{ display: view === 'form' ? 'flex' : 'none' }} data-body="form">
+            <NewIssueForm
+              draft={form.draft} editing={form.editing} onChange={(draft) => setForm({ ...formRef.current, draft })} focusKey={formFocus}
+              onSaved={saved} onClose={closeForm}
+            />
           </div>
         )}
       </Flexbox>
       <Modal
         open={confirm !== null}
-        title="Descartar esta issue?"
+        title={asked.current === null ? 'Descartar esta issue?' : `Descartar as alterações na #${asked.current}?`}
         width={480}
         closable={false}
         keyboard
@@ -218,7 +252,9 @@ export const IssuesArea = forwardRef<IssuesAreaHandle, IssuesAreaProps>(function
           </Flexbox>
         )}
       >
-        <Text as="div" fontSize={14} lineHeight={1.6} style={{ ...SECONDARY, margin: 0 }}>O título e a descrição escritos nesta aba serão perdidos.</Text>
+        <Text as="div" fontSize={14} lineHeight={1.6} style={{ ...SECONDARY, margin: 0 }}>
+          {asked.current === null ? 'O título e a descrição escritos nesta aba serão perdidos.' : `A #${asked.current} continua como estava antes desta aba.`}
+        </Text>
       </Modal>
     </Flexbox>
   );

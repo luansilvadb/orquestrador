@@ -18,17 +18,17 @@ Pôr CLIs de IA para trabalhar sobre a pasta de um projeto. Um orquestrador conv
 
 ## Positioning
 
-Orquestração local de CLIs de IA reais (`claude` e `codex`, cada um podendo ser orquestrador ou executor) sobre a pasta do projeto, com editor, Git, pesquisa, terminais e issues do GitHub no mesmo lugar. Não é um chat com IA nem um IDE com assistente: o centro são os agentes trabalhando em paralelo.
+Orquestração local de CLIs de IA reais (`claude` e `codex`, cada um podendo ser orquestrador ou executor) sobre a pasta do projeto, com editor, Git, pesquisa, terminais e issues no mesmo lugar. Não é um chat com IA nem um IDE com assistente: o centro são os agentes trabalhando em paralelo.
 
 ## Operating Context
 
 - Sessões longas, com o app aberto o dia todo ao lado do trabalho do usuário.
 - Fluxo: escolher a pasta, abrir o terminal do orquestrador, escolher ferramenta, modelo e esforço, conversar, acompanhar executores, revisar diffs e fazer commit.
-- Ferramentas em volta: Git, GitHub CLI (`gh`) para a tela Issues, os CLIs de IA no `PATH`.
+- Ferramentas em volta: Git e os CLIs de IA no `PATH`.
 
 ## Capabilities and Constraints
 
-- Telas: Arquivos (árvore e editor CodeMirror), Pesquisar, Git (controle de versão e comparador) e Issues (GitHub); painel do Orquestrador à direita e painel Terminal embaixo.
+- Telas: Arquivos (árvore e editor CodeMirror), Pesquisar, Git (controle de versão e comparador) e Issues (ideias de tarefa do projeto, só neste computador); painel do Orquestrador à direita e painel Terminal embaixo.
 - A concorrência dos executores é automática (CPU e RAM), sem ajuste manual.
 - Os executores têm permissão total na pasta do projeto; os limites estão em `docs/seguranca.md`.
 - Terminais xterm ficam sempre montados: trocar de tela não pode desmontar a coluna central nem o painel do Orquestrador.

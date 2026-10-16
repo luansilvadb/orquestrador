@@ -3,8 +3,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
-  Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GhStatus, GitBranches, GitDiff, GitState, GraphCommit, HunkRef, Issue, IssueComment,
-  IssuesSnapshot, Moved, Options,
+  ActiveIssue, Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GitBranches, GitDiff, GitState, GraphCommit, HunkRef, Issue,
+  IssuesData, Moved, Options,
   Pasted, QuickOpen, ReplaceApplied, ReplacePreview, ReplaceQuery, ReplaceRequest, ReviewDiff, SearchFilter, SearchOptions, SearchResults, Snapshot, UpdateStatus,
 } from './types';
 
@@ -139,17 +139,17 @@ export const backend = {
   // Prévia da substituição: não grava. A aplicação só toca nos arquivos escolhidos da prévia, com a revisão que ela mostrou; erros voltam por arquivo.
   replacePreview: (query: ReplaceQuery, replacement: string) => call<ReplacePreview>('replace_preview', { query, replacement }),
   replaceApply: (request: ReplaceRequest) => call<ReplaceApplied>('replace_apply', { request }),
-  // Issues do GitHub do repositório aberto, pelo GitHub CLI. Erro chega como mensagem em português (ex.: sem conexão).
-  githubStatus: () => call<GhStatus>('github_status'),
-  // Abertas e as 50 fechadas mais recentes; `data: null` se nada mudou desde `sinceVersion`.
-  githubIssues: (sinceVersion: number) => call<IssuesSnapshot>('github_issues', { sinceVersion }),
-  // Devolve a issue criada (ou com o estado novo), já com número e URL.
-  githubCreateIssue: (title: string, body: string, labels: string[]) => call<Issue>('github_create_issue', { title, body, labels }),
-  githubSetIssueState: (number: number, open: boolean) => call<Issue>('github_set_issue_state', { number, open }),
-  // Os comentários da issue, do mais antigo ao mais novo; o número que não existe vem como erro em português.
-  githubIssueComments: (number: number) => call<IssueComment[]>('github_issue_comments', { number }),
-  // Abre no navegador padrão um endereço `https://github.com/...` (a issue, ou a lista de issues do repositório). Outro endereço é recusado.
-  githubOpen: (url: string) => call<void>('github_open', { url }),
+  // Issues do projeto, só neste computador (um arquivo por projeto em `%LOCALAPPDATA%\orquestrador\issues`). Erro chega como mensagem
+  // em português (arquivo ilegível, disco recusando).
+  issuesLoad: () => call<IssuesData>('issues_load'),
+  // Devolvem a issue como ficou. Título vazio e issue que não existe mais rejeitam com a mensagem.
+  issuesCreate: (title: string, body: string, labels: string[]) => call<Issue>('issues_create', { title, body, labels }),
+  issuesUpdate: (number: number, title: string, body: string, labels: string[]) => call<Issue>('issues_update', { number, title, body, labels }),
+  issuesSetState: (number: number, open: boolean) => call<Issue>('issues_set_state', { number, open }),
+  // Apaga de vez; a em andamento e a próxima que eram ela perdem a marca no arquivo.
+  issuesDelete: (number: number) => call<void>('issues_delete', { number }),
+  // A em andamento e a próxima, guardadas no mesmo arquivo.
+  issuesSetTracked: (active: ActiveIssue | null, next: number | null) => call<void>('issues_set_tracked', { active, next }),
 };
 
 /** Erros do backend já chegam como mensagem em português. */

@@ -14,14 +14,13 @@ Requisitos:
 - Windows com WebView2.
 - Os CLIs `claude` e/ou `codex` no `PATH`, instalados e **já autenticados**. Só os que você for usar.
 - Git (recomendado). Sem ele, o app abre a pasta, mas sem os recursos de Git.
-- GitHub CLI (`gh`) instalado e logado (`gh auth login`), opcional: só a tela Issues usa, com o repositório do remoto `origin`.
 
 ## Usar
 
 1. Escolha a pasta do projeto. Uma pasta fora de repositório também abre, sem os recursos de Git.
 2. No painel do Orquestrador, à direita, clique em `Abrir terminal`, escolha ferramenta, modelo e esforço, e converse com ele até fechar o objetivo.
 3. Quando ele delega, cada executor ganha uma aba. A resposta volta sozinha ao orquestrador quando o executor termina.
-4. Enquanto ele trabalha, anote as próximas ideias na tela Issues, como issues do GitHub. Escolha uma na faixa para ver o detalhe dela; o Colar no orquestrador cola o título, o link e a descrição no rascunho do orquestrador, sem enviar.
+4. Enquanto ele trabalha, anote as próximas ideias na tela Issues. Elas ficam só neste computador, por projeto, com ou sem Git. Escolha uma na faixa para ver o detalhe dela; o Colar no orquestrador cola o número, o título e a descrição no rascunho do orquestrador, sem enviar.
 
 O passo a passo está em [uso](docs/uso.md), a tela em [interface](docs/interface.md) e a delegação em [delegação](docs/delegacao.md).
 
@@ -55,7 +54,7 @@ As demais checagens (em Node e de interface) estão em [desenvolvimento](docs/de
 
 | Documento | Conteúdo |
 | --- | --- |
-| [uso](docs/uso.md) | Passo a passo, aviso de Git ausente, Issues do GitHub, configuração e teto de executores |
+| [uso](docs/uso.md) | Passo a passo, aviso de Git ausente, Issues, configuração e teto de executores |
 | [interface](docs/interface.md) | Telas, painéis, editor, pesquisa, Git, Issues e terminal |
 | [delegação](docs/delegacao.md) | Como o orquestrador delega, perguntas de executor e limites |
 | [limites de segurança](docs/seguranca.md) | Permissões de cada papel, barreiras e medições |

@@ -1,41 +1,31 @@
-// Check da parte pura das Issues (src/issue-text.ts): o texto que vai ao orquestrador, datas relativas,
-// labels mais usadas, busca, filtro e ordenação da faixa, as fechadas recentes, qual issue o detalhe mostra, as seções e o
-// teclado da faixa, a leitura do estado salvo no localStorage, a resposta de uma criação, o espaçamento e o motivo das que falharam, as regras da issue em andamento e da próxima e o
-// rascunho do orquestrador (o que foi colado e não enviado). Roda sem dependências: `node scripts/check-issues.mjs`.
+// Check da parte pura das Issues (src/issue-text.ts): o texto que vai ao orquestrador, datas relativas, as labels (mais usadas, todas,
+// as do filtro, a cor e o nome de uma nova), busca, filtro e ordenação da faixa, as fechadas recentes, qual issue o detalhe mostra, as
+// seções e o teclado da faixa, as regras da issue em andamento e da próxima, o rascunho do orquestrador (o que foi colado e não enviado)
+// e a leitura das criações que a versão com o GitHub deixou no localStorage. Roda sem dependências: `node scripts/check-issues.mjs`.
 // Sai com 1 e mostra a falha se alguma regra quebrar.
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import {
-  commandIn, detailIssue, draftAdd, draftAsk, draftJoined, draftOnTurn, draftPaste, draftText, draftWaits, failedReason, failPending, filterLabels,
-  hasLabels, issueList, issuePrompt, markNext, markTurned, matchesQuery, passesFilter, pendingRetrying, pruneTracked, readSections, readStoredIssues,
-  recentClosed, relativeTime, retryDue, rovingStep, SECTIONS_DEFAULT, settleStored, sortIssues, splitCode, startTracked, storedEmpty, topLabels,
+  allLabels, detailIssue, draftAdd, draftAsk, draftJoined, draftOnTurn, draftPaste, draftText, draftWaits, filterLabels, hasLabels, issueList,
+  issuePrompt, LABEL_MAX, labelColor, legacyIssues, markNext, markTurned, matchesQuery, passesFilter, pickLabel, pruneTracked, readSections,
+  recentClosed, relativeTime, rovingStep, SECTIONS_DEFAULT, sortIssues, startTracked, topLabels,
 } from '../src/issue-text.ts';
 
 const issue = (number, body, labels = []) => ({
-  number, title: `Título ${number}`, body, state: 'open', labels: labels.map((name) => ({ name, color: 'ededed' })), author: 'luansilvadb',
-  comments: 0, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z', closedAt: null,
-  url: `https://github.com/luansilvadb/orquestrador/issues/${number}`,
+  number, title: `Título ${number}`, body, state: 'open', labels, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z', closedAt: null,
 });
-const label = (name) => ({ name, color: 'ededed', description: '' });
 
-check('issuePrompt: número, título, URL, linha em branco e a descrição', () => {
-  assert.equal(
-    issuePrompt(issue(7, 'Primeira linha\n\n- item')),
-    'Issue #7: Título 7\nhttps://github.com/luansilvadb/orquestrador/issues/7\n\nPrimeira linha\n\n- item',
-  );
+check('issuePrompt: número, título, linha em branco e a descrição', () => {
+  assert.equal(issuePrompt(issue(7, 'Primeira linha\n\n- item')), 'Issue #7: Título 7\n\nPrimeira linha\n\n- item');
 });
 
 check('issuePrompt: sem descrição (ou só espaço) não tem a linha em branco', () => {
-  const head = 'Issue #3: Título 3\nhttps://github.com/luansilvadb/orquestrador/issues/3';
-  assert.equal(issuePrompt(issue(3, '')), head);
-  assert.equal(issuePrompt(issue(3, ' \r\n\n\t')), head);
+  assert.equal(issuePrompt(issue(3, '')), 'Issue #3: Título 3');
+  assert.equal(issuePrompt(issue(3, ' \r\n\n\t')), 'Issue #3: Título 3');
 });
 
 check('issuePrompt: \\r\\n vira \\n e o espaço do fim sai', () => {
-  assert.equal(
-    issuePrompt(issue(1, 'a\r\nb\r\n\r\nc  \r\n\r\n')),
-    'Issue #1: Título 1\nhttps://github.com/luansilvadb/orquestrador/issues/1\n\na\nb\n\nc',
-  );
+  assert.equal(issuePrompt(issue(1, 'a\r\nb\r\n\r\nc  \r\n\r\n')), 'Issue #1: Título 1\n\na\nb\n\nc');
 });
 
 check('relativeTime: as faixas em português', () => {
@@ -72,7 +62,6 @@ check('matchesQuery: título sem diferenciar maiúsculas e acentos, ou o número
   assert.equal(matchesQuery('Configuração', 12, '#12'), true, 'número com #');
   assert.equal(matchesQuery('Configuração', 12, '#1'), false, 'número exato, não prefixo');
   assert.equal(matchesQuery('Versão 12', 7, '12'), true, 'número que aparece no título também passa');
-  assert.equal(matchesQuery('Ideia nova', null, '#3'), false, 'criação sem número só passa pelo título');
 });
 
 check('hasLabels: passa com todas as marcadas; sem marcadas passa tudo', () => {
@@ -91,19 +80,37 @@ check('sortIssues: mais novas, mais antigas e atualizadas recentemente, sem muda
   assert.deepEqual(list.map((i) => i.number), [1, 2, 3], 'a entrada não muda');
 });
 
-check('topLabels: mais usadas primeiro, empate pela ordem do repositório', () => {
-  const repo = ['bug', 'documentation', 'enhancement', 'question'].map(label);
-  const issues = [issue(1, '', ['question', 'enhancement']), issue(2, '', ['enhancement', 'documentation']), issue(3, '', ['question', 'fora-do-repo'])];
-  // question 2, enhancement 2 (empate: enhancement vem antes no repositório), documentation 1.
-  assert.deepEqual(topLabels(issues, repo, 3).map((l) => l.name), ['enhancement', 'question', 'documentation']);
+check('topLabels: mais usadas primeiro, empate em ordem alfabética; abertas e fechadas contam', () => {
+  const closed = { ...issue(4, '', ['bug', 'ui']), state: 'closed' };
+  const issues = [issue(1, '', ['question', 'enhancement']), issue(2, '', ['enhancement', 'documentation']), issue(3, '', ['question', 'ui']), closed];
+  // enhancement 2, question 2, ui 2 (empate: ordem alfabética), bug 1, documentation 1.
+  assert.deepEqual(topLabels(issues, 3), ['enhancement', 'question', 'ui']);
+  assert.deepEqual(topLabels(issues, 10), ['enhancement', 'question', 'ui', 'bug', 'documentation'], 'n maior que o total devolve todas');
+  assert.deepEqual(topLabels(issues, 0), []);
+  assert.deepEqual(topLabels([], 3), [], 'projeto sem labels');
 });
 
-check('topLabels: completa com as não usadas, na ordem do repositório', () => {
-  const repo = ['bug', 'documentation', 'enhancement', 'question', 'wontfix'].map(label);
-  assert.deepEqual(topLabels([issue(1, '', ['question'])], repo, 3).map((l) => l.name), ['question', 'bug', 'documentation']);
-  assert.deepEqual(topLabels([], repo, 2).map((l) => l.name), ['bug', 'documentation']);
-  assert.equal(topLabels([], repo, 10).length, 5, 'n maior que o total devolve todas');
-  assert.deepEqual(topLabels([], repo, 0), []);
+check('allLabels: todas as labels em uso, sem repetir, em ordem alfabética sem diferenciar maiúsculas e acentos', () => {
+  const closed = { ...issue(3, '', ['zeta']), state: 'closed' };
+  assert.deepEqual(allLabels([issue(1, '', ['ui', 'Bug', 'ação']), issue(2, '', ['ui', 'acesso']), closed]), ['ação', 'acesso', 'Bug', 'ui', 'zeta']);
+  assert.deepEqual(allLabels([issue(1, '')]), []);
+});
+
+check('pickLabel: espaços juntados, vazio é null, e a grafia de uma que já existe vale', () => {
+  assert.equal(pickLabel([], '  nova   label  '), 'nova label');
+  assert.equal(pickLabel([], ' \t '), null);
+  assert.equal(pickLabel(['Bug', 'ui'], 'bug'), 'Bug');
+  assert.equal(pickLabel(['Bug'], 'BUG '), 'Bug');
+  assert.equal(pickLabel(['Bug'], 'bugs'), 'bugs');
+  assert.equal(LABEL_MAX, 50, 'o mesmo limite do backend');
+});
+
+check('labelColor: uma cor da paleta, a mesma para o mesmo nome sem diferenciar maiúsculas', () => {
+  const colors = new Set(['bug', 'ui', 'documentation', 'enhancement', 'question', 'ação', 'help wanted', 'x', '', '🙂'].map(labelColor));
+  for (const color of colors) assert.match(color, /^[0-9a-f]{6}$/);
+  assert.ok(colors.size > 1, 'nomes diferentes não caem todos na mesma cor');
+  assert.equal(labelColor('Bug'), labelColor('bug'));
+  assert.equal(labelColor('bug'), labelColor('bug'), 'estável');
 });
 
 check('passesFilter: a busca da página (título sem acento e maiúsculas, ou #número) e todas as labels marcadas', () => {
@@ -118,13 +125,13 @@ check('passesFilter: a busca da página (título sem acento e maiúsculas, ou #n
   assert.equal(passesFilter(i, 'git', ['bug']), false, 'texto e labels valem juntos');
 });
 
-check('filterLabels: só as labels do repositório em uso nas abertas, na ordem do repositório; as marcadas ficam', () => {
-  const repo = ['bug', 'documentation', 'enhancement', 'question', 'wontfix'].map(label);
+check('filterLabels: só as labels em uso nas abertas, em ordem alfabética; as marcadas ficam', () => {
   const closed = { ...issue(3, '', ['wontfix']), state: 'closed' };
-  const issues = [issue(1, '', ['question', 'bug']), issue(2, '', ['question', 'fora-do-repo']), closed];
-  assert.deepEqual(filterLabels(issues, repo, []).map((l) => l.name), ['bug', 'question'], 'fechada e label fora do repositório não contam');
-  assert.deepEqual(filterLabels(issues, repo, ['wontfix']).map((l) => l.name), ['bug', 'question', 'wontfix'], 'a marcada sem uso fica, para desmarcar');
-  assert.deepEqual(filterLabels([], repo, []), []);
+  const issues = [issue(1, '', ['question', 'bug']), issue(2, '', ['question', 'docs']), closed];
+  assert.deepEqual(filterLabels(issues, []), ['bug', 'docs', 'question'], 'a da fechada não conta');
+  assert.deepEqual(filterLabels(issues, ['wontfix']), ['bug', 'docs', 'question', 'wontfix'], 'a marcada sem uso fica, para desmarcar');
+  assert.deepEqual(filterLabels(issues, ['bug']), ['bug', 'docs', 'question'], 'sem repetir');
+  assert.deepEqual(filterLabels([], []), []);
 });
 
 check('recentClosed: as n fechadas mais recentes pelo closedAt, sem mudar a entrada', () => {
@@ -149,7 +156,7 @@ check('detailIssue: a escolhida (aberta ou fechada); sem escolha, a em andamento
   assert.equal(n(detailIssue(list, null, 3, 1)), 3, 'sem escolha: a em andamento');
   assert.equal(n(detailIssue(list, null, null, 1)), 1, 'sem em andamento: a próxima');
   assert.equal(n(detailIssue(list, null, null, null)), 2, 'sem nenhuma das duas: a primeira aberta (a mais nova)');
-  assert.equal(n(detailIssue(list, 99, 3, null)), 3, 'a escolhida sumiu do GitHub: cai na regra sem escolha');
+  assert.equal(n(detailIssue(list, 99, 3, null)), 3, 'a escolhida foi excluída: cai na regra sem escolha');
   assert.equal(n(detailIssue(list, null, 4, 1)), 1, 'a em andamento fechada não vale: vai para a próxima');
   assert.equal(n(detailIssue(list, null, null, 4)), 2, 'a próxima fechada não vale: vai para a primeira aberta');
   assert.equal(detailIssue([at(4, '2026-10-04T00:00:00Z', 'closed')], null, null, null), null, 'nenhuma aberta e nada escolhido');
@@ -175,183 +182,6 @@ check('rovingStep: ↑/↓ andam uma sem dar a volta, Home e End vão às pontas
   assert.equal(rovingStep(0, 0, 'ArrowDown'), null, 'lista vazia');
 });
 
-const pending = (localId, extra = {}) => ({ localId, title: 'Ideia', body: 'texto', labels: ['bug'], createdAt: 1_700_000_000_000, status: 'failed', error: 'Sem conexão com o GitHub.', ...extra });
-const EMPTY = { v: 1, pending: [], active: null, next: null };
-
-check('readStoredIssues: texto ilegível ou formato errado volta vazio, sem lançar', () => {
-  for (const text of [null, '', '{', 'null', '42', '"texto"', '[]', '{}', '{"v":2,"pending":[]}', '{"v":"1","pending":[]}', '{"v":1}', '{"v":1,"pending":{}}']) {
-    assert.deepEqual(readStoredIssues(text), EMPTY, String(text));
-  }
-});
-
-check('readStoredIssues: a falha guardada volta igual, com a contagem e a hora', () => {
-  const saved = {
-    v: 1, pending: [pending('a', { failures: 2, failedAt: 1_700_000_100_000 }), pending('b', { labels: [], body: '', failures: 1, failedAt: 5 })], active: null, next: null,
-  };
-  assert.deepEqual(readStoredIssues(JSON.stringify(saved)), saved);
-});
-
-check('readStoredIssues: falha salva sem contagem (dado antigo) vale uma falha já vencida; contagem e hora inválidas também', () => {
-  const read = (extra) => readStoredIssues(JSON.stringify({ v: 1, pending: [pending('a', extra)] }), new Set(), 1_800_000_000_000).pending[0];
-  const old = read({});
-  assert.equal(old.failures, 1);
-  assert.equal(old.failedAt, 0);
-  assert.equal(retryDue(old, 1_800_000_000_000), true, 'sai na primeira atualização boa');
-  for (const failures of [0, -1, 1.5, '2', null]) assert.equal(read({ failures, failedAt: 9 }).failures, 1, JSON.stringify(failures));
-  for (const failedAt of ['ontem', null, true]) assert.equal(read({ failures: 2, failedAt }).failedAt, 0, JSON.stringify(failedAt));
-  assert.equal(read({ failures: 3, failedAt: 9 }).failures, 3);
-});
-
-check('readStoredIssues: envio interrompido conta como mais uma falha, na hora da leitura', () => {
-  const now = 1_800_000_000_000;
-  const read = (extra) => readStoredIssues(JSON.stringify({ v: 1, pending: [pending('a', { status: 'sending', ...extra })] }), new Set(), now).pending[0];
-  const first = read({ error: undefined });
-  assert.deepEqual([first.status, first.failures, first.failedAt], ['failed', 1, now], 'a primeira tentativa (sem falha antes)');
-  const again = read({ failures: 2, failedAt: 5 });
-  assert.deepEqual([again.status, again.failures, again.failedAt], ['failed', 3, now], 'uma nova tentativa depois de duas falhas');
-  assert.match(again.error, /interrompido/);
-});
-
-check('readStoredIssues: a nova tentativa ainda a caminho mantém o erro, a contagem e a hora da última falha', () => {
-  const text = JSON.stringify({ v: 1, pending: [pending('a', { status: 'sending', failures: 2, failedAt: 5 })] });
-  const [p] = readStoredIssues(text, new Set(['a'])).pending;
-  assert.deepEqual(p, pending('a', { status: 'sending', failures: 2, failedAt: 5 }));
-  assert.equal(pendingRetrying(p), true);
-});
-
-check('settleStored e failPending: a falha soma a contagem e guarda a hora', () => {
-  const text = JSON.stringify({ v: 1, pending: [pending('a', { status: 'sending', failures: 1, failedAt: 5 }), pending('b', { status: 'sending', error: undefined })] });
-  const [a] = settleStored(text, 'a', 'O GitHub respondeu 502.', 1_000).pending;
-  assert.deepEqual([a.status, a.error, a.failures, a.failedAt], ['failed', 'O GitHub respondeu 502.', 2, 1_000]);
-  const b = settleStored(text, 'b', 'Sem conexão com o GitHub.', 2_000).pending[1];
-  assert.deepEqual([b.status, b.failures, b.failedAt], ['failed', 1, 2_000], 'a primeira falha');
-  assert.deepEqual(failPending(pending('c', { status: 'sending', error: undefined }), 'x', 7), pending('c', { error: 'x', failures: 1, failedAt: 7 }));
-});
-
-check('retryDue: a próxima tentativa automática depois de 15 s, 1 min e 5 min; da 4ª falha em diante, nenhuma', () => {
-  const failed = (failures) => pending('a', { failures, failedAt: 1_000 });
-  for (const [failures, wait] of [[1, 15_000], [2, 60_000], [3, 300_000]]) {
-    assert.equal(retryDue(failed(failures), 1_000 + wait - 1), false, `${failures}: antes da espera`);
-    assert.equal(retryDue(failed(failures), 1_000 + wait), true, `${failures}: na espera`);
-  }
-  for (const failures of [4, 5, 12]) assert.equal(retryDue(failed(failures), 1e15), false, `${failures}: só o Tentar de novo`);
-  assert.equal(retryDue(pending('a', { status: 'sending', failures: 1, failedAt: 0 }), 1e15), false, 'a caminho');
-  assert.equal(retryDue(pending('a', { status: 'waiting', error: undefined }), 1e15), false, 'a guardada vai por outra regra');
-});
-
-check('failedReason: o motivo diz o que vai acontecer', () => {
-  const failed = (failures, error = 'Sem conexão com o GitHub.') => pending('a', { failures, failedAt: 0, error });
-  assert.equal(failedReason(failed(1)), 'Falhou: Sem conexão com o GitHub. Nova tentativa automática em 15 s.');
-  assert.equal(failedReason(failed(2)), 'Falhou: Sem conexão com o GitHub. Nova tentativa automática em 1 min.');
-  assert.equal(failedReason(failed(3, 'O GitHub respondeu 502')), 'Falhou: O GitHub respondeu 502. Nova tentativa automática em 5 min.', 'sem ponto, ganha um');
-  assert.equal(failedReason(failed(4)), 'Falhou 4 vezes: Sem conexão com o GitHub. Sem novas tentativas automáticas.');
-  assert.equal(failedReason(failed(6)), 'Falhou 6 vezes: Sem conexão com o GitHub. Sem novas tentativas automáticas.');
-  assert.equal(failedReason(failed(1, '')), 'Falhou: erro desconhecido. Nova tentativa automática em 15 s.');
-  const retrying = pending('a', { status: 'sending', failures: 2, failedAt: 0 });
-  assert.equal(failedReason(retrying), 'Falhou: Sem conexão com o GitHub. Tentando de novo…');
-  assert.equal(failedReason(retrying, true), 'Falhou: Sem conexão com o GitHub. Nova tentativa automática em 1 min.', 'o texto da falha, para reservar o espaço');
-});
-
-check('pendingRetrying: só a que já falhou e está a caminho de novo', () => {
-  assert.equal(pendingRetrying(pending('a', { status: 'sending', failures: 1, failedAt: 0 })), true);
-  assert.equal(pendingRetrying(pending('a', { status: 'sending', error: undefined })), false, 'a primeira tentativa (a otimista da captura)');
-  assert.equal(pendingRetrying(pending('a', { failures: 1, failedAt: 0 })), false, 'falhou e espera');
-});
-
-check('readStoredIssues: envio interrompido (sending) volta como failed, com aviso', () => {
-  const { pending: [p] } = readStoredIssues(JSON.stringify({ v: 1, pending: [pending('a', { status: 'sending', error: undefined })] }));
-  assert.equal(p.status, 'failed');
-  assert.match(p.error, /interrompido/);
-});
-
-check('readStoredIssues: sending com o pedido ainda a caminho nesta execução continua sending', () => {
-  const text = JSON.stringify({ v: 1, pending: [pending('a', { status: 'sending', error: undefined }), pending('b', { status: 'sending', error: undefined })] });
-  const read = readStoredIssues(text, new Set(['a']));
-  assert.deepEqual(read.pending.map((p) => [p.localId, p.status]), [['a', 'sending'], ['b', 'failed']]);
-  assert.equal('error' in read.pending[0], false);
-});
-
-check('settleStored: a resposta tira a criação que deu certo e marca a que falhou, sem mexer nas outras', () => {
-  const text = JSON.stringify({ v: 1, pending: [pending('ok', { status: 'sending', error: undefined }), pending('outra', { status: 'sending', error: undefined }), pending('velha')] });
-  const done = settleStored(text, 'ok');
-  assert.deepEqual(done.pending.map((p) => [p.localId, p.status]), [['outra', 'sending'], ['velha', 'failed']], 'as outras a caminho continuam sending');
-  const failed = settleStored(text, 'ok', 'Sem conexão com o GitHub.');
-  assert.deepEqual(failed.pending.map((p) => [p.localId, p.status, p.error]), [
-    ['ok', 'failed', 'Sem conexão com o GitHub.'], ['outra', 'sending', undefined], ['velha', 'failed', 'Sem conexão com o GitHub.'],
-  ]);
-  assert.deepEqual(settleStored(text, 'descartada').pending.length, 3, 'descartada no meio do envio não volta nem mexe no resto');
-  assert.deepEqual(settleStored(null, 'ok'), EMPTY, 'sem nada salvo (outro projeto limpo) continua vazio');
-});
-
-check('Troca de projeto no meio do envio: a resposta grava no projeto de origem e a criação não volta como falha', () => {
-  // Projeto A: criação a caminho, salva como sending. O usuário vai para B e volta para A antes da resposta.
-  const savedA = JSON.stringify({ v: 1, pending: [pending('x', { status: 'sending', error: undefined })] });
-  const reopened = readStoredIssues(savedA, new Set(['x']));
-  assert.equal(reopened.pending[0].status, 'sending', 'a sessão nova de A não a trata como interrompida (nem a reenvia)');
-  // A resposta chega (com B aberto ou com A de novo): o localStorage de A perde a pendência.
-  assert.deepEqual(settleStored(savedA, 'x'), EMPTY);
-  // Depois, sem nada a caminho, o que sobrou de A volta como falha só se o app fechou antes da resposta.
-  assert.equal(readStoredIssues(savedA).pending[0].status, 'failed');
-});
-
-check('readStoredIssues: criação inválida sai sozinha, as válidas ficam', () => {
-  const list = [
-    pending('ok-1'),
-    null, 'texto', 3,
-    pending(''),
-    pending('sem-titulo', { title: 5 }),
-    pending('labels-erradas', { labels: ['bug', 1] }),
-    pending('data-errada', { createdAt: 'ontem' }),
-    pending('status-errado', { status: 'done' }),
-    pending('erro-errado', { error: 404 }),
-    pending('ok-1', { title: 'repetida' }),
-    pending('ok-2', { error: undefined }),
-  ];
-  const read = readStoredIssues(JSON.stringify({ v: 1, pending: list, active: 12, next: 13 }));
-  assert.deepEqual(read.pending.map((p) => p.localId), ['ok-1', 'ok-2']);
-  assert.equal(read.pending[0].title, 'Ideia');
-  assert.equal('error' in read.pending[1], false, 'failed sem mensagem fica sem `error`');
-});
-
-check('readStoredIssues: a leitura antiga (sem active e next) continua valendo, com os dois null', () => {
-  const read = readStoredIssues(JSON.stringify({ v: 1, pending: [pending('a')] }));
-  assert.deepEqual(read.pending.map((p) => p.localId), ['a']);
-  assert.equal(read.active, null);
-  assert.equal(read.next, null);
-});
-
-check('readStoredIssues: em andamento e próxima voltam iguais', () => {
-  const saved = { v: 1, pending: [], active: { number: 12, since: 1_700_000_000_000, turned: true }, next: 13 };
-  assert.deepEqual(readStoredIssues(JSON.stringify(saved)), saved);
-  assert.deepEqual(readStoredIssues(JSON.stringify({ ...saved, active: null })), { ...saved, active: null }, 'só a próxima');
-  assert.deepEqual(readStoredIssues(JSON.stringify({ ...saved, next: null })), { ...saved, next: null }, 'só a em andamento');
-});
-
-check('readStoredIssues: em andamento ou próxima inválidas valem null, sem derrubar o resto', () => {
-  const since = 1_700_000_000_000;
-  for (const active of [12, '12', [], { number: 12 }, { since }, { number: '12', since }, { number: 0, since }, { number: -3, since },
-    { number: 1.5, since }, { number: 12, since: '2026' }, { number: 12, since: null }]) {
-    const read = readStoredIssues(JSON.stringify({ v: 1, pending: [pending('a')], active, next: 13 }));
-    assert.equal(read.active, null, JSON.stringify(active));
-    assert.equal(read.next, 13, 'a próxima válida fica');
-    assert.equal(read.pending.length, 1);
-  }
-  for (const next of ['13', 0, -1, 2.5, {}, [13], true]) {
-    assert.equal(readStoredIssues(JSON.stringify({ v: 1, pending: [], active: { number: 12, since }, next })).next, null, JSON.stringify(next));
-  }
-  const same = readStoredIssues(JSON.stringify({ v: 1, pending: [], active: { number: 12, since }, next: 12 }));
-  assert.deepEqual([same.active, same.next], [{ number: 12, since, turned: false }, null], 'a próxima igual à em andamento não vale');
-});
-
-check('settleStored: a resposta de uma criação não mexe na em andamento nem na próxima', () => {
-  const text = JSON.stringify({ v: 1, pending: [pending('ok', { status: 'sending', error: undefined })], active: { number: 4, since: 10, turned: true }, next: 5 });
-  const done = settleStored(text, 'ok');
-  assert.deepEqual(done, { v: 1, pending: [], active: { number: 4, since: 10, turned: true }, next: 5 });
-  assert.equal(storedEmpty(done), false, 'com em andamento ou próxima a chave fica no localStorage');
-  assert.equal(storedEmpty({ ...done, active: null }), false);
-  assert.equal(storedEmpty({ ...done, active: null, next: null }), true);
-});
-
 check('startTracked: vira a em andamento; o since só recomeça ao trocar de issue; deixa de ser a próxima', () => {
   const none = { active: null, next: null };
   assert.deepEqual(startTracked(none, 7, 100), { active: { number: 7, since: 100, turned: false }, next: null });
@@ -373,9 +203,9 @@ check('pruneTracked: zera a em andamento e a próxima fechadas ou fora da lista;
   const at = (number, state) => ({ ...issue(number, ''), state });
   const t = { active: { number: 1, since: 100 }, next: 2 };
   assert.equal(pruneTracked(t, [at(1, 'open'), at(2, 'open')]), t, 'as duas abertas: o mesmo objeto, sem mudança');
-  assert.deepEqual(pruneTracked(t, [at(1, 'closed'), at(2, 'open')]), { active: null, next: 2 }, 'em andamento fechada (Closes #1 ou pelo site)');
+  assert.deepEqual(pruneTracked(t, [at(1, 'closed'), at(2, 'open')]), { active: null, next: 2 }, 'em andamento fechada (em outra janela do app)');
   assert.deepEqual(pruneTracked(t, [at(1, 'open'), at(2, 'closed')]), { active: t.active, next: null }, 'próxima fechada');
-  assert.deepEqual(pruneTracked(t, [at(3, 'open')]), { active: null, next: null }, 'nenhuma das duas na lista');
+  assert.deepEqual(pruneTracked(t, [at(3, 'open')]), { active: null, next: null }, 'nenhuma das duas na lista (excluídas)');
   assert.deepEqual(pruneTracked(t, []), { active: null, next: null });
   const none = { active: null, next: null };
   assert.equal(pruneTracked(none, [at(1, 'open')]), none);
@@ -391,30 +221,13 @@ check('markTurned: a rodada marca a em andamento; sem em andamento ou já marcad
   assert.equal(markTurned(none), none);
 });
 
-check('Rodada desde o Iniciar: colada → trabalhando; um Iniciar de outra issue recomeça; o mesmo Iniciar mantém', () => {
+check('Rodada desde o Colar: colada → trabalhando; um Colar de outra issue recomeça; o mesmo Colar mantém', () => {
   let t = startTracked({ active: null, next: null }, 7, 100);
   assert.equal(t.active.turned, false, 'recém-colada: aguardando envio');
   t = markTurned(t);
   assert.equal(t.active.turned, true, 'rodada começou');
-  assert.equal(startTracked(t, 7, 900).active.turned, true, 'o mesmo Iniciar não zera');
+  assert.equal(startTracked(t, 7, 900).active.turned, true, 'o mesmo Colar não zera');
   assert.equal(startTracked(t, 9, 900).active.turned, false, 'outra issue começa colada de novo');
-});
-
-check('readStoredIssues: turned ausente (dado antigo) ou inválido vale false; só true vale true', () => {
-  const since = 1_700_000_000_000;
-  const turned = (v) => readStoredIssues(JSON.stringify({ v: 1, pending: [], active: { number: 12, since, ...(v === undefined ? {} : { turned: v }) }, next: null })).active.turned;
-  assert.equal(turned(undefined), false);
-  for (const v of ['true', 1, null, [], {}]) assert.equal(turned(v), false, JSON.stringify(v));
-  assert.equal(turned(false), false);
-  assert.equal(turned(true), true);
-});
-
-check('readStoredIssues: criação guardada sem o GitHub (waiting) continua waiting; sem erro inventado', () => {
-  const read = readStoredIssues(JSON.stringify({ v: 1, pending: [pending('w', { status: 'waiting', error: undefined })], active: null, next: null }));
-  assert.equal(read.pending.length, 1);
-  assert.equal(read.pending[0].status, 'waiting');
-  assert.equal('error' in read.pending[0], false);
-  assert.equal(storedEmpty(read), false, 'ainda há o que guardar');
 });
 
 check('rascunho: colar com ele vazio cola; a mesma de novo já está lá; outra pergunta', () => {
@@ -440,7 +253,7 @@ check('rascunho: Colar junto vai depois de uma linha em branco; colar sozinho, o
 
 check('rascunho: o envio esvazia (com texto, sem a issue, ou de CLI antigo); a leitura inicial (null) não', () => {
   const draft = [11, 13];
-  assert.deepEqual(draftOnTurn(draft, 'Issue #11: Título 11\nhttps://github.com/x/y/issues/11'), []);
+  assert.deepEqual(draftOnTurn(draft, 'Issue #11: Título 11\n\ntexto'), []);
   assert.deepEqual(draftOnTurn(draft, 'responda apenas OK'), [], 'o texto da issue pode não ter ido: a linha inteira foi');
   assert.deepEqual(draftOnTurn(draft, ''), []);
   assert.deepEqual(draftOnTurn(draft, undefined), [], 'CLI antigo, sem prompt: conta como envio');
@@ -477,27 +290,27 @@ check('rascunho: os avisos do Colar junto e da próxima que espera', () => {
   assert.equal(draftWaits([11, 13], 9), 'A #9 espera: o rascunho do orquestrador tem a #11 e a #13, ainda não enviadas.');
 });
 
-check('splitCode: separa os trechos entre crases do texto corrido', () => {
-  assert.deepEqual(splitCode('Instale o gh e rode `gh auth login`.'), [
-    { text: 'Instale o gh e rode ', code: false }, { text: 'gh auth login', code: true }, { text: '.', code: false },
+check('legacyIssues: as criações guardadas pela versão com o GitHub, na ordem; o resto fica de fora sem lançar', () => {
+  for (const text of [null, '', '{', 'null', '42', '"texto"', '[]', '{}', '{"v":1}', '{"v":1,"pending":{}}']) assert.deepEqual(legacyIssues(text), [], String(text));
+  const saved = {
+    v: 1, active: { number: 12, since: 1, turned: true }, next: 13,
+    pending: [
+      { localId: 'a', title: ' Ideia ', body: 'texto', labels: ['bug'], createdAt: 1, status: 'failed', error: 'Sem conexão com o GitHub.', failures: 2 },
+      null, 'texto', 3,
+      { localId: 'b', title: '   ', body: '', labels: [] },
+      { localId: 'c', title: 5, body: '', labels: [] },
+      { localId: 'd', title: 'labels erradas', body: '', labels: ['bug', 1] },
+      { localId: 'e', title: 'corpo errado', body: 7, labels: [] },
+      { localId: 'f', title: 'Guardada', body: '', labels: [], status: 'waiting' },
+      { title: 'Só o essencial' },
+    ],
+  };
+  assert.deepEqual(legacyIssues(JSON.stringify(saved)), [
+    { title: 'Ideia', body: 'texto', labels: ['bug'] },
+    { title: 'Guardada', body: '', labels: [] },
+    { title: 'Só o essencial', body: '', labels: [] },
   ]);
-  assert.deepEqual(splitCode('Rode `a` e `b c`'), [
-    { text: 'Rode ', code: false }, { text: 'a', code: true }, { text: ' e ', code: false }, { text: 'b c', code: true },
-  ]);
-  assert.deepEqual(splitCode('sem código'), [{ text: 'sem código', code: false }]);
-  assert.deepEqual(splitCode(''), []);
-});
-
-check('splitCode: crase sem par ou vazia fica como texto; não atravessa linha', () => {
-  assert.deepEqual(splitCode('uma `solta'), [{ text: 'uma `solta', code: false }]);
-  assert.deepEqual(splitCode('vazio ``'), [{ text: 'vazio ``', code: false }]);
-  assert.deepEqual(splitCode('`a\nb`'), [{ text: '`a\nb`', code: false }]);
-});
-
-check('commandIn: o primeiro comando gh entre crases; origin e texto sem código não são comando', () => {
-  assert.equal(commandIn('O GitHub CLI não está logado. Rode `gh auth login` num terminal e tente de novo.'), 'gh auth login');
-  assert.equal(commandIn('Instale o gh e rode `gh auth login`.'), 'gh auth login');
-  assert.equal(commandIn('O remoto `origin` deste repositório não está no GitHub.'), null);
-  assert.equal(commandIn('Sem conexão com o GitHub.'), null);
-  assert.equal(commandIn('`ghost` e depois `gh repo view`'), 'gh repo view');
+  // O que sobra da migração interrompida (gravado no mesmo formato) é lido do mesmo jeito.
+  const rest = JSON.stringify({ v: 1, pending: [{ title: 'Guardada', body: '', labels: [] }] });
+  assert.deepEqual(legacyIssues(rest), [{ title: 'Guardada', body: '', labels: [] }]);
 });

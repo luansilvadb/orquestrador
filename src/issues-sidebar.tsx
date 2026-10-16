@@ -1,26 +1,24 @@
-// Faixa lateral Issues: cabeçalho com atualizar, filtrar e abrir no GitHub, o repositório (só o nome; `dono/repo` no title) e a sincronia, o
-// filtro (texto e labels), a captura rápida de ideias, a seção "Em andamento" (um cartão com a issue que está com o orquestrador), a seção
-// "Abertas" (a próxima no topo, as criações a caminho ou que falharam, e as abertas), a seção "Fechadas recentes" e o rodapé com a contagem.
+// Faixa lateral Issues: cabeçalho com filtrar, o erro do arquivo das issues (se houver), o filtro (texto e labels), a captura rápida de
+// ideias, a seção "Em andamento" (um cartão com a issue que está com o orquestrador), a seção "Abertas" (a próxima no topo e as abertas), a
+// seção "Fechadas recentes" e o rodapé com a contagem.
 // O estado vem do store único do App (`useIssues`). Os cabeçalhos das seções, o cartão, as linhas da fila e as fechadas formam uma lista só
 // para o teclado (roving tabindex, como a árvore do VS Code): ↑/↓ andam por tudo, Enter ou Espaço no cabeçalho recolhe e expande (← recolhe,
 // → expande), e clicar ou Enter numa linha escolhe a issue (o detalhe da área central a mostra; o foco fica aqui). O duplo clique ou Enter na
 // já escolhida leva o foco ao detalhe, e Ctrl+Enter faz o que o Colar faria. O Colar (e o Reabrir das fechadas) só aparece na linha escolhida
-// e na próxima. Concluir e Voltar às abertas ficam só no detalhe; sem o GitHub, a faixa diz só "GitHub indisponível" e o detalhe tem o resto.
+// e na próxima. Concluir e Voltar às abertas ficam só no detalhe; sem conseguir abrir o arquivo das issues, a faixa diz só isso e o detalhe
+// tem o motivo.
 import { useEffect, useId, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, CircleDot, Clock, ExternalLink, ListFilter, Maximize2, RefreshCw, RotateCcw, Search } from 'lucide-react';
+import { ChevronDown, ChevronRight, CircleDot, Clock, ListFilter, Maximize2, RotateCcw, Search } from 'lucide-react';
 import { ActionIcon, Button, Input, Text, TextArea, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { backend, message } from './backend';
+import { message } from './backend';
+import { filterLabels, passesFilter, readSections, recentClosed, relativeTime, rovingStep, sortIssues, SECTIONS_DEFAULT, type IssueSections } from './issue-text';
 import {
-  failedReason, filterLabels, passesFilter, pendingRetrying, readSections, recentClosed, relativeTime, rovingStep, sortIssues, SECTIONS_DEFAULT,
-  type IssueSections,
-} from './issue-text';
-import {
-  ActiveMark, FailedActions, FIELD_FOCUS, FOCUS_BLUE, issuesUrl, FOCUS_RING, FOCUS_RING_INSET, GH, IssueIcon, LabelChips,
-  LabelToggle, pendingKind, pendingLabels, SECONDARY, StartButton, useNow, WAITING_TEXT, type StartIssue,
+  ActiveMark, FIELD_FOCUS, FOCUS_BLUE, FOCUS_RING, FOCUS_RING_INSET, GH, IssueIcon, LabelChips, LabelToggle, SECONDARY, StartButton, useNow,
+  type StartIssue,
 } from './issue-ui';
-import { useDetailIssue, useIssues, type ActiveIssue, type NewIssue, type PendingIssue } from './issues-store';
-import type { Issue, Label } from './types';
+import { useDetailIssue, useIssues, type NewIssue } from './issues-store';
+import type { ActiveIssue, Issue } from './types';
 
 const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -30,16 +28,15 @@ const RECENT_CLOSED = 5;
 // O que o filtro ativo não achou: diz o que está ativo (busca, labels ou os dois).
 const noMatchText = (query: string, wanted: string[]) =>
   `Nenhuma issue corresponde ${query.trim() !== '' && wanted.length > 0 ? 'à busca e às labels' : wanted.length > 0 ? 'às labels marcadas' : 'à busca'}.`;
-// Chave de uma linha da lista, em `data-row`: `#N` numa issue, o `localId` numa criação. As linhas de issue também levam o número em `data-issue`.
+// Chave de uma linha da lista, em `data-row`: `#N`. As linhas de issue também levam o número em `data-issue`.
 const issueKey = (n: number) => `#${n}`;
 // Chave do cabeçalho de uma seção na mesma lista (`data-row` e `data-section`).
 const sectionKey = (s: keyof IssueSections) => `§${s}`;
-// O que o texto de uma linha da fila diz fora da vista: tempo, comentários e o nome das labels (no `title` e na descrição acessível). O número
-// fica fora: ele já está no nome acessível da linha.
+// O que o texto de uma linha da fila diz fora da vista: tempo e o nome das labels (no `title` e na descrição acessível). O número fica fora:
+// ele já está no nome acessível da linha.
 const issueDetails = (i: Issue, now: number) => [
   relativeTime(i.createdAt, now),
-  i.comments > 0 && `${i.comments} ${i.comments === 1 ? 'comentário' : 'comentários'}`,
-  i.labels.length > 0 && `${i.labels.length === 1 ? 'label' : 'labels'}: ${i.labels.map((l) => l.name).join(', ')}`,
+  i.labels.length > 0 && `${i.labels.length === 1 ? 'label' : 'labels'}: ${i.labels.join(', ')}`,
 ].filter(Boolean).join(' · ');
 // Largura da coluna do `#N` (mono de 12 px, alinhado à direita) que cabe o maior número das linhas de Abertas e de Fechadas recentes, e o
 // relógio com o número da próxima: os títulos começam na mesma coluna em todas elas. Vai em `--issue-num` na lista; o `ch` é o do número.
@@ -68,8 +65,7 @@ export function IssuesSidebar({ start, onShowDetail, onOpenEditor, captureReques
   onCaptureDismiss: () => void;
 }) {
   const store = useIssues();
-  const { status, refreshing } = store;
-  const ready = status?.kind === 'ready' ? status : null;
+  const { loaded } = store;
   // O estado de recolhida fica aqui, não na seção: sobrevive à lista vazia e às atualizações. E ao recarregar, pelo localStorage.
   const [sections, setSections] = useState(loadSections);
   const toggle = (key: keyof IssueSections) => {
@@ -106,10 +102,9 @@ export function IssuesSidebar({ start, onShowDetail, onOpenEditor, captureReques
   const now = useNow();
 
   const active = store.issues.find((i) => i.number === store.active?.number && i.state === 'open') ?? null;
-  // Abertas: as abertas menos a em andamento, com a próxima no topo (acima até das criações).
+  // Abertas: as abertas menos a em andamento, com a próxima no topo.
   const open = sortIssues(store.issues.filter((i) => i.state === 'open' && i !== active), 'newest');
-  const pending = [...store.pending].sort((a, b) => b.createdAt - a.createdAt);
-  // O filtro vale para a fila e as fechadas; a em andamento e as criações ficam fora dele.
+  // O filtro vale para a fila e as fechadas; a em andamento fica fora dele.
   const filtering = filterOn && (query.trim() !== '' || wanted.length > 0);
   const passes = (i: Issue) => passesFilter(i, query, wanted);
   const shownOpen = open.filter(passes);
@@ -117,28 +112,19 @@ export function IssuesSidebar({ start, onShowDetail, onOpenEditor, captureReques
   const rest = shownOpen.filter((i) => i !== next);
   const closed = recentClosed(store.issues.filter(passes), RECENT_CLOSED);
   const numWidth = numColumn([...shownOpen, ...closed].map((i) => i.number), next?.number ?? null);
-  // As criações que ainda não chegaram ao GitHub não contam como abertas: o rodapé as diz à parte (a que falhou continua contando durante a nova tentativa).
-  const waiting = pending.filter((p) => p.status === 'waiting').length;
-  const failed = pending.filter((p) => p.status === 'failed' || pendingRetrying(p)).length;
   const footer = [
     `${filtering ? `${shownOpen.length} de ${open.length}` : open.length} ${open.length === 1 ? 'aberta' : 'abertas'}`,
     active && '1 em andamento',
-    waiting > 0 && `${waiting} ${waiting === 1 ? 'guardada' : 'guardadas'}`,
-    failed > 0 && `${failed} ${failed === 1 ? 'falhou' : 'falharam'}`,
   ].filter(Boolean).join(' · ');
 
   // Teclado: uma parada de Tab na lista (a última linha focada, ou a primeira), e ↑/↓/Home/End entre os cabeçalhos das seções e as linhas
   // visíveis. O cartão Em andamento é a primeira linha da lista quando a seção está aberta.
   const cardOpen = sections.active && active !== null && store.active !== null;
-  const showQueue = ready !== null || pending.length > 0;
-  const keys = [
-    ...(ready ? [sectionKey('active'), ...(cardOpen ? [issueKey(active.number)] : [])] : []),
-    ...(showQueue ? [
-      sectionKey('queue'),
-      ...(sections.queue ? [...(ready && next ? [issueKey(next.number)] : []), ...pending.map((p) => p.localId), ...(ready ? rest : []).map((i) => issueKey(i.number))] : []),
-    ] : []),
-    ...(ready ? [sectionKey('closed'), ...(sections.closed ? closed.map((i) => issueKey(i.number)) : [])] : []),
-  ];
+  const keys = loaded ? [
+    sectionKey('active'), ...(cardOpen ? [issueKey(active.number)] : []),
+    sectionKey('queue'), ...(sections.queue ? [...(next ? [issueKey(next.number)] : []), ...rest.map((i) => issueKey(i.number))] : []),
+    sectionKey('closed'), ...(sections.closed ? closed.map((i) => issueKey(i.number)) : []),
+  ] : [];
   const [current, setCurrent] = useState<string | null>(null);
   const tabKey = current !== null && keys.includes(current) ? current : keys[0] ?? null;
   const list = useRef<HTMLDivElement>(null);
@@ -167,7 +153,7 @@ export function IssuesSidebar({ start, onShowDetail, onOpenEditor, captureReques
     startAfter.current = null;
     [...list.current.querySelectorAll<HTMLElement>('[data-row]')].find((r) => r.dataset.row === key)?.querySelector<HTMLElement>('[data-start]')?.click();
   });
-  // Escolhe a issue da linha e mostra o detalhe. Criações (sem `data-issue`) não são escolhíveis.
+  // Escolhe a issue da linha e mostra o detalhe. Os cabeçalhos de seção (sem `data-issue`) não escolhem nada.
   const choose = (row: HTMLElement, focusDetail: boolean) => {
     if (!row.dataset.issue) return false;
     store.select(Number(row.dataset.issue));
@@ -218,20 +204,9 @@ export function IssuesSidebar({ start, onShowDetail, onOpenEditor, captureReques
     const row = rowOf(e.target);
     if (row && !(e.target as HTMLElement).closest('button, a, input')) choose(row, focusDetail);
   };
-  // Descartar uma criação tira a linha (e a pergunta "Descartar esta criação?", que é dela): o foco vai para a linha seguinte da seção, ou
-  // para a anterior se era a última (o cabeçalho, se era a única). No quadro seguinte, depois da devolução de foco da janela que saiu.
-  const discard = (localId: string) => {
-    const rows = [...list.current!.querySelectorAll<HTMLElement>('[data-row]')];
-    const at = rows.findIndex((r) => r.dataset.row === localId);
-    const after = rows[at + 1];
-    const key = (after && !after.dataset.section ? after : rows[at - 1])?.dataset.row;
-    store.discard(localId);
-    if (key === undefined) return;
-    requestAnimationFrame(() => [...list.current?.querySelectorAll<HTMLElement>('[data-row]') ?? []].find((r) => r.dataset.row === key)?.focus());
-  };
   const reopen = (issue: Issue, row: HTMLElement) => {
     if (row.contains(document.activeElement)) refocus.current = issueKey(issue.number);
-    store.setState(issue.number, true).then(() => toast.success({ title: `#${issue.number} reaberta no GitHub`, duration: 3000 }), report);
+    store.setState(issue.number, true).then(() => toast.success({ title: `#${issue.number} reaberta`, duration: 3000 }), report);
   };
 
   return (
@@ -239,69 +214,49 @@ export function IssuesSidebar({ start, onShowDetail, onOpenEditor, captureReques
       {/* Cabeçalho de 36 px no padrão do Git e da pesquisa. */}
       <Flexbox horizontal align="center" gap={2} paddingInline={12} height={36} flex="none">
         <Text style={SECONDARY} as="h2" ellipsis weight={500} fontSize={12} className="min-w-0 flex-1">Issues</Text>
-        <ActionIcon
-          size="small" variant="borderless" icon={RefreshCw} spin={refreshing} className={FOCUS_RING}
-          aria-label="Atualizar issues" title="Atualizar" onClick={() => void store.refresh()}
-        />
-        {ready && (
-          <>
-            <ActionIcon
-              size="small" variant="borderless" icon={ListFilter} active={filterOn} aria-pressed={filterOn} aria-controls="issues-filter"
-              className={FOCUS_RING} aria-label="Filtrar issues" title={filterOn ? 'Limpar e esconder o filtro' : 'Filtrar'} onClick={toggleFilter}
-            />
-            <ActionIcon
-              size="small" variant="borderless" icon={ExternalLink} className={FOCUS_RING}
-              aria-label="Abrir as issues no GitHub" title="Abrir no GitHub"
-              onClick={() => void backend.githubOpen(issuesUrl(ready.owner, ready.repo)).catch(report)}
-            />
-          </>
+        {loaded && (
+          <ActionIcon
+            size="small" variant="borderless" icon={ListFilter} active={filterOn} aria-pressed={filterOn} aria-controls="issues-filter"
+            className={FOCUS_RING} aria-label="Filtrar issues" title={filterOn ? 'Limpar e esconder o filtro' : 'Filtrar'} onClick={toggleFilter}
+          />
         )}
       </Flexbox>
 
-      {!status && (
-        <Text as="p" role="status" fontSize={12} style={{ ...SECONDARY, paddingInline: 12, paddingBlock: 4 }}>Conectando ao GitHub…</Text>
-      )}
-
-      {/* A mensagem inteira e o Tentar de novo ficam no detalhe; aqui só o aviso curto (o motivo no `title`) e o caminho até lá. */}
-      {status?.kind === 'unavailable' && (
+      {/* O arquivo das issues não abriu (o motivo inteiro fica no detalhe) ou uma gravação falhou (o motivo vai aqui mesmo). */}
+      {store.error && (
         <Flexbox gap={2} align="flex-start" paddingInline={12} className="pb-2" flex="none">
-          <Text style={SECONDARY} as="span" fontSize={12} title={status.message}>GitHub indisponível</Text>
-          <Button type="link" size="small" className={`h-auto! p-0! text-[12px]! ${FOCUS_RING}`} onClick={() => onShowDetail(true)}>Ver detalhes</Button>
+          <Text as="span" role="alert" type="danger" fontSize={12} lineHeight={1.35} ellipsis={{ rows: 3 }} title={store.error}>
+            {loaded ? store.error : 'Não foi possível abrir as issues.'}
+          </Text>
+          <Button
+            type="link" size="small" className={`h-auto! p-0! text-[12px]! ${FOCUS_RING}`}
+            onClick={() => (loaded ? void store.refresh() : onShowDetail(true))}
+          >
+            {loaded ? 'Tentar de novo' : 'Ver detalhes'}
+          </Button>
         </Flexbox>
       )}
 
-      {ready && (
-        <>
-          <Flexbox horizontal align="center" gap={6} paddingInline={12} className="-mt-1.5 pb-2" flex="none">
-            <Text style={SECONDARY} as="span" code fontSize={12} ellipsis title={`${ready.owner}/${ready.repo}`} className="min-w-0">
-              {ready.repo}
-            </Text>
-            <SyncState syncedAt={store.syncedAt} error={store.error} now={now} />
-          </Flexbox>
-
-          {filterOn && (
-            <Flexbox id="issues-filter" gap={6} paddingInline={8} className="pb-2" flex="none">
-              <Input
-                ref={filterInput} size="small" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filtrar"
-                aria-label="Filtrar as abertas e as fechadas por título ou #número" autoComplete="off"
-                onKeyDown={(e) => {
-                  // Esc limpa o texto; com o campo vazio não faz nada aqui (segue o que já fazia).
-                  if (e.key === 'Escape' && query !== '') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setQuery('');
-                  }
-                }} className={`h-[26px]! text-[12px]! ${FIELD_FOCUS}`}
-                prefix={<Search aria-hidden className="size-3.5 text-[var(--ant-color-text-tertiary)]" />}
-              />
-              <FilterChips issues={store.issues} labels={store.labels} selected={wanted} onChange={setWanted} />
-            </Flexbox>
-          )}
-        </>
+      {loaded && filterOn && (
+        <Flexbox id="issues-filter" gap={6} paddingInline={8} className="pb-2" flex="none">
+          <Input
+            ref={filterInput} size="small" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filtrar"
+            aria-label="Filtrar as abertas e as fechadas por título ou #número" autoComplete="off"
+            onKeyDown={(e) => {
+              // Esc limpa o texto; com o campo vazio não faz nada aqui (segue o que já fazia).
+              if (e.key === 'Escape' && query !== '') {
+                e.preventDefault();
+                e.stopPropagation();
+                setQuery('');
+              }
+            }} className={`h-[26px]! text-[12px]! ${FIELD_FOCUS}`}
+            prefix={<Search aria-hidden className="size-3.5 text-[var(--ant-color-text-tertiary)]" />}
+          />
+          <FilterChips issues={store.issues} selected={wanted} onChange={setWanted} />
+        </Flexbox>
       )}
 
-      {/* A captura não some sem o GitHub: a ideia fica guardada (`waiting`) entre as abertas e é criada quando ele voltar. */}
-      {status !== null && (
+      {loaded && (
         <>
           <Capture onOpenEditor={onOpenEditor} focusRequest={captureRequest} onDismiss={onCaptureDismiss} />
 
@@ -309,81 +264,51 @@ export function IssuesSidebar({ start, onShowDetail, onOpenEditor, captureReques
             ref={list} className="min-h-0 flex-1 overflow-y-auto pb-1.5" style={{ '--issue-num': numWidth } as CSSProperties}
             onKeyDown={onListKey} onFocus={onListFocus} onClick={(e) => onListClick(e, false)} onDoubleClick={(e) => onListClick(e, true)}
           >
-            {ready && (
-              <ActiveSection
-                open={sections.active} onToggle={() => toggle('active')} issue={active} since={store.active} now={now} busy={start?.busy ?? false}
-                tabKey={tabKey} selected={active !== null && active.number === shown}
-              />
-            )}
-            {showQueue && (
-              <QueueSection
-                open={sections.queue} onToggle={() => toggle('queue')} pending={pending} next={ready ? next : null} issues={ready ? rest : []} now={now}
-                start={start} filtering={filtering} tabKey={tabKey} shown={shown} hasActive={active !== null} onDiscard={discard}
-              />
-            )}
-            {ready && (
-              <ClosedSection
-                open={sections.closed} onToggle={() => toggle('closed')} issues={closed} filtering={filtering} tabKey={tabKey}
-                shown={shown} onReopen={reopen}
-              />
-            )}
+            <ActiveSection
+              open={sections.active} onToggle={() => toggle('active')} issue={active} since={store.active} now={now} busy={start?.busy ?? false}
+              tabKey={tabKey} selected={active !== null && active.number === shown}
+            />
+            <QueueSection
+              open={sections.queue} onToggle={() => toggle('queue')} next={next} issues={rest} now={now}
+              start={start} filtering={filtering} tabKey={tabKey} shown={shown} hasActive={active !== null}
+            />
+            <ClosedSection
+              open={sections.closed} onToggle={() => toggle('closed')} issues={closed} filtering={filtering} tabKey={tabKey}
+              shown={shown} onReopen={reopen}
+            />
             {/* Uma vez só, no fim: as seções vazias com o filtro ativo ficam só com o contador 0. */}
-            {ready && filtering && !shownOpen.length && !closed.length && <NoMatch text={noMatch} onClear={clearFilter} />}
+            {filtering && !shownOpen.length && !closed.length && <NoMatch text={noMatch} onClear={clearFilter} />}
           </div>
 
-          {ready && (
-            <Flexbox horizontal align="center" paddingInline={12} height={28} flex="none" className="border-t">
-              <Text style={SECONDARY} as="span" fontSize={12} ellipsis className="min-w-0" title={footer}>{footer}</Text>
-            </Flexbox>
-          )}
+          <Flexbox horizontal align="center" paddingInline={12} height={28} flex="none" className="border-t">
+            <Text style={SECONDARY} as="span" fontSize={12} ellipsis className="min-w-0" title={footer}>{footer}</Text>
+          </Flexbox>
         </>
       )}
     </Flexbox>
   );
 }
 
-/** Chips do filtro: as labels do repositório em uso nas abertas; com mais de uma marcada, a issue precisa ter todas. */
-function FilterChips({ issues, labels, selected, onChange }: {
+/** Chips do filtro: as labels em uso nas abertas; com mais de uma marcada, a issue precisa ter todas. */
+function FilterChips({ issues, selected, onChange }: {
   issues: readonly Issue[];
-  labels: readonly Label[];
   selected: string[];
   onChange: (next: string[]) => void;
 }) {
-  const shown = filterLabels(issues, labels, selected);
+  const shown = filterLabels(issues, selected);
   if (!shown.length) return null;
   const toggle = (name: string) => onChange(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
   return (
     <div role="group" aria-label="Filtrar por label" className="flex flex-wrap items-center gap-1">
-      {shown.map((label) => (
-        <LabelToggle key={label.name} label={label} on={selected.includes(label.name)} onToggle={() => toggle(label.name)} />
-      ))}
+      {shown.map((name) => <LabelToggle key={name} name={name} on={selected.includes(name)} onToggle={() => toggle(name)} />)}
     </div>
-  );
-}
-
-/** Ponto verde e "sincronizado há N s" (a cada segundo; depois de um minuto, o tempo relativo), ou ponto âmbar com a falha no `title`. */
-function SyncState({ syncedAt, error, now }: { syncedAt: number | null; error: string | null; now: number }) {
-  const seconds = syncedAt === null ? 0 : Math.max(0, Math.floor((now - syncedAt) / 1000));
-  const text = error ? 'falha ao atualizar'
-    : syncedAt === null ? 'sincronizando…'
-      : seconds < 60 ? `sincronizado há ${seconds} s` : `sincronizado ${relativeTime(iso(syncedAt), now)}`;
-  // O texto visível muda a cada segundo e não é região live; o leitor de tela só ouve as mudanças de estado, nesta região oculta.
-  const announce = error ? 'Falha ao sincronizar com o GitHub.' : syncedAt === null ? 'Sincronizando com o GitHub…' : 'Sincronizado com o GitHub.';
-  return (
-    <span className="ml-auto flex shrink-0 items-center gap-[5px] text-[12px] text-[var(--ant-color-text-secondary)] tabular-nums" title={error ?? undefined}>
-      <span className="sr-only" role="status" aria-live="polite">{announce}</span>
-      <span
-        aria-hidden className="size-1.5 rounded-full"
-        style={{ background: error ? 'var(--ant-color-warning)' : 'var(--ant-color-success)' }}
-      />
-      <span>{text}</span>
-    </span>
   );
 }
 
 /**
  * Captura rápida: o título sempre visível; com foco ou com algo escrito, o cartão expande com a descrição, as labels e o rodapé.
  * Enter no título cria; Shift+Enter vai para a descrição; na descrição, Enter quebra a linha e Ctrl+Enter cria; Esc limpa e recolhe.
+ * Criada, a captura limpa; se o backend recusar, o aviso diz o motivo e o texto fica.
  * Aberta pelo Ctrl+Shift+I (`focusRequest`), o Esc com o cartão vazio chama `onDismiss` (o App volta para a tela de antes); criar não sai
  * daqui, para anotar várias em seguida. Vale até o foco sair do cartão.
  */
@@ -401,6 +326,8 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
   const card = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  // Um Enter repetido enquanto a issue é gravada não cria outra.
+  const creating = useRef(false);
   const open = expanded || title !== '' || body !== '' || labels.length > 0;
   const viaShortcut = useRef(false);
   useEffect(() => {
@@ -431,13 +358,20 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
       );
     }
   };
-  const create = () => {
+  const create = async () => {
     if (!title.trim()) return refuse();
-    store.create({ title: title.trim(), body: body.trim(), labels });
-    if (store.status?.kind !== 'ready') toast.info({ title: 'Ideia guardada; será criada quando o GitHub estiver disponível.', duration: 4000 });
-    // O foco vem antes de limpar: focar o título expande o cartão, e a limpeza o recolhe de novo.
-    titleRef.current?.focus();
-    clear();
+    if (creating.current) return;
+    creating.current = true;
+    try {
+      await store.create({ title: title.trim(), body: body.trim(), labels });
+      // O foco vem antes de limpar: focar o título expande o cartão, e a limpeza o recolhe de novo.
+      titleRef.current?.focus();
+      clear();
+    } catch (e) {
+      report(e);
+    } finally {
+      creating.current = false;
+    }
   };
   const toEditor = () => {
     onOpenEditor({ title, body, labels });
@@ -465,7 +399,7 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
       requestAnimationFrame(() => bodyRef.current?.focus());
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      create();
+      void create();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       cancel();
@@ -475,7 +409,7 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
     if (e.nativeEvent.isComposing) return;
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      create();
+      void create();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       cancel();
@@ -531,7 +465,7 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
             ref={bodyRef} autoSize={{ minRows: 3, maxRows: 8 }} value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={onBodyKey}
             placeholder="Descrição (opcional)" aria-label="Descrição da nova issue" className={`text-[13px]! ${FIELD_FOCUS}`}
           />
-          <LabelChips issues={store.issues} labels={store.labels} selected={labels} onChange={setLabels} />
+          <LabelChips issues={store.issues} selected={labels} onChange={setLabels} />
           <Flexbox horizontal align="center" gap={8} className="mt-0.5">
             <Flexbox flex={1} className="min-w-0">
               <Text style={SECONDARY} as="span" fontSize={12} lineHeight={1.35}>Enter cria · Esc cancela</Text>
@@ -542,7 +476,7 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
                 Editor completo
               </Button>
             </Flexbox>
-            <Button size="small" type="primary" className={FOCUS_RING} onClick={create}>Criar</Button>
+            <Button size="small" type="primary" className={FOCUS_RING} onClick={() => void create()}>Criar</Button>
           </Flexbox>
         </Flexbox>
       )}
@@ -643,14 +577,13 @@ function ActiveSection({ open, onToggle, issue, since, now, busy, tabKey, select
 }
 
 /**
- * Seção "Abertas": a próxima no topo (com o relógio), as criações (mais novas em cima) e depois as abertas, da mais nova para a mais velha.
- * A em andamento não entra (o nome acessível diz isso). `issues` e `next` já vêm filtradas; as criações não passam pelo filtro, e o aviso
- * de nenhum resultado fica no fim da lista, uma vez só. O Colar aparece na linha escolhida e na próxima.
+ * Seção "Abertas": a próxima no topo (com o relógio) e depois as abertas, da mais nova para a mais velha. A em andamento não entra (o nome
+ * acessível diz isso). `issues` e `next` já vêm filtradas, e o aviso de nenhum resultado fica no fim da lista, uma vez só. O Colar aparece
+ * na linha escolhida e na próxima.
  */
-function QueueSection({ open, onToggle, pending, next, issues, now, start, filtering, tabKey, shown, hasActive, onDiscard }: {
+function QueueSection({ open, onToggle, next, issues, now, start, filtering, tabKey, shown, hasActive }: {
   open: boolean;
   onToggle: () => void;
-  pending: PendingIssue[];
   next: Issue | null;
   issues: Issue[];
   now: number;
@@ -659,13 +592,9 @@ function QueueSection({ open, onToggle, pending, next, issues, now, start, filte
   tabKey: string | null;
   shown: number | null;
   hasActive: boolean;
-  /** Descarta uma criação e leva o foco à linha vizinha. */
-  onDiscard: (localId: string) => void;
 }) {
-  const store = useIssues();
   const headId = useId();
-  const found = issues.length + (next ? 1 : 0);
-  const count = pending.length + found;
+  const count = issues.length + (next ? 1 : 0);
   const issueRow = (issue: Issue) => {
     const selected = issue.number === shown;
     return (
@@ -685,21 +614,6 @@ function QueueSection({ open, onToggle, pending, next, issues, now, start, filte
       {open && count > 0 && (
         <ul className="grid grid-cols-[minmax(0,1fr)]">
           {next && issueRow(next)}
-          {pending.map((p) => {
-            const labels = pendingLabels(p.labels, store.labels);
-            // O motivo inteiro, que quebra linha: a criação é rara e precisa ser lida. A que já falhou mantém o motivo e as ações (desabilitadas)
-            // durante a nova tentativa, com o espaço do texto da falha reservado: a linha não muda de altura.
-            const retrying = pendingRetrying(p);
-            const reason = p.status === 'waiting' ? WAITING_TEXT : p.status === 'sending' && !retrying ? 'Enviando…' : failedReason(p);
-            return (
-              <QueueRow
-                key={p.localId} rowKey={p.localId} issue={null} selected={false} tabKey={tabKey} kind={pendingKind(p)} title={p.title}
-                details={[reason, relativeTime(iso(p.createdAt), now), labels.length > 0 && `labels: ${labels.map((l) => l.name).join(', ')}`].filter(Boolean).join(' · ')}
-                reason={reason} reasonSpace={retrying ? failedReason(p, true) : undefined}
-                actions={p.status !== 'sending' || retrying ? <FailedActions pending={p} retry={store.retry} discard={onDiscard} /> : null}
-              />
-            );
-          })}
           {issues.map(issueRow)}
         </ul>
       )}
@@ -712,34 +626,25 @@ function QueueSection({ open, onToggle, pending, next, issues, now, start, filte
 
 /**
  * Linha de 24 px, como as da lista do Git: ícone de estado (14 px), o `#N` na coluna comum (`NumberCell`; na próxima, com o relógio antes
- * dele) e o título, que corta com reticências. O tempo, os comentários e o nome das labels saem da vista e ficam no `title` da linha e na
- * descrição acessível (`details`). A linha é focável (uma parada de Tab na lista inteira, a de `tabKey`). O Colar da escolhida e da próxima
- * fica no fim da linha, no fluxo, só com o ícone (24 px), sem mudar a altura. `issue` é o número da issue (null numa criação, que não é
- * escolhível); a escolhida leva `aria-current`.
- *
- * A criação pendente (`reason`) é a exceção, de altura própria: o título numa linha e, embaixo, o motivo inteiro, que quebra linha, e as
- * ações com rótulo. São raras e precisam ser lidas. `reasonSpace` é um texto invisível no mesmo lugar do motivo, que guarda a altura dele
- * (o da falha, durante a nova tentativa).
+ * dele) e o título, que corta com reticências. O tempo e o nome das labels saem da vista e ficam no `title` da linha e na descrição
+ * acessível (`details`). A linha é focável (uma parada de Tab na lista inteira, a de `tabKey`). O Colar da escolhida e da próxima fica no
+ * fim da linha, no fluxo, só com o ícone (24 px), sem mudar a altura. A escolhida leva `aria-current`.
  */
-function QueueRow({ rowKey, issue, selected, tabKey, kind, title, number, after = '', next = false, details, reason, reasonSpace, actions }: {
+function QueueRow({ rowKey, issue, selected, tabKey, kind, title, number, after = '', next = false, details, actions }: {
   rowKey: string;
-  issue: number | null;
+  issue: number;
   selected: boolean;
   tabKey: string | null;
   kind: Parameters<typeof IssueIcon>[0]['kind'];
   title: string;
-  /** O `#N` visível, que abre o nome acessível (a criação não tem). */
-  number?: number;
+  /** O `#N` visível, que abre o nome acessível. */
+  number: number;
   /** Texto só para leitor de tela depois do título ("(próxima)"). */
   after?: string;
   /** É a próxima: o relógio antes do `#N`. */
   next?: boolean;
-  /** O que a linha não mostra (tempo, comentários, labels): vai no `title` e na descrição acessível. */
+  /** O que a linha não mostra (tempo, labels): vai no `title` e na descrição acessível. */
   details: string;
-  /** Só na criação pendente: o texto de baixo, visível e inteiro. */
-  reason?: string;
-  /** Só na criação pendente: o texto que reserva a altura do motivo, sem aparecer nem ser lido. */
-  reasonSpace?: string;
   actions: ReactNode;
 }) {
   // Com as ações no fluxo de uma linha que não é a atual, cada uma viraria uma parada de Tab: só as da linha atual entram na ordem do teclado.
@@ -753,29 +658,14 @@ function QueueRow({ rowKey, issue, selected, tabKey, kind, title, number, after 
       {title}{after && <span className="sr-only">{after}</span>}
     </Text>
   );
-  const rowProps = {
-    tabIndex: tabbable ? 0 : -1, 'aria-labelledby': number === undefined ? titleId : `${numId} ${titleId}`, 'aria-describedby': metaId, 'data-row': rowKey, 'data-issue': issue ?? undefined,
-    'aria-current': selected ? ('true' as const) : undefined, title: `${title} · ${details}`,
-  };
-  if (reason !== undefined) {
-    return (
-      <li {...rowProps} className={`relative flex min-h-6 items-start gap-1.5 py-1 pr-2 pl-3.5 ${ROW_FOCUS}`}>
-        <span className="mt-0.5"><IssueIcon kind={kind} size={14} /></span>
-        <div className="min-w-0 flex-1">
-          {heading}
-          <div id={metaId} className="grid text-[12px] leading-4 [overflow-wrap:anywhere] text-[var(--ant-color-text-secondary)]">
-            <span className="[grid-area:1/1]">{reason}</span>
-            {reasonSpace && <span aria-hidden className="invisible [grid-area:1/1]">{reasonSpace}</span>}
-          </div>
-          {actions && <div ref={acts} className="mt-1 flex flex-wrap items-center gap-1">{actions}</div>}
-        </div>
-      </li>
-    );
-  }
   return (
-    <li {...rowProps} className={`relative flex h-6 items-center gap-1.5 pr-2 pl-3.5 ${ROW_FOCUS} ${selected ? ROW_SELECTED : ''}`}>
+    <li
+      tabIndex={tabbable ? 0 : -1} aria-labelledby={`${numId} ${titleId}`} aria-describedby={metaId} data-row={rowKey} data-issue={issue}
+      aria-current={selected ? 'true' : undefined} title={`${title} · ${details}`}
+      className={`relative flex h-6 items-center gap-1.5 pr-2 pl-3.5 ${ROW_FOCUS} ${selected ? ROW_SELECTED : ''}`}
+    >
       <IssueIcon kind={kind} size={14} />
-      {number !== undefined && <NumberCell id={numId} number={number} next={next} />}
+      <NumberCell id={numId} number={number} next={next} />
       <div className="relative min-w-0 flex-1 overflow-hidden">{heading}</div>
       <span id={metaId} className="sr-only">{details}</span>
       {actions && <div ref={acts} className="relative flex flex-none items-center gap-0.5">{actions}</div>}
@@ -799,7 +689,7 @@ function NumberCell({ id, number, next = false }: { id: string; number: number; 
 
 /**
  * Seção "Fechadas recentes" (começa recolhida): as 5 fechadas mais recentes que passam pelo filtro, em linhas de 24 px com a anatomia das
- * abertas: o ícone, o `#N` na mesma coluna e o título em 13 px no texto secundário. Clicar escolhe a issue (o detalhe a mostra, e abre no GitHub de lá); o Reabrir aparece na escolhida. Com o filtro
+ * abertas: o ícone, o `#N` na mesma coluna e o título em 13 px no texto secundário. Clicar escolhe a issue (o detalhe a mostra); o Reabrir aparece na escolhida. Com o filtro
  * ativo e nada para mostrar, fica só o contador 0: o aviso de nenhum resultado é um só, no fim da lista.
  */
 function ClosedSection({ open, onToggle, issues, filtering, tabKey, shown, onReopen }: {
@@ -846,7 +736,7 @@ function ClosedRow({ issue, tabbable, selected, onReopen }: {
       {/* Só a linha atual deixa o botão no Tab: a lista é uma parada só. */}
       {selected && (
         <Button
-          tabIndex={tabbable ? 0 : -1} size="small" icon={<RotateCcw className="size-3.5" />} aria-label={`Reabrir a issue #${issue.number}`} title="Reabre no GitHub"
+          tabIndex={tabbable ? 0 : -1} size="small" icon={<RotateCcw className="size-3.5" />} aria-label={`Reabrir a issue #${issue.number}`} title="Reabre a issue"
           className={`h-5! flex-none px-1.5! text-[12px]! ${FOCUS_RING}`}
           onClick={(e) => onReopen(issue, e.currentTarget.closest('li')!)}
         >

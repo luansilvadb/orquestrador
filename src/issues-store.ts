@@ -1,50 +1,43 @@
-// Estado das Issues do GitHub do projeto aberto, para a faixa lateral e o detalhe da issue. O App instancia o store uma vez
+// Estado das Issues do projeto aberto, para a faixa lateral e o detalhe da issue. O App instancia o store uma vez
 // (`useIssuesStore`) e o passa pelo `IssuesProvider`; as telas leem com `useIssues()`.
-// O GitHub é a única fonte das issues. Localmente só ficam, no localStorage, as criações que ainda não chegaram lá (`pending`), a issue em
-// andamento (`active`, a que está com o orquestrador) e a próxima (`next`, colada sozinha quando o orquestrador termina a rodada).
-// O rascunho do orquestrador (`draft`, as issues coladas nele e ainda não enviadas) fica só em memória: morre com o processo do orquestrador.
-// Depois de cada atualização boa, a em andamento e a próxima que não estão mais abertas saem, as criações guardadas sem o GitHub são enviadas
-// e as que falharam são reenviadas, espaçadas pela contagem de falhas (`retryDue`: 15 s, 1 min, 5 min e, da 4ª falha em diante, só o Tentar de novo).
-// Atualiza a cada 15 s com a janela em foco e a cada 60 s sem foco, e na hora quando a janela ganha o foco; uma atualização por vez.
+// As issues ficam só neste computador, num arquivo por projeto que o backend lê e grava (`issues.rs`), junto com a issue em andamento
+// (`active`, a que está com o orquestrador) e a próxima (`next`, colada sozinha quando o orquestrador termina a rodada). O rascunho do
+// orquestrador (`draft`, as issues coladas nele e ainda não enviadas) fica só em memória: morre com o processo do orquestrador.
+// O arquivo é lido ao abrir o projeto e relido quando a janela ganha o foco (outra janela do app pode ter mudado algo), no fim de cada
+// rodada do orquestrador e depois de cada mudança. A em andamento e a próxima vêm do arquivo só na primeira leitura; depois quem decide é
+// esta janela, que as grava a cada mudança. Cada mudança de issue grava na hora e devolve a issue como ficou.
+// Na abertura, as criações que a versão com o GitHub guardou no localStorage do projeto, e nunca chegaram lá, viram issues abertas.
 import { createContext, createElement, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import { backend, message } from './backend';
 import {
-  detailIssue, draftAdd, draftOnTurn, failPending, markNext, markTurned, pruneTracked, readStoredIssues, retryDue, settleStored, startTracked, storedEmpty,
-  type ActiveIssue, type Draft,
-  type PendingIssue, type StoredIssues, type Tracked,
+  detailIssue, draftAdd, draftOnTurn, legacyIssues, markNext, markTurned, pruneTracked, startTracked, type Draft, type Tracked,
 } from './issue-text';
-import type { GhStatus, Issue, Label } from './types';
-
-export type { ActiveIssue, PendingIssue } from './issue-text';
+import type { ActiveIssue, Issue } from './types';
 
 export type IssuesState = {
-  // null = carregando a primeira vez.
-  status: GhStatus | null;
+  // Falso até a primeira leitura do arquivo dar certo.
+  loaded: boolean;
   issues: Issue[];
-  labels: Label[];
-  pending: PendingIssue[];
-  // Date.now() da última resposta boa do GitHub (inclusive "nada mudou").
-  syncedAt: number | null;
-  refreshing: boolean;
-  // Erro da última atualização; a lista que já estava continua.
+  // Erro da última leitura ou gravação; a lista que já estava continua.
   error: string | null;
   // A issue escolhida na faixa, que o detalhe mostra (null: ninguém escolheu; vale `detailIssue`). Só em memória, por projeto.
   selected: number | null;
-  // As issues coladas no rascunho do orquestrador desde o último envio, na ordem da colagem. Só em memória, por projeto: não vai para o localStorage.
+  // As issues coladas no rascunho do orquestrador desde o último envio, na ordem da colagem. Só em memória, por projeto.
   draft: Draft;
 } & Tracked;
 export type NewIssue = { title: string; body: string; labels: string[] };
 export type IssuesStore = IssuesState & {
+  // Relê o arquivo. Só a leitura pedida por último vale.
   refresh(): Promise<void>;
-  // Otimista: entra em `pending` na hora e sai quando o GitHub devolve a issue. Sem o GitHub pronto, fica guardada (`waiting`) e sai quando ele
-  // voltar. `onCreated` roda quando o GitHub devolve a issue (só nesta execução do app).
-  create(input: NewIssue, onCreated?: (issue: Issue) => void): void;
-  // O Tentar de novo: reenvia na hora a que falhou, fora do espaçamento das automáticas.
-  retry(localId: string): void;
-  discard(localId: string): void;
+  // Grava a issue nova e a devolve, com o número. Rejeita com a mensagem se o backend recusar.
+  create(input: NewIssue): Promise<Issue>;
+  // Troca o título, a descrição e as labels.
+  update(number: number, input: NewIssue): Promise<Issue>;
+  // Apaga de vez: sai da escolha, e a em andamento e a próxima que eram ela perdem a marca.
+  remove(number: number): Promise<void>;
   // Escolhe a issue que o detalhe mostra (null volta à regra sem escolha). Não persiste.
   select(number: number | null): void;
-  // Otimista: o estado muda na hora; volta e rejeita com a mensagem se o GitHub recusar.
+  // Fecha ou reabre; rejeita com a mensagem se o backend recusar.
   setState(number: number, open: boolean): Promise<void>;
   // A issue com o orquestrador (null: nenhuma). `since` recomeça só quando muda de issue; a anterior volta à fila, nada é fechado.
   setActive(number: number | null): void;
@@ -58,85 +51,29 @@ export type IssuesStore = IssuesState & {
   sent(prompt: string | null | undefined): void;
   // O orquestrador abriu ou terminou: o rascunho está vazio.
   clearDraft(): void;
-  // Desfaz o Concluir: reabre `number` no GitHub e a devolve a Em andamento como estava (`prev`, com o `since` e o `turned`). Rejeita com a mensagem se o GitHub recusar.
+  // Desfaz o Concluir: reabre `number` e a devolve a Em andamento como estava (`prev`, com o `since` e o `turned`). Rejeita com a mensagem se der errado.
   undoFinish(prev: ActiveIssue): Promise<void>;
-  // Concluir a em andamento: sai do andamento na hora e fecha no GitHub; se o GitHub recusar, volta ao andamento e rejeita com a mensagem.
+  // Concluir a em andamento: sai do andamento na hora e é fechada; se der errado, volta ao andamento e rejeita com a mensagem.
   finish(number: number): Promise<void>;
   // O estado de agora, sem esperar a tela (depois de um `await refresh()`, por exemplo).
   latest(): IssuesState;
 };
 
-const FOCUSED_MS = 15_000, BLURRED_MS = 60_000;
-const storageKey = (project: string) => `orquestrador.issues:${project}`;
-
-// Criações com o pedido a caminho nesta execução do app (por `localId`), de qualquer projeto. Uma sessão nova do mesmo projeto
-// (trocou e voltou no meio do envio) as lê como `sending`, não como interrompidas, e não as reenvia.
-const inFlight = new Set<string>();
-// Sessões ligadas, para a resposta de uma criação chegar à sessão do projeto em que ela começou, mesmo que seja outra. A falha leva a hora
-// (`at`), a mesma no localStorage e na sessão.
-type Settled = { issue: Issue } | { error: string; at: number };
-const liveSessions = new Set<{ project: string; settled: (localId: string, outcome: Settled) => void }>();
-
-function loadStored(project: string): StoredIssues {
-  try {
-    return readStoredIssues(localStorage.getItem(storageKey(project)), inFlight);
-  } catch {
-    return { v: 1, pending: [], active: null, next: null };
-  }
-}
-
-function writeStored(key: string, stored: StoredIssues) {
-  if (storedEmpty(stored)) localStorage.removeItem(key);
-  else localStorage.setItem(key, JSON.stringify(stored));
-}
-
-// A resposta de uma criação vale para o projeto em que ela começou: grava no localStorage dele (tira a pendência quando deu certo)
-// e avisa a sessão ligada desse projeto, se houver. Assim trocar de projeto no meio do envio não faz a criação voltar como falha.
-function settle(project: string, localId: string, outcome: Settled) {
-  inFlight.delete(localId);
-  try {
-    const key = storageKey(project);
-    const failure = 'error' in outcome ? outcome : null;
-    writeStored(key, settleStored(localStorage.getItem(key), localId, failure?.error, failure?.at));
-  } catch {
-    // Sem localStorage: a sessão ligada ainda recebe a resposta abaixo.
-  }
-  for (const session of liveSessions) if (session.project === project) session.settled(localId, outcome);
-}
-
-// Guarda as criações que não chegaram ao GitHub (`sending` também: se o app fechar antes da resposta, voltam como `failed`), a em andamento e a próxima.
-function save(project: string, { pending, active, next }: IssuesState) {
-  try {
-    writeStored(storageKey(project), { v: 1, pending, active, next });
-  } catch {
-    // Sem localStorage (cheio ou bloqueado): só não sobrevive a um recarregamento.
-  }
-}
+// A chave da versão com o GitHub, por projeto: as criações que não chegaram lá, a em andamento e a próxima.
+const legacyKey = (project: string) => `orquestrador.issues:${project}`;
 
 // Uma sessão por projeto: trocar de projeto descarta a sessão e começa outra do zero.
 function createSession(project: string) {
-  const stored = loadStored(project);
-  let state: IssuesState = {
-    status: null, issues: [], labels: [], pending: stored.pending, active: stored.active, next: stored.next, syncedAt: null, refreshing: false, error: null, selected: null,
-    draft: [],
-  };
+  let state: IssuesState = { loaded: false, issues: [], active: null, next: null, error: null, selected: null, draft: [] };
   const listeners = new Set<() => void>();
-  // `version` é a última recebida (0 = nenhuma). `recheck` pede o status de novo antes das issues (depois de um erro).
-  let version = 0, recheck = true, started = false, focused = document.hasFocus();
-  // Conta as mudanças concluídas (criação, abrir/fechar): uma lista pedida antes delas chega velha e é ignorada; a atualização seguinte traz tudo.
-  let mutations = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let running: Promise<void> | null = null, queued: Promise<void> | null = null;
-  // Abrir/fechar a caminho: a lista que chegar no meio mantém o estado novo.
-  const toggling = new Map<number, Issue['state']>();
+  // `loads` conta as leituras pedidas: a resposta de uma que não é a última chega velha e é ignorada.
+  let loads = 0, started = false;
+  // As gravações da em andamento e da próxima, em fila: cada uma grava o estado de quando chega a vez dela, e a última vence.
+  let tracking: Promise<void> = Promise.resolve();
 
   const set = (patch: Partial<IssuesState>) => {
     state = { ...state, ...patch };
     listeners.forEach((l) => l());
-  };
-  const setPending = (pending: PendingIssue[]) => {
-    set({ pending });
-    save(project, state);
   };
   const setDraft = (draft: Draft) => {
     if (draft !== state.draft) set({ draft });
@@ -144,119 +81,50 @@ function createSession(project: string) {
   const setTracked = (tracked: Tracked) => {
     if (tracked.active === state.active && tracked.next === state.next) return;
     set({ active: tracked.active, next: tracked.next });
-    save(project, state);
+    // Depois do `stop` o backend já pode estar em outro projeto: o que ainda estava na fila não grava.
+    tracking = tracking.then(() => (started ? backend.issuesSetTracked(state.active, state.next) : undefined)).catch((e) => set({ error: message(e) }));
   };
-  // A issue devolvida pelo GitHub entra na hora: no lugar da que já estava, ou no começo.
+  // A issue devolvida pelo backend entra na hora: no lugar da que já estava, ou no fim.
   const upsert = (issue: Issue) => {
     const at = state.issues.findIndex((i) => i.number === issue.number);
-    set({ issues: at < 0 ? [issue, ...state.issues] : state.issues.map((i, k) => (k === at ? issue : i)) });
-  };
-  const withState = (number: number, s: Issue['state']) => state.issues.map((i) => (i.number === number ? { ...i, state: s } : i));
-
-  // Sem status, pronto ou offline, segue no ritmo; os outros indisponíveis só no `refresh()` manual e no foco da janela.
-  const automatic = () => !state.status || state.status.kind === 'ready' || state.status.reason === 'offline';
-  const schedule = () => {
-    clearTimeout(timer);
-    if (started && automatic()) timer = setTimeout(() => void refresh(), focused ? FOCUSED_MS : BLURRED_MS);
+    set({ issues: at < 0 ? [...state.issues, issue] : state.issues.map((i, k) => (k === at ? issue : i)), error: null });
+    setTracked(pruneTracked(state, state.issues));
   };
 
-  async function update() {
-    set({ refreshing: true });
-    const seen = mutations;
+  async function refresh() {
+    const ticket = ++loads;
     try {
-      if (recheck || state.status?.kind !== 'ready') {
-        const status = await backend.githubStatus();
-        set({ status });
-        if (status.kind !== 'ready') {
-          set({ error: null });
-          return;
-        }
-        recheck = false;
-      }
-      const snapshot = await backend.githubIssues(version);
-      if (mutations !== seen) return;
-      if (snapshot.data) {
-        const issues = snapshot.data.issues.map((i) => (toggling.has(i.number) ? { ...i, state: toggling.get(i.number)! } : i));
-        set({ issues, labels: snapshot.data.labels });
-      }
+      const data = await backend.issuesLoad();
+      if (ticket !== loads) return;
+      // A em andamento e a próxima vêm do arquivo só na primeira leitura; depois, só perdem a marca se a issue não está mais aberta.
+      const first = !state.loaded;
+      set({ loaded: true, issues: data.issues, error: null, ...(first ? { active: data.active, next: data.next } : {}) });
       setTracked(pruneTracked(state, state.issues));
-      version = snapshot.version;
-      set({ syncedAt: Date.now(), error: null });
-      // Envio das guardadas (`waiting`) e reenvio automático das que falharam e já esperaram o bastante (`retryDue`).
-      const now = Date.now();
-      if (started) for (const p of state.pending) if (p.status === 'waiting' || retryDue(p, now)) send(p.localId);
     } catch (e) {
-      recheck = true;
-      set({ error: message(e) });
-    } finally {
-      set({ refreshing: false });
-      schedule();
+      if (ticket === loads) set({ error: message(e) });
     }
   }
 
-  // Nunca duas ao mesmo tempo: a pedida durante outra roda logo depois, uma vez só (quem pediu espera essa).
-  function refresh(): Promise<void> {
-    if (!running) {
-      running = update().finally(() => {
-        running = null;
-      });
-      return running;
-    }
-    queued ??= running.then(() => {
-      queued = null;
-      return refresh();
-    });
-    return queued;
-  }
-
-  function send(localId: string) {
-    const p = state.pending.find((x) => x.localId === localId);
-    if (!p) return;
-    // A que já falhou continua com o erro e a contagem durante a tentativa: a linha mantém o motivo e as ações.
-    setPending(state.pending.map((x) => (x.localId === localId ? { ...x, status: 'sending' as const } : x)));
-    inFlight.add(localId);
-    backend.githubCreateIssue(p.title, p.body, p.labels).then(
-      (issue) => settle(project, localId, { issue }),
-      (e) => settle(project, localId, { error: message(e), at: Date.now() }),
-    );
-  }
-
-  // Resposta de uma criação deste projeto (desta sessão ou de uma anterior do mesmo projeto). O localStorage já foi gravado por `settle`.
-  // Quem quer saber quando uma criação chegou ao GitHub (por `localId`).
-  const created = new Map<string, (issue: Issue) => void>();
-  const hooks = {
-    project,
-    settled(localId: string, outcome: Settled) {
-      if ('issue' in outcome) {
-        mutations++;
-        setPending(state.pending.filter((x) => x.localId !== localId));
-        upsert(outcome.issue);
-        created.get(localId)?.(outcome.issue);
-        created.delete(localId);
-        void refresh();
-      } else {
-        // Descartada no meio do envio: não volta.
-        setPending(state.pending.map((x) => (x.localId === localId ? failPending(x, outcome.error, outcome.at) : x)));
+  // As criações da versão com o GitHub viram issues, uma a uma, e saem da chave a cada uma gravada: se o app fechar no meio, só a que
+  // estava sendo gravada pode voltar repetida. Sem localStorage, ou com o backend recusando, a chave fica para a próxima abertura.
+  async function migrate() {
+    try {
+      const key = legacyKey(project);
+      let rest = legacyIssues(localStorage.getItem(key));
+      while (rest.length && started) {
+        await backend.issuesCreate(rest[0].title, rest[0].body, rest[0].labels);
+        rest = rest.slice(1);
+        if (rest.length) localStorage.setItem(key, JSON.stringify({ v: 1, pending: rest }));
       }
-    },
-  };
+      if (!rest.length) localStorage.removeItem(key);
+    } catch (e) {
+      set({ error: message(e) });
+    }
+  }
 
   async function setIssueState(number: number, open: boolean) {
-    const before = state.issues.find((i) => i.number === number)?.state;
-    const next = open ? 'open' : 'closed';
-    toggling.set(number, next);
-    set({ issues: withState(number, next) });
-    try {
-      const issue = await backend.githubSetIssueState(number, open);
-      toggling.delete(number);
-      mutations++;
-      upsert(issue);
-      if (started) void refresh();
-    } catch (e) {
-      toggling.delete(number);
-      if (before) set({ issues: withState(number, before) });
-      throw e;
-    }
+    upsert(await backend.issuesSetState(number, open));
+    if (started) void refresh();
   }
 
   async function finish(number: number) {
@@ -271,14 +139,7 @@ function createSession(project: string) {
     }
   }
 
-  const onFocus = () => {
-    focused = true;
-    void refresh();
-  };
-  const onBlur = () => {
-    focused = false;
-    if (!running) schedule();
-  };
+  const onFocus = () => void refresh();
 
   return {
     get: () => state,
@@ -288,37 +149,32 @@ function createSession(project: string) {
     },
     start() {
       started = true;
-      liveSessions.add(hooks);
-      focused = document.hasFocus();
       window.addEventListener('focus', onFocus);
-      window.addEventListener('blur', onBlur);
-      void refresh();
+      void migrate().then(refresh);
     },
     stop() {
       started = false;
-      liveSessions.delete(hooks);
-      clearTimeout(timer);
       window.removeEventListener('focus', onFocus);
-      window.removeEventListener('blur', onBlur);
     },
     actions: {
       refresh,
-      create: (input: NewIssue, onCreated?: (issue: Issue) => void) => {
-        const ready = state.status?.kind === 'ready';
-        const p: PendingIssue = {
-          localId: crypto.randomUUID(), title: input.title, body: input.body, labels: [...input.labels], createdAt: Date.now(),
-          status: ready ? 'sending' : 'waiting',
-        };
-        if (onCreated) created.set(p.localId, onCreated);
-        setPending([...state.pending, p]);
-        if (ready) send(p.localId);
+      create: async (input: NewIssue) => {
+        const issue = await backend.issuesCreate(input.title, input.body, input.labels);
+        upsert(issue);
+        if (started) void refresh();
+        return issue;
       },
-      retry: (localId: string) => {
-        if (state.pending.some((x) => x.localId === localId && x.status === 'failed')) send(localId);
+      update: async (number: number, input: NewIssue) => {
+        const issue = await backend.issuesUpdate(number, input.title, input.body, input.labels);
+        upsert(issue);
+        if (started) void refresh();
+        return issue;
       },
-      discard: (localId: string) => {
-        created.delete(localId);
-        setPending(state.pending.filter((x) => x.localId !== localId));
+      remove: async (number: number) => {
+        await backend.issuesDelete(number);
+        set({ issues: state.issues.filter((i) => i.number !== number), selected: state.selected === number ? null : state.selected, error: null });
+        setTracked(pruneTracked(state, state.issues));
+        if (started) void refresh();
       },
       select: (number: number | null) => {
         if (number !== state.selected) set({ selected: number });
@@ -341,7 +197,7 @@ function createSession(project: string) {
   };
 }
 
-/** O store das Issues de `project`. Trocar de projeto zera tudo e recomeça; com `project` vazio não atualiza. */
+/** O store das Issues de `project`. Trocar de projeto zera tudo e recomeça; com `project` vazio não lê nada. */
 export function useIssuesStore(project: string): IssuesStore {
   const session = useMemo(() => createSession(project), [project]);
   useEffect(() => {
@@ -355,7 +211,7 @@ export function useIssuesStore(project: string): IssuesStore {
 
 const IssuesContext = createContext<IssuesStore | null>(null);
 
-/** Entrega o store criado pelo App à faixa lateral e à página de Issues. */
+/** Entrega o store criado pelo App à faixa lateral e à área das Issues. */
 export function IssuesProvider({ value, children }: { value: IssuesStore; children?: ReactNode }) {
   return createElement(IssuesContext.Provider, { value }, children);
 }
