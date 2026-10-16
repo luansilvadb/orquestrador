@@ -62,34 +62,34 @@ fn codex_mcp(app: &str, dir: &str) -> Vec<String> {
     .collect()
 }
 
-/// O orquestrador: lê o projeto, delega pelo servidor MCP do próprio app, usa as skills globais e o git (stage,
-/// commit e push quando o usuário pede).
+/// O orquestrador: o CLI interativo com a mesma permissão dos executores, nos dois CLIs, mais o servidor MCP do
+/// próprio app (`delegar`, `aguardar`, `responder`). O papel de líder técnico que não edita código vem do texto de
+/// `roles::ORCHESTRATOR` e dessas ferramentas, não de uma trava do app: não há sandbox, lista de ferramentas nem
+/// regra de comando específica de um CLI. Ao contrário do executor, não recebe o hook de guarda (stage, commit e
+/// push são dele, quando o usuário pede) nem o de confirmação (quem responderia é ele mesmo).
 pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &str) -> Spawn {
     let dir = session.dir.to_string_lossy().to_string();
     let (program, mut args) = if choice.tool == "codex" {
-        // Sandbox só de leitura: o Codex não escreve em lugar nenhum, nem nesta pasta nem na de
-        // regras, a não ser pelo que a regra da sessão libera. Ninguém aprova nada: o que a regra não
-        // libera é recusado pela política; o que ela libera (git, skills) roda fora do sandbox, e as
-        // ferramentas do MCP são aprovadas pela configuração (medido no Codex 0.162.1).
+        // Sem sandbox e sem aprovação, como o executor: o contrato é o mesmo nos dois CLIs. O servidor do
+        // orquestrador continua com `approve` em `codex_mcp`: com `never` ele era obrigatório (medido no 0.162.1);
+        // se o bypass o dispensa não foi medido, então fica.
         // --no-daemon: o agente roda neste processo, então matar o processo mata o agente.
-        let mut args = strs(&["--no-daemon", "-C", &dir, "--sandbox", "read-only", "--ask-for-approval", "never"]);
+        let mut args = strs(&["--no-daemon", "-C", &dir, "--dangerously-bypass-approvals-and-sandbox"]);
         args.extend(codex_trust(&dir));
         args.extend(codex_mcp(&exes.app, &dir));
         (exes.codex.clone(), args)
     } else {
-        // Sem sandbox, as ferramentas são a parede: --tools deixa só as nomeadas (Bash, Write e Edit ficam de
-        // fora) e dontAsk nega todo comando que não seja liberado pelas regras da sessão (git, programa de skill,
-        // ferramenta do orquestrador) ou pelas configurações normais de usuário e de projeto, salvo o que o Claude
-        // Code toma por somente leitura. Sem --restricted e sem --strict-mcp-config, o Claude carrega os MCPs do
-        // usuário e do projeto como no shell; o --mcp-config da sessão soma o servidor do orquestrador a eles.
-        // (Medido no 2.1.300: com --restricted, nenhum MCP de usuário ou de projeto conecta, e com
-        // --setting-sources também não.) As skills globais continuam vindo
+        // bypassPermissions com todas as ferramentas, como o executor: o contrato é o mesmo nos dois CLIs. O aviso
+        // do modo some com skipDangerousModePermissionPrompt, no settings da sessão. Sem --restricted e sem
+        // --strict-mcp-config, o Claude carrega os MCPs do usuário e do projeto como no shell; o --mcp-config da
+        // sessão soma o servidor do orquestrador a eles. (Medido no 2.1.300: com --restricted, nenhum MCP de
+        // usuário ou de projeto conecta, e com --setting-sources também não.) As skills globais continuam vindo
         // como plugin de .agents (medido: as skills carregam como ".agents:nome").
         let mut args = strs(&["--mcp-config"]);
         args.push(session.dir.join("mcp.json").to_string_lossy().to_string());
-        args.extend(strs(&["--tools", "Read,Glob,Grep,PowerShell,Skill", "--settings"]));
+        args.push("--settings".to_string());
         args.push(session.dir.join("claude-settings.json").to_string_lossy().to_string());
-        args.extend(strs(&["--permission-mode", "dontAsk", "--append-system-prompt-file"]));
+        args.extend(strs(&["--permission-mode", "bypassPermissions", "--append-system-prompt-file"]));
         args.push(session.dir.join("AGENTS.md").to_string_lossy().to_string());
         if let Some(first) = session.global_dirs.first() {
             args.extend(["--plugin-dir".to_string(), first.to_string_lossy().to_string(), "--add-dir".to_string()]);
@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(
             got.args,
             [
-                "--no-daemon", "-C", &dir, "--sandbox", "read-only", "--ask-for-approval", "never",
+                "--no-daemon", "-C", &dir, "--dangerously-bypass-approvals-and-sandbox",
                 "-c", &trust,
                 "-c", r#"mcp_servers.orquestrador.command="C:\\Program Files\\Orq\\o'rq.exe""#,
                 "-c", &mcp_args,
@@ -220,9 +220,8 @@ mod tests {
             got.args,
             [
                 "--mcp-config", &s.dir.join("mcp.json").to_string_lossy(),
-                "--tools", "Read,Glob,Grep,PowerShell,Skill",
                 "--settings", &s.dir.join("claude-settings.json").to_string_lossy(),
-                "--permission-mode", "dontAsk",
+                "--permission-mode", "bypassPermissions",
                 "--append-system-prompt-file", &s.dir.join("AGENTS.md").to_string_lossy(),
                 "--plugin-dir", &agents, "--add-dir", &agents,
                 "--model", "opus",

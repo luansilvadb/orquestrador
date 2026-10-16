@@ -432,17 +432,16 @@ fn caminhos_com_espaco_acento_e_apostrofo_funcionam() {
 }
 
 #[test]
-fn saida_do_orquestrador_mata_os_executores_e_limpa_sessao_e_regra() {
+fn saida_do_orquestrador_mata_os_executores_e_limpa_a_sessao() {
     let b = bench("saida", "temp", Some(8));
     assert!(b.core.start_orchestrator(Choice::new("gemini", "", ""), 100, 30).is_err());
     b.core.start_orchestrator(Choice::new("codex", "", ""), 100, 30).unwrap();
     assert!(b.core.start_orchestrator(Choice::new("codex", "", ""), 100, 30).unwrap_err().contains("Já há um orquestrador"));
     let session = b.core.session_dir().unwrap();
     let name = session.file_name().unwrap().to_string_lossy().into_owned();
+    // O orquestrador Codex não leva regra em CODEX_HOME: a sessão não escreve nada lá.
     let rule = b.root.join("rules").join(format!("{name}.rules"));
-    assert!(rule.is_file());
-    // A primeira linha da regra é o marcador da sessão, que a recuperação de sobras reconhece.
-    assert_eq!(std::fs::read_to_string(&rule).unwrap().lines().next().unwrap(), format!("# orquestrador {name}"));
+    assert!(!rule.exists() && !b.root.join("rules").exists());
     until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
 
     b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
@@ -454,7 +453,7 @@ fn saida_do_orquestrador_mata_os_executores_e_limpa_sessao_e_regra() {
     b.core.term_write(ORCHESTRATOR, "sair\r");
     assert_eq!(b.wait("orchestrator-exit", |e, _| e == "orchestrator-exit")["code"], 7);
     assert!(!b.core.has_running());
-    assert!(!session.exists() && !rule.exists());
+    assert!(!session.exists());
     // A chamada que esperava percebe que a sessão acabou em vez de esperar para sempre.
     let (text, is_error) = m.done(run);
     assert!(is_error && text == "A sessão do orquestrador terminou antes do fim do lote.", "{text}");

@@ -10,11 +10,11 @@ Os argumentos vão em JSON. Cada tarefa chega ao executor como está: aspas dupl
 
 Cada chamada espera até 5 minutos. A resposta termina de um de três jeitos:
 
-- `--- FIM ---`: o lote acabou. A saída traz as seções `--- EXECUTOR i/N ---`, `executor_exit` e `--- GIT ---`, como antes.
+- `--- FIM ---`: o lote acabou. A saída traz as seções `--- EXECUTOR i/N ---`, `executor_exit` e `--- GIT ---` (abaixo).
 - `--- AGUARDANDO RESPOSTA ---`: um executor fez uma pergunta. Ela volta na hora (abaixo).
 - `--- EM ANDAMENTO ---`: a janela passou e os executores continuam. O orquestrador chama `aguardar`.
 
-Uma chamada interrompida ou que deu erro de tempo também se resolve com `aguardar`, porque os executores não param. Erros do próprio comando (lista vazia, tarefa em branco, nenhum lote aguardando, sessão encerrada, resposta inválida em `responder`) voltam como erro da ferramenta, sem publicar nada. Não há mais códigos de saída de processo (0, 1, 3 e 4) nem a linha `wrapper_error:`.
+Uma chamada interrompida ou que deu erro de tempo também se resolve com `aguardar`, porque os executores não param. Erros do próprio comando (lista vazia, tarefa em branco, nenhum lote aguardando, sessão encerrada, resposta inválida em `responder`) voltam como erro da ferramenta, sem publicar nada.
 
 Cada tarefa abre um executor novo, sem memória das tarefas anteriores. Todos trabalham na mesma pasta; quem garante que as tarefas de um lote não se cruzam é o orquestrador, pelas instruções de `src-tauri/src/roles.rs`.
 
@@ -42,7 +42,7 @@ Limites:
 - Tamanho: o canal levou um texto de 31.679 caracteres, byte a byte (medido em 2026-10-14). O limite prático é a saída do modelo, não o canal: o Haiku não conseguiu escrever um argumento de cerca de 32 mil caracteres numa só chamada.
 - Tarefa vazia ou só de espaços é recusada e não publica nada.
 - Medido em 2026-10-14 com servidores MCP descartáveis:
-  - **Claude Code 2.1.300**, nas condições do orquestrador da época (`--restricted`, `--strict-mcp-config`, `--tools "Read,Glob,Grep,PowerShell,Skill"`, `--permission-mode dontAsk`; as duas primeiras saíram depois, ver [limites de segurança](seguranca.md)): a ferramenta MCP liberada em `permissions.allow` roda sem pedido; sem a liberação, é negada. O `--tools` não esconde ferramentas MCP. Um texto com apóstrofo solto, acentos, crases e `$` chegou byte a byte. Chamadas de 180 s (sem ajuste) e de 400 s (com `MCP_TOOL_TIMEOUT = 900000`) voltaram normalmente.
-  - **Codex 0.162.1**, com `-s read-only` e `approval_policy` `never`: toda chamada MCP é negada (`MCP tool call requires approval, but approval policy is never`), a menos que o servidor tenha `default_tools_approval_mode = "approve"`. Os valores `auto`, `writes` e `prompt` e o `enabled_tools` não liberam. A anotação `readOnlyHint` liberaria, mas `delegar` não é só leitura. Com `approve`, o texto chegou exato e o servidor gravou fora do sandbox. Chamadas de 90 s (sem ajuste) e de 400 s (com `tool_timeout_sec = 900`) voltaram normalmente.
+  - **Claude Code 2.1.300**: um texto com apóstrofo solto, acentos, crases e `$` chegou byte a byte. Chamadas de 180 s (sem ajuste) e de 400 s (com `MCP_TOOL_TIMEOUT = 900000`) voltaram normalmente.
+  - **Codex 0.162.1**, com `approval_policy` `never`: toda chamada MCP é negada (`MCP tool call requires approval, but approval policy is never`), a menos que o servidor tenha `default_tools_approval_mode = "approve"`. Os valores `auto`, `writes` e `prompt` e o `enabled_tools` não liberam. A anotação `readOnlyHint` liberaria, mas `delegar` não é só leitura. Com `approve`, o texto chegou exato. Chamadas de 90 s (sem ajuste) e de 400 s (com `tool_timeout_sec = 900`) voltaram normalmente. Se `--dangerously-bypass-approvals-and-sandbox`, com que o orquestrador roda, dispensa o `approve` não foi medido; por isso ele fica (ver [limites de segurança](seguranca.md)).
 
 O fim da rodada de um executor é detectado pelo hook `Stop` do Claude Code e pelo `notify` do Codex, que chamam o próprio executável do app.

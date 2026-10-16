@@ -1,6 +1,6 @@
 //! A pasta temporária de uma sessão do orquestrador (`strategist-<guid>`): o `mcp.json` que aponta o servidor MCP
-//! de delegação (Claude), o Git que o orquestrador pode rodar, as regras do Codex e as permissões do Claude, a
-//! limpeza e a recuperação das sobras de sessões mortas.
+//! de delegação e o settings do Claude, a limpeza e a recuperação das sobras de sessões mortas, inclusive das
+//! regras do Codex que versões antigas deixavam em CODEX_HOME.
 use crate::cli::toml;
 use crate::config::Config;
 use crate::proc::{owner_state, start_time, Owner};
@@ -13,15 +13,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// `recover_orphans` a usa, para limpar a sessão de quem atualizou com um Codex aberto.
 const JUSTIFICATION: &str = "Delegacao autorizada ao executor";
 
-/// O Git do orquestrador, com qualquer subcomando. `git.exe` vai junto porque o orquestrador pode digitar
-/// o nome com a extensão, e a regra casa o token exato.
-const GIT_PROGRAMS: [&str; 2] = ["git", "git.exe"];
-const GIT_JUSTIFICATION: &str = "Git do orquestrador, autorizado pelo usuario";
-
 /// Onde a sessão vive e o que ela consulta fora de si. Os testes trocam tudo por pastas próprias.
 #[derive(Clone, Debug)]
 pub struct Places {
     pub temp: PathBuf,
+    /// Onde versões antigas punham a regra do Codex da sessão. A sessão não escreve mais nada aqui; só
+    /// `recover_orphans` olha, para tirar o que sobrou.
     pub codex_rules: PathBuf,
     /// Pastas globais do usuário que têm `skills` (`.agents`, `.claude`), nessa ordem.
     pub global_dirs: Vec<PathBuf>,
@@ -41,12 +38,11 @@ impl Places {
 
 pub struct Session {
     pub dir: PathBuf,
-    pub rule: PathBuf,
     pub global_dirs: Vec<PathBuf>,
 }
 
-/// Uma regra `prefix_rule` do Codex para um único token, que é o programa liberado, com a justificativa que quem
-/// a pede escolhe (`GIT_JUSTIFICATION` para o Git, `JUSTIFICATION` na forma antiga).
+/// Uma regra `prefix_rule` do Codex para um único token, como a forma antiga a escrevia. Só `is_legacy_rule` a
+/// usa, para reconhecer o órfão pelo texto exato.
 fn rule(token: &str, justification: &str) -> String {
     format!("prefix_rule(pattern=[{}], decision=\"allow\", justification=\"{justification}\")\n", toml(token))
 }
@@ -56,59 +52,20 @@ fn command_for(name: &str) -> String {
     format!("orq-{}.ps1", name.strip_prefix("strategist-").unwrap_or(name))
 }
 
-/// A primeira linha da regra do Codex de uma sessão: é por ela que `recover_orphans` a reconhece.
+/// A primeira linha que versões antigas punham na regra do Codex de uma sessão: é por ela que `recover_orphans`
+/// reconhece o órfão.
 fn marker(name: &str) -> String {
     format!("# orquestrador {name}")
 }
 
-/// Os programas das skills globais, por interpretador, nas duas grafias de barra (o orquestrador
-/// pode escrever qualquer uma). Medido no Claude Code 2.1.296: regra com curinga dentro do
-/// caminho não passa em dontAsk; regra que nomeia o arquivo passa. Por isso um a um.
-pub fn skill_programs(global_dirs: &[PathBuf], runner: &str) -> Vec<String> {
-    let exts: &[&str] = if runner == "node" { &["mjs", "cjs", "js"] } else { &["py"] };
-    fn walk(dir: &Path, depth: u8, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
-        let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-        entries.sort();
-        for path in entries {
-            if path.is_dir() {
-                // A profundidade só existe para um link em círculo não prender o início.
-                if depth < 24 && path.file_name().is_some_and(|n| n != "node_modules") {
-                    walk(&path, depth + 1, out);
-                }
-            } else {
-                out.push(path);
-            }
-        }
-    }
-    let mut files = Vec::new();
-    for dir in global_dirs {
-        walk(&dir.join("skills"), 0, &mut files);
-    }
-    files
-        .iter()
-        .filter(|f| f.extension().and_then(|e| e.to_str()).is_some_and(|e| exts.contains(&e)))
-        .flat_map(|f| {
-            let s = f.to_string_lossy().to_string();
-            [s.clone(), s.replace('\\', "/")]
-        })
-        .collect()
-}
-
-const RUNNERS: [&str; 2] = ["node", "python"];
-
 impl Session {
     /// Cria a pasta e tudo o que a sessão usa. `app` é o caminho do próprio app, que a sessão põe como servidor
-    /// MCP do orquestrador. O que falhar no meio é desfeito por quem chamou, com `remove`: por isso `dir` e `rule`
-    /// são devolvidos mesmo no erro.
+    /// MCP do orquestrador. O que falhar no meio é desfeito por quem chamou, com `remove`: por isso `dir` é
+    /// devolvido mesmo no erro.
     pub fn create(places: &Places, app: &str, project: &str, cfg: &Config) -> (Session, Result<(), String>) {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         let name = format!("strategist-{nanos:032x}");
-        let session = Session {
-            rule: places.codex_rules.join(format!("{name}.rules")),
-            global_dirs: places.global_dirs.clone(),
-            dir: places.temp.join(&name),
-        };
+        let session = Session { global_dirs: places.global_dirs.clone(), dir: places.temp.join(&name) };
         let result = session
             .fill(&name, app, project, cfg)
             .map_err(|e| format!("Não foi possível criar a sessão em {}: {e}", session.dir.display()));
@@ -124,65 +81,31 @@ impl Session {
         let pid = std::process::id();
         std::fs::write(d.join("owner"), format!("{pid} {} {name}", start_time(pid).unwrap_or(0)))?;
         std::fs::write(d.join("AGENTS.md"), roles::ORCHESTRATOR.replace("{{PROJECT}}", project))?;
-        if cfg.orchestrator.tool == "codex" {
-            // O servidor do Codex vai na linha de comando, em `cli.rs`; a regra só leva o marcador e o Git.
-            std::fs::create_dir_all(self.rule.parent().unwrap())?;
-            std::fs::write(&self.rule, self.codex_rules(name))?;
-        } else {
+        // O Codex não leva nada além disso: o servidor dele vai na linha de comando, em `cli.rs`, e sem sandbox não
+        // há regra de comando a escrever (a regra é global em CODEX_HOME e liberaria o mesmo a qualquer codex).
+        if cfg.orchestrator.tool != "codex" {
             let mcp = json!({ "mcpServers": { "orquestrador": { "command": app, "args": ["--mcp", d.to_string_lossy()] } } });
             std::fs::write(d.join("mcp.json"), serde_json::to_string_pretty(&mcp).unwrap())?;
-            std::fs::write(d.join("claude-settings.json"), self.claude_settings())?;
+            std::fs::write(d.join("claude-settings.json"), Self::claude_settings())?;
         }
         Ok(())
     }
 
-    /// A primeira linha é o marcador desta sessão, que `recover_orphans` reconhece. Depois dela, uma regra para cada
-    /// programa do Git e uma por interpretador com os programas das skills. O servidor de delegação não tem regra:
-    /// o Codex o chama por MCP, e a aprovação das ferramentas dele vai na linha de comando.
-    fn codex_rules(&self, name: &str) -> String {
-        let mut text = format!("{}\n", marker(name));
-        for program in GIT_PROGRAMS {
-            text += &rule(program, GIT_JUSTIFICATION);
-        }
-        for runner in RUNNERS {
-            let files: Vec<String> = skill_programs(&self.global_dirs, runner).iter().map(|f| toml(f)).collect();
-            if !files.is_empty() {
-                text += &format!(
-                    "prefix_rule(pattern=[\"{runner}\", [{}]], decision=\"allow\", justification=\"Programa de skill global do usuario\")\n",
-                    files.join(", ")
-                );
-            }
-        }
-        text
-    }
-
-    fn claude_settings(&self) -> String {
-        let mut allow: Vec<String> = ["Read", "Glob", "Grep", "Skill", "mcp__orquestrador__delegar", "mcp__orquestrador__aguardar", "mcp__orquestrador__responder"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        allow.extend(GIT_PROGRAMS.iter().map(|g| format!("PowerShell({g} *)")));
-        // Medido no Claude Code 2.1.296: a regra casa o texto do comando, com as aspas. O orquestrador costuma pôr o
-        // caminho entre aspas (`node "C:\...\x.mjs" start`), e a regra sem aspas nega esse comando. Por isso cada
-        // programa entra nas três grafias: sem aspas, com aspas duplas e com aspas simples.
-        for runner in RUNNERS {
-            for file in skill_programs(&self.global_dirs, runner) {
-                allow.extend(["", "\"", "'"].iter().map(|q| format!("PowerShell({runner} {q}{file}{q} *)")));
-            }
-        }
-        // Sem a primeira variável, o Claude Code 2.1.296 não expõe o PowerShell no Windows com Git Bash. A segunda
-        // dá às chamadas ao servidor do orquestrador os 15 minutos da espera de um lote. Elas entram só por este
-        // arquivo, passado com --settings: o ambiente do usuário não muda.
+    /// Sem lista de permissões: em bypassPermissions ela não muda nada. skipDangerousModePermissionPrompt tira o
+    /// aviso do modo, como no settings dos executores (`cli::executor`). Sem CLAUDE_CODE_USE_POWERSHELL_TOOL, o
+    /// Claude Code 2.1.296 não expõe o PowerShell no Windows com Git Bash, e o orquestrador ficaria no Git Bash.
+    /// MCP_TOOL_TIMEOUT dá às chamadas ao servidor do orquestrador os 15 minutos da espera de um lote. As duas
+    /// entram só por este arquivo, passado com --settings: o ambiente do usuário não muda.
+    fn claude_settings() -> String {
         serde_json::to_string_pretty(&json!({
+            "skipDangerousModePermissionPrompt": true,
             "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" },
-            "permissions": { "allow": allow },
         }))
         .unwrap()
     }
 
-    /// Tira a regra e a pasta. Nunca falha: o que não saiu fica e é dito no texto devolvido.
+    /// Tira a pasta. Nunca falha: o que não saiu fica e é dito no texto devolvido.
     pub fn remove(&self) -> Option<String> {
-        let _ = std::fs::remove_file(&self.rule);
         remove_dir(&self.dir)
     }
 }
@@ -224,8 +147,12 @@ fn owner_dead(dir: &Path, name: &str) -> bool {
     owner_of(dir).is_some_and(|(pid, started, session)| session == name && owner_state(pid, started) == Owner::Dead)
 }
 
-/// A primeira linha é o marcador que este app escreveu para a pasta `dir`, exato: outro nome ou espaço a mais não é
-/// nosso.
+/// A primeira linha é o marcador que versões antigas deste app escreviam para a pasta `dir`, exato: outro nome ou
+/// espaço a mais não é nosso.
+///
+/// Sai a partir de 2027-02-01, junto com `is_legacy_rule`: a sessão não escreve mais regra do Codex, e isto só
+/// existe para limpar os órfãos que versões antigas deixaram. Depois do marcador eles liberam o git (e programas de
+/// skill), fora do sandbox, para qualquer codex.
 fn is_marker(line: &str, dir: &Path) -> bool {
     dir.file_name().and_then(|n| n.to_str()).is_some_and(|name| marker(name) == line)
 }
@@ -241,10 +168,11 @@ fn is_legacy_rule(line: &str, dir: &Path) -> bool {
     rule(&command_for(name), JUSTIFICATION).trim_end() == line
 }
 
-/// Uma sessão morta à força deixa a regra do Codex valendo enquanto a pasta dela existir, e a
-/// pasta para trás. As duas saem aqui, mas só com prova: a regra é a que este app escreveu para
-/// aquela pasta (`is_marker`, ou `is_legacy_rule` na forma antiga), a pasta se declara aquela sessão
-/// (`pid início sessão` em `owner`) e o dono está comprovadamente morto. Menos que isso fica intocado.
+/// Uma sessão morta à força deixa a pasta para trás; nas versões antigas, que escreviam a regra do Codex em
+/// CODEX_HOME, deixava também a regra, valendo para qualquer codex. As duas saem aqui, mas só com prova: a regra é
+/// a que este app escreveu para aquela pasta (`is_marker`, ou `is_legacy_rule` na forma antiga), a pasta se declara
+/// aquela sessão (`pid início sessão` em `owner`) e o dono está comprovadamente morto. Menos que isso fica
+/// intocado. A parte das regras sai a partir de 2027-02-01 (ver `is_marker`); a das pastas fica.
 pub fn recover_orphans(places: &Places) {
     let temp = &places.temp;
     for entry in std::fs::read_dir(&places.codex_rules).into_iter().flatten().flatten() {
@@ -265,7 +193,8 @@ pub fn recover_orphans(places: &Places) {
             remove_dir(&old);
         }
     }
-    // Sessões sem regra (orquestrador Claude) só deixam a pasta: mesma prova pelo dono.
+    // Sessões sem regra (todas as atuais, e as do orquestrador Claude de antes) só deixam a pasta: mesma prova
+    // pelo dono.
     for entry in std::fs::read_dir(temp).into_iter().flatten().flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if is_session_name(&name) && owner_dead(&entry.path(), &name) {
@@ -285,13 +214,8 @@ pub mod tests {
     pub fn places(tag: &str) -> Places {
         let root = std::env::temp_dir().join(format!("orq-ses-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let skills = root.join("home").join(".agents").join("skills");
-        std::fs::create_dir_all(skills.join("exemplo").join("node_modules").join("dep")).unwrap();
+        std::fs::create_dir_all(root.join("home").join(".agents").join("skills").join("exemplo")).unwrap();
         std::fs::create_dir_all(root.join("temp")).unwrap();
-        std::fs::write(skills.join("exemplo").join("canvas.mjs"), "").unwrap();
-        std::fs::write(skills.join("exemplo").join("tool.py"), "").unwrap();
-        std::fs::write(skills.join("exemplo").join("SKILL.md"), "").unwrap();
-        std::fs::write(skills.join("exemplo").join("node_modules").join("dep").join("index.js"), "").unwrap();
         Places { temp: root.join("temp"), codex_rules: root.join("codex").join("rules"), global_dirs: vec![root.join("home").join(".agents")] }
     }
 
@@ -304,7 +228,7 @@ pub mod tests {
     }
 
     #[test]
-    fn sessao_codex_escreve_marcador_regras_agents_e_owner_e_limpa_tudo() {
+    fn sessao_codex_escreve_agents_e_owner_nenhuma_regra_e_limpa_tudo() {
         let p = places("codex");
         let (s, r) = Session::create(&p, APP, r"C:\proj", &cfg("codex"));
         r.unwrap();
@@ -318,25 +242,15 @@ pub mod tests {
         assert!(!agents.contains("cada apóstrofo é dobrado") && !agents.contains("Não use here-string"));
         let owner = std::fs::read_to_string(s.dir.join("owner")).unwrap();
         assert_eq!(owner, format!("{} {} {name}", std::process::id(), start_time(std::process::id()).unwrap()));
-
-        let rule = std::fs::read_to_string(&s.rule).unwrap();
-        let lines: Vec<&str> = rule.lines().collect();
-        assert_eq!(lines[0], format!("# orquestrador {name}"));
-        assert!(is_marker(lines[0], &s.dir));
-        assert_eq!(lines[1], "prefix_rule(pattern=[\"git\"], decision=\"allow\", justification=\"Git do orquestrador, autorizado pelo usuario\")");
-        assert_eq!(lines[2], "prefix_rule(pattern=[\"git.exe\"], decision=\"allow\", justification=\"Git do orquestrador, autorizado pelo usuario\")");
-        assert!(lines[3].starts_with("prefix_rule(pattern=[\"node\", [") && lines[3].contains("canvas.mjs") && lines[3].contains("exemplo/canvas.mjs"));
-        assert!(lines[4].starts_with("prefix_rule(pattern=[\"python\", [") && lines[4].contains("tool.py"));
-        assert_eq!(lines.len(), 5, "marcador, git, git.exe, node e python, e nada além");
-        // O caminho das skills de teste tem `orq-ses-`, então o comando antigo se reconhece pelo `.ps1`.
-        assert!(!rule.contains(".ps1") && !rule.contains("Delegacao") && !rule.contains("node_modules") && !rule.contains("SKILL.md"));
+        // Nenhuma regra do Codex: nem a pasta de regras é criada.
+        assert!(!p.codex_rules.exists(), "a sessão não escreve regra do Codex");
         assert!(!s.dir.join("claude-settings.json").exists() && !s.dir.join("mcp.json").exists());
 
         // O que o app deixa na pasta durante o uso também sai.
         std::fs::create_dir_all(s.dir.join("requests").join("x")).unwrap();
         std::fs::write(s.dir.join("requests").join("x").join("1.txt"), "t").unwrap();
         assert_eq!(s.remove(), None);
-        assert!(!s.dir.exists() && !s.rule.exists());
+        assert!(!s.dir.exists());
         discard(&p);
     }
 
@@ -352,25 +266,15 @@ pub mod tests {
         assert_eq!(mcp["mcpServers"]["orquestrador"]["args"], json!(["--mcp", s.dir.to_string_lossy()]));
         assert_eq!(mcp["mcpServers"].as_object().unwrap().len(), 1, "só o orquestrador");
         let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("claude-settings.json")).unwrap()).unwrap();
-        assert_eq!(settings["env"]["CLAUDE_CODE_USE_POWERSHELL_TOOL"], "1", "sem a variável o Claude não expõe o PowerShell");
-        assert_eq!(settings["env"]["MCP_TOOL_TIMEOUT"], "900000", "a espera de um lote cabe no prazo");
-        let allow: Vec<&str> = settings["permissions"]["allow"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
         assert_eq!(
-            &allow[..9],
-            [
-                "Read", "Glob", "Grep", "Skill",
-                "mcp__orquestrador__delegar", "mcp__orquestrador__aguardar", "mcp__orquestrador__responder",
-                "PowerShell(git *)", "PowerShell(git.exe *)",
-            ]
+            settings,
+            json!({
+                "skipDangerousModePermissionPrompt": true,
+                "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" },
+            }),
+            "sem lista de permissões e sem hooks: só o aviso do bypass desligado, o PowerShell e o prazo do lote"
         );
-        assert!(allow.iter().all(|a| !a.starts_with("PowerShell(orq-")), "o comando antigo saiu da permissão");
-        assert!(allow.iter().any(|a| a.starts_with("PowerShell(node ") && a.ends_with("canvas.mjs *)")));
-        assert!(allow.iter().any(|a| a.starts_with("PowerShell(python ") && a.ends_with("tool.py *)")));
-        // O caminho entre aspas, como o orquestrador costuma escrever, também passa.
-        assert!(allow.iter().any(|a| a.starts_with("PowerShell(node \"") && a.ends_with("canvas.mjs\" *)")));
-        assert!(allow.iter().any(|a| a.starts_with("PowerShell(node '") && a.ends_with("canvas.mjs' *)")));
-        assert!(allow.iter().all(|a| !a.contains("--hook") && !a.contains("--guard")), "os modos dos hooks não são liberados ao orquestrador");
-        assert!(!s.rule.exists());
+        assert!(!p.codex_rules.exists());
         assert_eq!(s.remove(), None);
         discard(&p);
     }
@@ -451,16 +355,46 @@ pub mod tests {
 
     #[test]
     fn regra_com_git_e_skills_sai_como_orfa_pela_primeira_linha() {
-        // As regras do Git e das skills vêm depois do marcador: a sessão morta sai inteira.
+        // A regra que versões antigas escreviam: o marcador e, depois dele, o Git e as skills. Feita à mão, porque a
+        // sessão não a escreve mais; a sessão morta sai inteira.
         let p = places("orfa-git");
-        let (s, r) = Session::create(&p, APP, r"C:\proj", &cfg("codex"));
-        r.unwrap();
         let me = std::process::id();
-        let name = s.dir.file_name().unwrap().to_string_lossy().to_string();
-        std::fs::write(s.dir.join("owner"), format!("{me} {} {name}", start_time(me).unwrap() + 1)).unwrap();
+        let name = format!("strategist-{}", "9".repeat(32));
+        let dir = p.temp.join(&name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("owner"), format!("{me} {} {name}", start_time(me).unwrap() + 1)).unwrap();
+        std::fs::create_dir_all(&p.codex_rules).unwrap();
+        let rule_file = p.codex_rules.join(format!("{name}.rules"));
+        let git = "Git do orquestrador, autorizado pelo usuario";
+        std::fs::write(
+            &rule_file,
+            format!(
+                "{}\n{}{}prefix_rule(pattern=[\"node\", [\"C:/x/canvas.mjs\"]], decision=\"allow\", justification=\"Programa de skill global do usuario\")\n",
+                marker(&name),
+                rule("git", git),
+                rule("git.exe", git)
+            ),
+        )
+        .unwrap();
         recover_orphans(&p);
-        assert!(!s.rule.exists() && !s.dir.exists());
+        assert!(!rule_file.exists() && !dir.exists());
         discard(&p);
+    }
+
+    /// Lembrete com data: a limpeza das regras órfãs do Codex é transição e sai a partir de 2027-02-01.
+    #[test]
+    fn transicao_das_regras_orfas_do_codex_ainda_no_prazo() {
+        // 2027-02-01T00:00:00Z em segundos UNIX.
+        const PRAZO: u64 = 1_801_440_000;
+        let agora = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        assert!(
+            agora < PRAZO,
+            "Chegou 2027-02-01: remova a limpeza das regras órfãs do Codex. Em session.rs: `is_marker`, `marker`, \
+             `is_legacy_rule`, `command_for`, `JUSTIFICATION`, `rule`, o campo `Places.codex_rules` e o laço de regras \
+             em `recover_orphans`, mais os testes deles (`regra_orfa_so_sai_com_prova`, \
+             `regra_com_git_e_skills_sai_como_orfa_pela_primeira_linha`) e este teste. Tire também a menção em \
+             docs/seguranca.md (e em docs/arquitetura.md)."
+        );
     }
 
     #[test]

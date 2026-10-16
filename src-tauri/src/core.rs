@@ -1126,7 +1126,7 @@ mod tests {
         std::fs::create_dir_all(&pedido).unwrap();
         std::fs::write(pedido.join("1.txt"), "Tarefa X\n").unwrap();
         let mut inner = core.inner.lock().unwrap();
-        inner.session = Some(Session { dir: session.clone(), rule: PathBuf::new(), global_dirs: vec![] });
+        inner.session = Some(Session { dir: session.clone(), global_dirs: vec![] });
         inner.git_exclusive = true;
         core.accept_batches(&mut inner);
         assert!(inner.nodes.is_empty(), "com o git em curso, o lote não é aceito");

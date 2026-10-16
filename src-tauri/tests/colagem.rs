@@ -29,9 +29,10 @@ fn wait_for(buffer: &Shared, marker: &str, secs: u64) -> bool {
 fn abrir_cli(cli: &str, dir: &Path, size: (u16, u16)) -> (Term, Shared) {
     let dir_s = dir.to_string_lossy().to_string();
     let args: Vec<String> = if cli == "codex" {
-        // Mesmos argumentos que o orquestrador usa para o Codex (cli.rs), sem sandbox de aprovação nem regras.
+        // Os argumentos que o orquestrador usa para o Codex (cli.rs), sem o servidor MCP: sem sandbox e sem
+        // aprovação, como o executor, e a pasta já confiada.
         let trust = format!("projects={{{}={{trust_level=\"trusted\"}}}}", serde_json::to_string(&dir_s).unwrap());
-        ["--no-daemon", "-C", &dir_s, "--sandbox", "read-only", "--ask-for-approval", "never", "-c", &trust]
+        ["--no-daemon", "-C", &dir_s, "--dangerously-bypass-approvals-and-sandbox", "-c", &trust]
             .iter()
             .map(|s| s.to_string())
             .collect()
