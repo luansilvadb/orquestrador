@@ -21,7 +21,7 @@ Requisitos:
 1. Escolha a pasta do projeto. Uma pasta fora de repositório também abre, sem os recursos de Git.
 2. No painel do Orquestrador, à direita, clique em `Abrir terminal`, escolha ferramenta, modelo e esforço, e converse com ele até fechar o objetivo.
 3. Quando ele delega, cada executor ganha uma aba. A resposta volta sozinha ao orquestrador quando o executor termina.
-4. Enquanto ele trabalha, anote as próximas ideias na tela Issues, como issues do GitHub. O Iniciar de cada uma cola o título, o link e a descrição no prompt do orquestrador, sem enviar.
+4. Enquanto ele trabalha, anote as próximas ideias na tela Issues, como issues do GitHub. Escolha uma na faixa para ver o detalhe dela; o Colar no orquestrador cola o título, o link e a descrição no rascunho do orquestrador, sem enviar.
 
 O passo a passo está em [uso](docs/uso.md), a tela em [interface](docs/interface.md) e a delegação em [delegação](docs/delegacao.md).
 

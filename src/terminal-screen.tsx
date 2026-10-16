@@ -6,6 +6,7 @@ import { Button, colorsPreset, DraggablePanel, DropdownMenu, Tag, TabsIndicator,
 import { Center, Flexbox, type PresetColorKey } from '@lobehub/ui';
 import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
+import { SECONDARY } from './issue-ui';
 import { TermHost, terminals } from './terminals';
 import { revealTab, wheelToScroll } from './tab-strip';
 import { ORCHESTRATOR, TOOL_NAME, type Choice, type ExecutorNode, type NodeState, type Tool } from './types';
@@ -276,7 +277,7 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
               <Flexbox align="center" gap={12} padding={16} width="min(380px, calc(100% - 32px))" height="fit-content" className="absolute inset-0 m-auto">
                 {notice && <Text as="p" role="status" fontSize={14} className="rounded-md border bg-card px-3 py-1.5">{notice}</Text>}
                 <Button type="primary" onClick={onOpen}>Abrir terminal</Button>
-                <Text as="p" type="secondary" fontSize={12} align="center">
+                <Text as="p" fontSize={12} align="center" style={SECONDARY}>
                   Abre o orquestrador, com quem você conversa. Os executores aparecem em abas quando ele delega.
                 </Text>
               </Flexbox>

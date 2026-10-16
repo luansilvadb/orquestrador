@@ -23,10 +23,13 @@
 // Issues do GitHub (`?gh=`): `ready` (padrão; repositório `luansilvadb/orquestrador`, login `luansilvadb`, issues em memória), e os indisponíveis
 // `no-gh`, `no-login`, `no-remote`, `issues-disabled` e `offline`, em que `github_status` volta `unavailable` com a mensagem do backend.
 // `create-fails` deixa tudo pronto, mas `github_create_issue` rejeita com "Sem conexão com o GitHub." (para ver a criação guardada que falhou).
+// `github_issue_comments` devolve, por issue, exatamente `comments` comentários (textos fixos, alguns com Markdown).
 // Os comandos `github_*` demoram ~300 ms. Em execução, `__mock.ghMode = 'offline'` troca o modo.
-// Rodada do orquestrador: um Enter no terminal do orquestrador (`term_write` com só `"\r"`; colar não conta) emite `orchestrator-turn` com
-// `busy: true` e, 8 s depois, `busy: false`, com uma linha curta no terminal em cada ponta. `orchestrator_busy` responde o estado, e abrir o
-// orquestrador começa livre. `__mock.orchestratorTurn(true)` (ou `false`) força o estado na hora, sem o fim automático.
+// Rodada do orquestrador: o simulado guarda o rascunho do terminal do orquestrador (o que foi colado e digitado via `term_write`). Um Enter
+// (`term_write` com só `"\r"`; colar não conta) emite `orchestrator-turn` com `busy: true` e `prompt` = o rascunho (que então é limpo) e, 8 s
+// depois, `busy: false`, com uma linha curta no terminal em cada ponta. `orchestrator_busy` responde o estado, e abrir o orquestrador começa
+// livre. `__mock.orchestratorTurn(true, prompt?)` (ou `false`) força o estado na hora, sem o fim automático; sem `prompt`, o evento sai sem ele
+// (como numa rodada que não veio de um envio do usuário).
 import { EDITOR_HEAD_LINES } from './mock-fixtures';
 import { parseDiffFromFile } from '@pierre/diffs';
 import type { Transport } from './backend';
@@ -35,7 +38,7 @@ import {
   type Batch, type Choice, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
   type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type Pasted, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
-  type SearchResults, type SkipReason, type GhStatus, type Issue, type IssuesSnapshot, type Label,
+  type SearchResults, type SkipReason, type GhStatus, type Issue, type IssueComment, type IssuesSnapshot, type Label,
 } from './types';
 
 type Handler = (payload: never) => void;
@@ -331,7 +334,7 @@ const debug = { close: async () => {
   // `choose_project` devolve a pasta como dentro de um repositório (o projeto aberto é a raiz dele).
   subfolder: params.get('subfolder') === '1',
   // Força a rodada do orquestrador (ver o topo do arquivo): `true` ocupado até chamar com `false`.
-  orchestratorTurn: (busy: boolean) => orchestratorTurn(busy),
+  orchestratorTurn: (busy: boolean, prompt?: string) => orchestratorTurn(busy, false, prompt),
   // Chamadas de Git que chegaram ao simulado, com argumento, resultado e erro (só para o check conferir o payload).
   calls: [] as { cmd: string; args: unknown; result: unknown; error: string | null }[] };
 (window as unknown as { __mock: typeof debug }).__mock = debug;
@@ -341,12 +344,14 @@ const SHELL_PROMPT = 'PS C:\\projetos\\exemplo> ';
 let orchestratorBusy = false;
 let turnTimer: ReturnType<typeof setTimeout> | undefined;
 const TURN_MS = 8000;
-function orchestratorTurn(busy: boolean, quiet = false) {
+// O que está no campo de entrada do orquestrador (colado e digitado) e ainda não foi enviado.
+let orchestratorDraft = '';
+function orchestratorTurn(busy: boolean, quiet = false, prompt?: string) {
   clearTimeout(turnTimer);
   if (busy === orchestratorBusy) return;
   orchestratorBusy = busy;
   if (!quiet) out('orchestrator', busy ? '\r\n[simulado] rodada iniciada…\r\n' : '[simulado] rodada concluída.\r\n');
-  emit('orchestrator-turn', { busy });
+  emit('orchestrator-turn', busy && prompt !== undefined ? { busy, prompt } : { busy });
 }
 
 function shellTyped(id: string, data: string) {
@@ -1020,6 +1025,31 @@ function ghSetState(number: number, open: boolean): Issue {
   return structuredClone(issue);
 }
 
+// [autor, texto] dos comentários simulados; a issue de número N usa os `comments` primeiros a partir de `N`, em círculo.
+const GH_COMMENT_POOL: [string, string][] = [
+  ['ana-dev', 'Consegui reproduzir aqui no Windows 11.\n\nPassos:\n\n1. Abrir o projeto\n2. Maximizar a janela\n3. Voltar ao tamanho normal'],
+  ['carlosm', 'Acho que o problema está em `fit()` sendo chamado antes do layout terminar. Talvez um `requestAnimationFrame` resolva.'],
+  ['luansilvadb', 'Boa observação. Vou olhar isso na próxima rodada.'],
+  ['visitante42', 'Também acontece comigo. Segue o trecho que testei:\n\n```ts\nconst largura = el.clientWidth;\nif (largura > 0) terminal.fit();\n```'],
+  ['ana-dev', 'Sugestão de checklist para fechar:\n\n- [x] reproduzir\n- [ ] corrigir\n- [ ] cobrir com o check em `scripts/`'],
+  ['luansilvadb', 'Corrigido na branch `fix/redimensionar`. **Pode testar?**'],
+  ['carlosm', 'Testei e funcionou. Só vi um piscar rápido ao abrir, mas nada que atrapalhe.'],
+  ['visitante42', 'Obrigado pelo retorno rápido! Fico no aguardo da próxima versão.'],
+];
+function ghComments(number: number): IssueComment[] {
+  ghReady();
+  const issue = ghIssues.find((i) => i.number === number);
+  if (!issue) throw `A issue #${number} não existe em ${GH_OWNER}/${GH_REPO}.`;
+  const start = Date.parse(issue.createdAt), end = issue.closedAt ? Date.parse(issue.closedAt) : Date.now();
+  return Array.from({ length: issue.comments }, (_, i) => {
+    const [author, body] = GH_COMMENT_POOL[(number + i) % GH_COMMENT_POOL.length];
+    // Espalhados entre a abertura da issue e o fechamento (ou agora), em ordem.
+    const at = new Date(start + ((end - start) * (i + 1)) / (issue.comments + 1)).toISOString();
+    const id = number * 1000 + i + 1;
+    return { id, author, body, createdAt: at, updatedAt: at, url: `${ghUrl(number)}#issuecomment-${id}` };
+  });
+}
+
 const commands: Record<string, (args: any) => unknown> = {
   read_media: ({ path }: { path: string }) => mockBytes(path),
   update_status: () => ({ phase: 'ready' }),
@@ -1115,9 +1145,18 @@ const commands: Record<string, (args: any) => unknown> = {
     // No orquestrador, um Enter sozinho (a tecla, não uma colagem) começa uma rodada simulada, que termina sozinha em 8 s. O resto o simulado
     // só mostra (a colagem de uma issue, por exemplo), com as quebras de linha do texto (LF no bracketed paste, CR no paste do xterm).
     else if (id === 'orchestrator' && data === '\r') {
-      orchestratorTurn(true);
+      const prompt = orchestratorDraft;
+      orchestratorDraft = '';
+      orchestratorTurn(true, false, prompt);
       turnTimer = setTimeout(() => orchestratorTurn(false), TURN_MS);
-    } else if (id === 'orchestrator') out(id, text.replace(/\r\n?|\n/g, '\r\n'));
+    } else if (id === 'orchestrator') {
+      // O rascunho guarda o que foi colado e digitado; Backspace apaga o último caractere, e o resto das teclas de controle não entra.
+      for (const char of text.replace(/\r\n?/g, '\n')) {
+        if (char === '\x7f') orchestratorDraft = orchestratorDraft.slice(0, -1);
+        else if (char >= ' ' || char === '\n') orchestratorDraft += char;
+      }
+      out(id, text.replace(/\r\n?|\n/g, '\r\n'));
+    }
   },
   list_dir: ({ path }: { path: string }) => {
     const dir = folderAt(path);
@@ -1177,6 +1216,7 @@ const commands: Record<string, (args: any) => unknown> = {
   github_issues: ({ sinceVersion }: { sinceVersion: number }): IssuesSnapshot => ghSnapshot(sinceVersion),
   github_create_issue: ({ title, body, labels }: { title: string; body: string; labels: string[] }): Issue => ghCreate(title, body, labels),
   github_set_issue_state: ({ number, open }: { number: number; open: boolean }): Issue => ghSetState(number, open),
+  github_issue_comments: ({ number }: { number: number }): IssueComment[] => ghComments(number),
   // Sem navegador para abrir: só registra no console.
   github_open: ({ url }: { url: string }) => void console.info(`[mock] github_open ${url}`),
   term_resize: () => undefined,

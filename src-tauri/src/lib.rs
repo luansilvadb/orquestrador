@@ -270,6 +270,12 @@ fn github_set_issue_state(core: State<Core>, gate: State<Gate>, hub: State<githu
     hub.set_issue_state(&repo(&core, &gate)?, number, open)
 }
 
+/// Os comentários da issue `number`, do mais antigo ao mais novo.
+#[tauri::command(async)]
+fn github_issue_comments(core: State<Core>, gate: State<Gate>, hub: State<github::Hub>, number: u64) -> Result<Vec<github::IssueComment>, String> {
+    hub.issue_comments(&repo(&core, &gate)?, number)
+}
+
 /// Abre no navegador padrão um link do GitHub; recusa qualquer outro.
 #[tauri::command(async)]
 fn github_open(gate: State<Gate>, url: String) -> Result<(), String> {
@@ -509,6 +515,7 @@ pub fn run(context: tauri::Context) {
             github_issues,
             github_create_issue,
             github_set_issue_state,
+            github_issue_comments,
             github_open,
             start_orchestrator,
             start_shell,

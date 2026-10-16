@@ -90,6 +90,22 @@ pub struct IssuesSnapshot {
     pub data: Option<IssuesData>,
 }
 
+/// Um comentário de uma issue.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueComment {
+    /// O `id` do GitHub, estável.
+    pub id: u64,
+    /// O `user.login`.
+    pub author: String,
+    /// Vazio quando o GitHub manda `null`.
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+    /// O `html_url`.
+    pub url: String,
+}
+
 /// O repositório do GitHub (`dono/repo`) apontado pelo `origin`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Slug {
@@ -245,6 +261,25 @@ fn issue_do_json(corpo: &str) -> Result<Issue, String> {
 fn issues_do_json(corpo: &str) -> Result<Vec<Issue>, String> {
     let itens: Vec<Value> = serde_json::from_str(corpo).map_err(ilegivel)?;
     itens.into_iter().filter(|v| v.get("pull_request").is_none()).map(|v| serde_json::from_value::<IssueGh>(v).map(Issue::from).map_err(ilegivel)).collect()
+}
+
+#[derive(Deserialize)]
+struct CommentGh {
+    id: u64,
+    body: Option<String>,
+    user: Option<UserGh>,
+    created_at: String,
+    updated_at: String,
+    html_url: String,
+}
+
+/// Os comentários de uma página da lista.
+fn comentarios_do_json(corpo: &str) -> Result<Vec<IssueComment>, String> {
+    let itens: Vec<CommentGh> = serde_json::from_str(corpo).map_err(ilegivel)?;
+    Ok(itens
+        .into_iter()
+        .map(|c| IssueComment { id: c.id, author: c.user.map(|u| u.login).unwrap_or_default(), body: c.body.unwrap_or_default(), created_at: c.created_at, updated_at: c.updated_at, url: c.html_url })
+        .collect())
 }
 
 fn labels_do_json(corpo: &str) -> Result<Vec<Label>, String> {
@@ -496,6 +531,24 @@ impl Hub {
         issue_do_json(&resposta.corpo)
     }
 
+    /// Os comentários da issue, do mais antigo ao mais novo (todas as páginas). Sem cache: cada abertura relê.
+    pub fn issue_comments(&self, dir: &Path, number: u64) -> Result<Vec<IssueComment>, String> {
+        let slug = slug_da_pasta(dir).ok_or_else(|| mensagem(Reason::NoRemote, ""))?;
+        let alvo = slug.to_string();
+        let mut todos = Vec::new();
+        let mut url = Some(format!("{API}/repos/{alvo}/issues/{number}/comments?per_page=100"));
+        while let Some(atual) = url {
+            let resposta = self.chamar("GET", &atual, None, None).map_err(|f| f.texto(&alvo))?;
+            if resposta.status != 200 {
+                return Err(resposta.falha().texto(&alvo));
+            }
+            // O token só segue para a própria API.
+            url = resposta.link.as_deref().and_then(proxima).filter(|u| u.starts_with(&format!("{API}/")));
+            todos.extend(comentarios_do_json(&resposta.corpo)?);
+        }
+        Ok(todos)
+    }
+
     /// Cria a issue. Título vazio é recusado sem chamar a API.
     pub fn create_issue(&self, dir: &Path, title: &str, body: &str, labels: &[String]) -> Result<Issue, String> {
         let title = title.trim();
@@ -647,6 +700,25 @@ mod tests {
         assert_eq!(json["createdAt"], "2026-10-01T10:00:00Z");
         assert_eq!(json["closedAt"], Value::Null);
         assert_eq!(json["state"], "open");
+    }
+
+    #[test]
+    fn comentarios_do_json_com_body_e_autor_nulos() {
+        let corpo = r#"[
+            {"id": 101, "body": "Reproduzi aqui.\n\n- passo 1", "user": {"login": "ana"},
+             "created_at": "2026-10-01T11:00:00Z", "updated_at": "2026-10-01T12:00:00Z",
+             "html_url": "https://github.com/dono/repo/issues/7#issuecomment-101"},
+            {"id": 102, "body": null, "user": null, "created_at": "2026-10-02T11:00:00Z", "updated_at": "2026-10-02T11:00:00Z",
+             "html_url": "https://github.com/dono/repo/issues/7#issuecomment-102"}
+        ]"#;
+        let comentarios = comentarios_do_json(corpo).unwrap();
+        assert_eq!(comentarios.len(), 2);
+        assert_eq!(comentarios[0].author, "ana");
+        assert_eq!(comentarios[1], IssueComment { id: 102, author: String::new(), body: String::new(), created_at: "2026-10-02T11:00:00Z".to_string(), updated_at: "2026-10-02T11:00:00Z".to_string(), url: "https://github.com/dono/repo/issues/7#issuecomment-102".to_string() });
+        let json = serde_json::to_value(&comentarios[0]).unwrap();
+        assert_eq!(json["id"], 101);
+        assert_eq!(json["createdAt"], "2026-10-01T11:00:00Z");
+        assert_eq!(json["updatedAt"], "2026-10-01T12:00:00Z");
     }
 
     #[test]

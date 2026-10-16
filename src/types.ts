@@ -127,7 +127,8 @@ export type Events = {
   'node-state': NodeStateEvent;
   'orchestrator-exit': { code: number | null };
   // A cada mudança: `busy` com a rodada do orquestrador em andamento; livre esperando o usuário ou com o orquestrador fechado.
-  'orchestrator-turn': { busy: boolean };
+  // `prompt` é o texto enviado ao orquestrador: só vem no começo da rodada (`busy: true`) e pode faltar (o hook não o trouxe).
+  'orchestrator-turn': { busy: boolean; prompt?: string };
   'shell-exit': { id: string; code: number | null };
   'update-status': UpdateStatus;
 };
@@ -146,5 +147,7 @@ export type Issue = {
   createdAt: string; updatedAt: string; closedAt: string | null; url: string;
 };
 export type Label = { name: string; color: string; description: string };
+// Comentário de uma issue (`github_issue_comments`): `id` estável do GitHub, `author` é o login, datas em ISO 8601, `body` em Markdown.
+export type IssueComment = { id: number; author: string; body: string; createdAt: string; updatedAt: string; url: string };
 // Retorno de `github_issues`: `data: null` quer dizer que nada mudou desde a `version` pedida. Traz as abertas e as 50 fechadas mais recentes.
 export type IssuesSnapshot = { version: number; data: null | { issues: Issue[]; labels: Label[] } };

@@ -123,7 +123,7 @@ A fonte detalhada das regras, com o porquê de cada medida, é `docs/design-syst
 Uma paleta de neutros quase sem matiz, onde o branco faz o papel de cor primária e as cores saturadas só aparecem como sinal.
 
 ### Primary
-- **Branco de Tinta** (ink-white): botão principal (`type="fill"`), filete de 2 px da navegação ativa e da seleção no Git, indicador da aba ativa no grupo com foco. Fica mais branco no hover e acinzentado no clique.
+- **Branco de Tinta** (ink-white): botão principal (`type="primary"`), filete de 2 px da navegação ativa e da seleção no Git, indicador da aba ativa no grupo com foco. Fica mais branco no hover e acinzentado no clique.
 
 ### Neutral
 - **Preto Absoluto** (pitch-black): fundo da janela (`bg-background`), atrás de tudo.
@@ -142,7 +142,7 @@ Uma paleta de neutros quase sem matiz, onde o branco faz o papel de cor primári
 ### Named Rules
 **The Signal-Only Rule.** Cor saturada só comunica estado, mudança ou erro. Nada de cor decorativa.
 
-**The Token Rule.** Componentes usam os tokens do tema (`bg-card`, `text-muted-foreground`, `border`…). Cores fixas só nas exceções documentadas: titlebar, comparador (cores do VS Code), destaque da pesquisa e as telas de Issues, que imitam o GitHub com valores centralizados em `src/issue-ui.tsx`.
+**The Token Rule.** Componentes usam os tokens do tema (`bg-card`, `text-muted-foreground`, `border`…). Cores fixas só nas exceções documentadas: titlebar, comparador (cores do VS Code), destaque da pesquisa e as cores do GitHub nos ícones de estado das Issues (aberta, fechada, falha e o âmbar da em andamento), centralizadas em `GH` no `src/issue-ui.tsx`. O resto das Issues usa os tokens: texto neutro, primário branco do app, labels como chip neutro com bolinha.
 
 ## Typography
 
@@ -188,7 +188,7 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 
 ### Buttons
 - **Shape:** cantos discretos (6px), altura padrão do tema (36px), pequeno nas barras.
-- **Fill:** branco de tinta com texto preto, para a ação principal (Salvar, Commit, Escolher pasta).
+- **Fill:** branco de tinta com texto preto, para a ação principal (Salvar, Commit, Escolher pasta; no detalhe da issue, o Colar no orquestrador).
 - **Default:** preenchimento neutro, para Cancelar e ações secundárias.
 - **Danger:** só na ação destrutiva, que também diz o que faz no texto ("Descartar e encerrar todos").
 - **ActionIcon:** ações pequenas de ícone (24–36 px); foco por teclado com `focus-visible:ring-2`.
@@ -208,10 +208,10 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 - **Tabs:** `TabsRoot variant="square"`, faixa de 36 px, linha de 2 px na aba ativa, divisor de 1 px em toda a largura.
 
 ### List Rows
-- 24 px, ícone `File`, nome com prioridade (até 70%) e pasta em texto secundário que corta primeiro; ações num slot de largura fixa que aparece no hover ou no foco, sem deslocar o nome. Seleção em `bg-muted` com filete primário à esquerda.
+- 24 px, ícone `File`, nome com prioridade (até 70%) e pasta em texto secundário que corta primeiro; ações num slot de largura fixa que aparece no hover ou no foco, sem deslocar o nome. Seleção em `bg-muted` com filete primário à esquerda; na faixa Issues, a linha escolhida (a que o detalhe mostra) é marcada assim, e o Colar compacto, um botão de ícone (`ActionIcon` com o ícone de colar, na cor do texto), só aparece nela e na próxima, no fluxo da linha. As linhas da faixa Issues têm 24 px, numa linha só (ícone de estado, `#N` em mono de 12 px numa coluna alinhada à direita, para os títulos começarem na mesma coluna, título e, na escolhida e na próxima, o botão de ícone), sem bolinhas de label; tempo, comentários e nomes das labels ficam no `title` e na descrição acessível.
 
 ### Execution State
-- `Tag` com rótulo e ícone, cor predefinida do Lobe UI. Estado nunca só por cor.
+- `Tag` com rótulo e ícone, cor predefinida do Lobe UI. Estado nunca só por cor. Na issue: Aberta, Fechada e Em andamento são `Tag` com texto neutro e a cor só no ícone (verde, roxo e âmbar do GitHub); a Próxima é neutra, com relógio (na linha da faixa, só o relógio antes do título). As quatro são `Tag` `outlined`, com o filete do tema e sem preenchimento, porque o chip de label é preenchido. Nunca pílula com a forma de uma label.
 
 ## Do's and Don'ts
 
@@ -225,7 +225,7 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 
 ### Don't:
 - **Don't** usar glows, gradientes decorativos ou acento colorido nas bordas de cards.
-- **Don't** usar cor fixa num componente fora das exceções documentadas (titlebar, comparador, pesquisa, Issues).
+- **Don't** usar cor fixa num componente fora das exceções documentadas (titlebar, comparador, pesquisa e os ícones de estado das Issues).
 - **Don't** usar monoespaçado fora de terminal e valores técnicos.
 - **Don't** pôr sombra em superfícies de trabalho.
 - **Don't** trocar a Inter pela fonte padrão do Lobe UI (HarmonyOS Sans, que viria da CDN).

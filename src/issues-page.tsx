@@ -1,206 +1,300 @@
-// Página Issues da área central, no layout da página de Issues do GitHub (modo escuro) com as cores do app: cabeçalho com "New issue",
-// a busca, e a caixa com Open/Closed, o filtro de Labels, a ordenação e as linhas. As criações a caminho ou que falharam ficam no topo
-// da lista Open. O estado vem do store único do App (`useIssues`); busca, filtro e ordenação são só desta tela.
-import { useState } from 'react';
-import { Check, ChevronDown, MessageSquare, Search } from 'lucide-react';
-import { Button, DropdownMenu, Input, Text, toast } from '@lobehub/ui/base-ui';
-import { Center, Flexbox } from '@lobehub/ui';
+// Detalhe da issue na aba Issues da área central: a issue escolhida na faixa (ou, sem escolha, a em andamento, a próxima ou a primeira aberta;
+// ver `detailIssue`). Cabeçalho com o título em toda a largura, o estado em `Tag`, "autor abriu há X", os comentários e as labels, e, numa
+// linha abaixo, a barra de ações (Colar no orquestrador como ação principal, Concluir e Voltar às abertas só quando não há o painel, Reabrir,
+// Abrir no GitHub); na issue em andamento, o painel "Com o orquestrador" (o que ele está fazendo, os executores agora e as ações Ir ao
+// orquestrador, Concluir e Voltar às abertas); na próxima, uma linha com o Não colar depois; depois, a descrição em Markdown e os
+// comentários carregados do GitHub. É também o único lugar da indisponibilidade do GitHub: título, mensagem, Tentar de novo e, quando a
+// mensagem traz um comando, o Rodar no Terminal. A faixa é a fila e o único lugar de lista, busca e filtro: esta tela não tem nada disso.
+// O estado vem do store único do App (`useIssues`); os executores e as ações de terminal vêm por props.
+import { Suspense, useEffect, useId, useRef, useState } from 'react';
+import { Clock, ExternalLink, MessageSquare, SquareTerminal } from 'lucide-react';
+import { ActionIcon, Button, Text, toast } from '@lobehub/ui/base-ui';
+import { Center } from '@lobehub/ui';
 import { backend, message } from './backend';
-import { hasLabels, matchesQuery, relativeTime, sortIssues, type IssueOrder } from './issue-text';
+import { commandIn, issueList } from './issue-text';
 import {
-  ActiveMark, FailedActions, GREEN_BUTTON, IssueIcon, LabelMenu, LabelPill, NextMark, pendingKind, pendingLabels, StartButton, useNow, type StartIssue,
+  Ago, FOCUS_RING, GH, GithubMessage, IssueActions, IssueMarkdown, LabelPill, MARKDOWN_FOCUS, NextMark, SECONDARY, StartButton, StateMark, ActiveMark, type StartIssue,
 } from './issue-ui';
-import { useIssues, type PendingIssue } from './issues-store';
-import type { Issue } from './types';
+import { useDetailIssue, useIssues } from './issues-store';
+import { FINISHED, STATES } from './terminal-screen';
+import type { ExecutorNode, Issue, IssueComment, NodeState } from './types';
 
 const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
-const ORDERS: { key: IssueOrder; label: string }[] = [
-  { key: 'newest', label: 'Mais novas' },
-  { key: 'oldest', label: 'Mais antigas' },
-  { key: 'updated', label: 'Atualizadas recentemente' },
-];
-// Ações que aparecem só no hover e com o foco na linha; com `opacity`, o Tab ainda as alcança (a linha de uma criação não tem outro foco).
-const HOVER_ONLY = 'opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100';
-// O Iniciar, como o da faixa: escondido até o hover ou o foco na linha (o título é focável, então o Tab chega nele), com ou sem
-// orquestrador, e visível enquanto o menu dele está aberto. `invisible` guarda o lugar: a linha não muda de altura no hover.
-const START_SLOT = 'invisible group-focus-within:visible group-hover:visible has-[[aria-expanded=true]]:visible';
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+// Medida de leitura da descrição e dos comentários.
+const MEASURE = 'max-w-[72ch]';
 
-export function IssuesPage({ start, onNew }: { start: StartIssue; onNew: () => void }) {
+export function IssuesPage({ start, onNew, focusKey, executors, onFocusOrchestrator, onRunInTerminal }: {
+  start: StartIssue;
+  /** Abre a aba Nova issue (o botão do estado vazio). */
+  onNew: () => void;
+  /** Sobe a cada pedido de foco no detalhe (duplo clique ou Enter com a linha já selecionada na faixa): a rolagem da tela recebe o foco. */
+  focusKey: number;
+  /** Executores vivos do App, resumidos no painel "Com o orquestrador". */
+  executors: readonly ExecutorNode[];
+  /** Leva o foco ao terminal do orquestrador. */
+  onFocusOrchestrator: () => void;
+  /** Abre o Terminal e cola o comando no shell ativo, sem Enter. */
+  onRunInTerminal: (command: string) => void;
+}) {
   const store = useIssues();
   const { status } = store;
-  const [tab, setTab] = useState<'open' | 'closed'>('open');
-  const [query, setQuery] = useState('');
-  const [wanted, setWanted] = useState<string[]>([]);
-  const [order, setOrder] = useState<IssueOrder>('newest');
-  const now = useNow(30_000);
-
-  const passes = (title: string, number: number | null, labels: string[]) => matchesQuery(title, number, query) && hasLabels(labels, wanted);
-  const shown = store.issues.filter((i) => passes(i.title, i.number, i.labels.map((l) => l.name)));
-  const open = sortIssues(shown.filter((i) => i.state === 'open'), order);
-  const closed = sortIssues(shown.filter((i) => i.state === 'closed'), order);
-  const pending = store.pending.filter((p) => passes(p.title, null, p.labels)).sort((a, b) => b.createdAt - a.createdAt);
-  const filtering = query.trim() !== '' || wanted.length > 0;
-  const rows = tab === 'open' ? open : closed;
-  const empty = tab === 'open' ? rows.length + pending.length === 0 : rows.length === 0;
-  const ready = status?.kind === 'ready';
-
-  const stateButton = (key: 'open' | 'closed', label: string, n: number) => (
-    <Button
-      type="text" size="small" aria-pressed={tab === key} onClick={() => setTab(key)}
-      className={`h-auto! gap-1.5! px-1! text-[14px]! ${tab === key ? 'font-semibold! text-[var(--ant-color-text)]!' : 'text-[var(--ant-color-text-secondary)]!'}`}
-    >
-      {label}
-      <span className="rounded-full bg-[var(--ant-color-fill-secondary)] px-[7px] text-[12px] leading-[18px] font-medium text-[var(--ant-color-text)] tabular-nums">{n}</span>
-    </Button>
-  );
+  const issue = useDetailIssue();
+  const command = status?.kind === 'unavailable' ? commandIn(status.message) : null;
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focusKey === 0) return;
+    const frame = requestAnimationFrame(() => root.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [focusKey]);
+  // Concluir, Voltar às abertas, Reabrir e Não colar depois tiram o próprio botão da tela: o foco vem para o detalhe, que segue com a issue.
+  const focusDetail = () => root.current?.focus({ preventScroll: true });
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto">
-      <Flexbox gap={16} padding={24} className="mx-auto w-full max-w-[1280px]">
-        <Flexbox horizontal align="center" justify="space-between" gap={12}>
-          <Text as="h1" fontSize={20} weight={600} style={{ margin: 0 }}>Issues</Text>
-          <Button
-            className={GREEN_BUTTON} disabled={!ready} title={ready ? undefined : 'O GitHub não está disponível agora.'} onClick={onNew}
-          >
-            New issue
-          </Button>
-        </Flexbox>
-
-        <Input
-          value={query} onChange={(e) => setQuery(e.target.value)} allowClear onClear={() => setQuery('')}
-          prefix={<Search aria-hidden className="size-4 text-[var(--ant-color-text-tertiary)]" />}
-          placeholder="Buscar por título ou #número" aria-label="Buscar issues" autoComplete="off"
-        />
-
-        <div className="overflow-hidden rounded-md border">
-          {!status || status.kind === 'unavailable' ? (
-            <Center gap={12} padding={32}>
-              <Text as="p" role="status" type="secondary" fontSize={14} style={{ margin: 0, textAlign: 'center' }}>
-                {status ? status.message : 'Conectando ao GitHub…'}
-              </Text>
-              {status && (
-                <Button loading={store.refreshing} disabled={store.refreshing} onClick={() => void store.refresh()}>Tentar de novo</Button>
-              )}
-            </Center>
+    <div ref={root} tabIndex={-1} className="@container h-full min-h-0 overflow-x-hidden overflow-y-auto outline-none">
+      <div className="mx-auto w-full max-w-[928px] min-w-0 p-3 @[30rem]:p-6">
+        {status?.kind === 'ready' ? (
+          issue ? (
+            <IssueDetail issue={issue} start={start} executors={executors} onFocusOrchestrator={onFocusOrchestrator} onDone={focusDetail} />
           ) : (
-            <>
-              <Flexbox
-                horizontal align="center" justify="space-between" gap={16} height={48} paddingInline={16}
-                className="border-b bg-[var(--ant-color-fill-quaternary)]"
-              >
-                <Flexbox horizontal align="center" gap={16} role="group" aria-label="Estado">
-                  {stateButton('open', 'Open', open.length + pending.length)}
-                  {stateButton('closed', 'Closed', closed.length)}
-                </Flexbox>
-                <Flexbox horizontal align="center" gap={16}>
-                  <LabelMenu labels={store.labels} selected={wanted} onChange={setWanted}>
-                    <Button type="text" size="small" className="h-auto! gap-1! px-1! text-[13px]! text-[var(--ant-color-text-secondary)]!" aria-label={`Filtrar por labels${wanted.length ? ` (${wanted.length} marcadas)` : ''}`}>
-                      Labels
-                      {wanted.length > 0 && (
-                        <span className="rounded-full bg-[var(--ant-color-fill-secondary)] px-1.5 text-[11px] leading-4 text-[var(--ant-color-text)] tabular-nums">{wanted.length}</span>
-                      )}
-                      <ChevronDown aria-hidden className="size-3.5" />
-                    </Button>
-                  </LabelMenu>
-                  <DropdownMenu
-                    placement="bottomRight"
-                    items={ORDERS.map((o) => ({
-                      key: o.key, label: o.label, icon: o.key === order ? Check : undefined, onClick: () => setOrder(o.key),
-                    }))}
-                  >
-                    <Button type="text" size="small" className="h-auto! gap-1! px-1! text-[13px]! text-[var(--ant-color-text-secondary)]!" aria-label={`Ordenar: ${ORDERS.find((o) => o.key === order)!.label}`}>
-                      {ORDERS.find((o) => o.key === order)!.label}
-                      <ChevronDown aria-hidden className="size-3.5" />
-                    </Button>
-                  </DropdownMenu>
-                </Flexbox>
-              </Flexbox>
-
-              {empty ? (
-                <Center gap={8} padding={32}>
-                  {filtering && <Search aria-hidden className="size-6 text-[var(--ant-color-text-tertiary)]" />}
-                  <Text as="p" type="secondary" fontSize={14} style={{ margin: 0 }}>
-                    {filtering ? 'Nenhuma issue corresponde à busca.' : tab === 'open' ? 'Nenhuma issue aberta.' : 'Nenhuma issue fechada.'}
-                  </Text>
-                </Center>
-              ) : (
-                <ul aria-label={tab === 'open' ? 'Issues abertas' : 'Issues fechadas'}>
-                  {tab === 'open' && pending.map((p) => <PendingRow key={p.localId} pending={p} />)}
-                  {rows.map((issue) => <IssueRow key={issue.number} issue={issue} now={now} start={start} />)}
-                </ul>
+            <Center gap={12} padding={32}>
+              <Text as="p" fontSize={14} style={{ ...SECONDARY, margin: 0 }}>Nenhuma issue aberta.</Text>
+              <Button className={FOCUS_RING} onClick={onNew}>Nova issue</Button>
+            </Center>
+          )
+        ) : status ? (
+          // A indisponibilidade só é dita aqui (a faixa mostra uma linha curta com "Ver detalhes").
+          <Center gap={12} padding={32}>
+            <Text as="h1" fontSize={20} weight={600} lineHeight="28px" style={{ margin: 0 }}>GitHub indisponível</Text>
+            {/* As ações ficam juntas sob a mensagem: com comando, o Rodar no Terminal é a principal; sem, o Tentar de novo. */}
+            <GithubMessage message={status.message} size={14}>
+              {command && (
+                <Button type="primary" size="small" className={FOCUS_RING} icon={<SquareTerminal className="size-3.5" />} onClick={() => onRunInTerminal(command)}>
+                  Rodar no Terminal
+                </Button>
               )}
-            </>
-          )}
-        </div>
-      </Flexbox>
+              <Button
+                type={command ? undefined : 'primary'} size="small" className={FOCUS_RING} loading={store.refreshing} disabled={store.refreshing}
+                onClick={() => void store.refresh()}
+              >
+                Tentar de novo
+              </Button>
+            </GithubMessage>
+          </Center>
+        ) : (
+          <Center gap={12} padding={32}>
+            <Text as="p" role="status" fontSize={14} style={{ ...SECONDARY, margin: 0, textAlign: 'center' }}>Conectando ao GitHub…</Text>
+          </Center>
+        )}
+      </div>
     </div>
   );
 }
 
 /**
- * Uma issue: ícone, título (abre no GitHub) com a marca de em andamento ou de próxima e as labels em pílula, "#N · autor abriu há X"
- * (ou "fechada há X"), comentários e o Iniciar (a em andamento não tem).
+ * Cabeçalho (título, estado, quem abriu, comentários, labels e as ações), descrição e comentários de uma issue. Os tempos ("há X") vêm do
+ * relógio das Issues pelo `Ago`: só eles se atualizam, sem renderizar de novo a descrição e os comentários. `onDone` leva o foco ao detalhe
+ * depois de uma ação que some com o próprio botão.
  */
-function IssueRow({ issue, now, start }: { issue: Issue; now: number; start: StartIssue }) {
+function IssueDetail({ issue, start, executors, onFocusOrchestrator, onDone }: {
+  issue: Issue; start: StartIssue; executors: readonly ExecutorNode[]; onFocusOrchestrator: () => void; onDone: () => void;
+}) {
   const store = useIssues();
   const isOpen = issue.state === 'open';
   const isActive = isOpen && store.active?.number === issue.number;
   const isNext = isOpen && store.next === issue.number;
-  const when = isOpen ? `${issue.author} abriu ${relativeTime(issue.createdAt, now)}` : `fechada ${relativeTime(issue.closedAt ?? issue.updatedAt, now)}`;
+  const body = issue.body.trim();
+  const hasBar = isOpen ? !(isActive && store.draft.includes(issue.number)) : true;
   return (
-    <li className="group flex items-start gap-3 border-t px-4 py-3 first:border-t-0 hover:bg-muted">
-      <span className="pt-0.5"><IssueIcon kind={isOpen ? 'open' : 'closed'} /></span>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-          <button
-            type="button" onClick={() => void backend.githubOpen(issue.url).catch(report)} title="Abrir no GitHub"
-            className="min-w-0 text-left text-[14px] font-semibold text-[var(--ant-color-text)] outline-none hover:text-[var(--ant-color-primary)] hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
-          >
+    <article aria-label={`Issue #${issue.number}`} className="@container flex min-w-0 flex-col">
+      <header className="flex flex-col gap-3 border-b pb-4">
+        <div className="min-w-0">
+          <Text as="h1" fontSize={20} weight={600} lineHeight="28px" style={{ margin: 0, overflowWrap: 'anywhere', textWrap: 'balance' }}>
             {issue.title}
-          </button>
-          {isActive && <ActiveMark />}
-          {isNext && <NextMark pill />}
-          {issue.labels.map((l) => <LabelPill key={l.name} label={l} />)}
+            <span className="ml-2 font-normal" style={SECONDARY}>{`#${issue.number}`}</span>
+          </Text>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px]" style={SECONDARY}>
+            {isActive ? <ActiveMark size="middle" /> : <StateMark closed={!isOpen} size="middle" />}
+            {isNext && <NextMark size="middle" />}
+            <span>
+              {`${issue.author} abriu `}<Ago iso={issue.createdAt} />
+              {!isOpen && <>{' · fechada '}<Ago iso={issue.closedAt ?? issue.updatedAt} /></>}
+            </span>
+            {issue.comments > 0 && (
+              <span className="inline-flex items-center gap-1">
+                <MessageSquare aria-hidden className="size-3.5" />
+                {count(issue.comments, 'comentário', 'comentários')}
+              </span>
+            )}
+            {issue.labels.map((l) => <LabelPill key={l.name} label={l} />)}
+            <ActionIcon
+              size="small" icon={ExternalLink} className={FOCUS_RING} aria-label={`Abrir a issue #${issue.number} no GitHub`} title="Abrir no GitHub"
+              onClick={() => void backend.githubOpen(issue.url).catch(report)}
+            />
+          </div>
         </div>
-        <Text as="div" type="secondary" fontSize={12} style={{ marginTop: 4 }}>
-          <span className="font-mono">{`#${issue.number}`}</span>{` · ${when}`}
-        </Text>
-      </div>
-      <Flexbox horizontal align="center" gap={12} flex="none">
-        {issue.comments > 0 && (
-          <span className="inline-flex items-center gap-1 text-[12px] text-muted-foreground" aria-label={`${issue.comments} ${issue.comments === 1 ? 'comentário' : 'comentários'}`}>
-            <MessageSquare aria-hidden className="size-3.5" />
-            {issue.comments}
-          </span>
+        {/* Os botões fluem numa linha abaixo do título e quebram só quando preciso; a dica do Colar (`order-last basis-full`) fica numa linha
+            abaixo deles, à esquerda como eles. Concluir e Voltar às abertas moram no painel da em andamento: aqui só o Reabrir da fechada.
+            A barra só existe com botão: o Colar (aberta, menos a em andamento ainda não enviada, que o `StartButton` omite) ou o Reabrir. */}
+        {hasBar && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 [&_span.order-last]:text-left!">
+            {isOpen && <StartButton issue={issue} start={start} variant="primary" />}
+            {!isActive && <IssueActions issue={issue} onDone={onDone} />}
+          </div>
         )}
-        {/* O esconder fica no invólucro: no botão, o estilo de desabilitado do Lobe UI venceria. */}
-        {isOpen && !isActive && <span className={START_SLOT}><StartButton issue={issue} start={start} /></span>}
-      </Flexbox>
-    </li>
+      </header>
+
+      {isActive && <OrchestratorPanel issue={issue} start={start} executors={executors} onFocusOrchestrator={onFocusOrchestrator} onDone={onDone} />}
+      {isNext && !isActive && (
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-[8px] border bg-card px-3 py-2">
+          <Clock aria-hidden className="size-4 shrink-0" style={SECONDARY} />
+          <Text as="span" role="status" fontSize={14} style={SECONDARY} className="min-w-0 flex-1">
+            Será colada sozinha quando o orquestrador terminar a rodada
+          </Text>
+          <Button
+            size="small" className={FOCUS_RING}
+            onClick={() => {
+              onDone();
+              if (start) start.later(null);
+              else store.setNext(null);
+            }}
+          >
+            Não colar depois
+          </Button>
+        </div>
+      )}
+
+      <div className={`${MEASURE} pt-4`}>
+        {body ? (
+          <Suspense fallback={<Text as="p" role="status" fontSize={14} style={{ ...SECONDARY, margin: 0 }}>Carregando a descrição…</Text>}>
+            <div className={MARKDOWN_FOCUS}><IssueMarkdown fontSize={14}>{body}</IssueMarkdown></div>
+          </Suspense>
+        ) : <Text as="p" fontSize={14} style={{ ...SECONDARY, margin: 0 }}>Sem descrição.</Text>}
+      </div>
+
+      {issue.comments > 0 && <Comments issue={issue} />}
+    </article>
   );
 }
 
-/** Uma criação que ainda não chegou ao GitHub: enviando, ou falhou com Tentar de novo e Descartar. */
-function PendingRow({ pending }: { pending: PendingIssue }) {
-  const store = useIssues();
-  const failed = pending.status === 'failed';
+// Os estados vivos dos executores, na ordem em que o resumo os conta.
+const LIVE: NodeState[] = ['running', 'queued', 'awaiting-choice', 'awaiting-orchestrator'];
+
+/** "2 executando · 1 na fila" com os rótulos de `STATES`, ou "Nenhum executor rodando". Os executores não são ligados a uma issue. */
+function executorsSummary(executors: readonly ExecutorNode[]): string {
+  const parts = LIVE
+    .map((state) => [executors.filter((e) => e.state === state).length, STATES[state].label] as const)
+    .filter(([n]) => n)
+    .map(([n, label]) => `${n} ${label}`);
+  return parts.length ? parts.join(' · ') : 'Nenhum executor rodando';
+}
+
+/**
+ * Painel "Com o orquestrador" da issue em andamento: o que o orquestrador faz agora (no mesmo vocabulário do cartão da faixa), os executores
+ * vivos e as ações da issue (Ir ao orquestrador, Concluir, Voltar às abertas). Bloco `bg-card` com filete de 1 px, sem sombra nem acento na
+ * borda (Flat-Bench Rule). Os executores são do orquestrador como um todo, não desta issue: o texto diz "executores agora".
+ */
+function OrchestratorPanel({ issue, start, executors, onFocusOrchestrator, onDone }: {
+  issue: Issue; start: StartIssue; executors: readonly ExecutorNode[]; onFocusOrchestrator: () => void; onDone: () => void;
+}) {
+  const { active, draft } = useIssues();
+  const headingId = useId();
+  if (!active) return null;
+  // O estado vem do rascunho do orquestrador (ver o cartão Em andamento da faixa).
+  const drafted = draft.includes(active.number);
+  const others = drafted ? draft.filter((n) => n !== active.number) : [];
+  const busy = start?.busy ?? false;
+  const alive = executors.filter((e) => !FINISHED.includes(e.state));
   return (
-    <li className="group flex items-start gap-3 border-t px-4 py-3 first:border-t-0 hover:bg-muted">
-      <span className="pt-0.5"><IssueIcon kind={pendingKind(pending)} /></span>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-          <span className="min-w-0 text-[14px] font-semibold">{pending.title}</span>
-          {pendingLabels(pending.labels, store.labels).map((l) => <LabelPill key={l.name} label={l} />)}
-        </div>
-        <Text as="div" type={failed ? 'danger' : 'secondary'} fontSize={12} style={{ marginTop: 4 }}>
-          {failed ? `falhou: ${pending.error ?? 'erro desconhecido'}` : 'enviando…'}
-        </Text>
+    <section aria-labelledby={headingId} className="mt-4 flex flex-col gap-3 rounded-[8px] border bg-card p-3 @[30rem]:p-4">
+      <Text as="h2" id={headingId} fontSize={14} weight={600} style={{ margin: 0 }}>Com o orquestrador</Text>
+      <Text as="div" role="status" fontSize={14} style={SECONDARY} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {!drafted && active.turned && busy && (
+          <span aria-hidden className="inline-flex gap-[3px]">
+            {[0, 200, 400].map((delay) => (
+              <span key={delay} className="size-1 rounded-full motion-safe:animate-pulse" style={{ background: GH.amber, animationDelay: `${delay}ms` }} />
+            ))}
+          </span>
+        )}
+        <span>
+          {drafted
+            ? 'Colada no rascunho do orquestrador, aguardando você enviar'
+            : !active.turned ? 'Não está no rascunho do orquestrador. Cole de novo para enviar.' : busy ? 'Orquestrador trabalhando' : 'Orquestrador livre'}
+          {' · '}
+          <span className="tabular-nums">{'no orquestrador '}<Ago iso={new Date(active.since).toISOString()} /></span>
+        </span>
+      </Text>
+      {others.length > 0 && <Text as="div" fontSize={14} style={SECONDARY}>{`O rascunho também tem ${issueList(others)}.`}</Text>}
+      <Text as="div" fontSize={14} style={SECONDARY}>
+        {`Executores agora: ${executorsSummary(alive)}`}
+      </Text>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button className={FOCUS_RING} disabled={!start} title={start ? undefined : 'O orquestrador não está aberto.'} icon={<SquareTerminal className="size-4" />} onClick={onFocusOrchestrator}>
+          Ir ao orquestrador
+        </Button>
+        <IssueActions issue={issue} onDone={onDone} />
       </div>
-      {failed && (
-        <Flexbox horizontal align="center" gap={4} flex="none" className={HOVER_ONLY}>
-          <FailedActions pending={pending} retry={store.retry} discard={store.discard} />
-        </Flexbox>
+    </section>
+  );
+}
+
+type Loaded = { number: number; items: IssueComment[] | null; error: string | null; loading: boolean };
+
+/**
+ * Comentários da issue, do mais antigo ao mais novo, carregados do GitHub. Recarrega quando a issue muda e quando a contagem dela muda
+ * (alguém comentou); a resposta de um pedido que já não vale (outra issue, ou outra contagem no meio) é descartada. Com a lista já na tela,
+ * o recarregamento não a troca por "Carregando".
+ */
+function Comments({ issue }: { issue: Issue }) {
+  const [view, setView] = useState<Loaded>({ number: issue.number, items: null, error: null, loading: true });
+  const [attempt, setAttempt] = useState(0);
+  const headingId = useId();
+  useEffect(() => {
+    let current = true;
+    // Os comentários da issue anterior não valem para esta.
+    const keep = (v: Loaded) => (v.number === issue.number ? v.items : null);
+    setView((v) => ({ number: issue.number, items: keep(v), error: null, loading: true }));
+    backend.githubIssueComments(issue.number).then(
+      (items) => current && setView({ number: issue.number, items, error: null, loading: false }),
+      (e) => current && setView((v) => ({ number: issue.number, items: keep(v), error: message(e), loading: false })),
+    );
+    return () => {
+      current = false;
+    };
+  }, [issue.number, issue.comments, attempt]);
+  const mine = view.number === issue.number ? view : null;
+  const items = mine?.items ?? null;
+  return (
+    <section aria-labelledby={headingId} className="mt-8 border-t pt-4">
+      <Text as="h2" id={headingId} fontSize={14} weight={600} style={{ margin: 0 }}>
+        Comentários
+        <span className="ml-2 font-normal tabular-nums" style={SECONDARY}>{issue.comments}</span>
+      </Text>
+      {(!mine || (mine.loading && !items)) && (
+        <Text as="p" role="status" fontSize={14} style={{ ...SECONDARY, margin: '12px 0 0' }}>Carregando comentários…</Text>
       )}
-    </li>
+      {mine?.error && (
+        <div className="mt-3 flex flex-col items-start gap-2">
+          <GithubMessage message={mine.error} size={14} block />
+          <Button size="small" className={FOCUS_RING} loading={mine.loading} onClick={() => setAttempt((n) => n + 1)}>Tentar de novo</Button>
+        </div>
+      )}
+      {items && !items.length && <Text as="p" fontSize={14} style={{ ...SECONDARY, margin: '12px 0 0' }}>Nenhum comentário.</Text>}
+      {items && items.length > 0 && (
+        <ul className={`${MEASURE} mt-1 divide-y`}>
+          {items.map((c) => (
+            <li key={c.id} className="py-4">
+              <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 text-[12px]">
+                <span className="text-[14px] font-semibold">{c.author}</span>
+                <span style={SECONDARY}><Ago iso={c.createdAt} /></span>
+              </div>
+              <Suspense fallback={null}>
+                <div className={MARKDOWN_FOCUS}><IssueMarkdown fontSize={14}>{c.body}</IssueMarkdown></div>
+              </Suspense>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

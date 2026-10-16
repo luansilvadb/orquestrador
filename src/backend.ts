@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
-  Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GhStatus, GitBranches, GitDiff, GitState, GraphCommit, HunkRef, Issue,
+  Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GhStatus, GitBranches, GitDiff, GitState, GraphCommit, HunkRef, Issue, IssueComment,
   IssuesSnapshot, Moved, Options,
   Pasted, QuickOpen, ReplaceApplied, ReplacePreview, ReplaceQuery, ReplaceRequest, ReviewDiff, SearchFilter, SearchOptions, SearchResults, Snapshot, UpdateStatus,
 } from './types';
@@ -146,6 +146,8 @@ export const backend = {
   // Devolve a issue criada (ou com o estado novo), já com número e URL.
   githubCreateIssue: (title: string, body: string, labels: string[]) => call<Issue>('github_create_issue', { title, body, labels }),
   githubSetIssueState: (number: number, open: boolean) => call<Issue>('github_set_issue_state', { number, open }),
+  // Os comentários da issue, do mais antigo ao mais novo; o número que não existe vem como erro em português.
+  githubIssueComments: (number: number) => call<IssueComment[]>('github_issue_comments', { number }),
   // Abre no navegador padrão um endereço `https://github.com/...` (a issue, ou a lista de issues do repositório). Outro endereço é recusado.
   githubOpen: (url: string) => call<void>('github_open', { url }),
 };

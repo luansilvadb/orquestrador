@@ -153,20 +153,34 @@ pub fn turn_end(payload: &str, prompt: &str) -> Option<String> {
 }
 
 /// O que um sinal da pasta `orch-hook` diz da rodada do orquestrador.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum OrchTurn {
-    Start,
+    /// Começo de rodada, com o texto que foi enviado (o campo `prompt` do hook), se veio.
+    Start(Option<String>),
     End,
     Ignore,
 }
 
+/// Quanto do texto enviado vai no evento `orchestrator-turn`: o suficiente para a tela reconhecer o que colou.
+const PROMPT_MAX: usize = 8 * 1024;
+
 /// Classifica o JSON que o `--hook` gravou para o orquestrador. Os dois CLIs mandam o mesmo formato, com
-/// `hook_event_name` (medido no Claude Code 2.1.301 e no Codex 0.162.1): `UserPromptSubmit` começa a rodada e
-/// `Stop` a termina. O resto (JSON quebrado, outro evento, um `notify`) não muda nada.
+/// `hook_event_name` (medido no Claude Code 2.1.301 e no Codex 0.162.1): `UserPromptSubmit` começa a rodada, com o
+/// texto enviado em `prompt` (nos dois), e `Stop` a termina. O resto (JSON quebrado, outro evento, um `notify`) não
+/// muda nada. O `prompt` é cortado em `PROMPT_MAX` bytes, num limite de caractere.
 pub fn orchestrator_turn(payload: &str) -> OrchTurn {
     let v: Value = serde_json::from_str(payload).unwrap_or_default();
     match v["hook_event_name"].as_str() {
-        Some("UserPromptSubmit") => OrchTurn::Start,
+        Some("UserPromptSubmit") => {
+            let prompt = v["prompt"].as_str().map(|p| {
+                let mut end = p.len().min(PROMPT_MAX);
+                while !p.is_char_boundary(end) {
+                    end -= 1;
+                }
+                p[..end].to_string()
+            });
+            OrchTurn::Start(prompt)
+        }
         Some("Stop") => OrchTurn::End,
         _ => OrchTurn::Ignore,
     }
@@ -433,7 +447,7 @@ impl Core {
         let mut inner = self.inner.lock().unwrap();
         // A rodada interrompida não manda sinal de fim (ver `ESC`): o Esc no orquestrador ocupado conta como fim.
         if id == ORCHESTRATOR && data == ESC {
-            self.set_busy(&mut inner, false);
+            self.set_busy(&mut inner, false, None);
         }
         if let Some(term) = inner.slots.get_mut(id).and_then(|s| s.term.as_mut()) {
             term.write(data.as_bytes());
@@ -445,11 +459,16 @@ impl Core {
         self.inner.lock().unwrap().busy
     }
 
-    /// Troca o estado da rodada do orquestrador e, só se mudou, emite `orchestrator-turn`.
-    fn set_busy(&self, inner: &mut Inner, busy: bool) {
+    /// Troca o estado da rodada do orquestrador e, só se mudou, emite `orchestrator-turn`. O `prompt` (o texto
+    /// enviado) só vai no começo da rodada, e só se o hook o trouxe.
+    fn set_busy(&self, inner: &mut Inner, busy: bool, prompt: Option<String>) {
         if inner.busy != busy {
             inner.busy = busy;
-            (self.emit)("orchestrator-turn", json!({ "busy": busy }));
+            let mut payload = json!({ "busy": busy });
+            if let Some(prompt) = prompt.filter(|_| busy) {
+                payload["prompt"] = Value::String(prompt);
+            }
+            (self.emit)("orchestrator-turn", payload);
         }
     }
 
@@ -465,8 +484,8 @@ impl Core {
             let Ok(payload) = std::fs::read_to_string(&file) else { break };
             let _ = std::fs::remove_file(&file);
             match orchestrator_turn(&payload) {
-                OrchTurn::Start => self.set_busy(inner, true),
-                OrchTurn::End => self.set_busy(inner, false),
+                OrchTurn::Start(prompt) => self.set_busy(inner, true, prompt),
+                OrchTurn::End => self.set_busy(inner, false, None),
                 OrchTurn::Ignore => {}
             }
         }
@@ -527,7 +546,7 @@ impl Core {
         inner.seen.clear();
         inner.choice = None;
         // Orquestrador encerrado conta como livre.
-        self.set_busy(inner, false);
+        self.set_busy(inner, false, None);
         if let Some(warning) = inner.session.take().and_then(|s| s.remove()) {
             eprintln!("{warning}");
         }
@@ -898,15 +917,32 @@ mod tests {
     fn rodada_do_orquestrador_claude() {
         let start = r#"{"session_id":"7506e422","transcript_path":"C:\\Users\\x\\.claude\\projects\\p\\7506e422.jsonl","cwd":"C:\\proj","prompt_id":"063ae18d","permission_mode":"bypassPermissions","hook_event_name":"UserPromptSubmit","prompt":"responda apenas OK"}"#;
         let end = r#"{"session_id":"7506e422","transcript_path":"C:\\Users\\x\\.claude\\projects\\p\\7506e422.jsonl","cwd":"C:\\proj","prompt_id":"063ae18d","permission_mode":"bypassPermissions","effort":{"level":"medium"},"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"OK","background_tasks":[],"session_crons":[]}"#;
-        assert_eq!(orchestrator_turn(start), OrchTurn::Start);
+        assert_eq!(orchestrator_turn(start), OrchTurn::Start(Some("responda apenas OK".into())));
         assert_eq!(orchestrator_turn(end), OrchTurn::End);
+    }
+
+    #[test]
+    fn prompt_da_rodada_presente_ausente_e_cortado() {
+        let sem = r#"{"hook_event_name":"UserPromptSubmit"}"#;
+        assert_eq!(orchestrator_turn(sem), OrchTurn::Start(None));
+        let vazio = r#"{"hook_event_name":"UserPromptSubmit","prompt":""}"#;
+        assert_eq!(orchestrator_turn(vazio), OrchTurn::Start(Some(String::new())));
+        let nao_texto = r#"{"hook_event_name":"UserPromptSubmit","prompt":5}"#;
+        assert_eq!(orchestrator_turn(nao_texto), OrchTurn::Start(None));
+        // Corte no limite: 'é' tem 2 bytes e atravessa o byte PROMPT_MAX, então o corte recua para antes dele.
+        let longo = format!("{}é{}", "a".repeat(PROMPT_MAX - 1), "b".repeat(10));
+        let payload = json!({ "hook_event_name": "UserPromptSubmit", "prompt": longo }).to_string();
+        let OrchTurn::Start(Some(cortado)) = orchestrator_turn(&payload) else { panic!("sem prompt") };
+        assert_eq!(cortado, "a".repeat(PROMPT_MAX - 1));
+        let exato = json!({ "hook_event_name": "UserPromptSubmit", "prompt": "a".repeat(PROMPT_MAX) }).to_string();
+        assert_eq!(orchestrator_turn(&exato), OrchTurn::Start(Some("a".repeat(PROMPT_MAX))));
     }
 
     #[test]
     fn rodada_do_orquestrador_codex() {
         let start = r#"{"session_id":"01a14323","turn_id":"01a14323-357a","transcript_path":"C:\\Users\\x\\.codex\\sessions\\r.jsonl","cwd":"C:\\proj","hook_event_name":"UserPromptSubmit","model":"gpt-6.1-sol","permission_mode":"bypassPermissions","prompt":"responda apenas OK"}"#;
         let end = r#"{"session_id":"01a14323","turn_id":"01a14323-357a","transcript_path":"C:\\Users\\x\\.codex\\sessions\\r.jsonl","cwd":"C:\\proj","hook_event_name":"Stop","model":"gpt-6.1-sol","permission_mode":"bypassPermissions","stop_hook_active":false,"last_assistant_message":"OK"}"#;
-        assert_eq!(orchestrator_turn(start), OrchTurn::Start);
+        assert_eq!(orchestrator_turn(start), OrchTurn::Start(Some("responda apenas OK".into())));
         assert_eq!(orchestrator_turn(end), OrchTurn::End);
         // O `notify` da rodada do título não chega a esta pasta (a rodada do título não dispara hook), mas, se
         // chegasse, não mudaria nada.

@@ -1,15 +1,12 @@
-// Aba Nova issue da área central, no estilo da página New issue do GitHub: título (obrigatório), a descrição com Escrever e Visualizar
-// (Markdown do Lobe UI), o seletor de labels da faixa, e Cancelar e "Criar issue". O texto fica no editor (`draft`), não aqui: mover a aba
-// de grupo remonta este componente sem perder nada. Ctrl+Enter cria; Ctrl+W fecha (com a confirmação do editor, se houver texto).
-import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+// Aba Nova issue da área das Issues (`issues-area.tsx`), com o visual do app (botão primário branco): título (obrigatório), a descrição com Escrever e Visualizar
+// (Markdown do Lobe UI), o seletor de labels da faixa, e Cancelar e "Criar issue". O texto fica na área (`draft`), não aqui: remontar
+// este componente não perde nada. Ctrl+Enter cria; Ctrl+W fecha (com a confirmação da área, se houver texto).
+import { Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { Flexbox } from '@lobehub/ui';
-import { Button, Input, TabsIndicator, TabsList, TabsRoot, TabsTab, Text, TextArea } from '@lobehub/ui/base-ui';
-import { GREEN_BUTTON, LabelChips } from './issue-ui';
+import { Button, Input, TabsIndicator, TabsList, TabsRoot, TabsTab, Text, TextArea, toast } from '@lobehub/ui/base-ui';
+import { backend, message } from './backend';
+import { FIELD_FOCUS, FOCUS_BLUE, FOCUS_RING, FOCUS_RING_INSET,IssueMarkdown, LabelChips, SECONDARY } from './issue-ui';
 import { useIssues, type NewIssue } from './issues-store';
-
-// O Markdown do Lobe UI (com os plugins dele) dobra o pacote principal: só carrega na primeira vez que a aba Visualizar abre.
-// O componente é o mesmo `Markdown` de `@lobehub/ui`, pelo caminho do módulo dele (`es/Markdown/index`), para o Vite separar o pedaço.
-const Markdown = lazy(() => import('@lobehub/ui/es/Markdown/index'));
 
 export type IssueDraft = NewIssue;
 export const EMPTY_DRAFT: IssueDraft = { title: '', body: '', labels: [] };
@@ -21,9 +18,9 @@ export function NewIssueForm({ draft, onChange, focusKey, onCreated, onClose }: 
   onChange: (draft: IssueDraft) => void;
   /** Muda a cada abertura da aba: o título recebe o foco. */
   focusKey: number;
-  /** A issue foi para o store: o editor fecha esta aba e ativa a aba Issues. */
+  /** A issue foi para o store: a área fecha esta aba e mostra o detalhe. */
   onCreated: () => void;
-  /** Cancelar e Ctrl+W: o editor fecha a aba (pergunta antes, se houver texto). */
+  /** Cancelar e Ctrl+W: a área fecha a aba (pergunta antes, se houver texto). */
   onClose: () => void;
 }) {
   const store = useIssues();
@@ -41,7 +38,16 @@ export function NewIssueForm({ draft, onChange, focusKey, onCreated, onClose }: 
 
   const create = () => {
     if (!canCreate) return;
-    store.create({ title: draft.title.trim(), body: draft.body.trim(), labels: draft.labels });
+    // O número só existe quando o GitHub responde: o aviso vem então, com a ação de abrir, e o detalhe passa a mostrá-la, a não ser que
+    // a seleção tenha mudado enquanto isso (quem escolheu outra issue nesse meio tempo não é interrompido).
+    const selected = store.latest().selected;
+    store.create({ title: draft.title.trim(), body: draft.body.trim(), labels: draft.labels }, (issue) => {
+      if (store.latest().selected === selected) store.select(issue.number);
+      toast.success({
+        title: `Issue #${issue.number} criada`, duration: 6000,
+        actions: [{ label: 'Abrir', variant: 'text', onClick: () => void backend.githubOpen(issue.url).catch((e) => toast.error({ title: message(e), duration: 7000 })) }],
+      });
+    });
     onCreated();
   };
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -51,7 +57,7 @@ export function NewIssueForm({ draft, onChange, focusKey, onCreated, onClose }: 
       e.stopPropagation();
       create();
     } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'w') {
-      // Nos campos, o Ctrl+W do editor não vale (ele ignora os campos de texto): esta aba fecha por aqui.
+      // Nos campos, o Ctrl+W global não vale (ignora os campos de texto): esta aba fecha por aqui.
       e.preventDefault();
       e.stopPropagation();
       onClose();
@@ -70,19 +76,19 @@ export function NewIssueForm({ draft, onChange, focusKey, onCreated, onClose }: 
           </label>
           <Input
             id="new-issue-title" ref={titleRef} value={draft.title} onChange={(e) => onChange({ ...draft, title: e.target.value })}
-            placeholder="Resumo curto da issue" autoComplete="off" aria-required="true"
+            placeholder="Resumo curto da issue" autoComplete="off" aria-required="true" className={FIELD_FOCUS}
           />
         </Flexbox>
 
         <Flexbox gap={6}>
           <Text as="span" id="new-issue-body-label" weight={600} fontSize={14}>Descrição</Text>
-          <div className="overflow-hidden rounded-md border">
+          <div className="overflow-hidden rounded-md border focus-within:border-[var(--focus-blue)]" style={{ '--focus-blue': FOCUS_BLUE } as CSSProperties}>
             <div className="relative h-9 border-b bg-[var(--ant-color-fill-quaternary)]">
               <TabsRoot variant="square" value={mode} onValueChange={(value: string) => setMode(value as 'write' | 'preview')} className="h-full gap-0">
                 <TabsList className="h-full flex-nowrap justify-start" style={{ gap: 0, boxShadow: 'none' }} aria-label="Modo da descrição">
                   <TabsIndicator />
-                  <TabsTab value="write" className="flex-none px-3">Escrever</TabsTab>
-                  <TabsTab value="preview" className="flex-none px-3">Visualizar</TabsTab>
+                  <TabsTab value="write" className={`flex-none px-3 ${FOCUS_RING_INSET}`}>Escrever</TabsTab>
+                  <TabsTab value="preview" className={`flex-none px-3 ${FOCUS_RING_INSET}`}>Visualizar</TabsTab>
                 </TabsList>
               </TabsRoot>
             </div>
@@ -90,17 +96,17 @@ export function NewIssueForm({ draft, onChange, focusKey, onCreated, onClose }: 
               <TextArea
                 variant="borderless" autoSize={{ minRows: 8, maxRows: 24 }} value={draft.body} onChange={(e) => onChange({ ...draft, body: e.target.value })}
                 placeholder="Descreva o problema ou a ideia. Aceita Markdown." aria-labelledby="new-issue-body-label"
-                className="rounded-none! font-mono! text-[12.5px]!"
+                className="rounded-none! text-[14px]!"
               />
             ) : (
               <div className="min-h-[180px] px-3 py-2.5" aria-label="Visualização da descrição">
                 {draft.body.trim()
                   ? (
-                    <Suspense fallback={<Text as="p" type="secondary" fontSize={14} style={{ margin: 0 }}>Carregando a visualização…</Text>}>
-                      <Markdown fontSize={14}>{draft.body}</Markdown>
+                    <Suspense fallback={<Text as="p" fontSize={14} style={{ ...SECONDARY, margin: 0 }}>Carregando a visualização…</Text>}>
+                      <IssueMarkdown fontSize={14}>{draft.body}</IssueMarkdown>
                     </Suspense>
                   )
-                  : <Text as="p" type="secondary" fontSize={14} style={{ margin: 0 }}>Nada para visualizar.</Text>}
+                  : <Text as="p" fontSize={14} style={{ ...SECONDARY, margin: 0 }}>Nada para visualizar.</Text>}
               </div>
             )}
           </div>
@@ -112,9 +118,9 @@ export function NewIssueForm({ draft, onChange, focusKey, onCreated, onClose }: 
         </Flexbox>
 
         <Flexbox horizontal align="center" justify="flex-end" gap={8}>
-          {blocked && <Text as="span" type="secondary" fontSize={12} className="mr-auto">{blocked}</Text>}
-          <Button onClick={onClose}>Cancelar</Button>
-          <Button className={GREEN_BUTTON} disabled={!canCreate} title="Criar a issue (Ctrl+Enter)" onClick={create}>Criar issue</Button>
+          {blocked && <Text style={SECONDARY} as="span" fontSize={12} className="mr-auto">{blocked}</Text>}
+          <Button className={FOCUS_RING} onClick={onClose}>Cancelar</Button>
+          <Button type="primary" className={FOCUS_RING} disabled={!canCreate} title="Criar a issue (Ctrl+Enter)" onClick={create}>Criar issue</Button>
         </Flexbox>
       </Flexbox>
     </div>

@@ -3,6 +3,7 @@
 import { Children, useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { Flexbox } from '@lobehub/ui';
 import { Text, Tooltip } from '@lobehub/ui/base-ui';
+import { SECONDARY } from './issue-ui';
 import { host } from './backend';
 import { CloseIcon, MaximizeIcon, MinimizeIcon, RestoreIcon } from './window-icons';
 
@@ -72,7 +73,7 @@ export function TitleBar({ connected, project, children }: { connected: boolean;
             <Text as="span" data-tauri-drag-region fontSize={13} weight={500} ellipsis title={project} className="min-w-0 shrink">
               {folderName(project)}
             </Text>
-            <Text as="span" type="secondary" fontSize={12} code ellipsis title={project} className="min-w-0 shrink select-text">
+            <Text as="span" fontSize={12} code ellipsis title={project} className="min-w-0 shrink select-text" style={SECONDARY}>
               {project}
             </Text>
           </>

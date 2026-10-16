@@ -119,11 +119,11 @@ export function Nav({ route, changed, onGo }: { route: Route; changed: number; o
     </Flexbox>
   );
   const gitLabel = changed ? `Git (${changed} ${changed === 1 ? 'arquivo alterado' : 'arquivos alterados'})` : 'Git';
-  // Contador no canto de baixo à direita do botão, com as medidas do badge do Antigravity (pílula de 12 px, fonte de 9 px) e a posição 19/5 px dentro do botão de 36 px. Sem filhos, o Badge é a própria pílula: o `style` troca o tamanho e a sombra do tema, e não há deslocamento para fora do canto.
+  // Contador no canto de baixo à direita do botão, com as medidas do badge do Antigravity (pílula de 12 px, fonte de 10 px, preta para dar contraste sobre o vermelho) e a posição 19/5 px dentro do botão de 36 px. Sem filhos, o Badge é a própria pílula: o `style` troca o tamanho e a sombra do tema, e não há deslocamento para fora do canto.
   const gitBadge = changed > 0 && (
     <Badge
       aria-hidden="true" count={changed} size="small" className="pointer-events-none absolute"
-      style={{ top: 19, right: 5, minWidth: 12, height: 12, padding: '0 3px', fontSize: 9, fontWeight: 600, lineHeight: '12px', borderRadius: 4, boxShadow: 'none' }}
+      style={{ top: 19, right: 5, minWidth: 12, height: 12, padding: '0 3px', fontSize: 10, fontWeight: 600, color: '#000', lineHeight: '12px', borderRadius: 4, boxShadow: 'none' }}
     />
   );
   return (
