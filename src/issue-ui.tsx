@@ -172,7 +172,7 @@ export function LabelPill({ name }: { name: string }) {
 const LABEL_ITEM = '[&_[role=menuitemcheckbox]]:h-[26px]! [&_[role=menuitemcheckbox]]:min-h-[26px]! [&_[role=menuitemcheckbox]]:py-0! [&_[role=menuitemcheckbox]]:px-[26px]! [&_[role=menuitemcheckbox]]:text-[13px]! [&_[role=menuitemcheckbox]]:leading-[26px]!';
 
 /**
- * Lista das labels em uso no projeto para marcar e desmarcar (o "+" da captura e do formulário), com a bolinha de cor de cada uma, e,
+ * Lista das labels em uso no projeto para marcar e desmarcar (o "+" do formulário), com a bolinha de cor de cada uma, e,
  * no fim, "Nova label…" (`onNew`). A lista fica aberta enquanto se marca; Esc ou clique fora fecha.
  */
 export function LabelMenu({ labels, selected, onChange, onNew, children }: {
@@ -194,7 +194,7 @@ export function LabelMenu({ labels, selected, onChange, onNew, children }: {
 }
 
 /**
- * O seletor de labels da captura e do formulário: as 3 mais usadas no projeto como chips que marcam e desmarcam (marcados, com fundo
+ * O seletor de labels do formulário: as 3 mais usadas no projeto como chips que marcam e desmarcam (marcados, com fundo
  * preenchido e borda), as outras marcadas também como chips, e o "+", que abre a lista de todas as labels em uso e o "Nova label…" (sem
  * nenhuma label no projeto, o "+" vai direto para o campo). O campo da label nova fica ao lado do "+": Enter marca a label (a grafia de
  * uma que já existe vale, sem diferenciar maiúsculas) e devolve o foco ao "+"; Esc desiste; sair do campo também.
@@ -220,7 +220,7 @@ export function LabelChips({ issues, selected, onChange }: {
     return () => cancelAnimationFrame(frame);
   }, [adding]);
   const close = () => {
-    // O foco vai ao "+" antes de o campo sumir: ele não sai do cartão da captura, que recolheria.
+    // O foco vai ao "+" antes de o campo sumir: não se perde no documento.
     group.current?.querySelector<HTMLElement>('[data-label-plus]')?.focus();
     setText('');
     setAdding(false);
@@ -247,7 +247,7 @@ export function LabelChips({ issues, selected, onChange }: {
           onChange={(e) => setText(e.target.value)} onBlur={() => setAdding(false)}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing || (e.key !== 'Enter' && e.key !== 'Escape')) return;
-            // Enter e Esc são só do campo: nem criam a issue nem limpam a captura.
+            // Enter e Esc são só do campo: não chegam ao formulário (nem criam a issue).
             e.preventDefault();
             e.stopPropagation();
             if (e.key === 'Enter') add();
@@ -260,7 +260,7 @@ export function LabelChips({ issues, selected, onChange }: {
   );
 }
 
-/** Chip de label que marca e desmarca (`aria-pressed`): bolinha e nome; marcado, com fundo preenchido, borda clara e o ✓ (não só cor). A captura, o formulário e o filtro da faixa usam. */
+/** Chip de label que marca e desmarca (`aria-pressed`): bolinha e nome; marcado, com fundo preenchido, borda clara e o ✓ (não só cor). O formulário e o filtro da faixa usam. */
 export function LabelToggle({ name, on, onToggle }: { name: string; on: boolean; onToggle: () => void }) {
   return (
     <Button

@@ -9,12 +9,12 @@
 // tem o motivo.
 import { useEffect, useId, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, CircleDot, Clock, ListFilter, Maximize2, RotateCcw, Search } from 'lucide-react';
-import { ActionIcon, Button, Input, Text, TextArea, toast } from '@lobehub/ui/base-ui';
+import { ActionIcon, Button, Input, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { message } from './backend';
 import { filterLabels, passesFilter, readSections, recentClosed, relativeTime, rovingStep, sortIssues, SECTIONS_DEFAULT, type IssueSections } from './issue-text';
 import {
-  ActiveMark, FIELD_FOCUS, FOCUS_BLUE, FOCUS_RING, FOCUS_RING_INSET, GH, IssueIcon, LabelChips, LabelToggle, SECONDARY, StartButton, useNow,
+  ActiveMark, FIELD_FOCUS, FOCUS_BLUE, FOCUS_RING, FOCUS_RING_INSET, GH, IssueIcon, LabelToggle, SECONDARY, StartButton, useNow,
   type StartIssue,
 } from './issue-ui';
 import { useDetailIssue, useIssues, type NewIssue } from './issues-store';
@@ -57,9 +57,9 @@ export function IssuesSidebar({ start, onShowDetail, onOpenEditor, captureReques
   start: StartIssue;
   /** Ativa a aba central Issues (o detalhe da issue escolhida); com `focus`, o foco vai para o detalhe. */
   onShowDetail: (focus: boolean) => void;
-  /** Abre a aba Nova issue com o que estava na captura. */
+  /** Abre a aba Nova issue com o título da captura. */
   onOpenEditor: (seed: NewIssue) => void;
-  /** Sobe a cada Ctrl+Shift+I: a captura ganha o foco e abre. */
+  /** Sobe a cada Ctrl+Shift+I: a captura ganha o foco. */
   captureRequest: number;
   /** Esc com a captura vazia depois do Ctrl+Shift+I: volta para onde estava. */
   onCaptureDismiss: () => void;
@@ -306,18 +306,15 @@ function FilterChips({ issues, selected, onChange }: {
 }
 
 /**
- * Captura rápida: o título sempre visível; com foco ou com algo escrito, o cartão expande com a descrição, as labels e o rodapé.
- * Enter no título cria; Shift+Enter vai para a descrição; na descrição, Enter quebra a linha e Ctrl+Enter cria; Esc limpa e recolhe.
+ * Captura rápida: só o título, para anotar rápido; a descrição e as labels ficam na aba Nova issue. Enter cria só com o título;
+ * Shift+Enter, Ctrl+Enter ou o botão à direita levam o título para a aba Nova issue; Esc limpa.
  * Criada, a captura limpa; se o backend recusar, o aviso diz o motivo e o texto fica.
- * Aberta pelo Ctrl+Shift+I (`focusRequest`), o Esc com o cartão vazio chama `onDismiss` (o App volta para a tela de antes); criar não sai
+ * Focada pelo Ctrl+Shift+I (`focusRequest`), o Esc com o campo vazio chama `onDismiss` (o App volta para a tela de antes); criar não sai
  * daqui, para anotar várias em seguida. Vale até o foco sair do cartão.
  */
 function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (seed: NewIssue) => void; focusRequest: number; onDismiss: () => void }) {
   const store = useIssues();
   const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [labels, setLabels] = useState<string[]>([]);
-  const [expanded, setExpanded] = useState(false);
   const [focused, setFocused] = useState(false);
   const [invalid, setInvalid] = useState(false);
   // Mensagem do título vazio: sobe a cada Enter recusado (a mensagem remonta e o leitor de tela a ouve de novo); 0 é sem mensagem.
@@ -325,27 +322,21 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
   const refusedId = useId();
   const card = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
-  const bodyRef = useRef<HTMLTextAreaElement>(null);
   // Um Enter repetido enquanto a issue é gravada não cria outra.
   const creating = useRef(false);
-  const open = expanded || title !== '' || body !== '' || labels.length > 0;
   const viaShortcut = useRef(false);
   useEffect(() => {
     if (!focusRequest) return;
     viaShortcut.current = true;
     titleRef.current?.focus();
-    setExpanded(true);
   }, [focusRequest]);
 
   const clear = () => {
     setRefused(0);
     setTitle('');
-    setBody('');
-    setLabels([]);
-    setExpanded(false);
   };
   // Título vazio não cria: o cartão sacode (só sem `prefers-reduced-motion`), a borda fica vermelha por um instante e, embaixo do campo, a
-  // mensagem diz o motivo (até digitar algo no título ou a captura recolher).
+  // mensagem diz o motivo (até digitar algo no título ou o foco sair da captura).
   const refuse = () => {
     setRefused((n) => n + 1);
     setInvalid(true);
@@ -363,8 +354,7 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
     if (creating.current) return;
     creating.current = true;
     try {
-      await store.create({ title: title.trim(), body: body.trim(), labels });
-      // O foco vem antes de limpar: focar o título expande o cartão, e a limpeza o recolhe de novo.
+      await store.create({ title: title.trim(), body: '', labels: [] });
       titleRef.current?.focus();
       clear();
     } catch (e) {
@@ -373,15 +363,14 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
       creating.current = false;
     }
   };
+  // Leva o título para a aba Nova issue, onde ficam a descrição e as labels.
   const toEditor = () => {
-    onOpenEditor({ title, body, labels });
+    onOpenEditor({ title, body: '', labels: [] });
     clear();
-    // O botão que tinha o foco sai junto com o cartão aberto e não há blur: sem isto a borda azul ficaria acesa.
     viaShortcut.current = false;
-    setFocused(false);
   };
   const cancel = () => {
-    if (viaShortcut.current && title === '' && body === '' && labels.length === 0) {
+    if (viaShortcut.current && title === '') {
       viaShortcut.current = false;
       clear();
       onDismiss();
@@ -393,10 +382,9 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
 
   const onTitleKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.nativeEvent.isComposing) return;
-    if (e.key === 'Enter' && e.shiftKey) {
+    if (e.key === 'Enter' && (e.shiftKey || e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      setExpanded(true);
-      requestAnimationFrame(() => bodyRef.current?.focus());
+      toEditor();
     } else if (e.key === 'Enter') {
       e.preventDefault();
       void create();
@@ -405,34 +393,18 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
       cancel();
     }
   };
-  const onBodyKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.nativeEvent.isComposing) return;
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      void create();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      cancel();
-    }
-  };
-  // Recolhe só quando o foco sai do cartão (a lista de labels abre fora dele, num portal, e não conta como saída).
-  const onFocusIn = () => {
-    setFocused(true);
-    setExpanded(true);
-  };
+  // Sair do cartão (não só do título para o botão) esquece a volta do Ctrl+Shift+I e a mensagem do título vazio.
   const onFocusOut = (e: FocusEvent<HTMLDivElement>) => {
-    const next = e.relatedTarget as Element | null;
-    if (next && (e.currentTarget.contains(next) || next.closest('[role="menu"]'))) return;
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
     viaShortcut.current = false;
     setRefused(0);
     setFocused(false);
-    setExpanded(false);
   };
 
   const border = invalid ? 'var(--ant-color-error)' : focused ? FOCUS_BLUE : 'var(--ant-color-border)';
   return (
     <div
-      ref={card} onFocus={onFocusIn} onBlur={onFocusOut}
+      ref={card} onFocus={() => setFocused(true)} onBlur={onFocusOut}
       className="@container mx-2 mb-2 flex-none rounded-md border bg-card transition-colors"
       style={{ borderColor: border }}
     >
@@ -453,32 +425,15 @@ function Capture({ onOpenEditor, focusRequest, onDismiss }: { onOpenEditor: (see
         {title === '' && !focused && (
           <span aria-hidden className="hidden shrink-0 text-[12px] text-[var(--ant-color-text-secondary)] @[15rem]:inline">Ctrl+Shift+I</span>
         )}
+        <ActionIcon
+          size="small" variant="borderless" icon={Maximize2} aria-label="Abrir no editor completo" title="Abrir no editor completo"
+          className={`shrink-0 ${FOCUS_RING}`} onClick={toEditor}
+        />
       </Flexbox>
       {refused > 0 && (
         <Text key={refused} as="div" id={refusedId} role="alert" type="danger" fontSize={12} lineHeight={1.35} style={{ paddingInline: 32, paddingBottom: 4 }}>
           Escreva um título para criar.
         </Text>
-      )}
-      {open && (
-        <Flexbox gap={6} paddingInline={8} className="pb-2">
-          <TextArea
-            ref={bodyRef} autoSize={{ minRows: 3, maxRows: 8 }} value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={onBodyKey}
-            placeholder="Descrição (opcional)" aria-label="Descrição da nova issue" className={`text-[13px]! ${FIELD_FOCUS}`}
-          />
-          <LabelChips issues={store.issues} selected={labels} onChange={setLabels} />
-          <Flexbox horizontal align="center" gap={8} className="mt-0.5">
-            <Flexbox flex={1} className="min-w-0">
-              <Text style={SECONDARY} as="span" fontSize={12} lineHeight={1.35}>Enter cria · Esc cancela</Text>
-              <Button
-                type="text" size="small" icon={<Maximize2 className="size-3.5" />} aria-label="Abrir no editor completo" title="Abrir no editor completo"
-                className={`self-start! px-1! text-[12px]! ${FOCUS_RING}`} onClick={toEditor}
-              >
-                Editor completo
-              </Button>
-            </Flexbox>
-            <Button size="small" type="primary" className={FOCUS_RING} onClick={() => void create()}>Criar</Button>
-          </Flexbox>
-        </Flexbox>
       )}
     </div>
   );
