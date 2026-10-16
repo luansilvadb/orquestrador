@@ -78,7 +78,7 @@ const tree = folder({
   'package.json': file(),
   assets: folder({ 'logo.png': file() }),
   dados: folder({ 'exportacao.json': file() }),
-  docs: folder({ 'design-system.md': file(), 'rascunho-painel.md': file(), 'apagado.md': file() }),
+  docs: folder({ 'design-system.md': file(), 'rascunho-painel.md': file(), 'apagado.md': file(), 'visual-comparador.md': file() }),
   src: folder({
     'App.tsx': file(), 'editor-workspace.tsx': file(), 'index.css': file(), 'longo.ts': file(), 'main.tsx': file(), 'conflito.ts': file(), 'sem-quebra.ts': file(),
     components: folder({ ui: folder({ 'button.tsx': file(), 'card.tsx': file() }) }),
@@ -95,6 +95,7 @@ const entry = (path: string, staged: GitKind | null, unstaged: GitKind | null): 
 const byPath = (a: GitFile, b: GitFile) => a.path.localeCompare(b.path, 'pt-BR');
 const files: GitFile[] = [
   entry('README.md', null, 'modified'),
+  entry('docs/visual-comparador.md', null, 'modified'),
   entry('docs/design-system.md', 'modified', null),
   entry('docs/rascunho-painel.md', null, 'untracked'),
   entry('src/App.tsx', 'modified', 'modified'),
@@ -121,6 +122,31 @@ const SEM_QUEBRA_WORK = [
   ...SEM_QUEBRA_HEAD.slice(0, 2), 'const novo1 = 1;', 'const novo2 = 2;', 'const novo3 = 3;', 'const novo4 = 4;',
   ...SEM_QUEBRA_HEAD.slice(2, 139), 'const troca1 = 1;', 'const troca2 = 2;', ...SEM_QUEBRA_HEAD.slice(140, 149), 'const v149 = 1490;',
 ].join('\n');
+// Fixture visual do comparador: linhas longas alteradas e dois intervalos com alturas diferentes entre os lados.
+const COMPARADOR_HEAD = [
+  '# Guia do comparador', '',
+  'Este parágrafo descreve o comportamento anterior do comparador lado a lado e tem uma linha comprida para testar a quebra automática dentro da coluna sem criar rolagem horizontal.',
+  'A calha mantém os números de linha e os sinais de cada lado.', '',
+  '## Trecho com mais linhas no novo',
+  'A versão antiga tinha somente esta explicação curta.',
+  '', '## Trecho com menos linhas no novo',
+  'Esta primeira linha explica em detalhes a configuração anterior do painel Git e como as alterações eram apresentadas ao usuário.',
+  'Esta segunda linha continua a explicação anterior com outro texto longo para que a quebra apareça nas duas colunas.',
+  'Esta terceira linha fecha o conteúdo antigo que será reduzido na nova versão.', '',
+  'O restante do documento permanece igual depois das mudanças.',
+];
+const COMPARADOR_WORK = [
+  '# Guia do comparador', '',
+  'Este parágrafo descreve o comportamento atual do comparador lado a lado e tem uma linha comprida que deve quebrar dentro da coluna mantendo a rolagem vertical e os números de linha visíveis.',
+  'A calha mantém os números de linha e os sinais de cada lado.', '',
+  '## Trecho com mais linhas no novo',
+  'A versão nova mostra o primeiro detalhe.',
+  'A versão nova mostra o segundo detalhe.',
+  'A versão nova mostra o terceiro detalhe.',
+  '', '## Trecho com menos linhas no novo',
+  'O texto atualizado resume a configuração do painel Git numa única linha mais comprida, que deve quebrar automaticamente dentro da coluna sem afetar a calha.', '',
+  'O restante do documento permanece igual depois das mudanças.',
+];
 // Conteúdo simulado de alguns arquivos da árvore, para a pesquisa. Linhas separadas por "\n".
 const TEXTS: Record<string, string> = {
   'README.md': '# Orquestrador\n\nUm app para Windows que põe CLIs de IA para trabalhar em papéis separados.\nO orquestrador lê o projeto e delega; os executores trabalham em paralelo.\n',
@@ -136,6 +162,7 @@ const TEXTS: Record<string, string> = {
   'src/conflito.ts': '<<<<<<< ours\nexport const v = 2;\n=======\nexport const v = 3;\n>>>>>>> theirs\n',
   'docs/apagado.md': '# Rascunho\n\nAjuste.\n',
   'src/sem-quebra.ts': SEM_QUEBRA_WORK,
+  'docs/visual-comparador.md': COMPARADOR_WORK.join('\n') + '\n',
 };
 
 /** Pasta pelo caminho relativo com "/" ('' é a raiz); arquivo ou caminho inexistente dá undefined. */
@@ -340,6 +367,7 @@ const GIT_TEXT: Record<string, { head: string; index: string }> = {
   },
   'src/editor-workspace.tsx': { head: EDITOR_HEAD, index: EDITOR_INDEX },
   'src/sem-quebra.ts': { head: SEM_QUEBRA_HEAD.join('\n') + '\n', index: SEM_QUEBRA_HEAD.join('\n') + '\n' },
+  'docs/visual-comparador.md': { head: COMPARADOR_HEAD.join('\n') + '\n', index: COMPARADOR_HEAD.join('\n') + '\n' },
 };
 type Hunk = { header: string; body: string[]; oldAt: number; oldLen: number; newAt: number; newLen: number; oldLines: string[]; newLines: string[] };
 const textLines = (text: string) => (text === '' ? [] : text.replace(/\n$/, '').split('\n'));
@@ -1058,5 +1086,6 @@ export const mock: Transport = {
   toggleMaximize: async () => {},
   close: async () => void (await debug.close()),
   isMaximized: async () => false,
+  setTitle: async (title) => { document.title = title; },
   onResized: async () => () => {},
 };

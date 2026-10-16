@@ -17,6 +17,7 @@ export interface Transport {
   /** Passa pelo `onCloseRequested`: a confirmação de fechamento vale também para o botão da barra. */
   close(): Promise<void>;
   isMaximized(): Promise<boolean>;
+  setTitle(title: string): Promise<void>;
   /** Chama `handler` a cada mudança de tamanho (maximizar e restaurar entram aqui); responde o cancelamento da escuta. */
   onResized(handler: () => void): Promise<() => void>;
 }
@@ -32,6 +33,7 @@ const tauri: Transport = {
   toggleMaximize: () => getCurrentWindow().toggleMaximize(),
   close: () => getCurrentWindow().close(),
   isMaximized: () => getCurrentWindow().isMaximized(),
+  setTitle: (title) => getCurrentWindow().setTitle(title),
   onResized: (handler) => getCurrentWindow().onResized(() => handler()),
 };
 

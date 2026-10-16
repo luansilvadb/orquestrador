@@ -35,6 +35,12 @@ export function folderName(path: string) {
 export function TitleBar({ connected, project, children }: { connected: boolean; project?: string; children?: ReactNode }) {
   const [maximized, setMaximized] = useState(false);
 
+  // O título nativo distingue as janelas na barra de tarefas.
+  useEffect(() => {
+    if (!connected) return;
+    void host().setTitle(project ? `${folderName(project)} - Orquestrador` : 'Orquestrador');
+  }, [connected, project]);
+
   // Antes de connect() não há janela para consultar: a consulta e a escuta só começam com a conexão pronta.
   useEffect(() => {
     if (!connected) return;

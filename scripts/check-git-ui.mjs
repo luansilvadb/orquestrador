@@ -99,6 +99,21 @@ const scrollBody = (page, top) => page.evaluate((t) => {
   const body = [...document.querySelectorAll('[data-body] .compare-body')].find((el) => el.getClientRects().length > 0);
   body.scrollTop = t;
 }, top);
+const visibleTopLine = (page) => page.evaluate(() => {
+  const body = [...document.querySelectorAll('[data-body] .compare-body')].find((el) => el.getClientRects().length > 0);
+  const stage = body.querySelector('.compare-stage');
+  const root = stage.querySelector('diffs-container').shadowRoot;
+  const top = body.getBoundingClientRect().top;
+  const rows = [...root.querySelectorAll('[data-line]')].map((el) => ({
+    line: Number(el.getAttribute('data-line')), type: el.getAttribute('data-line-type'), top: el.getBoundingClientRect().top,
+  })).filter((r) => r.top >= top - 19 && r.top <= top + 19);
+  return rows[0] ? { line: rows[0].line, type: rows[0].type, offset: rows[0].top - top } : null;
+});
+const assertSameTopLine = async (page, expected, message) => {
+  const actual = await visibleTopLine(page);
+  assert.ok(actual && expected && actual.line === expected.line && actual.type === expected.type && Math.abs(actual.offset - expected.offset) <= 19,
+    `${message}: topo antes ${JSON.stringify(expected)}, depois ${JSON.stringify(actual)}`);
+};
 // Cabeçalhos `@@` do patch lido: a ordem é a numeração da revisão (o índice do bloco).
 const headersOf = (review) => review.diff.patch.split('\n').filter((l) => l.startsWith('@@'));
 // Não há sobreposição: o centro do botão cai nele (ou num filho), e a caixa dele fica dentro do contêiner pedido.
@@ -308,12 +323,12 @@ scenario('comparador: Próximo e Anterior vão à linha real da mudança; F8 e S
   // Com o bloco 1 atual, um clique na linha 96 (do bloco 2) escolhe o bloco 2; depois, um clique na 28 escolhe o bloco 1.
   await page.keyboard.press('Shift+F8');
   await waitCounter(page, 'bloco 1 de 2');
-  await scrollBody(page, 1500);
+  await reveal(page, 96, 'change-deletion');
   const r96 = (await engineRows(page)).find((r) => r.line === 96 && r.type === 'change-deletion');
   assert.ok(r96 && r96.inView, `a linha 96 aparece na tela: ${JSON.stringify(r96)}`);
   await page.mouse.click(r96.x + 60, r96.y);
   await waitCounter(page, 'bloco 2 de 2');
-  await scrollBody(page, 300);
+  await reveal(page, 28, 'change-deletion');
   const r28 = (await engineRows(page)).find((r) => r.line === 28 && r.type === 'change-deletion');
   assert.ok(r28 && r28.inView, `a linha 28 aparece na tela: ${JSON.stringify(r28)}`);
   await page.mouse.click(r28.x + 60, r28.y);
@@ -394,10 +409,9 @@ scenario('comparador com inserção desigual e sem quebra de linha no fim: marca
   assert.equal(await page.evaluate(() => [...document.querySelectorAll('[data-body] .compare-body')].find((el) => el.getClientRects().length > 0).scrollTop), 300, 'polling igual não mexe na rolagem');
 });
 
-// Divisor do lado a lado (`.compare-sash`): um separador focável entre as colunas do motor. O vão é a trilha de 6 px do motor (`--compare-gap`)
-// e o pipe de 2 px fica no centro dele; a área de pegar tem 8 px e ocupa o palco todo, então pega em qualquer ponto da rolagem. Medido nas
-// colunas que o motor desenhou (o grid do split).
-const GAP = 6;
+// Divisor do lado a lado (`.compare-sash`): um separador focável no vão de 40 px entre as colunas do motor; a área de pegar tem 8 px e ocupa
+// o palco todo, então pega em qualquer ponto da rolagem. Medido nas colunas que o motor desenhou (o grid do split).
+const GAP = 40;
 const sash = (page) => view(page).locator('.compare-sash');
 const scrollOf = (page) => page.evaluate(() => [...document.querySelectorAll('[data-body] .compare-body')].find((el) => el.getClientRects().length > 0).scrollTop);
 // Contraste WCAG entre duas cores `rgb(r, g, b)`: (mais clara + 0,05) / (mais escura + 0,05), com a luminância relativa de cada uma.
@@ -412,19 +426,23 @@ const contrast = (a, b) => {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
 };
-// `pct` é a parte do lado esquerdo no total do palco (as duas colunas e o vão); `gap` é o vão entre elas; `center` é o meio do divisor e `mid` o meio do vão.
+// Mede a proporção nas caixas de texto (as calhas numéricas são trilhas separadas); o vão começa após o texto esquerdo e termina na calha direita.
 const splitGeo = (page) => page.evaluate(() => {
   const stage = [...document.querySelectorAll('[data-body] .compare-stage')].find((el) => el.getClientRects().length > 0);
   const root = stage.querySelector('diffs-container').shadowRoot;
-  const del = root.querySelector('pre[data-diff-type] > [data-deletions]').getBoundingClientRect();
-  const add = root.querySelector('pre[data-diff-type] > [data-additions]').getBoundingClientRect();
+  const pre = root.querySelector('pre[data-diff-type]');
+  const delText = pre.querySelector(':scope > [data-deletions] > [data-content]').getBoundingClientRect();
+  const addGutter = pre.querySelector(':scope > [data-additions] > [data-gutter]').getBoundingClientRect();
+  const addText = pre.querySelector(':scope > [data-additions] > [data-content]').getBoundingClientRect();
   const sash = stage.querySelector('.compare-sash').getBoundingClientRect();
   const s = stage.getBoundingClientRect();
+  const textWidth = delText.width + addText.width;
   return {
-    pct: (del.width / (del.width + (add.left - del.right) + add.width)) * 100,
-    gap: add.left - del.right,
+    pct: delText.width / textWidth * 100,
+    gap: addGutter.left - delText.right,
+    textWidth,
     center: sash.left + sash.width / 2,
-    mid: (del.right + add.left) / 2,
+    mid: (delText.right + addGutter.left) / 2,
     coversTop: sash.top <= s.top + 0.5,
     coversBottom: sash.bottom >= s.bottom - 0.5,
     stageLeft: s.left,
@@ -436,7 +454,7 @@ const sashPoint = (page) => page.evaluate(() => {
   const body = [...document.querySelectorAll('[data-body] .compare-body')].find((el) => el.getClientRects().length > 0).getBoundingClientRect();
   const sash = [...document.querySelectorAll('[data-body] .compare-sash')].find((el) => el.getClientRects().length > 0).getBoundingClientRect();
   const x = sash.left + sash.width / 2;
-  const y = body.top + body.height / 2;
+  const y = Math.max(body.top + 1, Math.min(body.bottom - 1, sash.top + sash.height / 2));
   return { x, y, hit: document.elementFromPoint(x, y)?.classList.contains('compare-sash') === true };
 });
 // Arrasta o divisor com o mouse até `x` (pixels da tela), em passos, a partir do ponto dele.
@@ -449,7 +467,7 @@ async function dragSashTo(page, x) {
   await page.mouse.up();
 }
 
-scenario('divisor: lado a lado tem um pipe de 2 px no vão de 6 px entre as colunas, na altura do arquivo, em 1920 e 1040; unificado não tem divisor', async ({ page }) => {
+scenario('divisor: lado a lado tem um pipe fino no vão de 40 px entre as colunas, na altura do arquivo, em 1920 e 1040; unificado não tem divisor', async ({ page }) => {
   await openGit(page);
   await row(page, 'unstaged', EDIT).dblclick();
   await view(page).waitFor();
@@ -460,7 +478,7 @@ scenario('divisor: lado a lado tem um pipe de 2 px no vão de 6 px entre as colu
   }));
   assert.deepEqual(aria, { role: 'separator', orientation: 'vertical', label: 'Divisor entre o original e o modificado', now: '50' }, 'separador focável, 50% de início');
   const line = await sash(page).evaluate((el) => ({ width: getComputedStyle(el, '::after').width, bg: getComputedStyle(el, '::after').backgroundColor }));
-  assert.deepEqual(line, { width: '2px', bg: 'rgb(110, 110, 110)' }, 'pipe de 2 px #6E6E6E em repouso');
+  assert.deepEqual(line, { width: '1px', bg: 'rgb(110, 110, 110)' }, 'pipe de 1 px #6E6E6E em repouso');
   // O pipe tem de se ver contra o fundo do editor (#1F1F1F): contraste WCAG de pelo menos 1,8:1, para não sumir na tela.
   const ratio = contrast(line.bg, 'rgb(31, 31, 31)');
   assert.ok(ratio >= 1.8, `pipe em repouso ${line.bg} contra #1F1F1F: contraste ${ratio.toFixed(2)}:1, não 1,8:1 ou mais`);
@@ -471,6 +489,9 @@ scenario('divisor: lado a lado tem um pipe de 2 px no vão de 6 px entre as colu
     assert.ok(g.gap >= GAP - 0.5 && g.gap <= GAP + 0.5, `${width}px: vão de ${g.gap}px entre as colunas, não ${GAP}`);
     assert.ok(Math.abs(g.center - g.mid) <= 1, `${width}px: o divisor (${g.center}) fica no vão (${g.mid})`);
     assert.ok(g.coversTop && g.coversBottom, `${width}px: o divisor ocupa a altura do arquivo`);
+    const cur = await current(page);
+    const real = await engineLine(page, 28, 'change-deletion');
+    assert.ok(Math.abs(cur.top - real.top) <= 1, `${width}px: a marca do bloco atual (${cur.top}px) acompanha a linha real (${real.top}px)`);
   }
   await tb(page, 'Unificado').click();
   assert.equal(await sash(page).count(), 0, 'unificado não tem divisor');
@@ -479,9 +500,9 @@ scenario('divisor: lado a lado tem um pipe de 2 px no vão de 6 px entre as colu
   assert.equal(await sash(page).count(), 1, 'lado a lado de volta tem o divisor');
 });
 
-// Arrastar muda a proporção sem rolar a tela e sem refazer o diff (o mesmo elemento do motor); o mínimo de 15% segura nos dois lados; o
+// Arrastar mantém a mesma linha no topo apesar da reflow e sem refazer o diff (o mesmo elemento do motor); o mínimo de 15% segura; o
 // duplo clique volta a 50/50; as setas movem com o foco no divisor, e a medida da linha da mudança atual continua certa.
-scenario('divisor: arrastar muda a proporção sem rolar nem refazer o diff; limite de 15% nos dois lados; duplo clique volta a 50/50; setas com foco', async ({ page }) => {
+scenario('divisor: arrastar muda a proporção e mantém a mesma linha no topo; limite de 15% nos dois lados; duplo clique volta a 50/50; setas com foco', async ({ page }) => {
   await openGit(page);
   await row(page, 'unstaged', EDIT).dblclick();
   await view(page).waitFor();
@@ -490,22 +511,24 @@ scenario('divisor: arrastar muda a proporção sem rolar nem refazer o diff; lim
   assert.ok(Math.abs(start.pct - 50) <= 0.5, `começa em 50/50 (${start.pct})`);
   // Rolado para o meio do arquivo, o divisor continua pegando (ele cobre o palco todo).
   await scrollBody(page, 900);
+  const topBeforeDrag = await visibleTopLine(page);
   await page.evaluate(() => { window.__motor = [...document.querySelectorAll('[data-body] .compare-stage')].find((el) => el.getClientRects().length > 0).querySelector('diffs-container'); });
   await dragSashTo(page, start.center + 200);
   const right = await splitGeo(page);
   assert.ok(right.pct > start.pct + 3, `arrastar para a direita aumenta o lado esquerdo (${start.pct} → ${right.pct})`);
-  assert.equal(await scrollOf(page), 900, 'arrastar não rola a tela');
+  await assertSameTopLine(page, topBeforeDrag, 'arrastar mantém a linha no topo');
   assert.equal(await page.evaluate(() => window.__motor === [...document.querySelectorAll('[data-body] .compare-stage')].find((el) => el.getClientRects().length > 0).querySelector('diffs-container')), true, 'o motor do diff não foi refeito');
   // Mínimo e máximo: o arraste além do limite para no 15% e no 85%.
   await dragSashTo(page, right.stageLeft + 1);
+  const topBeforeMax = await visibleTopLine(page);
   const min = await splitGeo(page);
   assert.ok(Math.abs(min.pct - 15) <= 0.5, `limite mínimo: lado esquerdo em ${min.pct}, não 15`);
   await dragSashTo(page, min.stageLeft + min.stageWidth - 1);
   const max = await splitGeo(page);
   assert.ok(Math.abs(max.pct - 85) <= 0.5, `limite máximo: lado esquerdo em ${max.pct}, não 85`);
   for (const g of [min, max]) assert.ok(Math.abs(g.center - g.mid) <= 1, `em ${g.pct.toFixed(1)}%, o pipe (${g.center}) fica no vão (${g.mid})`);
-  assert.equal(await scrollOf(page), 900, 'os limites não rolam a tela');
-  // A marca da mudança atual continua no topo da linha real dela (a largura nova não mudou a altura das linhas).
+  await assertSameTopLine(page, topBeforeMax, 'arraste até os limites mantém a linha no topo');
+  // A largura nova muda a altura das linhas; a marca tem de acompanhar a linha real.
   await scrollBody(page, 0);
   const cur = await current(page);
   const real = await engineLine(page, 28, 'change-deletion');
@@ -519,6 +542,7 @@ scenario('divisor: arrastar muda a proporção sem rolar nem refazer o diff; lim
   assert.ok(Math.abs(reset.pct - 50) <= 0.5, `duplo clique volta a 50/50 (${reset.pct})`);
   // Setas: com o divisor focado, a direita e a esquerda movem 2 pontos percentuais, e o aria acompanha.
   await sash(page).focus();
+  const topBeforeKeys = await visibleTopLine(page);
   for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
   await page.waitForTimeout(100);
   const keyed = await splitGeo(page);
@@ -527,9 +551,9 @@ scenario('divisor: arrastar muda a proporção sem rolar nem refazer o diff; lim
   await page.keyboard.press('ArrowLeft');
   await page.waitForTimeout(100);
   assert.ok(Math.abs((await splitGeo(page)).pct - 54) <= 0.5, 'seta à esquerda volta 2 pontos');
-  assert.equal(await scrollOf(page), 0, 'as setas não rolam a tela');
+  await assertSameTopLine(page, topBeforeKeys, 'as setas mantêm a linha no topo');
   // Captura com o divisor arrastado para fora do meio (35%), sem o foco nem o pairar do mouse marcando a linha.
-  const to35 = start.stageLeft + start.stageWidth * 0.35;
+  const to35 = start.center + (35 - start.pct) / 100 * start.textWidth;
   await dragSashTo(page, to35);
   await sash(page).evaluate((el) => el.blur());
   await page.mouse.move(2, 2);
@@ -539,7 +563,8 @@ scenario('divisor: arrastar muda a proporção sem rolar nem refazer o diff; lim
   // Zoom do divisor: 200×300 px em volta dele, na primeira mudança (a unidade atual, com a barra azul) para ver as barras das bordas internas.
   const sashBox = await sash(page).boundingBox();
   const curBox = await view(page).locator('.compare-current').boundingBox();
-  await page.screenshot({ path: join(OUT, 'git-ui-divisor-zoom.png'), clip: { x: sashBox.x + sashBox.width / 2 - 100, y: curBox.y - 120, width: 200, height: 300 } });
+  const clipY = Math.max(0, Math.min(curBox.y - 120, 1080 - 300));
+  await page.screenshot({ path: join(OUT, 'git-ui-divisor-zoom.png'), clip: { x: sashBox.x + sashBox.width / 2 - 100, y: clipY, width: 200, height: 300 } });
 });
 
 // No commit, o divisor existe e arrastar muda a proporção (o commit é só leitura, mas a proporção é a mesma).

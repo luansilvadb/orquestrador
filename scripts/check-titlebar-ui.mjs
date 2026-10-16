@@ -112,6 +112,13 @@ scenario('três controles: 46 px de largura, 35 px úteis, colados à direita, �
   assert.equal(await page.locator('header').getByText('Orquestrador', { exact: true }).evaluate((el) => el.hasAttribute('data-tauri-drag-region')), true, 'título arrastável');
 });
 
+scenario('título nativo simulado acompanha o projeto aberto', async ({ page }) => {
+  const folder = await page.locator('header').locator('[title]').first().textContent();
+  assert.ok(folder, 'nome da pasta do projeto visível');
+  await page.waitForFunction((name) => document.title === `${name} - Orquestrador`, folder);
+  assert.equal(await page.title(), `${folder} - Orquestrador`);
+});
+
 scenario('estado normal: cor #CCCCCC, fundo transparente', async ({ page }) => {
   const m = await measure(page);
   for (const b of m.buttons) {

@@ -29,7 +29,7 @@ import {
 } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownMenu, Modal, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox, PatchDiff } from '@lobehub/ui';
-import { ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
 import { FileIcon } from './file-icon';
 import { Breadcrumbs } from './breadcrumbs';
 import { backend, message } from './backend';
@@ -1243,16 +1243,15 @@ function Note({ text, danger, onRetry }: { text: string; danger?: boolean; onRet
 
 type ViewMode = 'split' | 'unified';
 
-// Comparador: lado a lado por padrão, com a fonte e as cores do editor (docs/interface.md). O arquivo é um PatchDiff só, com todo o
-// contexto, então não há separador entre as mudanças. `overflow: 'scroll'` mantém cada linha com a altura de uma linha. A posição das
-// unidades vem do motor (o `Continuous` mede as linhas no DOM), não de uma conta. `diffOptions` vale só para os PatchDiff daqui.
-// A grade do lado a lado (`1fr 1fr` no motor, sem vão) ganha uma trilha central de `--compare-gap` do palco (6 px): a cor dela é o fundo
-// escuro do motor (#181818), e o divisor do `Continuous` (`.compare-sash`) pinta uma linha de 2 px no centro dela. A proporção das colunas é
-// a variável `--compare-left` do palco (50% por padrão). As barras de mudança das bordas internas ficam a 2 px da linha de cada lado.
+// Comparador: lado a lado por padrão, com a fonte e as cores do editor (docs/interface.md). Linhas longas quebram dentro das colunas;
+// o motor alinha os lados. A geometria é medida nos elementos de linha do shadow DOM depois de cada render.
 type DiffOptions = NonNullable<ComponentProps<typeof PatchDiff>['diffOptions']>;
+// A grade tem cinco trilhas: número, texto, vão de 40 px, número e texto.
 const COMPARE_DIFF_OPTIONS: DiffOptions = {
   theme: { dark: 'dark-plus', light: 'dark-plus' },
-  overflow: 'scroll',
+  overflow: 'wrap',
+  diffIndicators: 'none',
+  lineDiffType: 'word-alt',
   unsafeCSS: `
     :host {
       --diffs-dark-bg: #1F1F1F;
@@ -1261,18 +1260,31 @@ const COMPARE_DIFF_OPTIONS: DiffOptions = {
       --diffs-bg-context-gutter-override: #1F1F1F;
       --diffs-bg-buffer-override: #1F1F1F;
       --diffs-bg-separator-override: #1F1F1F;
-      --diffs-bg-addition-override: rgb(156 204 44 / 0.2);
-      --diffs-bg-deletion-override: rgb(255 0 0 / 0.2);
+      --diffs-bg-addition-override: #9bb95533;
+      --diffs-bg-deletion-override: #ff000033;
+      --diffs-bg-addition-emphasis-override: #9ccc2c33;
+      --diffs-bg-deletion-emphasis-override: #ff000033;
       --diffs-fg-number: #6E7681;
       --diffs-font-family: Consolas, 'Courier New', monospace;
       --diffs-font-size: 14px;
       --diffs-line-height: 19px;
     }
     [data-separator-wrapper], [data-separator] { display: none; }
-    pre[data-diff-type='split'] { --diffs-gap-inline: 1px; background-color: #181818; }
-    pre[data-diff-type='split'][data-overflow='scroll'] { grid-template-columns: minmax(0, var(--compare-left, 50%)) var(--compare-gap, 6px) minmax(0, 1fr); column-gap: 0; }
-    pre[data-diff-type='split'][data-overflow='scroll'] > [data-deletions] { grid-column: 1; }
-    pre[data-diff-type='split'][data-overflow='scroll'] > [data-additions] { grid-column: 3; }
+    pre[data-diff-type='split'][data-overflow='wrap'] { grid-template-columns: var(--diffs-grid-number-column-width) minmax(0, var(--compare-l, 50fr)) 40px var(--diffs-grid-number-column-width) minmax(0, var(--compare-r, 50fr)); background-color: #1f1f1f; }
+    pre[data-diff-type='split'][data-overflow='wrap'] > [data-deletions] > [data-gutter] { grid-column: 1; }
+    pre[data-diff-type='split'][data-overflow='wrap'] > [data-deletions] > [data-content] { grid-column: 2; border-right: 1px solid #3c3c3c; }
+    pre[data-diff-type='split'][data-overflow='wrap'] > [data-additions] > [data-gutter] { grid-column: 4; border-left: 0; }
+    pre[data-diff-type='split'][data-overflow='wrap'] > [data-additions] > [data-content] { grid-column: 5; }
+    pre[data-diff-type='split'] [data-column-number] { padding-inline-end: 4px; }
+    pre[data-diff-type='split'] [data-column-number][data-line-type='change-deletion']::after,
+    pre[data-diff-type='single'] [data-column-number][data-line-type='change-deletion']::after { content: '−'; margin-inline-start: 4px; color: #6e7681; }
+    pre[data-diff-type='split'] [data-column-number][data-line-type='change-addition']::after,
+    pre[data-diff-type='single'] [data-column-number][data-line-type='change-addition']::after { content: '+'; margin-inline-start: 4px; color: #6e7681; }
+    pre[data-background] [data-line][data-line-type='change-deletion'] { --diffs-line-bg: #ff000033; }
+    pre[data-background] [data-line][data-line-type='change-addition'] { --diffs-line-bg: #9bb95533; }
+    pre[data-background] [data-line][data-line-type='change-deletion'] span[data-decoration-bg] { --diffs-decoration-bg: #ff000033; }
+    pre[data-background] [data-line][data-line-type='change-addition'] span[data-decoration-bg] { --diffs-decoration-bg: #9ccc2c33; }
+    pre[data-diff-type='split'] [data-content-buffer] { background-image: linear-gradient(-45deg, #cccccc33 12.5%, #0000 12.5%, #0000 50%, #cccccc33 50%, #cccccc33 62.5%, #0000 62.5%, #0000 100%); background-size: 8px 8px; background-color: #1f1f1f; }
     [data-code] { padding-top: 0 !important; padding-bottom: 0 !important; }
   `,
 };
@@ -1302,11 +1314,10 @@ const clampSplit = (pct: number) => Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct)
 
 // O arquivo inteiro numa só visão: nada separa as mudanças. A unidade atual (bloco, ou trecho no commit) tem contorno, cada unidade
 // tem uma marca na faixa da direita, e um clique numa mudança a escolhe. A rolagem vai à primeira linha da unidade atual, e só quando
-// ela, o modo ou o arquivo mudam: a atualização do diff não rola a tela. No lado a lado, um divisor entre as colunas (`.compare-sash`)
-// muda a proporção delas. A proporção é o estado daqui (vale para a aba) e chega ao motor pela variável `--compare-left` do palco: arrastar
-// não refaz o diff nem rola a tela.
-function Continuous({ patch, compare, mode, current, unitName, onPick }: {
-  patch: string; compare: CompareModel; mode: ViewMode; current: number; unitName: string; onPick: (unit: number) => void;
+// ela, o modo ou o arquivo mudam: a atualização do diff não rola a tela. No lado a lado, a proporção das colunas de texto e a posição do vão
+// são atualizadas no palco sem refazer o diff nem rolar a tela.
+function Continuous({ patch, compare, mode, current, unitName, onPick, center }: {
+  patch: string; compare: CompareModel; mode: ViewMode; current: number; unitName: string; onPick: (unit: number) => void; center?: ReactNode;
 }) {
   const body = useRef<HTMLDivElement>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -1350,6 +1361,10 @@ function Continuous({ patch, compare, mode, current, unitName, onPick }: {
       const last = at.get(changeKeys(rows[s[1]])[0] ?? '');
       return first && last ? [first[0], last[1]] : null;
     });
+    if (drawn === 'split') {
+      const content = root.querySelector('pre[data-diff-type="split"] > [data-deletions] > [data-content]');
+      if (content) stage.current?.style.setProperty('--compare-center-x', `${content.getBoundingClientRect().right - box.left + 20}px`);
+    }
     const next: Geo = { patch: text, mode: drawn, height: box.height, units };
     setGeo((prev) => (prev && sameGeo(prev, next) ? prev : next));
   };
@@ -1371,8 +1386,6 @@ function Continuous({ patch, compare, mode, current, unitName, onPick }: {
   const ready = geo && geo.patch === patch && geo.mode === mode ? geo : null;
   // Sem medida válida (o patch mudou com a aba escondida, ou ainda não houve render), mede assim que a aba estiver na tela.
   useLayoutEffect(() => { if (!ready) measure(); });
-  // Proporção nova (divisor, setas ou duplo clique): as linhas são medidas de novo, porque a largura da coluna pode mudar a altura delas.
-  useLayoutEffect(() => { measure(); }, [left]);
   const cur = ready?.units[current] ?? null;
   const frac = (y: number) => `${(y / (ready?.height || 1)) * 100}%`;
   // Um clique numa linha de mudança escolhe a unidade dela, pelo número e pelo lado que o motor deu.
@@ -1392,16 +1405,32 @@ function Continuous({ patch, compare, mode, current, unitName, onPick }: {
   ), [patch, mode, engine]);
   const drag = useRef<{ x: number; start: number; width: number; pct: number } | null>(null);
   const paint = (pct: number) => {
-    stage.current?.style.setProperty('--compare-left', `${pct}%`);
+    const el = stage.current;
+    el?.style.setProperty('--compare-l', `${pct}fr`);
+    el?.style.setProperty('--compare-r', `${100 - pct}fr`);
+    const root = el?.querySelector('diffs-container')?.shadowRoot;
+    const content = root?.querySelector('pre[data-diff-type="split"] > [data-deletions] > [data-content]');
+    if (el && content) el.style.setProperty('--compare-center-x', `${content.getBoundingClientRect().right - el.getBoundingClientRect().left + 20}px`);
     sash.current?.setAttribute('aria-valuenow', String(Math.round(pct)));
   };
+  useLayoutEffect(() => {
+    paint(left);
+    const el = stage.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => { paint(left); measure(); });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [left]);
   const onSashDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
-    // Sem seleção de texto no arraste; o foco vai ao divisor, que é focável.
     e.preventDefault();
-    e.currentTarget.focus();
+    // Sem seleção de texto no arraste; o foco vai ao divisor, que é focável.
+    e.currentTarget.focus({ preventScroll: true });
     e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = { x: e.clientX, start: left, width: stage.current?.clientWidth || 1, pct: left };
+    const root = stage.current?.querySelector('diffs-container')?.shadowRoot;
+    const delText = root?.querySelector('pre[data-diff-type="split"] > [data-deletions] > [data-content]')?.getBoundingClientRect();
+    const addText = root?.querySelector('pre[data-diff-type="split"] > [data-additions] > [data-content]')?.getBoundingClientRect();
+    drag.current = { x: e.clientX, start: left, width: Math.max(1, (delText?.width ?? 0) + (addText?.width ?? 0)), pct: left };
     e.currentTarget.setAttribute('data-dragging', '');
     body.current?.setAttribute('data-dragging', '');
   };
@@ -1414,26 +1443,30 @@ function Continuous({ patch, compare, mode, current, unitName, onPick }: {
   const onSashUp = (e: ReactPointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (!d) return;
+    e.preventDefault();
     drag.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     e.currentTarget.removeAttribute('data-dragging');
     body.current?.removeAttribute('data-dragging');
     setLeft(d.pct);
+    measure();
   };
   // Setas esquerda e direita movem 2 pontos percentuais; a rolagem da tela fica parada.
   const onSashKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     e.preventDefault();
     setLeft(clampSplit(left + (e.key === 'ArrowRight' ? 2 : -2)));
+    requestAnimationFrame(measure);
   };
   return (
     <Flexbox flex={1} className="min-h-0 compare-view">
       <div
         ref={body} tabIndex={0} aria-label="Arquivo inteiro: F8 vai à próxima mudança, Shift+F8 à anterior" className="compare-body"
       >
-        <div ref={stage} className="compare-stage" style={{ '--compare-left': `${left}%` } as CSSProperties}>
+        <div ref={stage} className="compare-stage" style={{ '--compare-l': '50fr', '--compare-r': '50fr' } as CSSProperties}>
           {diff}
           {cur && <div className="compare-current" data-unit={current} style={{ top: cur[0], height: cur[1] - cur[0] }} />}
+          {mode === 'split' && center && <div className="compare-center" style={cur ? { top: cur[0] + (cur[1] - cur[0]) / 2 } : undefined}>{center}</div>}
           {mode === 'split' && (
             <div
               ref={sash} role="separator" aria-orientation="vertical" aria-label="Divisor entre o original e o modificado"
@@ -1592,7 +1625,7 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
               : <ActionIcon size="small" variant="borderless" icon={Plus} aria-label={`Preparar bloco ${cur + 1} de ${n}`} title={`Preparar o bloco ${cur + 1} de ${n}`} disabled={blocked_} onClick={() => stageAt(cur)} />}
             {!staged && (
               <ActionIcon
-                size="small" variant="borderless" danger icon={Undo2} aria-label={`Descartar bloco ${cur + 1} de ${n}`}
+                size="small" variant="borderless" danger icon={ArrowRight} aria-label={`Descartar bloco ${cur + 1} de ${n}`}
                 disabled={blocked_ || draftOpen}
                 title={draftOpen ? 'Resolva o rascunho aberto deste arquivo antes de descartar.' : `Descartar o bloco ${cur + 1} de ${n}`}
                 onClick={() => discardAt(cur)}
@@ -1625,7 +1658,14 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
           />
         )}
       </Flexbox>
-      <Continuous key={`${target.path}|${target.side}`} patch={review.display.patch} compare={compare} mode={mode} current={cur} unitName="Bloco" onPick={setAt} />
+      <Continuous key={`${target.path}|${target.side}`} patch={review.display.patch} compare={compare} mode={mode} current={cur} unitName="Bloco" onPick={setAt}
+        center={ref && block && !untracked ? <div className="compare-center-actions">
+          {!staged && <ActionIcon size="small" variant="borderless" danger icon={ArrowRight} aria-label={`Descartar bloco ${cur + 1} de ${n}`} title={`Descartar o bloco ${cur + 1} de ${n}`} disabled={blocked_ || draftOpen} onClick={() => discardAt(cur)} />}
+          {staged
+            ? <ActionIcon size="small" variant="borderless" icon={Minus} aria-label={`Tirar bloco ${cur + 1} de ${n} do preparo`} title={`Tirar o bloco ${cur + 1} de ${n} do preparo`} disabled={blocked_} onClick={() => unstageAt(cur)} />
+            : <ActionIcon size="small" variant="borderless" icon={Plus} aria-label={`Preparar bloco ${cur + 1} de ${n}`} title={`Preparar o bloco ${cur + 1} de ${n}`} disabled={blocked_} onClick={() => stageAt(cur)} />}
+        </div> : undefined}
+      />
     </Flexbox>
   );
 }

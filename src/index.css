@@ -153,12 +153,13 @@ body {
 .compare-body:focus-visible {
   box-shadow: inset 0 0 0 1px #007fd4;
 }
-/* Ao menos a altura visível: o divisor pega do topo ao fim da área, mesmo com o arquivo mais curto que ela. A trilha do meio do motor
-   (a largura de `--compare-gap`) é lida também pelo motor, que herda a variável; o divisor se centra nela. */
+/* Ao menos a altura visível: o divisor pega do topo ao fim da área, mesmo com o arquivo mais curto que ela. */
 .compare-stage {
   position: relative;
   min-height: 100%;
-  --compare-gap: 6px;
+  --compare-l: 50fr;
+  --compare-r: 50fr;
+  --compare-center-x: 50%;
 }
 /* A unidade atual: uma barra azul à esquerda do trecho, sem véu (o vermelho e o verde das linhas continuam visíveis). Não toma o clique. */
 .compare-current {
@@ -168,16 +169,34 @@ body {
   pointer-events: none;
   background: #007fd4;
 }
-/* Divisor do lado a lado: um pipe único no vão entre as colunas. O vão é a trilha do meio do motor (`--compare-gap`, 6 px, de fundo #181818,
-   em COMPARE_DIFF_OPTIONS); a linha de 2 px #6E6E6E fica no centro dele, e as barras de mudança das bordas internas ficam 2 px de cada lado.
-   A proporção é a variável `--compare-left` do palco, que o grid do motor também lê; arrastar só troca essa variável, sem refazer o diff.
+.compare-center {
+  /* Ações do bloco atual, centralizadas no vão e na altura da unidade. */
+  position: absolute;
+  z-index: 4;
+  left: var(--compare-center-x, 50%);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.compare-center-actions {
+  /* Ações empilhadas sobre o vão entre as colunas. */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #454545;
+  border-radius: 4px;
+  background: #292929;
+  pointer-events: auto;
+}
+/* Divisor do lado a lado: um pipe único no vão de 40 px entre as colunas; a proporção das colunas de texto usa trilhas `fr`.
+   Arrastar só atualiza essas variáveis, sem refazer o diff.
    A área de pegar tem 8 px e ocupa o palco todo, então pega em qualquer ponto da rolagem. O hover põe a linha azul de 4 px depois de 300 ms;
    arrastar e o foco, na hora. */
 .compare-sash {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: calc(var(--compare-left, 50%) + var(--compare-gap, 6px) / 2);
+  left: var(--compare-center-x, 50%);
   width: 8px;
   margin-left: -4px;
   cursor: col-resize;
@@ -190,7 +209,7 @@ body {
   top: 0;
   bottom: 0;
   left: 50%;
-  width: 2px;
+  width: 1px;
   transform: translateX(-50%);
   background: #6e6e6e;
   transition: width 0s, background-color 0s;
