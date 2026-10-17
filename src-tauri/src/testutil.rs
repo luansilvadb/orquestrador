@@ -1,6 +1,7 @@
 //! Fixtures dos testes unitários que mais de um módulo usa: pastas temporárias com nome por processo, o Git de
 //! teste com identidade fixa, a junction do Windows e as sessões de delegação. Só existe em `cargo test`.
-use crate::proc::{git_saida, start_time};
+use crate::platform::start_time;
+use crate::proc::git_saida;
 use std::path::{Path, PathBuf};
 
 /// Pasta vazia `<temporária>\<prefix>-<pid>-<tag>`. Quem chama a apaga quando acaba; `Tmp` faz isso sozinho.

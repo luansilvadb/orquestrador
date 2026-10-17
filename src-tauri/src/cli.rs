@@ -134,9 +134,6 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session) -> Spawn {
     Spawn { program, args, cwd: dir, env }
 }
 
-/// Os PowerShells que o shell do usuário tenta, nesta ordem: o primeiro que iniciar vale.
-pub const SHELLS: [&str; 2] = ["pwsh.exe", "powershell.exe"];
-
 /// O shell do usuário: um PowerShell interativo na pasta do projeto, sem env.
 pub fn shell(program: &str, project: &str) -> Spawn {
     Spawn { program: program.to_string(), args: strs(&["-NoLogo"]), cwd: project.to_string(), env: vec![] }

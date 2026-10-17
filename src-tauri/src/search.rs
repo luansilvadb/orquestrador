@@ -934,12 +934,13 @@ mod tests {
         assert!(fora.0.join("segredo.txt").exists(), "a limpeza do projeto não pode seguir a junção");
     }
 
+    #[cfg(windows)]
     #[test]
     fn link_nao_entra_na_substituicao() {
         let t = repo_tmp("link");
         write(&t.0, "real.txt", "foo\n");
         commit_all(&t.0, "base");
-        if std::os::windows::fs::symlink_file(&t.0.join("real.txt"), &t.0.join("atalho.txt")).is_err() {
+        if crate::platform::symlink_arquivo(&t.0.join("real.txt"), &t.0.join("atalho.txt")).is_err() {
             eprintln!("sem permissão para criar link no Windows; teste pulado");
             return;
         }
@@ -967,6 +968,7 @@ mod tests {
         assert_eq!(quick_open(&t.0, "b.txt").unwrap().paths, vec!["pasta/b.txt"]);
     }
 
+    #[cfg(windows)]
     #[test]
     fn sem_repositorio_a_pesquisa_nao_entra_em_juncao() {
         let fora = Tmp::new("orq-search", "sem-git-junction-fora");

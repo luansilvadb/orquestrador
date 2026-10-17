@@ -1033,7 +1033,9 @@ pub fn accept_deletion(dir: &Path, rel: &str, revision: &str) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{commit_all, git, identity, junction, write, Tmp};
+    use crate::testutil::{commit_all, git, identity, write, Tmp};
+    #[cfg(windows)]
+    use crate::testutil::junction;
     use std::fs;
 
     /// Repositório novo, sem commit, com a branch `main`.
@@ -2044,6 +2046,7 @@ mod tests {
         assert_eq!(fs::read(dir.join("x.txt")).unwrap(), antes, "a recusa não gravou nada");
     }
 
+    #[cfg(windows)]
     #[test]
     fn junction_no_caminho_do_conflito_e_recusada() {
         let tmp = Tmp::new("orq-git", "junction");

@@ -349,8 +349,8 @@ impl Core {
             None => project.clone(),
         };
         inner.slots.remove(id);
-        let mut started = Err(String::new());
-        for program in cli::SHELLS {
+        let mut started = Err("Ainda não suportado neste sistema.".to_string());
+        for program in crate::platform::SHELLS {
             started = self.spawn(&mut inner, id, &cli::shell(program, &dir), Some((cols, rows))).map(|_| program);
             if started.is_ok() {
                 break;
@@ -952,12 +952,13 @@ mod tests {
         core.inner.lock().unwrap().slots.get(id).is_some_and(|s| s.term.is_some())
     }
 
+    #[cfg(windows)]
     #[test]
     fn shell_abre_recusa_o_mesmo_id_sai_com_exit_e_volta_a_abrir() {
         let (emit, eventos) = gravador();
         let (core, _root) = git_core_with("shell", emit);
         let programa = core.start_shell_in("shell-1", 80, 24, None).unwrap();
-        assert!(cli::SHELLS.contains(&programa.as_str()), "{programa} não está em cli::SHELLS");
+        assert!(crate::platform::SHELLS.contains(&programa.as_str()), "{programa} não está em platform::SHELLS");
         assert_eq!(core.start_shell_in("shell-1", 80, 24, None).unwrap_err(), "Já há um shell aberto com este id.");
         assert!(!core.has_running(), "o shell vivo não faz o app pedir confirmação");
         core.term_write("shell-1", "exit\r");
@@ -970,6 +971,7 @@ mod tests {
         core.shutdown();
     }
 
+    #[cfg(windows)]
     #[test]
     fn dois_shells_abertos_ao_mesmo_tempo() {
         let (core, _root) = git_core("dois-shells");
@@ -982,6 +984,7 @@ mod tests {
 
     /// O CLI do shell vem do processo: um `codex.exe` (aqui uma cópia do ping, que sai sozinha) rodando nele conta enquanto
     /// vive; a linha digitada com o nome não conta, a outra aba não vê, e depois que ele sai a aba volta a ser shell comum.
+    #[cfg(windows)]
     #[test]
     fn cli_do_shell_vem_do_processo_e_some_quando_ele_sai() {
         let (core, root) = git_core("shell-cli");

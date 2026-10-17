@@ -1,7 +1,7 @@
 //! Backend do app Orquestrador: terminais em que um CLI orquestra e outros executam.
 pub mod capacity;
 pub mod cli;
-pub mod clipboard;
+pub mod platform;
 pub mod config;
 pub mod core;
 pub mod delegate;
@@ -313,18 +313,18 @@ fn reveal_dir(core: State<Core>, path: String) -> Result<(), String> {
 
 /// Os arquivos e o efeito (copiar ou recortar) do clipboard agora. Lido na hora de cada ação; sem arquivo, `paths` vem vazio.
 #[tauri::command(async)]
-fn clipboard_snapshot() -> Result<clipboard::Snapshot, String> {
-    Ok(clipboard::snapshot())
+fn clipboard_snapshot() -> Result<platform::Snapshot, String> {
+    Ok(platform::snapshot())
 }
 
 /// A colagem com o detalhe: cada item colado (`from` absoluto como estava no clipboard, `to` relativo ao projeto), e
 /// o erro do que parou, se parou. Ver `Batch`. Se um recorte moveu algo, esvazia o clipboard se ele ainda for `snap`; um
 /// clipboard trocado no meio fica como está.
 #[tauri::command(async)]
-fn paste_files_detailed(core: State<Core>, dest: String, snap: clipboard::Snapshot) -> Result<files::Batch<files::Moved>, String> {
+fn paste_files_detailed(core: State<Core>, dest: String, snap: platform::Snapshot) -> Result<files::Batch<files::Moved>, String> {
     let result = files::paste_detailed(&core.repo()?, &dest, &snap);
     if snap.cut && !result.done.is_empty() {
-        clipboard::clear_if_same(&snap);
+        platform::clear_if_same(&snap);
     }
     Ok(result)
 }

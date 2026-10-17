@@ -95,7 +95,7 @@ pub fn check_choice(role: &str, c: &Choice) -> Result<(), String> {
 }
 
 pub fn config_path() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(|b| PathBuf::from(b).join("orquestrador").join("config.json"))
+    crate::platform::pasta_local_do_usuario().map(|b| b.join("orquestrador").join("config.json"))
 }
 
 /// O arquivo é lido como `Config` (ver o derive): chave que falta vale o padrão do que ela cobre. Forma errada é

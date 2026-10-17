@@ -63,7 +63,8 @@ Plano: cada módulo é uma unidade.
 | `src-tauri/src/search.rs` | O comando da pesquisa, `search`: os candidatos vêm de `git ls-files` (rastreados e não ignorados, sem `.git`) quando há repositório; sem repositório, vêm da pasta percorrida com a crate `ignore` (respeita `.gitignore` e `.ignore` da pasta e das subpastas, não os de pastas acima; inclui ocultos; não segue links; pula `.git` e `node_modules`), e o texto é casado em Rust pelo motor `regex`, o mesmo da prévia e da substituição. |
 | `src-tauri/src/git.rs` | Os comandos do painel Git: status, diff, preparar, commit, fetch, pull, push e branches. Também o modo do projeto (com repositório, sem Git, sem repositório ou repositório acima) e o `git init` do botão Inicializar repositório. |
 | `src-tauri/src/core.rs` | O núcleo da sessão: PTYs, lotes, executores e a fila. Ver [delegação](delegacao.md). |
-| `src-tauri/src/capacity.rs` | A política automática de simultâneos: teto pela CPU e pela memória física (`GlobalMemoryStatusEx`), com a reserva de 2 GiB e 1 GiB por executor. |
+| `src-tauri/src/platform/` | O único lugar das chamadas ao sistema operacional: Job Objects, consulta de processo, COM e a Lixeira, o Explorer, o clipboard de arquivos, a memória física, as pastas do usuário e os nomes dos shells. `windows.rs` implementa; `other.rs` (macOS e Linux) responde "Ainda não suportado neste sistema." ou devolve `None`, conforme o chamador já trata a ausência. Fora daqui não há `windows_sys` nem `std::os::windows`. |
+| `src-tauri/src/capacity.rs` | A política automática de simultâneos: teto pela CPU e pela memória física (`platform::memoria`), com a reserva de 2 GiB e 1 GiB por executor. |
 | `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores e configuração. |
 | `src-tauri/src/delegate.rs` | A lógica de delegação: publica o lote na pasta da sessão, espera o resultado, imprime o lote e grava as respostas às perguntas de executor. |
 | `src-tauri/src/mcp.rs` | O servidor MCP da sessão, `orquestrador.exe --mcp <pasta da sessão>`: fala JSON-RPC pela entrada e saída padrão e expõe `delegar` e `aguardar`. |
@@ -107,7 +108,7 @@ Agrupados por tipo.
 
 ## Workflows (`.github/workflows/`)
 
-- `ci.yml`: a cada push em `main` e em pull request, o build do front-end, `npm run check` e `cargo test`. Sem segredos, sem assinatura e sem publicação. O `check:ui` não roda aqui, porque sobe o Vite e um Chromium.
+- `ci.yml`: a cada push em `main` e em pull request, o build do front-end, `npm run check` e `cargo test` no Windows; e o job `compilar`, que só faz `cargo check --all-targets` do backend em `ubuntu-latest` e `macos-latest`. Sem segredos, sem assinatura e sem publicação. O `check:ui` não roda aqui, porque sobe o Vite e um Chromium.
 - `release.yml`: release por tag: instalador assinado, `latest.json` e conferência, em rascunho.
 
 ## Ícone do app

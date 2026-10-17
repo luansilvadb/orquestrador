@@ -33,7 +33,7 @@ Os checks de interface são em Chrome headless, contra o app simulado.
 
 Capturas e logs vão para `.playwright-mcp/`, que não vai para o Git.
 
-O workflow `.github/workflows/ci.yml` roda o build, `npm run check` e `cargo test` a cada push em `main` e em pull request. Os checks de interface (`npm run check:ui`) ficam de fora do CI: sobem o Vite e um Chromium local.
+O workflow `.github/workflows/ci.yml` roda a cada push em `main` e em pull request. No Windows, faz o build do front-end, `npm run check` e `cargo test`. Em Ubuntu e macOS, só compila o backend (`cargo check --all-targets`), sem testes, porque os recursos específicos do sistema ainda não foram portados. Os checks de interface (`npm run check:ui`) ficam de fora do CI: sobem o Vite e um Chromium local.
 
 Os testes do backend:
 

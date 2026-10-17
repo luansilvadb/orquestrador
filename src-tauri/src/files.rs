@@ -1,23 +1,11 @@
 //! O explorador de arquivos do projeto: lista pastas, lê e grava conteúdo de arquivos, e renomeia, manda à Lixeira
 //! e mostra no Explorer do Windows. Toda ação recebe o caminho relativo ao projeto e recusa o que sai dele.
-use crate::clipboard::Snapshot;
-use crate::proc::quiet;
+use crate::platform::{self, ErroShell, Snapshot};
 use serde::Serialize;
 use std::collections::HashSet;
-use std::ffi::c_void;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
-use windows_sys::core::{GUID, HRESULT};
-use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, ERROR_SHARING_VIOLATION};
-use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, FILE_SHARE_READ};
-use windows_sys::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
-use windows_sys::Win32::UI::Shell::{
-    SHCreateItemFromParsingName, FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_RENAMEONCOLLISION,
-    FOF_SILENT,
-};
 
 /// Arquivo com mais que isto não é lido: a tela mostra só o aviso.
 pub(crate) const MAX_FILE: u64 = 1_048_576;
@@ -186,7 +174,7 @@ fn put(file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
 fn hold(project: &Path, rel: &str) -> Result<File, String> {
     let lexical = plain(project, rel, false)?;
     let real = inside(project, rel, false)?;
-    let file = OpenOptions::new().read(true).write(true).share_mode(FILE_SHARE_READ).open(&lexical).map_err(open_err)?;
+    let file = platform::abrir_para_gravar(&lexical).map_err(open_err)?;
     let link = std::fs::symlink_metadata(&lexical).is_ok_and(|m| m.file_type().is_symlink());
     if link || lexical.canonicalize().ok().as_deref() != Some(real.as_path()) {
         return Err(format!("{rel} mudou de lugar desde a validação. Nada foi gravado."));
@@ -196,10 +184,12 @@ fn hold(project: &Path, rel: &str) -> Result<File, String> {
 
 /// Mensagem para quem não conseguiu abrir o arquivo para gravar. Outro programa com o arquivo aberto para gravar cai aqui.
 fn open_err(e: std::io::Error) -> String {
-    match e.raw_os_error().map(|c| c as u32) {
-        Some(ERROR_SHARING_VIOLATION) => "Outro programa está gravando este arquivo agora. Nada foi gravado; tente de novo.".into(),
-        _ if e.kind() == std::io::ErrorKind::NotFound => "O arquivo não existe mais. Nada foi gravado.".into(),
-        _ => format!("Não foi possível abrir o arquivo para gravar: {e}"),
+    if platform::em_uso(&e) {
+        "Outro programa está gravando este arquivo agora. Nada foi gravado; tente de novo.".into()
+    } else if e.kind() == std::io::ErrorKind::NotFound {
+        "O arquivo não existe mais. Nada foi gravado.".into()
+    } else {
+        format!("Não foi possível abrir o arquivo para gravar: {e}")
     }
 }
 
@@ -319,18 +309,15 @@ pub fn rename(project: &Path, rel: &str, name: &str) -> Result<String, String> {
     Ok(next)
 }
 
-/// Muda o nome (ou move) sem sobrescrever: `MoveFileExW` sem `MOVEFILE_REPLACE_EXISTING` falha se o destino existir (inclusive
-/// um link). O `std::fs::rename` do Windows sobrescreve, por isso não é usado aqui.
+/// Muda o nome (ou move) sem sobrescrever: se o destino existe, recusa. Ver `platform::mover_sem_substituir`.
 fn move_no_replace(from: &Path, to: &Path) -> Result<(), String> {
-    let (src, dst) = (wide(from.as_os_str()), wide(to.as_os_str()));
-    if unsafe { MoveFileExW(src.as_ptr(), dst.as_ptr(), 0) } != 0 {
-        return Ok(());
-    }
-    let err = std::io::Error::last_os_error();
-    match err.raw_os_error().map(|c| c as u32) {
-        Some(ERROR_ALREADY_EXISTS) | Some(ERROR_FILE_EXISTS) => Err("Já existe um item com este nome na pasta de destino. Nada foi movido.".into()),
-        _ => Err(format!("Não foi possível concluir a operação: {err}")),
-    }
+    platform::mover_sem_substituir(from, to).map_err(|err| {
+        if platform::ja_existe(&err) {
+            "Já existe um item com este nome na pasta de destino. Nada foi movido.".into()
+        } else {
+            format!("Não foi possível concluir a operação: {err}")
+        }
+    })
 }
 
 /// Um item do projeto pronto para uma ação: o caminho para o sistema, se é pasta, o `rel` sem barras sobrando e o nome.
@@ -463,7 +450,7 @@ pub fn move_items(project: &Path, rels: &[String], dest: &str) -> Batch<Moved> {
 /// apagado aqui: o movimento do recorte acontece quando alguém cola.
 pub fn copy_items(project: &Path, rels: &[String], cut: bool) -> Result<(), String> {
     let paths: Vec<PathBuf> = selection(project, rels)?.into_iter().map(|it| it.path).collect();
-    crate::clipboard::set_files(&paths, cut)
+    platform::set_files(&paths, cut)
 }
 
 /// Manda os itens `rels` para a Lixeira do Windows (pasta inteira ou arquivo), com a checagem de `selection` antes. Se um
@@ -481,113 +468,33 @@ pub fn recycle(project: &Path, rel: &str) -> Result<(), String> {
 
 /// Manda `file` (arquivo ou pasta já validada) para a Lixeira e confere que saiu do lugar.
 fn recycle_path(file: &Path) -> Result<(), String> {
-    let _apartment = Apartment::enter("Não foi possível abrir a Lixeira do Windows. Nada foi excluído.")?;
-    unsafe { send_to_recycle_bin(file) }?;
+    platform::mandar_para_lixeira(file).map_err(erro_lixeira)?;
     if std::fs::symlink_metadata(file).is_ok() {
         return Err("A Lixeira não recebeu o arquivo. Nada foi excluído.".into());
     }
     Ok(())
 }
 
-const CLSID_FILE_OPERATION: GUID = GUID { data1: 0x3AD05575, data2: 0x8857, data3: 0x4850, data4: [0x92, 0x77, 0x11, 0xB8, 0x5B, 0xDB, 0x8E, 0x09] };
-const IID_IFILE_OPERATION: GUID = GUID { data1: 0x947AAB5F, data2: 0x0A5C, data3: 0x4C13, data4: [0xB4, 0xD6, 0x4B, 0xF7, 0x83, 0x6F, 0xC9, 0xF8] };
-const IID_ISHELL_ITEM: GUID = GUID { data1: 0x43826D1E, data2: 0xE718, data3: 0x42EE, data4: [0xBC, 0x55, 0xA1, 0xE2, 0x61, 0xC3, 0x7B, 0xFE] };
-
-/// Vtable de IUnknown: o começo de todo objeto COM. `release` serve também ao `IShellItem` e ao `IFileOperation`.
-#[repr(C)]
-struct Unknown {
-    query_interface: usize,
-    add_ref: usize,
-    release: unsafe extern "system" fn(*mut c_void) -> u32,
-}
-
-/// Vtable de `IFileOperation` (shobjidl_core.h), na ordem da interface. Só `SetOperationFlags`, `MoveItem`, `CopyItem`,
-/// `DeleteItem`, `PerformOperations` e `GetAnyOperationsAborted` são chamados; os demais slots são só espaço, com o mesmo tamanho de um ponteiro.
-#[repr(C)]
-struct FileOperationVtbl {
-    base: Unknown,
-    advise: usize,
-    unadvise: usize,
-    set_operation_flags: unsafe extern "system" fn(*mut c_void, u32) -> HRESULT,
-    set_progress_message: usize,
-    set_progress_dialog: usize,
-    set_properties: usize,
-    set_owner_window: usize,
-    apply_properties_to_item: usize,
-    apply_properties_to_items: usize,
-    rename_item: usize,
-    rename_items: usize,
-    move_item: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *const u16, *mut c_void) -> HRESULT,
-    move_items: usize,
-    copy_item: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *const u16, *mut c_void) -> HRESULT,
-    copy_items: usize,
-    delete_item: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void) -> HRESULT,
-    delete_items: usize,
-    new_item: usize,
-    perform_operations: unsafe extern "system" fn(*mut c_void) -> HRESULT,
-    get_any_operations_aborted: unsafe extern "system" fn(*mut c_void, *mut i32) -> HRESULT,
-}
-
-/// Um ponteiro COM que solta a referência ao sair do escopo.
-struct Com(*mut c_void);
-
-impl Drop for Com {
-    fn drop(&mut self) {
-        // SAFETY: o ponteiro veio de uma chamada COM bem-sucedida e esta struct é a dona da referência.
-        unsafe { ((**(self.0 as *const *const Unknown)).release)(self.0) };
+/// A mensagem de uma falha da Lixeira.
+fn erro_lixeira(erro: ErroShell) -> String {
+    match erro {
+        ErroShell::SemCom | ErroShell::SemOperacao => "Não foi possível abrir a Lixeira do Windows. Nada foi excluído.".into(),
+        ErroShell::ItemAusente => "Não foi possível localizar o arquivo para a Lixeira. Nada foi excluído.".into(),
+        ErroShell::Recusada => "A Lixeira não recebeu o arquivo. Nada foi excluído.".into(),
+        ErroShell::NaoSuportado => "Ainda não suportado neste sistema. Nada foi excluído.".into(),
     }
-}
-
-/// Roda uma IFileOperation com `flags`. `add` pede as ações sobre o vtable e devolve o HRESULT delas com os `IShellItem`
-/// usados, que ficam vivos até a execução. Depois executa e confere o aborto: só dá `Ok` se tudo deu certo. `criar` é a
-/// mensagem se o Windows não cria a operação; `falha`, a das outras.
-unsafe fn run_operation(flags: u32, criar: &str, falha: &str, add: impl FnOnce(&FileOperationVtbl, *mut c_void) -> Result<(HRESULT, Vec<Com>), String>) -> Result<(), String> {
-    let mut op: *mut c_void = std::ptr::null_mut();
-    let hr = CoCreateInstance(&CLSID_FILE_OPERATION, std::ptr::null_mut(), CLSCTX_INPROC_SERVER, &IID_IFILE_OPERATION, &mut op);
-    if hr < 0 || op.is_null() {
-        return Err(criar.into());
-    }
-    let op = Com(op);
-    let vtbl = &**(op.0 as *const *const FileOperationVtbl);
-    let flagged = (vtbl.set_operation_flags)(op.0, flags);
-    let (mut hr, _items) = if flagged >= 0 { add(vtbl, op.0)? } else { (flagged, Vec::new()) };
-    if hr >= 0 {
-        hr = (vtbl.perform_operations)(op.0);
-    }
-    let mut aborted = 0;
-    let aborted_hr = (vtbl.get_any_operations_aborted)(op.0, &mut aborted);
-    if hr < 0 || aborted_hr < 0 || aborted != 0 {
-        return Err(falha.into());
-    }
-    Ok(())
-}
-
-/// Pede ao Windows para reciclar `file`. Erro se o Windows não criar a operação, não aceitar a reciclagem, abortar ou não
-/// executar. Não há caminho de exclusão definitiva.
-unsafe fn send_to_recycle_bin(file: &Path) -> Result<(), String> {
-    let flags = FOFX_RECYCLEONDELETE | FOF_ALLOWUNDO | FOF_SILENT | FOF_NOERRORUI;
-    run_operation(flags, "Não foi possível abrir a Lixeira do Windows. Nada foi excluído.", "A Lixeira não recebeu o arquivo. Nada foi excluído.", |vtbl, op| {
-        let item = shell_item(file, "Não foi possível localizar o arquivo para a Lixeira. Nada foi excluído.")?;
-        Ok(((vtbl.delete_item)(op, item.0, std::ptr::null_mut()), vec![item]))
-    })
-}
-
-/// Abre `programa` sem janela com `arg` como linha de comando crua. Se não abrir, `falha` vira o começo da mensagem.
-/// O código de saída não é lido: o Explorer sai com 1 mesmo quando funciona.
-fn abrir_programa(programa: &str, arg: String, falha: &str) -> Result<(), String> {
-    quiet(programa).raw_arg(arg).spawn().map(drop).map_err(|e| format!("{falha}: {e}"))
 }
 
 /// Abre o Explorer do Windows com o arquivo selecionado.
 pub fn reveal(project: &Path, rel: &str) -> Result<(), String> {
     let path = plain(project, rel, false)?;
-    abrir_programa("explorer.exe", format!("/select,\"{}\"", path.display()), "Não foi possível abrir o Explorer")
+    platform::revelar_no_explorador(&path).map_err(|e| format!("Não foi possível abrir o Explorer: {e}"))
 }
 
 /// Abre o diálogo "Como você quer abrir este arquivo?" do Windows, o mesmo do Abrir com... do Explorer.
 pub fn open_with(project: &Path, rel: &str) -> Result<(), String> {
     let path = plain(project, rel, false)?;
-    abrir_programa("rundll32.exe", format!("shell32.dll,OpenAs_RunDLL \"{}\"", path.display()), "Não foi possível abrir o diálogo do Windows")
+    platform::dialogo_abrir_com(&path).map_err(|e| format!("Não foi possível abrir o diálogo do Windows: {e}"))
 }
 
 /// Cria um arquivo vazio `name` dentro da pasta `dir` do projeto (vazio é a raiz). Devolve o caminho relativo criado.
@@ -638,7 +545,7 @@ fn check_new_name(name: &str) -> Result<(), String> {
 /// Abre no Explorer a pasta `rel` do projeto (vazio é a raiz). Recusa `.git`, link e o que sai do projeto.
 pub fn reveal_dir(project: &Path, rel: &str) -> Result<(), String> {
     let path = plain(project, rel, true)?;
-    abrir_programa("explorer.exe", format!("\"{}\"", path.display()), "Não foi possível abrir o Explorer")
+    platform::abrir_pasta_no_explorador(&path).map_err(|e| format!("Não foi possível abrir o Explorer: {e}"))
 }
 
 /// Cola em `dest` (pasta do projeto, vazio é a raiz) os itens de `snap`: copia, ou move se `snap.cut`. `done` traz cada item
@@ -778,7 +685,7 @@ fn pick_name(dest: &Path, name: &str, dir: bool, taken: &mut HashSet<String>) ->
 /// Copia ou move `src` para `parent/name` (que ainda não existe). Confere no disco: vale só se o destino existe e, no
 /// recorte, a origem saiu do lugar. Se falha, diz se ficou algo no destino.
 fn transfer(src: &Path, parent: &Path, name: &str, cut: bool) -> Result<(), String> {
-    let result = unsafe { run_transfer(src, parent, name, cut) };
+    let result = platform::copiar_ou_mover(src, parent, name, cut).map_err(erro_colagem);
     let target = parent.join(name);
     let made = std::fs::symlink_metadata(&target).is_ok();
     let left = std::fs::symlink_metadata(src).is_ok();
@@ -794,66 +701,15 @@ fn transfer(src: &Path, parent: &Path, name: &str, cut: bool) -> Result<(), Stri
     }
 }
 
-/// Um `IShellItem` para o caminho `path` do sistema de arquivos. O Shell recusa `/`, então as barras viram `\` aqui.
-/// `falha` é a mensagem se o Shell não achar o caminho.
-unsafe fn shell_item(path: &Path, falha: &str) -> Result<Com, String> {
-    let mut wide = wide(path.as_os_str());
-    for unit in wide.iter_mut().filter(|u| **u == b'/' as u16) {
-        *unit = b'\\' as u16;
+/// A mensagem de uma falha da colagem pelo Shell.
+fn erro_colagem(erro: ErroShell) -> String {
+    match erro {
+        ErroShell::SemCom => "Não foi possível iniciar o COM do Windows. Nada foi colado.".into(),
+        ErroShell::SemOperacao => "Não foi possível iniciar a cópia do Windows. Nada foi colado.".into(),
+        ErroShell::ItemAusente => "Não foi possível localizar o item para colar. Nada foi colado.".into(),
+        ErroShell::Recusada => "O Windows não concluiu a operação.".into(),
+        ErroShell::NaoSuportado => "Ainda não suportado neste sistema. Nada foi colado.".into(),
     }
-    let mut item: *mut c_void = std::ptr::null_mut();
-    let hr = SHCreateItemFromParsingName(wide.as_ptr(), std::ptr::null_mut(), &IID_ISHELL_ITEM, &mut item);
-    if hr < 0 || item.is_null() {
-        return Err(falha.into());
-    }
-    Ok(Com(item))
-}
-
-/// Caminho com zero final, para as APIs do Windows.
-fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
-    use std::os::windows::ffi::OsStrExt;
-    s.encode_wide().chain(std::iter::once(0)).collect()
-}
-
-/// Inicializa o COM na thread que chama e desfaz ao sair, inclusive quando a chamada já o tinha inicializado.
-struct Apartment;
-
-impl Apartment {
-    /// Erro com `falha` se o COM não inicia.
-    fn enter(falha: &str) -> Result<Apartment, String> {
-        // SAFETY: COM é inicializado na própria thread, e o Drop chama `CoUninitialize` para cada chamada bem-sucedida.
-        let hr = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
-        if hr < 0 {
-            return Err(falha.into());
-        }
-        Ok(Apartment)
-    }
-}
-
-impl Drop for Apartment {
-    fn drop(&mut self) {
-        // SAFETY: par do `CoInitializeEx` de `enter`.
-        unsafe { CoUninitialize() };
-    }
-}
-
-/// Chama o IFileOperation para copiar ou mover `src` para dentro de `parent` com o nome `name`. Sem confirmação e com
-/// renomeação em conflito: nada existente é sobrescrito; um conflito que apareça na hora ganha outro nome (o `transfer` confere).
-unsafe fn run_transfer(src: &Path, parent: &Path, name: &str, cut: bool) -> Result<(), String> {
-    let _apartment = Apartment::enter("Não foi possível iniciar o COM do Windows. Nada foi colado.")?;
-    let name_w = wide(std::ffi::OsStr::new(name));
-    let flags = FOF_RENAMEONCOLLISION | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
-    let falha = "Não foi possível localizar o item para colar. Nada foi colado.";
-    run_operation(flags, "Não foi possível iniciar a cópia do Windows. Nada foi colado.", "O Windows não concluiu a operação.", |vtbl, op| {
-        let item = shell_item(src, falha)?;
-        let folder = shell_item(parent, falha)?;
-        let hr = if cut {
-            (vtbl.move_item)(op, item.0, folder.0, name_w.as_ptr(), std::ptr::null_mut())
-        } else {
-            (vtbl.copy_item)(op, item.0, folder.0, name_w.as_ptr(), std::ptr::null_mut())
-        };
-        Ok((hr, vec![item, folder]))
-    })
 }
 
 /// O caminho real de `rel` dentro do projeto. Recusa o que sai da pasta, o que não existe e o que não é do tipo pedido
@@ -1089,15 +945,16 @@ src/gerado/
         assert_eq!(rename(&root, "B.txt", "B.txt").unwrap(), "B.txt");
     }
 
+    #[cfg(windows)]
     #[test]
     fn link_quebrado_ocupa_o_nome_e_link_nao_e_renomeado() {
         let root = &fixture("links").0;
         // Criar link simbólico exige privilégio no Windows; sem ele, o teste só não roda esta parte.
-        if std::os::windows::fs::symlink_file(root.join("sub/x.md"), root.join("link.md")).is_err() {
+        if crate::platform::symlink_arquivo(&root.join("sub/x.md"), &root.join("link.md")).is_err() {
             eprintln!("sem privilégio para link simbólico: teste de links pulado");
             return;
         }
-        std::os::windows::fs::symlink_file(root.join("nao-existe.md"), root.join("quebrado.md")).unwrap();
+        crate::platform::symlink_arquivo(&root.join("nao-existe.md"), &root.join("quebrado.md")).unwrap();
         assert!(rename(&root, "b.txt", "quebrado.md").unwrap_err().starts_with("Já existe"));
         assert!(rename(&root, "link.md", "outro.md").unwrap_err().contains("é um link"));
         assert!(rename(&root, "link.md", "outro.md").is_err());
@@ -1174,8 +1031,8 @@ src/gerado/
         }
     }
 
-    fn snap(paths: &[PathBuf], cut: bool) -> crate::clipboard::Snapshot {
-        crate::clipboard::Snapshot { paths: paths.to_vec(), cut }
+    fn snap(paths: &[PathBuf], cut: bool) -> Snapshot {
+        Snapshot { paths: paths.to_vec(), cut }
     }
 
     #[test]
@@ -1209,11 +1066,12 @@ src/gerado/
         assert!(root.join("Zeta").is_dir());
     }
 
+    #[cfg(windows)]
     #[test]
     fn criacao_nao_sobrescreve_link_quebrado() {
         let root = &fixture("cria-quebrado").0;
         // Criar link simbólico exige privilégio no Windows; sem ele, o teste só não roda esta parte.
-        if std::os::windows::fs::symlink_file(root.join("nao-existe.md"), root.join("quebrado.md")).is_err() {
+        if crate::platform::symlink_arquivo(&root.join("nao-existe.md"), &root.join("quebrado.md")).is_err() {
             eprintln!("sem privilégio para link simbólico: teste de link quebrado pulado");
             return;
         }
@@ -1591,12 +1449,13 @@ src/gerado/
         assert!(!root.join("A.txt").exists());
     }
 
+    #[cfg(windows)]
     #[test]
     fn gravacao_verificada_recusa_link_no_lugar_do_arquivo() {
         let root = &fixture("verifica-link").0;
         std::fs::write(root.join("sub/x.md"), "alvo").unwrap();
         // Criar link simbólico exige privilégio no Windows; sem ele, o teste só não roda esta parte.
-        if std::os::windows::fs::symlink_file(root.join("sub/x.md"), root.join("link.md")).is_err() {
+        if crate::platform::symlink_arquivo(&root.join("sub/x.md"), &root.join("link.md")).is_err() {
             eprintln!("sem privilégio para link simbólico: teste pulado");
             return;
         }
@@ -1624,7 +1483,7 @@ src/gerado/
         let root = &fixture("verifica-trava").0;
         std::fs::write(root.join("A.txt"), "base").unwrap();
         let held = hold(&root, "A.txt").unwrap();
-        assert!(OpenOptions::new().write(true).open(root.join("A.txt")).is_err(), "outro gravador entrou com o arquivo travado");
+        assert!(std::fs::OpenOptions::new().write(true).open(root.join("A.txt")).is_err(), "outro gravador entrou com o arquivo travado");
         assert!(write_checked(&root, "A.txt", "novo", "base", false).unwrap_err().contains("gravando"));
         drop(held);
         write_checked(&root, "A.txt", "novo", "base", false).unwrap();

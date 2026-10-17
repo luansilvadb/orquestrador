@@ -3,7 +3,8 @@
 //! regras do Codex que versões antigas deixavam em CODEX_HOME.
 use crate::cli::{self, toml};
 use crate::config::Config;
-use crate::proc::{owner_state, start_time, Owner};
+use crate::platform::start_time;
+use crate::proc::{owner_state, Owner};
 use crate::roles;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -26,7 +27,7 @@ pub struct Places {
 
 impl Places {
     pub fn real() -> Places {
-        let home = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default());
+        let home = crate::platform::pasta_pessoal();
         let codex_home = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()).map(PathBuf::from);
         Places {
             temp: std::env::temp_dir(),

@@ -1,4 +1,4 @@
-# Checks a cada push em main e a cada pull request: build do frontend, checagens puras e testes Rust. Sem segredos, sem assinatura, sem publicação.
+# Checks a cada push em main e a cada pull request: build do frontend, checagens puras, testes Rust no Windows e compilação do backend em Linux e macOS. Sem segredos, sem assinatura, sem publicação.
 # Os checks de interface (npm run check:ui) não rodam aqui: sobem o Vite e um Chromium local.
 name: ci
 
@@ -37,3 +37,37 @@ jobs:
       - name: Testes Rust
         shell: bash
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  # Só compila o backend fora do Windows (macOS e Linux). O app ainda não tem os recursos lá, então não há teste.
+  compilar:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+
+      # Pacotes do Tauri 2 para Ubuntu, conforme a documentação de pré-requisitos (tauri.app/start/prerequisites).
+      - name: Dependências do Tauri no Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - run: npm ci
+        shell: bash
+
+      - run: npm run build
+        shell: bash
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Compilação do backend fora do Windows
+        shell: bash
+        run: cargo check --all-targets --manifest-path src-tauri/Cargo.toml

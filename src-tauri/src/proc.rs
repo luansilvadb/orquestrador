@@ -1,25 +1,15 @@
 //! Processos: comandos sem janela, Git, o job que mata a árvore inteira e a prova de vida do dono
 //! de uma sessão.
-use std::os::windows::process::CommandExt;
+use crate::platform::{self, Job, Situacao};
 use std::collections::HashSet;
 use std::path::Path;
 use std::io::Write;
 use std::process::{Command, Stdio};
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, FILETIME, HANDLE, STILL_ACTIVE};
-use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
-    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject, JOBOBJECT_BASIC_PROCESS_ID_LIST,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-};
-use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, CREATE_NO_WINDOW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
-};
 
 /// Um comando que não abre janela de console (o app é de janela; cada filho abriria a sua).
 pub fn quiet(program: &str) -> Command {
     let mut cmd = Command::new(program);
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    platform::sem_janela(&mut cmd);
     cmd
 }
 
@@ -142,120 +132,10 @@ pub fn branch(dir: &Path) -> Result<String, String> {
     Ok(hash.trim().to_string())
 }
 
-/// Job do Windows: tudo o que o processo criar morre junto, no `kill` ou quando o app fecha o
-/// handle (inclusive ao morrer), então não sobra processo órfão.
-pub struct Job(HANDLE);
-unsafe impl Send for Job {}
-
-impl Job {
-    pub fn adopt(pid: u32) -> Option<Job> {
-        unsafe {
-            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-            if job.is_null() {
-                return None;
-            }
-            let job = Job(job);
-            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            SetInformationJobObject(
-                job.0,
-                JobObjectExtendedLimitInformation,
-                &info as *const _ as *const _,
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            );
-            let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
-            if process.is_null() {
-                return None;
-            }
-            let ok = AssignProcessToJobObject(job.0, process);
-            CloseHandle(process);
-            (ok != 0).then_some(job)
-        }
-    }
-
-    pub fn kill(&self) {
-        unsafe { TerminateJobObject(self.0, 1) };
-    }
-
-    /// O CLI interativo (`claude` ou `codex`) que roda agora no job, pelo executável de cada processo vivo dele. Com
-    /// os dois (um chamou o outro), vale o que começou primeiro: é o de fora, dono do terminal. `None` sem nenhum.
-    pub fn cli(&self) -> Option<&'static str> {
-        // ponytail: lista de até 512 processos; um job maior que isso dá `None` (o terminal cola como shell comum).
-        let mut buf = vec![0usize; 1 + 512];
-        let list = buf.as_mut_ptr() as *mut JOBOBJECT_BASIC_PROCESS_ID_LIST;
-        let size = (buf.len() * std::mem::size_of::<usize>()) as u32;
-        let pids = unsafe {
-            if QueryInformationJobObject(self.0, JobObjectBasicProcessIdList, list as *mut _, size, std::ptr::null_mut()) == 0 {
-                return None;
-            }
-            std::slice::from_raw_parts((*list).ProcessIdList.as_ptr(), (*list).NumberOfProcessIdsInList as usize)
-        };
-        pids.iter()
-            .filter_map(|&pid| consulta(pid as u32, |p| Some((cli_do_executavel(p)?, hora_de_criacao(p)?))).ok().flatten())
-            .min_by_key(|&(_, criada)| criada)
-            .map(|(cli, _)| cli)
-    }
-}
-
-/// `claude` ou `codex` quando o executável do processo aberto para consulta é `claude.exe` ou `codex.exe`.
-fn cli_do_executavel(process: HANDLE) -> Option<&'static str> {
-    let mut buf = [0u16; 1024];
-    let mut len = buf.len() as u32;
-    if unsafe { QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) } == 0 {
-        return None;
-    }
-    let path = String::from_utf16_lossy(&buf[..len as usize]);
-    match Path::new(&path).file_name()?.to_string_lossy().to_lowercase().as_str() {
-        "claude.exe" => Some("claude"),
-        "codex.exe" => Some("codex"),
-        _ => None,
-    }
-}
-
-impl Drop for Job {
-    fn drop(&mut self) {
-        unsafe { CloseHandle(self.0) };
-    }
-}
-
-fn filetime(t: FILETIME) -> u64 {
-    ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64
-}
-
-/// Abre o processo só para consulta, lê com `ler` e fecha o handle em qualquer caso. `Err` traz o código
-/// do Windows quando o processo não abre; `Ok(None)` quando abre mas `ler` não consegue.
-fn consulta<T>(pid: u32, ler: impl FnOnce(HANDLE) -> Option<T>) -> Result<Option<T>, u32> {
-    unsafe {
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if process.is_null() {
-            return Err(GetLastError());
-        }
-        let lido = ler(process);
-        CloseHandle(process);
-        Ok(lido)
-    }
-}
-
-/// Hora de criação de um processo aberto para consulta.
-fn hora_de_criacao(process: HANDLE) -> Option<u64> {
-    unsafe {
-        let mut times: [FILETIME; 4] = std::mem::zeroed();
-        let ok = GetProcessTimes(process, &mut times[0], &mut times[1], &mut times[2], &mut times[3]);
-        (ok != 0).then(|| filetime(times[0]))
-    }
-}
-
-/// Código de saída de um processo aberto para consulta: `STILL_ACTIVE` enquanto ele roda.
-fn codigo_de_saida(process: HANDLE) -> Option<u32> {
-    unsafe {
-        let mut code = 0u32;
-        (GetExitCodeProcess(process, &mut code) != 0).then_some(code)
-    }
-}
-
-/// Hora de criação de um processo, no mesmo número que `StartTime.ToFileTimeUtc()` do PowerShell.
-pub fn start_time(pid: u32) -> Option<u64> {
-    consulta(pid, hora_de_criacao).ok().flatten()
+/// O CLI interativo (`claude` ou `codex`) que roda agora no job, pelo executável de cada processo vivo dele. Com
+/// os dois (um chamou o outro), vale o que começou primeiro: é o de fora, dono do terminal. `None` sem nenhum.
+pub fn cli_do_job(job: &Job) -> Option<&'static str> {
+    job.pids()?.into_iter().filter_map(platform::cli_do_processo).min_by_key(|&(_, criada)| criada).map(|(cli, _)| cli)
 }
 
 #[derive(Debug, PartialEq)]
@@ -268,19 +148,22 @@ pub enum Owner {
 /// Um PID sozinho não prova nada, o Windows reaproveita: só é o mesmo dono se a hora de início
 /// também bater. Processo que não pode ser lido é `Unknown`.
 pub fn owner_state(pid: u32, started: u64) -> Owner {
-    match consulta(pid, |p| Some((hora_de_criacao(p)?, codigo_de_saida(p)?))) {
-        Err(erro) if erro == ERROR_INVALID_PARAMETER => Owner::Dead,
-        Err(_) | Ok(None) => Owner::Unknown,
-        Ok(Some((criada, code))) if code == STILL_ACTIVE as u32 && criada == started => Owner::Alive,
-        Ok(Some(_)) => Owner::Dead,
+    match platform::situacao_do_processo(pid) {
+        Situacao::Inexistente => Owner::Dead,
+        Situacao::Ilegivel => Owner::Unknown,
+        Situacao::Lido { criada, rodando } if rodando && criada == started => Owner::Alive,
+        Situacao::Lido { .. } => Owner::Dead,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    use crate::platform::start_time;
     use crate::testutil::Tmp;
 
+    #[cfg(windows)]
     #[test]
     fn dono_vivo_morto_e_pid_reaproveitado() {
         let me = std::process::id();
@@ -294,6 +177,7 @@ mod tests {
         assert_eq!(owner_state(pid, t), Owner::Dead);
     }
 
+    #[cfg(windows)]
     #[test]
     fn job_mata_a_arvore() {
         // cmd -> ping: matar o job leva os dois.
@@ -318,6 +202,7 @@ mod tests {
         assert_eq!(branch(&dir).unwrap(), hash.trim());
     }
 
+    #[cfg(windows)]
     #[test]
     fn mesma_pasta_ignora_maiusculas_e_pasta_inexistente_nao_e() {
         let dir = &Tmp::new("orq-proc", "mesma").0;

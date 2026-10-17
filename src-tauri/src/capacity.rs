@@ -50,15 +50,7 @@ pub fn admission(cpus: Option<usize>, memory: Option<Memory>, live: usize) -> us
 }
 
 fn memory() -> Option<Memory> {
-    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-    // SAFETY: MEMORYSTATUSEX é só números; a estrutura é zerada e `dwLength` é o tamanho dela, como a API exige.
-    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
-    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
-    // SAFETY: a API só escreve dentro da estrutura passada, que vive até a chamada acabar.
-    if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
-        return None;
-    }
-    Some(Memory { total: status.ullTotalPhys, available: status.ullAvailPhys })
+    crate::platform::memoria().map(|(total, available)| Memory { total, available })
 }
 
 #[cfg(test)]
@@ -116,6 +108,7 @@ mod tests {
         assert_eq!(admission(Some(64), cheio, usize::MAX), 16);
     }
 
+    #[cfg(windows)]
     #[test]
     fn leitura_real_da_memoria_e_das_cpus() {
         let real = Resources::real();

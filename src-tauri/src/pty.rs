@@ -1,6 +1,7 @@
 //! Um CLI rodando num PTY (ConPTY), com a saída guardada desde o início e numerada.
 use crate::cli::Spawn;
-use crate::proc::Job;
+use crate::platform::Job;
+use crate::proc::cli_do_job;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -90,9 +91,9 @@ impl Term {
         let _ = self.writer.write_all(data).and_then(|_| self.writer.flush());
     }
 
-    /// O CLI (`claude` ou `codex`) que roda agora neste terminal, pelos processos dele (ver `Job::cli`).
+    /// O CLI (`claude` ou `codex`) que roda agora neste terminal, pelos processos dele (ver `cli_do_job`).
     pub fn cli(&self) -> Option<&'static str> {
-        self.job.as_ref()?.cli()
+        cli_do_job(self.job.as_ref()?)
     }
 
     pub fn resize(&self, cols: u16, rows: u16) {
