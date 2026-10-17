@@ -6,7 +6,7 @@ import { Button, colorsPreset, DraggablePanel, DropdownMenu, Tag, TabsIndicator,
 import { Center, Flexbox, type PresetColorKey } from '@lobehub/ui';
 import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
-import { SECONDARY } from './issue-ui';
+import { SECONDARY } from './text-style';
 import { TermHost, terminals } from './terminals';
 import { revealTab, wheelToScroll } from './tab-strip';
 import { ORCHESTRATOR, TOOL_NAME, type Choice, type ExecutorNode, type NodeState, type Tool } from './types';

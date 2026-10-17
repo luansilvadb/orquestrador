@@ -41,10 +41,6 @@ pub struct Session {
     pub global_dirs: Vec<PathBuf>,
 }
 
-/// A pasta da sessão onde os hooks do orquestrador gravam o início (`UserPromptSubmit`) e o fim (`Stop`) de cada
-/// rodada, um arquivo por evento, pelo `--hook`. Quem lê é o laço da sessão, em `core.rs`.
-pub const TURN_DIR: &str = "orch-hook";
-
 /// Uma regra `prefix_rule` do Codex para um único token, como a forma antiga a escrevia. Só `is_legacy_rule` a
 /// usa, para reconhecer o órfão pelo texto exato.
 fn rule(token: &str, justification: &str) -> String {
@@ -79,7 +75,7 @@ impl Session {
     fn fill(&self, name: &str, app: &str, project: &str, cfg: &Config) -> std::io::Result<()> {
         let d = &self.dir;
         std::fs::create_dir(d)?;
-        for sub in ["requests", "results", "exec", TURN_DIR] {
+        for sub in ["requests", "results", "exec"] {
             std::fs::create_dir(d.join(sub))?;
         }
         let pid = std::process::id();
@@ -90,7 +86,7 @@ impl Session {
         if cfg.orchestrator.tool != "codex" {
             let mcp = json!({ "mcpServers": { "orquestrador": { "command": app, "args": ["--mcp", d.to_string_lossy()] } } });
             std::fs::write(d.join("mcp.json"), serde_json::to_string_pretty(&mcp).unwrap())?;
-            std::fs::write(d.join("claude-settings.json"), Self::claude_settings(app, &self.turn_dir()))?;
+            std::fs::write(d.join("claude-settings.json"), Self::claude_settings())?;
         }
         Ok(())
     }
@@ -100,22 +96,12 @@ impl Session {
     /// Claude Code 2.1.296 não expõe o PowerShell no Windows com Git Bash, e o orquestrador ficaria no Git Bash.
     /// MCP_TOOL_TIMEOUT dá às chamadas ao servidor do orquestrador os 15 minutos da espera de um lote. As duas
     /// entram só por este arquivo, passado com --settings: o ambiente do usuário não muda.
-    /// Os hooks `UserPromptSubmit` e `Stop` marcam o início e o fim de cada rodada em `turn_dir`, na forma `args`,
-    /// sem shell, como os do executor. Medido no Claude Code 2.1.301: os dois chegam com `hook_event_name`, uma vez
-    /// por rodada; a rodada interrompida com Esc não dispara `Stop` (ver `core::ESC`).
-    fn claude_settings(app: &str, turn_dir: &Path) -> String {
-        let run = json!([{ "hooks": [{ "type": "command", "command": app, "args": ["--hook", turn_dir.to_string_lossy()] }] }]);
+    fn claude_settings() -> String {
         serde_json::to_string_pretty(&json!({
             "skipDangerousModePermissionPrompt": true,
             "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" },
-            "hooks": { "UserPromptSubmit": run, "Stop": run },
         }))
         .unwrap()
-    }
-
-    /// A pasta dos sinais de início e fim de rodada do orquestrador (`TURN_DIR`).
-    pub fn turn_dir(&self) -> PathBuf {
-        self.dir.join(TURN_DIR)
     }
 
     /// Tira a pasta. Nunca falha: o que não saiu fica e é dito no texto devolvido.
@@ -259,12 +245,10 @@ pub mod tests {
         // Nenhuma regra do Codex: nem a pasta de regras é criada.
         assert!(!p.codex_rules.exists(), "a sessão não escreve regra do Codex");
         assert!(!s.dir.join("claude-settings.json").exists() && !s.dir.join("mcp.json").exists());
-        assert!(s.turn_dir().is_dir(), "a pasta dos sinais nasce com a sessão, também no Codex");
 
         // O que o app deixa na pasta durante o uso também sai.
         std::fs::create_dir_all(s.dir.join("requests").join("x")).unwrap();
         std::fs::write(s.dir.join("requests").join("x").join("1.txt"), "t").unwrap();
-        std::fs::write(s.turn_dir().join("1.json"), "{}").unwrap();
         assert_eq!(s.remove(), None);
         assert!(!s.dir.exists());
         discard(&p);
@@ -282,17 +266,14 @@ pub mod tests {
         assert_eq!(mcp["mcpServers"]["orquestrador"]["args"], json!(["--mcp", s.dir.to_string_lossy()]));
         assert_eq!(mcp["mcpServers"].as_object().unwrap().len(), 1, "só o orquestrador");
         let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("claude-settings.json")).unwrap()).unwrap();
-        let turn = json!([{ "hooks": [{ "type": "command", "command": APP, "args": ["--hook", s.dir.join("orch-hook").to_string_lossy()] }] }]);
         assert_eq!(
             settings,
             json!({
                 "skipDangerousModePermissionPrompt": true,
                 "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" },
-                "hooks": { "UserPromptSubmit": turn, "Stop": turn },
             }),
-            "sem lista de permissões: o aviso do bypass desligado, o PowerShell, o prazo do lote e o início e o fim da rodada"
+            "sem lista de permissões e sem hooks: o aviso do bypass desligado, o PowerShell e o prazo do lote"
         );
-        assert!(s.turn_dir().is_dir(), "a pasta dos sinais nasce com a sessão");
         assert!(!p.codex_rules.exists());
         assert_eq!(s.remove(), None);
         discard(&p);

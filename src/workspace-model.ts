@@ -7,8 +7,7 @@
 //   escolhido pelo integrador e nunca trocado. O `path` é só onde o arquivo está agora: `remapPath` o atualiza sem mexer no docId.
 //   Por isso renomear/mover não desmonta o buffer, e duas abas com o mesmo docId (em grupos diferentes) compartilham o buffer.
 // - Diff é identificado por lado + path (`staged`/`unstaged`); histórico, por hash + path; conflito, por path.
-// - As Issues não são abas do editor (têm área própria, `issues-area.tsx`). A recuperação salva por versões antigas pode trazer abas
-//   `issues` e `new-issue`: `loadWorkspace` as descarta em silêncio, sem invalidar o resto.
+// - Abas `issues` e `new-issue` só vêm de recuperações salvas por versões antigas: `loadWorkspace` as descarta em silêncio, sem invalidar o resto.
 // - Dentro de um grupo, uma identidade aparece no máximo uma vez: abrir de novo só ativa a que já existe.
 // - Ordem do grupo: fixadas primeiro, depois as demais. No máximo uma prévia por grupo. Fixada nunca é prévia.
 // - Cada operação devolve um estado novo; o argumento não muda. Operação inválida (grupo ou aba inexistente) devolve o mesmo estado.
@@ -243,11 +242,11 @@ export function loadWorkspace(text: string): Loaded {
     }
     groupIds.add(group.id);
     const tabs: EditorTab[] = [];
-    // Se a ativa era uma aba antiga das Issues, a ativa passa para a vizinha da direita (a próxima que ficar) ou, sem ela, a da esquerda.
+    // Se a ativa era uma aba antiga (recuperação de versão antiga), a ativa passa para a vizinha da direita (a próxima que ficar) ou, sem ela, a da esquerda.
     let activeId = typeof group.active === 'string' ? group.active : null;
     let inheritActive = false;
     for (const tab of asArray(group.tabs)) {
-      // Abas das Issues de versões antigas: saem sem aviso (a área das Issues não é do editor).
+      // Abas antigas de `issues` e `new-issue` (só de recuperações de versões antigas): saem sem aviso.
       if (isLegacyIssueTab(tab)) {
         if (isRecord(tab) && tab.id === activeId) inheritActive = true;
         continue;

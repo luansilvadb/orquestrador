@@ -112,7 +112,7 @@
     ],
     "rules": [
       { "name": "The Signal-Only Rule", "body": "Cor saturada só comunica estado, mudança ou erro. Nada de cor decorativa.", "section": "colors" },
-      { "name": "The Token Rule", "body": "Componentes usam os tokens do tema (`bg-card`, `text-muted-foreground`, `border`…). Cores fixas só nas exceções documentadas: titlebar, comparador (cores do VS Code), destaque da pesquisa e as cores de estado nos ícones das Issues, com a paleta das bolinhas de label, centralizadas em `src/issue-ui.tsx` e `src/issue-text.ts`.", "section": "colors" },
+      { "name": "The Token Rule", "body": "Componentes usam os tokens do tema (`bg-card`, `text-muted-foreground`, `border`…). Cores fixas só nas exceções documentadas: titlebar, comparador (cores do VS Code), destaque da pesquisa.", "section": "colors" },
       { "name": "The Technical-Mono Rule", "body": "Monoespaçado só em terminal e valores técnicos. Nunca como estilo de rótulo ou título.", "section": "typography" },
       { "name": "The Flat-Bench Rule", "body": "Superfícies de trabalho (painéis, faixas, listas) não têm sombra. Sem glow, sem gradiente decorativo, sem acento colorido na borda de cards.", "section": "elevation" }
     ],
@@ -126,7 +126,7 @@
     ],
     "donts": [
       "Don't usar glows, gradientes decorativos ou acento colorido nas bordas de cards.",
-      "Don't usar cor fixa num componente fora das exceções documentadas (titlebar, comparador, pesquisa, Issues).",
+      "Don't usar cor fixa num componente fora das exceções documentadas (titlebar, comparador, pesquisa).",
       "Don't usar monoespaçado fora de terminal e valores técnicos.",
       "Don't pôr sombra em superfícies de trabalho.",
       "Don't trocar a Inter pela fonte padrão do Lobe UI (HarmonyOS Sans, que viria da CDN)."

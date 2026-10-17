@@ -90,6 +90,11 @@ impl Term {
         let _ = self.writer.write_all(data).and_then(|_| self.writer.flush());
     }
 
+    /// O CLI (`claude` ou `codex`) que roda agora neste terminal, pelos processos dele (ver `Job::cli`).
+    pub fn cli(&self) -> Option<&'static str> {
+        self.job.as_ref()?.cli()
+    }
+
     pub fn resize(&self, cols: u16, rows: u16) {
         let _ = self.master.resize(size(cols, rows));
     }

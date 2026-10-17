@@ -3,9 +3,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
-  ActiveIssue, Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GitBranches, GitDiff, GitState, GraphCommit, HunkRef, Issue,
-  IssuesData, Moved, Options,
-  Pasted, QuickOpen, ReplaceApplied, ReplacePreview, ReplaceQuery, ReplaceRequest, ReviewDiff, SearchFilter, SearchOptions, SearchResults, Snapshot, UpdateStatus,
+  Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GitBranches, GitDiff, GitState, GraphCommit, HunkRef,
+  Moved, Options, Pasted, QuickOpen, ReplaceApplied, ReplacePreview, ReplaceQuery, ReplaceRequest, ReviewDiff, SearchFilter, SearchOptions, SearchResults, Snapshot, UpdateStatus,
 } from './types';
 
 export interface Transport {
@@ -65,9 +64,9 @@ export const backend = {
   // Mata o shell de `id` sem gerar evento de saída.
   closeShell: (id: string) => call<void>('close_shell', { id }),
   setExecutorChoice: (choice: Choice) => call<void>('set_executor_choice', { choice }),
-  // Rodada do orquestrador em andamento agora (o evento `orchestrator-turn` traz as mudanças). Fechado conta como livre.
-  orchestratorBusy: () => call<boolean>('orchestrator_busy'),
   termWrite: (id: string, data: string) => call<void>('term_write', { id, data }),
+  // O CLI que roda agora no terminal `id`, pelo processo (num shell, muda quando ele abre e quando sai); `null` é shell comum.
+  termCli: (id: string) => call<'claude' | 'codex' | null>('term_cli', { id }),
   termResize: (id: string, cols: number, rows: number) => call<void>('term_resize', { id, cols, rows }),
   termSnapshot: (id: string) => call<Snapshot>('term_snapshot', { id }),
   stopExecutor: (id: string) => call<void>('stop_executor', { id }),
@@ -139,17 +138,6 @@ export const backend = {
   // Prévia da substituição: não grava. A aplicação só toca nos arquivos escolhidos da prévia, com a revisão que ela mostrou; erros voltam por arquivo.
   replacePreview: (query: ReplaceQuery, replacement: string) => call<ReplacePreview>('replace_preview', { query, replacement }),
   replaceApply: (request: ReplaceRequest) => call<ReplaceApplied>('replace_apply', { request }),
-  // Issues do projeto, só neste computador (um arquivo por projeto em `%LOCALAPPDATA%\orquestrador\issues`). Erro chega como mensagem
-  // em português (arquivo ilegível, disco recusando).
-  issuesLoad: () => call<IssuesData>('issues_load'),
-  // Devolvem a issue como ficou. Título vazio e issue que não existe mais rejeitam com a mensagem.
-  issuesCreate: (title: string, body: string, labels: string[]) => call<Issue>('issues_create', { title, body, labels }),
-  issuesUpdate: (number: number, title: string, body: string, labels: string[]) => call<Issue>('issues_update', { number, title, body, labels }),
-  issuesSetState: (number: number, open: boolean) => call<Issue>('issues_set_state', { number, open }),
-  // Apaga de vez; a em andamento e a próxima que eram ela perdem a marca no arquivo.
-  issuesDelete: (number: number) => call<void>('issues_delete', { number }),
-  // A em andamento e a próxima, guardadas no mesmo arquivo.
-  issuesSetTracked: (active: ActiveIssue | null, next: number | null) => call<void>('issues_set_tracked', { active, next }),
 };
 
 /** Erros do backend já chegam como mensagem em português. */

@@ -18,7 +18,7 @@ Pôr CLIs de IA para trabalhar sobre a pasta de um projeto. Um orquestrador conv
 
 ## Positioning
 
-Orquestração local de CLIs de IA reais (`claude` e `codex`, cada um podendo ser orquestrador ou executor) sobre a pasta do projeto, com editor, Git, pesquisa, terminais e issues no mesmo lugar. Não é um chat com IA nem um IDE com assistente: o centro são os agentes trabalhando em paralelo.
+Orquestração local de CLIs de IA reais (`claude` e `codex`, cada um podendo ser orquestrador ou executor) sobre a pasta do projeto, com editor, Git, pesquisa e terminais no mesmo lugar. Não é um chat com IA nem um IDE com assistente: o centro são os agentes trabalhando em paralelo.
 
 ## Operating Context
 
@@ -28,7 +28,7 @@ Orquestração local de CLIs de IA reais (`claude` e `codex`, cada um podendo se
 
 ## Capabilities and Constraints
 
-- Telas: Arquivos (árvore e editor CodeMirror), Pesquisar, Git (controle de versão e comparador) e Issues (ideias de tarefa do projeto, só neste computador); painel do Orquestrador à direita e painel Terminal embaixo.
+- Telas: Arquivos (árvore e editor CodeMirror), Pesquisar, Git (controle de versão e comparador); painel do Orquestrador à direita e painel Terminal embaixo.
 - A concorrência dos executores é automática (CPU e RAM), sem ajuste manual.
 - Os executores têm permissão total na pasta do projeto; os limites estão em `docs/seguranca.md`.
 - Terminais xterm ficam sempre montados: trocar de tela não pode desmontar a coluna central nem o painel do Orquestrador.

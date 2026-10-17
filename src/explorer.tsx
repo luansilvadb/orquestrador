@@ -5,7 +5,7 @@
 // O visual segue o Explorer do Antigravity/VS Code: ícones do tema Symbols, decorações do Git (cor, letra e "•" na pasta; cinza no ignorado),
 // barra com as ações da view e a seção recolhível com o nome do projeto.
 import { type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronRight, ChevronsDownUp, CircleDot, FilePlus, Files, FolderPlus, Info, LoaderCircle, type LucideIcon, RefreshCw, Search, SquareTerminal, X } from 'lucide-react';
+import { ChevronRight, ChevronsDownUp, FilePlus, Files, FolderPlus, Info, LoaderCircle, type LucideIcon, RefreshCw, Search, SquareTerminal, X } from 'lucide-react';
 import {
   ActionIcon, Alert, Badge, type ContextMenuItem, Modal, ScrollArea, showContextMenu, Text, toast, Tree, type TreeDataNode,
 } from '@lobehub/ui/base-ui';
@@ -21,7 +21,7 @@ import { splitPath } from './git-history';
 import { usePolling } from './polling';
 import type { DirEntry, GitStatus, Moved } from './types';
 
-export type Route = 'arquivos' | 'pesquisa' | 'git' | 'issues';
+export type Route = 'arquivos' | 'pesquisa' | 'git';
 
 /** Opções de abertura. Sem elas, o clique simples abre como prévia (a aba seguinte substitui). `permanent`: a aba fica. `side`: abre na área da direita. */
 export type OpenOptions = { permanent?: boolean; side?: boolean };
@@ -102,7 +102,7 @@ function dropProblem(paths: string[], dest: string): string | null {
 const NONE: string[] = [];
 const NO_MODS = { ctrl: false, shift: false };
 
-/** Coluna de ícones: uma tela por botão, na ordem Arquivos, Pesquisar, Git, Issues. O botão da tela aberta tem aria-current e um filete à esquerda. */
+/** Coluna de ícones: uma tela por botão, na ordem Arquivos, Pesquisar, Git. O botão da tela aberta tem aria-current e um filete à esquerda. */
 export function Nav({ route, changed, onGo }: { route: Route; changed: number; onGo: (to: Route) => void }) {
   // Botão de 36 px com ícone de 20 px (o size numérico já dá essa proporção). A linha ocupa a faixa toda, para o filete encostar na borda.
   const button = (to: Route, label: string, icon: LucideIcon, title = label, badge?: ReactNode) => (
@@ -131,7 +131,6 @@ export function Nav({ route, changed, onGo }: { route: Route; changed: number; o
       {button('arquivos', 'Arquivos', Files)}
       {button('pesquisa', 'Pesquisar', Search, 'Pesquisar (Ctrl+Shift+F)')}
       {button('git', gitLabel, SourceControl, 'Git', gitBadge)}
-      {button('issues', 'Issues', CircleDot, 'Issues (Ctrl+Shift+I)')}
     </Flexbox>
   );
 }

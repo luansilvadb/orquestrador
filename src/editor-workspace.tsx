@@ -1152,7 +1152,6 @@ const EMPTY_HINTS = [
   ['Abrir arquivo', 'Ctrl+P'],
   ['Pesquisar nos arquivos', 'Ctrl+Shift+F'],
   ['Alternar o terminal', 'Ctrl+`'],
-  ['Nova issue', 'Ctrl+Shift+I'],
 ] as const;
 
 function EmptyGroup() {

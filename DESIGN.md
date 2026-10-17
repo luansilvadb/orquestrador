@@ -142,7 +142,7 @@ Uma paleta de neutros quase sem matiz, onde o branco faz o papel de cor primári
 ### Named Rules
 **The Signal-Only Rule.** Cor saturada só comunica estado, mudança ou erro. Nada de cor decorativa.
 
-**The Token Rule.** Componentes usam os tokens do tema (`bg-card`, `text-muted-foreground`, `border`…). Cores fixas só nas exceções documentadas: titlebar, comparador (cores do VS Code), destaque da pesquisa e as cores de estado nos ícones das Issues (aberta, fechada e o âmbar da em andamento, as do GitHub), centralizadas em `GH` no `src/issue-ui.tsx`, com a paleta fixa das bolinhas de label (`labelColor` em `src/issue-text.ts`). O resto das Issues usa os tokens: texto neutro, primário branco do app, labels como chip neutro com bolinha.
+**The Token Rule.** Componentes usam os tokens do tema (`bg-card`, `text-muted-foreground`, `border`…). Cores fixas só nas exceções documentadas: titlebar, comparador (cores do VS Code) e destaque da pesquisa.
 
 ## Typography
 
@@ -164,7 +164,7 @@ Uma paleta de neutros quase sem matiz, onde o branco faz o papel de cor primári
 
 ## Layout
 
-Layout de IDE em colunas fixas, nada rola na janela (`html body { overflow: hidden }`): titlebar de 36 px no topo; navegação de 44 px à esquerda (Arquivos, Pesquisar, Git, Issues); faixa lateral redimensionável (mínimo 200 px); área central com editor em cima e painel Terminal embaixo; painel do Orquestrador à direita. Os painéis são `DraggablePanel` redimensionáveis e lembram o tamanho.
+Layout de IDE em colunas fixas, nada rola na janela (`html body { overflow: hidden }`): titlebar de 36 px no topo; navegação de 44 px à esquerda (Arquivos, Pesquisar, Git); faixa lateral redimensionável (mínimo 200 px); área central com editor em cima e painel Terminal embaixo; painel do Orquestrador à direita. Os painéis são `DraggablePanel` redimensionáveis e lembram o tamanho.
 
 O ritmo é dado pelas alturas fixas: linha de lista de 24 px, faixa de abas e cabeçalho de 36 px (as abas dos arquivos no editor têm 30 px, nas medidas do Antigravity), campo de 32 px, item de menu de 26 px. As faixas de abas rolam só na horizontal, com a barra escondida. Barras estreitas usam container queries (`@container`) para encolher rótulos abaixo de ~448–460 px, mantendo o texto completo no `title` e no `aria-label`.
 
@@ -188,7 +188,7 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 
 ### Buttons
 - **Shape:** cantos discretos (6px), altura padrão do tema (36px), pequeno nas barras.
-- **Fill:** branco de tinta com texto preto, para a ação principal (Salvar, Commit, Escolher pasta; no detalhe da issue, o Colar no orquestrador).
+- **Fill:** branco de tinta com texto preto, para a ação principal (Salvar, Commit, Escolher pasta).
 - **Default:** preenchimento neutro, para Cancelar e ações secundárias.
 - **Danger:** só na ação destrutiva, que também diz o que faz no texto ("Descartar e encerrar todos").
 - **ActionIcon:** ações pequenas de ícone (24–36 px); foco por teclado com `focus-visible:ring-2`.
@@ -208,10 +208,10 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 - **Tabs:** `TabsRoot variant="square"`, faixa de 36 px, linha de 2 px na aba ativa, divisor de 1 px em toda a largura. As abas dos arquivos no editor são a exceção, nas medidas do Antigravity: 30 px, divisor à direita de cada aba, e a ativa com o fundo do editor e um filete de 1 px em cima.
 
 ### List Rows
-- 24 px, ícone `File`, nome com prioridade (até 70%) e pasta em texto secundário que corta primeiro; ações num slot de largura fixa que aparece no hover ou no foco, sem deslocar o nome. Seleção em `bg-muted` com filete primário à esquerda; na faixa Issues, a linha escolhida (a que o detalhe mostra) é marcada assim, e o Colar compacto, um botão de ícone (`ActionIcon` com o ícone de colar, na cor do texto), só aparece nela e na próxima, no fluxo da linha. As linhas da faixa Issues têm 24 px, numa linha só (ícone de estado, `#N` em mono de 12 px numa coluna alinhada à direita, para os títulos começarem na mesma coluna, título e, na escolhida e na próxima, o botão de ícone), sem bolinhas de label; tempo e nomes das labels ficam no `title` e na descrição acessível.
+- 24 px, ícone `File`, nome com prioridade (até 70%) e pasta em texto secundário que corta primeiro; ações num slot de largura fixa que aparece no hover ou no foco, sem deslocar o nome. Seleção em `bg-muted` com filete primário à esquerda.
 
 ### Execution State
-- `Tag` com rótulo e ícone, cor predefinida do Lobe UI. Estado nunca só por cor. Na issue: Aberta, Fechada e Em andamento são `Tag` com texto neutro e a cor só no ícone (verde, roxo e âmbar do GitHub); a Próxima é neutra, com relógio (na linha da faixa, só o relógio antes do título). As quatro são `Tag` `outlined`, com o filete do tema e sem preenchimento, porque o chip de label é preenchido. Nunca pílula com a forma de uma label.
+- `Tag` com rótulo e ícone, cor predefinida do Lobe UI. Estado nunca só por cor.
 
 ## Do's and Don'ts
 
@@ -225,7 +225,7 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 
 ### Don't:
 - **Don't** usar glows, gradientes decorativos ou acento colorido nas bordas de cards.
-- **Don't** usar cor fixa num componente fora das exceções documentadas (titlebar, comparador, pesquisa e os ícones de estado das Issues).
+- **Don't** usar cor fixa num componente fora das exceções documentadas (titlebar, comparador, pesquisa).
 - **Don't** usar monoespaçado fora de terminal e valores técnicos.
 - **Don't** pôr sombra em superfícies de trabalho.
 - **Don't** trocar a Inter pela fonte padrão do Lobe UI (HarmonyOS Sans, que viria da CDN).

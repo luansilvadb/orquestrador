@@ -20,14 +20,6 @@
 // e `repo-above` (pasta dentro de outro repositório, raiz `C:\projetos`). Fora de `repo`, `git_status` devolve só o `kind` (e a raiz, em `repo-above`).
 // `?subfolder=1` faz `choose_project` devolver `subfolder: true`. Em execução, `__mock.gitMode = 'no-repo'` e `__mock.subfolder = true` trocam isso
 // (por exemplo, um `git init` feito pelo terminal, que o painel vê na consulta seguinte).
-// Issues (`?issues=`): `seed` (padrão; 13 issues em memória, abertas e fechadas, como no arquivo do projeto), `empty` (o projeto começa sem
-// nenhuma) e `broken` (`issues_load` e as mudanças rejeitam com a mensagem do arquivo ilegível, como o backend). A em andamento e a próxima
-// ficam em memória junto, como no arquivo. Em execução, `__mock.issuesMode = 'broken'` (ou `'seed'`) troca o modo.
-// Rodada do orquestrador: o simulado guarda o rascunho do terminal do orquestrador (o que foi colado e digitado via `term_write`). Um Enter
-// (`term_write` com só `"\r"`; colar não conta) emite `orchestrator-turn` com `busy: true` e `prompt` = o rascunho (que então é limpo) e, 8 s
-// depois, `busy: false`, com uma linha curta no terminal em cada ponta. `orchestrator_busy` responde o estado, e abrir o orquestrador começa
-// livre. `__mock.orchestratorTurn(true, prompt?)` (ou `false`) força o estado na hora, sem o fim automático; sem `prompt`, o evento sai sem ele
-// (como numa rodada que não veio de um envio do usuário).
 import { EDITOR_HEAD_LINES } from './mock-fixtures';
 import { parseDiffFromFile } from '@pierre/diffs';
 import type { Transport } from './backend';
@@ -36,7 +28,7 @@ import {
   type Batch, type Choice, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
   type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type Pasted, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
-  type SearchResults, type SkipReason, type ActiveIssue, type Issue,
+  type SearchResults, type SkipReason,
 } from './types';
 
 type Handler = (payload: never) => void;
@@ -45,8 +37,6 @@ type Handler = (payload: never) => void;
 const GIT_MODES = ['repo', 'no-repo', 'no-git', 'repo-above'] as const;
 type GitMode = (typeof GIT_MODES)[number];
 const params = new URLSearchParams(window.location.search);
-const ISSUES_MODES = ['seed', 'empty', 'broken'] as const;
-type IssuesMode = (typeof ISSUES_MODES)[number];
 const REPO_ROOT = 'C:\\projetos';
 
 const CLAUDE = ['low', 'medium', 'high', 'xhigh', 'max'], CODEX = ['low', 'medium', 'high', 'xhigh'];
@@ -327,31 +317,13 @@ const debug = { close: async () => {
   },
   // Modo do Git do simulado (ver o topo do arquivo). Trocar em execução simula um `git init` ou `git` removido por fora.
   gitMode: (GIT_MODES.find((m) => m === params.get('git')) ?? 'repo') as GitMode,
-  // Modo das Issues (ver o topo do arquivo).
-  issuesMode: (ISSUES_MODES.find((m) => m === params.get('issues')) ?? 'seed') as IssuesMode,
   // `choose_project` devolve a pasta como dentro de um repositório (o projeto aberto é a raiz dele).
   subfolder: params.get('subfolder') === '1',
-  // Força a rodada do orquestrador (ver o topo do arquivo): `true` ocupado até chamar com `false`.
-  orchestratorTurn: (busy: boolean, prompt?: string) => orchestratorTurn(busy, false, prompt),
   // Chamadas de Git que chegaram ao simulado, com argumento, resultado e erro (só para o check conferir o payload).
   calls: [] as { cmd: string; args: unknown; result: unknown; error: string | null }[] };
 (window as unknown as { __mock: typeof debug }).__mock = debug;
 
 const SHELL_PROMPT = 'PS C:\\projetos\\exemplo> ';
-// Rodada do orquestrador simulado: ocupado do Enter até o fim automático (8 s) ou até `__mock.orchestratorTurn(false)`.
-let orchestratorBusy = false;
-let turnTimer: ReturnType<typeof setTimeout> | undefined;
-const TURN_MS = 8000;
-// O que está no campo de entrada do orquestrador (colado e digitado) e ainda não foi enviado.
-let orchestratorDraft = '';
-function orchestratorTurn(busy: boolean, quiet = false, prompt?: string) {
-  clearTimeout(turnTimer);
-  if (busy === orchestratorBusy) return;
-  orchestratorBusy = busy;
-  if (!quiet) out('orchestrator', busy ? '\r\n[simulado] rodada iniciada…\r\n' : '[simulado] rodada concluída.\r\n');
-  emit('orchestrator-turn', busy && prompt !== undefined ? { busy, prompt } : { busy });
-}
-
 function shellTyped(id: string, data: string) {
   const shell = shells.get(id)!;
   for (const char of data) {
@@ -941,62 +913,6 @@ function wavSilence(seconds: number): ArrayBuffer {
   return buf;
 }
 
-// ---- Issues do projeto (em memória, como o arquivo de `issues.rs`): as issues, o último número dado, a em andamento e a próxima. ----
-const ISSUES_BROKEN = 'Não foi possível ler as issues deste projeto em C:\\Users\\voce\\AppData\\Local\\orquestrador\\issues\\exemplo-5f0c9a2b7d3e4f61.json: expected value at line 1 column 1';
-const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
-// [número, título, descrição, labels, criada há (horas), fechada há (horas; null = aberta)]
-type IssueSeed = [number, string, string, string[], number, number | null];
-const ISSUE_SEED: IssueSeed[] = [
-  [1, 'Tela inicial sem projeto escolhido', 'Ao abrir o app pela primeira vez, a tela fica vazia.\n\n- Mostrar o botão **Escolher pasta**\n- Lembrar o último projeto', ['enhancement'], 24 * 200, 24 * 180],
-  [2, 'Terminal não redimensiona ao maximizar', 'Depois de maximizar a janela, o xterm continua com o tamanho antigo até digitar algo.\n\nPassos: abrir o painel Terminal e maximizar.', ['bug'], 24 * 150, 24 * 140],
-  [3, 'Documentar os modos do simulado', 'Listar em `docs/arquitetura.md` os parâmetros de URL do `mock.ts`.\n\nHoje só `?git=` e `?subfolder=` aparecem lá.', ['documentation', 'good first issue'], 24 * 120, 24 * 90],
-  [4, 'Ícone duplicado na coluna', 'O ícone do Git aparecia duas vezes depois de trocar de projeto.\n\nMesmo problema da #2? Parece que não.', ['bug', 'duplicate'], 24 * 60, 24 * 58],
-  [5, 'Suporte a Linux', 'Dá para rodar no Linux?\n\nPor enquanto o app é só para Windows (ConPTY, Lixeira, clipboard).', ['question', 'wontfix'], 24 * 45, 24 * 40],
-  [6, 'Atalho para abrir a pesquisa nos arquivos', 'Hoje só dá pelo ícone. Proposta: `Ctrl+Shift+F`, como no VS Code.\n\nTambém seria bom focar o campo ao abrir.', ['enhancement'], 24 * 30, null],
-  [7, 'Contraste baixo nas abas inativas', 'O texto das abas inativas fica abaixo de 4,5:1 no tema escuro.\n\n| Elemento | Contraste |\n| --- | --- |\n| Aba inativa | 3,1:1 |', ['accessibility', 'bug'], 24 * 21, null],
-  [8, 'Histórico do Git lento em repositórios grandes', 'Com mais de 50 mil commits, a aba de histórico leva uns 4 s para abrir.\n\nTalvez paginar já na primeira consulta.', ['bug', 'help wanted'], 24 * 14, null],
-  [9, 'Escolher o modelo do executor por tarefa', 'Hoje o executor usa sempre a última escolha.\n\nSeria útil o orquestrador **sugerir** o modelo conforme a tarefa.', ['enhancement', 'question'], 24 * 9, null],
-  [10, 'Guia de contribuição', 'Falta um `CONTRIBUTING.md` explicando:\n\n1. Como rodar em desenvolvimento (`npm run dev`)\n2. Como rodar os checks em `scripts/`\n3. O estilo dos comentários', ['documentation', 'good first issue', 'help wanted'], 24 * 5, null],
-  [11, 'Leitor de tela não anuncia a aba ativa', 'O NVDA lê só "aba", sem o nome do arquivo.\n\nFalta `aria-selected` e o rótulo na faixa de abas.', ['accessibility'], 26, null],
-  [12, 'Mensagem de erro em inglês ao fazer push', 'Quando o push é recusado, aparece a saída crua do Git em inglês.\n\n```\n! [rejected] main -> main (fetch first)\n```', ['invalid'], 5, null],
-  [13, 'Mostrar o progresso dos executores na barra de título', 'Algo como `2/5 executores` ao lado do nome do projeto.\n\nSó quando houver um lote rodando.', [], 0.2, null],
-];
-const issueFile = {
-  issues: (debug.issuesMode === 'empty' ? [] : ISSUE_SEED).map(([number, title, body, labels, created, closed]): Issue => ({
-    number, title, body, state: closed === null ? 'open' : 'closed', labels,
-    createdAt: hoursAgo(created), updatedAt: hoursAgo(closed ?? created / 2), closedAt: closed === null ? null : hoursAgo(closed),
-  })),
-  lastNumber: debug.issuesMode === 'empty' ? 0 : ISSUE_SEED.length,
-  active: null as ActiveIssue | null,
-  next: null as number | null,
-};
-const issuesNow = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-// No modo `broken`, tudo recusa como o backend com o arquivo ilegível.
-const issuesReady = () => {
-  if (debug.issuesMode === 'broken') throw ISSUES_BROKEN;
-};
-function issueAt(number: number): Issue {
-  issuesReady();
-  const issue = issueFile.issues.find((i) => i.number === number);
-  if (!issue) throw `A issue #${number} não existe mais.`;
-  return issue;
-}
-const issueTitle = (title: string) => {
-  if (!title.trim()) throw 'O título da issue está vazio.';
-  return title.trim();
-};
-// As mesmas regras do backend: espaços juntados, sem vazias, sem repetir (sem diferenciar maiúsculas), a grafia de uma que já existe, até 50 caracteres.
-function issueLabels(names: string[]): string[] {
-  const known = issueFile.issues.flatMap((i) => i.labels), out: string[] = [];
-  for (const raw of names) {
-    const name = raw.split(/\s+/).filter(Boolean).join(' ');
-    if (!name || out.some((n) => n.toLowerCase() === name.toLowerCase())) continue;
-    if ([...name].length > 50) throw `A label “${name}” passa de 50 caracteres.`;
-    out.push(known.find((k) => k.toLowerCase() === name.toLowerCase()) ?? name);
-  }
-  return out;
-}
-
 const commands: Record<string, (args: any) => unknown> = {
   read_media: ({ path }: { path: string }) => mockBytes(path),
   update_status: () => ({ phase: 'ready' }),
@@ -1005,9 +921,7 @@ const commands: Record<string, (args: any) => unknown> = {
   get_options: () => structuredClone(options),
   start_orchestrator: ({ choice }: { choice: Choice }) => {
     options.last.orchestrator = choice;
-    orchestratorTurn(false, true);
   },
-  orchestrator_busy: () => orchestratorBusy,
   set_executor_choice: ({ choice }: { choice: Choice }) => { options.last.executor = choice; },
   start_shell: ({ id, cwd }: { id: string; cwd?: string }) => {
     // Pasta do projeto (relativa); sem ela, ou com '', é a raiz, como no backend. Pasta que não existe é recusada antes de abrir.
@@ -1085,25 +999,14 @@ const commands: Record<string, (args: any) => unknown> = {
     shells.delete(id);
     terms.delete(id);
   },
+  // O simulado não roda CLI: todo terminal é shell comum.
+  term_cli: () => null,
   term_write: ({ id, data }: { id: string; data: string }) => {
     // Marcas de colagem entre aspas (bracketed paste) não são texto: o simulado só põe o conteúdo no rascunho.
     const text = data.replace(/\x1b\[20[01]~/g, '');
     if (shells.has(id)) shellTyped(id, text);
-    // No orquestrador, um Enter sozinho (a tecla, não uma colagem) começa uma rodada simulada, que termina sozinha em 8 s. O resto o simulado
-    // só mostra (a colagem de uma issue, por exemplo), com as quebras de linha do texto (LF no bracketed paste, CR no paste do xterm).
-    else if (id === 'orchestrator' && data === '\r') {
-      const prompt = orchestratorDraft;
-      orchestratorDraft = '';
-      orchestratorTurn(true, false, prompt);
-      turnTimer = setTimeout(() => orchestratorTurn(false), TURN_MS);
-    } else if (id === 'orchestrator') {
-      // O rascunho guarda o que foi colado e digitado; Backspace apaga o último caractere, e o resto das teclas de controle não entra.
-      for (const char of text.replace(/\r\n?/g, '\n')) {
-        if (char === '\x7f') orchestratorDraft = orchestratorDraft.slice(0, -1);
-        else if (char >= ' ' || char === '\n') orchestratorDraft += char;
-      }
-      out(id, text.replace(/\r\n?|\n/g, '\r\n'));
-    }
+    // O orquestrador simulado só mostra o que chega (a colagem, por exemplo), com as quebras de linha do texto (LF no bracketed paste, CR no paste do xterm).
+    else if (id === 'orchestrator') out(id, text.replace(/\r\n?|\n/g, '\r\n'));
   },
   list_dir: ({ path }: { path: string }) => {
     const dir = folderAt(path);
@@ -1159,45 +1062,6 @@ const commands: Record<string, (args: any) => unknown> = {
   },
   git_accept_deletion: ({ path, revision }: { path: string; revision: string }) => { acceptDeletion(path, revision); return null; },
   search: ({ query }: { query: ReplaceQuery }): SearchResults => searchText(query),
-  issues_load: () => {
-    issuesReady();
-    return structuredClone({ v: 1, project: 'C:\\projetos\\exemplo', ...issueFile });
-  },
-  issues_create: ({ title, body, labels }: { title: string; body: string; labels: string[] }): Issue => {
-    issuesReady();
-    const now = issuesNow(), number = Math.max(issueFile.lastNumber, ...issueFile.issues.map((i) => i.number)) + 1;
-    const issue: Issue = { number, title: issueTitle(title), body, state: 'open', labels: issueLabels(labels), createdAt: now, updatedAt: now, closedAt: null };
-    issueFile.issues.push(issue);
-    issueFile.lastNumber = number;
-    return structuredClone(issue);
-  },
-  issues_update: ({ number, title, body, labels }: { number: number; title: string; body: string; labels: string[] }): Issue => {
-    const clean = issueTitle(title), names = issueLabels(labels), issue = issueAt(number);
-    if (issue.title !== clean || issue.body !== body || issue.labels.join('\n') !== names.join('\n')) {
-      Object.assign(issue, { title: clean, body, labels: names, updatedAt: issuesNow() });
-    }
-    return structuredClone(issue);
-  },
-  issues_set_state: ({ number, open }: { number: number; open: boolean }): Issue => {
-    const issue = issueAt(number);
-    if ((issue.state === 'open') !== open) {
-      const now = issuesNow();
-      Object.assign(issue, { state: open ? 'open' : 'closed', closedAt: open ? null : now, updatedAt: now });
-    }
-    return structuredClone(issue);
-  },
-  issues_delete: ({ number }: { number: number }) => {
-    issueAt(number);
-    issueFile.issues = issueFile.issues.filter((i) => i.number !== number);
-    if (issueFile.active?.number === number) issueFile.active = null;
-    if (issueFile.next === number) issueFile.next = null;
-    return null;
-  },
-  issues_set_tracked: ({ active, next }: { active: ActiveIssue | null; next: number | null }) => {
-    issuesReady();
-    Object.assign(issueFile, { active, next });
-    return null;
-  },
   term_resize: () => undefined,
   term_snapshot: ({ id }: { id: string }) => {
     const term = terms.get(id);

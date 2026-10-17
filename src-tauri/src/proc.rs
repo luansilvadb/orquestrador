@@ -7,12 +7,13 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, FILETIME, HANDLE};
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
-    TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
+    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
-    PROCESS_TERMINATE,
+    GetExitCodeProcess, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
 };
 
 /// Um comando que não abre janela de console (o app é de janela; cada filho abriria a sua).
@@ -175,6 +176,40 @@ impl Job {
 
     pub fn kill(&self) {
         unsafe { TerminateJobObject(self.0, 1) };
+    }
+
+    /// O CLI interativo (`claude` ou `codex`) que roda agora no job, pelo executável de cada processo vivo dele. Com
+    /// os dois (um chamou o outro), vale o que começou primeiro: é o de fora, dono do terminal. `None` sem nenhum.
+    pub fn cli(&self) -> Option<&'static str> {
+        // ponytail: lista de até 512 processos; um job maior que isso dá `None` (o terminal cola como shell comum).
+        let mut buf = vec![0usize; 1 + 512];
+        let list = buf.as_mut_ptr() as *mut JOBOBJECT_BASIC_PROCESS_ID_LIST;
+        let size = (buf.len() * std::mem::size_of::<usize>()) as u32;
+        let pids = unsafe {
+            if QueryInformationJobObject(self.0, JobObjectBasicProcessIdList, list as *mut _, size, std::ptr::null_mut()) == 0 {
+                return None;
+            }
+            std::slice::from_raw_parts((*list).ProcessIdList.as_ptr(), (*list).NumberOfProcessIdsInList as usize)
+        };
+        pids.iter()
+            .filter_map(|&pid| consulta(pid as u32, |p| Some((cli_do_executavel(p)?, hora_de_criacao(p)?))).ok().flatten())
+            .min_by_key(|&(_, criada)| criada)
+            .map(|(cli, _)| cli)
+    }
+}
+
+/// `claude` ou `codex` quando o executável do processo aberto para consulta é `claude.exe` ou `codex.exe`.
+fn cli_do_executavel(process: HANDLE) -> Option<&'static str> {
+    let mut buf = [0u16; 1024];
+    let mut len = buf.len() as u32;
+    if unsafe { QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) } == 0 {
+        return None;
+    }
+    let path = String::from_utf16_lossy(&buf[..len as usize]);
+    match Path::new(&path).file_name()?.to_string_lossy().to_lowercase().as_str() {
+        "claude.exe" => Some("claude"),
+        "codex.exe" => Some("codex"),
+        _ => None,
     }
 }
 

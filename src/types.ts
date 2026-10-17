@@ -126,23 +126,8 @@ export type Events = {
   'node-added': ExecutorNode;
   'node-state': NodeStateEvent;
   'orchestrator-exit': { code: number | null };
-  // A cada mudança: `busy` com a rodada do orquestrador em andamento; livre esperando o usuário ou com o orquestrador fechado.
-  // `prompt` é o texto enviado ao orquestrador: só vem no começo da rodada (`busy: true`) e pode faltar (o hook não o trouxe).
-  'orchestrator-turn': { busy: boolean; prompt?: string };
   'shell-exit': { id: string; code: number | null };
   'update-status': UpdateStatus;
 };
 
 export const ORCHESTRATOR = 'orchestrator';
-
-// Issues do projeto, só neste computador (contrato do backend, `issues.rs`). As labels são só nomes; a cor sai do nome (`labelColor`).
-// Datas em ISO 8601; `closedAt` é null na aberta.
-export type Issue = {
-  number: number; title: string; body: string; state: 'open' | 'closed'; labels: string[];
-  createdAt: string; updatedAt: string; closedAt: string | null;
-};
-// A issue com o orquestrador e desde quando (`Date.now()`). `turned`: uma rodada do orquestrador começou com ela depois do Colar; falso é
-// "colada, aguardando envio" (o Colar só cola).
-export type ActiveIssue = { number: number; since: number; turned: boolean };
-// Retorno de `issues_load`: as issues do projeto (abertas e fechadas, na ordem de criação), a em andamento e a próxima.
-export type IssuesData = { issues: Issue[]; active: ActiveIssue | null; next: number | null };

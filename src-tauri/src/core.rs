@@ -152,44 +152,6 @@ pub fn turn_end(payload: &str, prompt: &str) -> Option<String> {
     None
 }
 
-/// O que um sinal da pasta `orch-hook` diz da rodada do orquestrador.
-#[derive(Clone, Debug, PartialEq)]
-pub enum OrchTurn {
-    /// Começo de rodada, com o texto que foi enviado (o campo `prompt` do hook), se veio.
-    Start(Option<String>),
-    End,
-    Ignore,
-}
-
-/// Quanto do texto enviado vai no evento `orchestrator-turn`: o suficiente para a tela reconhecer o que colou.
-const PROMPT_MAX: usize = 8 * 1024;
-
-/// Classifica o JSON que o `--hook` gravou para o orquestrador. Os dois CLIs mandam o mesmo formato, com
-/// `hook_event_name` (medido no Claude Code 2.1.301 e no Codex 0.162.1): `UserPromptSubmit` começa a rodada, com o
-/// texto enviado em `prompt` (nos dois), e `Stop` a termina. O resto (JSON quebrado, outro evento, um `notify`) não
-/// muda nada. O `prompt` é cortado em `PROMPT_MAX` bytes, num limite de caractere.
-pub fn orchestrator_turn(payload: &str) -> OrchTurn {
-    let v: Value = serde_json::from_str(payload).unwrap_or_default();
-    match v["hook_event_name"].as_str() {
-        Some("UserPromptSubmit") => {
-            let prompt = v["prompt"].as_str().map(|p| {
-                let mut end = p.len().min(PROMPT_MAX);
-                while !p.is_char_boundary(end) {
-                    end -= 1;
-                }
-                p[..end].to_string()
-            });
-            OrchTurn::Start(prompt)
-        }
-        Some("Stop") => OrchTurn::End,
-        _ => OrchTurn::Ignore,
-    }
-}
-
-/// O Esc sozinho, como o terminal manda a tecla. Medido no Claude Code 2.1.301 e no Codex 0.162.1: com a rodada
-/// em andamento, o Esc a interrompe e nenhum dos dois dispara `Stop` (nem o `notify`, no Codex).
-const ESC: &str = "\x1b";
-
 struct Slot {
     buffer: Shared,
     term: Option<Term>,
@@ -232,8 +194,6 @@ struct Inner {
     epoch: u64,
     /// Uma operação do Git (`git_idle`) roda sem o lock: enquanto esta marca estiver ligada, nenhum lote novo é aceito.
     git_exclusive: bool,
-    /// O orquestrador está numa rodada: do prompt do usuário até o fim dela. Sem orquestrador, livre.
-    busy: bool,
 }
 
 impl Inner {
@@ -288,7 +248,6 @@ impl Core {
             counter: 0,
             epoch: 0,
             git_exclusive: false,
-            busy: false,
         };
         Core { inner: Arc::new(Mutex::new(inner)), emit }
     }
@@ -445,50 +404,18 @@ impl Core {
             return;
         }
         let mut inner = self.inner.lock().unwrap();
-        // A rodada interrompida não manda sinal de fim (ver `ESC`): o Esc no orquestrador ocupado conta como fim.
-        if id == ORCHESTRATOR && data == ESC {
-            self.set_busy(&mut inner, false, None);
-        }
         if let Some(term) = inner.slots.get_mut(id).and_then(|s| s.term.as_mut()) {
             term.write(data.as_bytes());
         }
     }
 
-    /// Se o orquestrador está numa rodada agora. A tela lê isto ao montar e depois acompanha `orchestrator-turn`.
-    pub fn orchestrator_busy(&self) -> bool {
-        self.inner.lock().unwrap().busy
-    }
-
-    /// Troca o estado da rodada do orquestrador e, só se mudou, emite `orchestrator-turn`. O `prompt` (o texto
-    /// enviado) só vai no começo da rodada, e só se o hook o trouxe.
-    fn set_busy(&self, inner: &mut Inner, busy: bool, prompt: Option<String>) {
-        if inner.busy != busy {
-            inner.busy = busy;
-            let mut payload = json!({ "busy": busy });
-            if let Some(prompt) = prompt.filter(|_| busy) {
-                payload["prompt"] = Value::String(prompt);
-            }
-            (self.emit)("orchestrator-turn", payload);
+    /// O CLI (`claude` ou `codex`) que roda agora no terminal `id`, pelo processo, não pelo que foi digitado: num shell, ele
+    /// muda quando o CLI abre e quando sai. Só o orquestrador e os shells, que recebem teclado; `None` para o resto.
+    pub fn term_cli(&self, id: &str) -> Option<&'static str> {
+        if id != ORCHESTRATOR && !is_shell(id) {
+            return None;
         }
-    }
-
-    /// Lê os sinais de início e fim de rodada do orquestrador, na ordem em que chegaram (o nome é cronológico), e
-    /// apaga cada um depois de lido. Cada troca de estado sai como evento, mesmo que início e fim cheguem juntos.
-    fn orchestrator_turns(&self, inner: &mut Inner) {
-        let Some(dir) = inner.session.as_ref().map(Session::turn_dir) else { return };
-        let mut files: Vec<PathBuf> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).collect();
-        files.retain(|f| f.extension().is_some_and(|e| e == "json"));
-        files.sort();
-        for file in files {
-            // Um arquivo que não abre agora fica, com os seguintes, para a próxima volta: a ordem não se perde.
-            let Ok(payload) = std::fs::read_to_string(&file) else { break };
-            let _ = std::fs::remove_file(&file);
-            match orchestrator_turn(&payload) {
-                OrchTurn::Start(prompt) => self.set_busy(inner, true, prompt),
-                OrchTurn::End => self.set_busy(inner, false, None),
-                OrchTurn::Ignore => {}
-            }
-        }
+        self.inner.lock().unwrap().slots.get(id)?.term.as_ref()?.cli()
     }
 
     /// Vale também para um nó ainda sem PTY: o tamanho fica guardado para quando ele abrir.
@@ -545,8 +472,6 @@ impl Core {
         inner.batches.clear();
         inner.seen.clear();
         inner.choice = None;
-        // Orquestrador encerrado conta como livre.
-        self.set_busy(inner, false, None);
         if let Some(warning) = inner.session.take().and_then(|s| s.remove()) {
             eprintln!("{warning}");
         }
@@ -599,8 +524,7 @@ impl Core {
         }
     }
 
-    /// Laço da sessão: recebe os lotes pedidos pelo comando de delegação, os sinais de fim de rodada dos executores
-    /// e os de início e fim de rodada do orquestrador.
+    /// Laço da sessão: recebe os lotes pedidos pelo comando de delegação e os sinais de fim de rodada dos executores.
     fn pump(&self, epoch: u64) {
         // A memória livre muda sozinha, então a fila é reavaliada a cada 1 s (cinco voltas), e só quando há nó na fila.
         let mut turns = 0u32;
@@ -610,7 +534,6 @@ impl Core {
             if inner.epoch != epoch {
                 return;
             }
-            self.orchestrator_turns(&mut inner);
             self.accept_batches(&mut inner);
             for i in 0..inner.nodes.len() {
                 if inner.nodes[i].info.state.is_live() {
@@ -912,96 +835,6 @@ mod tests {
         assert_eq!(turn_end(&title.to_string(), prompt), None);
     }
 
-    // Os JSON abaixo são os que os hooks do orquestrador gravaram na medição (caminhos e ids encurtados).
-    #[test]
-    fn rodada_do_orquestrador_claude() {
-        let start = r#"{"session_id":"7506e422","transcript_path":"C:\\Users\\x\\.claude\\projects\\p\\7506e422.jsonl","cwd":"C:\\proj","prompt_id":"063ae18d","permission_mode":"bypassPermissions","hook_event_name":"UserPromptSubmit","prompt":"responda apenas OK"}"#;
-        let end = r#"{"session_id":"7506e422","transcript_path":"C:\\Users\\x\\.claude\\projects\\p\\7506e422.jsonl","cwd":"C:\\proj","prompt_id":"063ae18d","permission_mode":"bypassPermissions","effort":{"level":"medium"},"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"OK","background_tasks":[],"session_crons":[]}"#;
-        assert_eq!(orchestrator_turn(start), OrchTurn::Start(Some("responda apenas OK".into())));
-        assert_eq!(orchestrator_turn(end), OrchTurn::End);
-    }
-
-    #[test]
-    fn prompt_da_rodada_presente_ausente_e_cortado() {
-        let sem = r#"{"hook_event_name":"UserPromptSubmit"}"#;
-        assert_eq!(orchestrator_turn(sem), OrchTurn::Start(None));
-        let vazio = r#"{"hook_event_name":"UserPromptSubmit","prompt":""}"#;
-        assert_eq!(orchestrator_turn(vazio), OrchTurn::Start(Some(String::new())));
-        let nao_texto = r#"{"hook_event_name":"UserPromptSubmit","prompt":5}"#;
-        assert_eq!(orchestrator_turn(nao_texto), OrchTurn::Start(None));
-        // Corte no limite: 'é' tem 2 bytes e atravessa o byte PROMPT_MAX, então o corte recua para antes dele.
-        let longo = format!("{}é{}", "a".repeat(PROMPT_MAX - 1), "b".repeat(10));
-        let payload = json!({ "hook_event_name": "UserPromptSubmit", "prompt": longo }).to_string();
-        let OrchTurn::Start(Some(cortado)) = orchestrator_turn(&payload) else { panic!("sem prompt") };
-        assert_eq!(cortado, "a".repeat(PROMPT_MAX - 1));
-        let exato = json!({ "hook_event_name": "UserPromptSubmit", "prompt": "a".repeat(PROMPT_MAX) }).to_string();
-        assert_eq!(orchestrator_turn(&exato), OrchTurn::Start(Some("a".repeat(PROMPT_MAX))));
-    }
-
-    #[test]
-    fn rodada_do_orquestrador_codex() {
-        let start = r#"{"session_id":"01a14323","turn_id":"01a14323-357a","transcript_path":"C:\\Users\\x\\.codex\\sessions\\r.jsonl","cwd":"C:\\proj","hook_event_name":"UserPromptSubmit","model":"gpt-6.1-sol","permission_mode":"bypassPermissions","prompt":"responda apenas OK"}"#;
-        let end = r#"{"session_id":"01a14323","turn_id":"01a14323-357a","transcript_path":"C:\\Users\\x\\.codex\\sessions\\r.jsonl","cwd":"C:\\proj","hook_event_name":"Stop","model":"gpt-6.1-sol","permission_mode":"bypassPermissions","stop_hook_active":false,"last_assistant_message":"OK"}"#;
-        assert_eq!(orchestrator_turn(start), OrchTurn::Start(Some("responda apenas OK".into())));
-        assert_eq!(orchestrator_turn(end), OrchTurn::End);
-        // O `notify` da rodada do título não chega a esta pasta (a rodada do título não dispara hook), mas, se
-        // chegasse, não mudaria nada.
-        let title = r#"{"type":"agent-turn-complete","thread-id":"01a14323-3c09","client":"codex-tui","input-messages":["Generate a concise, single-line task title of at most 36 characters.\n\nUser prompt:\nresponda apenas OK"],"last-assistant-message":"{\"title\":\"Responder OK\"}"}"#;
-        assert_eq!(orchestrator_turn(title), OrchTurn::Ignore);
-        for other in [r#"{"hook_event_name":"SessionStart"}"#, r#"{"hook_event_name":"PreToolUse"}"#, "", "{quebrado", "[]"] {
-            assert_eq!(orchestrator_turn(other), OrchTurn::Ignore, "{other}");
-        }
-    }
-
-    /// Os eventos `orchestrator-turn` que o gravador recebeu, na ordem.
-    fn turnos(eventos: &Arc<Mutex<Vec<(String, Value)>>>) -> Vec<bool> {
-        eventos.lock().unwrap().iter().filter(|(ev, _)| ev == "orchestrator-turn").map(|(_, p)| p["busy"].as_bool().unwrap()).collect()
-    }
-
-    #[test]
-    fn sinais_do_orquestrador_mudam_o_estado_em_ordem_e_saem_da_pasta() {
-        let (emit, eventos) = gravador();
-        let root = fresh("orq-core", "turnos");
-        let core = core_vazio(&root, emit);
-        let session = Session { dir: root.join("sessao"), global_dirs: vec![] };
-        std::fs::create_dir_all(session.turn_dir()).unwrap();
-        let put = |name: &str, event: &str| std::fs::write(session.turn_dir().join(name), json!({ "hook_event_name": event }).to_string()).unwrap();
-        // Início e fim na mesma volta saem como dois eventos; um início repetido não repete o evento.
-        put("1.json", "UserPromptSubmit");
-        put("2.json", "UserPromptSubmit");
-        put("3.json", "SessionStart");
-        put("4.json", "Stop");
-        put("5.json.tmp", "UserPromptSubmit");
-        let mut inner = core.inner.lock().unwrap();
-        inner.session = Some(session);
-        core.orchestrator_turns(&mut inner);
-        assert!(!inner.busy);
-        let dir = inner.session.as_ref().unwrap().turn_dir();
-        let left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
-        assert_eq!(left, ["5.json.tmp"], "os lidos saem; o que ainda está sendo publicado fica");
-        std::fs::write(dir.join("6.json"), json!({ "hook_event_name": "UserPromptSubmit" }).to_string()).unwrap();
-        core.orchestrator_turns(&mut inner);
-        assert!(inner.busy);
-        drop(inner);
-        assert!(core.orchestrator_busy());
-        assert_eq!(turnos(&eventos), [true, false, true]);
-        // O Esc no orquestrador ocupado conta como fim; outra tecla, ou o Esc num shell, não.
-        core.term_write(ORCHESTRATOR, "\x1b[A");
-        core.term_write("shell-1", ESC);
-        assert!(core.orchestrator_busy());
-        core.term_write(ORCHESTRATOR, ESC);
-        assert!(!core.orchestrator_busy());
-        core.term_write(ORCHESTRATOR, ESC);
-        assert_eq!(turnos(&eventos), [true, false, true, false], "livre de novo não repete o evento");
-        // Encerrar o orquestrador ocupado volta a livre, com o evento.
-        core.inner.lock().unwrap().busy = true;
-        core.shutdown();
-        assert!(!core.orchestrator_busy());
-        assert_eq!(turnos(&eventos), [true, false, true, false, false]);
-        assert!(!dir.exists(), "a pasta dos sinais sai com a sessão");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
     /// Um Core com um repositório de teste (branch `main` e `outra`), sem CLI real nem configuração.
     fn git_core(tag: &str) -> (Core, std::path::PathBuf) {
         git_core_with(tag, Arc::new(|_: &str, _: Value| {}))
@@ -1199,6 +1032,28 @@ mod tests {
         core.start_shell_in("shell-2", 80, 24, None).unwrap();
         assert!(vivo(&core, "shell-1") && vivo(&core, "shell-2"), "cada id tem o seu processo");
         assert!(!core.has_running(), "shells não fazem o app pedir confirmação");
+        core.shutdown();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// O CLI do shell vem do processo: um `codex.exe` (aqui uma cópia do ping, que sai sozinha) rodando nele conta enquanto
+    /// vive; a linha digitada com o nome não conta, a outra aba não vê, e depois que ele sai a aba volta a ser shell comum.
+    #[test]
+    fn cli_do_shell_vem_do_processo_e_some_quando_ele_sai() {
+        let (core, root) = git_core("shell-cli");
+        let fake = root.join("codex.exe");
+        std::fs::copy(r"C:\Windows\System32\PING.EXE", &fake).unwrap();
+        core.start_shell_in("shell-1", 80, 24, None).unwrap();
+        core.start_shell_in("shell-2", 80, 24, None).unwrap();
+        core.term_write("shell-1", "# codex\r");
+        std::thread::sleep(Duration::from_secs(2));
+        assert_eq!(core.term_cli("shell-1"), None, "o nome digitado não é o CLI rodando");
+        core.term_write("shell-1", &format!("& '{}' -n 4 127.0.0.1\r", fake.display()));
+        assert!(espera(|| core.term_cli("shell-1") == Some("codex")), "o codex.exe rodando no shell não foi visto");
+        assert_eq!(core.term_cli("shell-2"), None, "a outra aba não tem CLI");
+        assert_eq!(core.term_cli("exec-1"), None);
+        assert!(espera(|| core.term_cli("shell-1").is_none()), "o CLI saiu e o shell continuou como CLI");
+        assert!(vivo(&core, "shell-1"), "o shell segue aberto depois do CLI");
         core.shutdown();
         let _ = std::fs::remove_dir_all(&root);
     }

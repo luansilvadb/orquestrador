@@ -3,7 +3,7 @@
 import { Children, useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { Flexbox } from '@lobehub/ui';
 import { Text, Tooltip } from '@lobehub/ui/base-ui';
-import { SECONDARY } from './issue-ui';
+import { SECONDARY } from './text-style';
 import { host } from './backend';
 import { CloseIcon, MaximizeIcon, MinimizeIcon, RestoreIcon } from './window-icons';
 

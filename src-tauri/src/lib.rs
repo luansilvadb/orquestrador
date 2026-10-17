@@ -8,7 +8,6 @@ pub mod delegate;
 pub mod files;
 pub mod git;
 pub mod hook;
-pub mod issues;
 pub mod mcp;
 pub mod proc;
 pub mod pty;
@@ -247,54 +246,6 @@ fn git_create_branch(core: State<Core>, gate: State<Gate>, name: String) -> Resu
     idle(&core, &gate, |dir| git::create_branch(dir, &name))
 }
 
-/// A pasta dos arquivos de issues e o projeto, depois de checar que o uso está liberado.
-fn issues_at(core: &Core, gate: &Gate) -> Result<(PathBuf, PathBuf), String> {
-    let project = repo(core, gate)?;
-    Ok((issues::dir()?, project))
-}
-
-/// As issues do projeto (só neste computador), a em andamento e a próxima. Sem arquivo, nenhuma.
-#[tauri::command(async)]
-fn issues_load(core: State<Core>, gate: State<Gate>) -> Result<issues::Dados, String> {
-    let (dir, project) = issues_at(&core, &gate)?;
-    issues::load(&dir, &project)
-}
-
-/// Cria a issue aberta, com o número seguinte, e a devolve.
-#[tauri::command(async)]
-fn issues_create(core: State<Core>, gate: State<Gate>, title: String, body: String, labels: Vec<String>) -> Result<issues::Issue, String> {
-    let (dir, project) = issues_at(&core, &gate)?;
-    issues::create(&dir, &project, &title, &body, &labels)
-}
-
-/// Troca o título, a descrição e as labels da issue `number` e a devolve.
-#[tauri::command(async)]
-fn issues_update(core: State<Core>, gate: State<Gate>, number: u64, title: String, body: String, labels: Vec<String>) -> Result<issues::Issue, String> {
-    let (dir, project) = issues_at(&core, &gate)?;
-    issues::update(&dir, &project, number, &title, &body, &labels)
-}
-
-/// Reabre (`open` true) ou fecha a issue `number` e a devolve.
-#[tauri::command(async)]
-fn issues_set_state(core: State<Core>, gate: State<Gate>, number: u64, open: bool) -> Result<issues::Issue, String> {
-    let (dir, project) = issues_at(&core, &gate)?;
-    issues::set_state(&dir, &project, number, open)
-}
-
-/// Apaga a issue `number` de vez; a em andamento e a próxima que eram ela perdem a marca.
-#[tauri::command(async)]
-fn issues_delete(core: State<Core>, gate: State<Gate>, number: u64) -> Result<(), String> {
-    let (dir, project) = issues_at(&core, &gate)?;
-    issues::delete(&dir, &project, number)
-}
-
-/// Guarda a issue em andamento e a próxima no arquivo do projeto.
-#[tauri::command(async)]
-fn issues_set_tracked(core: State<Core>, gate: State<Gate>, active: Option<issues::Active>, next: Option<u64>) -> Result<(), String> {
-    let (dir, project) = issues_at(&core, &gate)?;
-    issues::set_tracked(&dir, &project, active, next)
-}
-
 #[tauri::command(async)]
 fn start_orchestrator(core: State<Core>, gate: State<Gate>, choice: Choice, cols: u16, rows: u16) -> Result<(), String> {
     gate.ensure_open()?;
@@ -408,6 +359,13 @@ fn term_write(core: State<Core>, gate: State<Gate>, id: String, data: String) ->
     Ok(())
 }
 
+/// O CLI que roda agora no terminal `id` (`claude`, `codex` ou nenhum), para a colagem de arquivo e imagem.
+#[tauri::command(async)]
+fn term_cli(core: State<Core>, gate: State<Gate>, id: String) -> Result<Option<&'static str>, String> {
+    gate.ensure_open()?;
+    Ok(core.term_cli(&id))
+}
+
 #[tauri::command(async)]
 fn term_resize(core: State<Core>, gate: State<Gate>, id: String, cols: u16, rows: u16) -> Result<(), String> {
     gate.ensure_open()?;
@@ -426,13 +384,6 @@ fn stop_executor(core: State<Core>, gate: State<Gate>, id: String) -> Result<(),
     gate.ensure_open()?;
     core.stop_executor(&id);
     Ok(())
-}
-
-/// Se o orquestrador está numa rodada agora: a tela lê isto ao montar e depois acompanha `orchestrator-turn`.
-#[tauri::command(async)]
-fn orchestrator_busy(core: State<Core>, gate: State<Gate>) -> Result<bool, String> {
-    gate.ensure_open()?;
-    Ok(core.orchestrator_busy())
 }
 
 #[tauri::command(async)]
@@ -522,21 +473,15 @@ pub fn run(context: tauri::Context) {
             git_conflict,
             git_write_resolution,
             git_accept_deletion,
-            issues_load,
-            issues_create,
-            issues_update,
-            issues_set_state,
-            issues_delete,
-            issues_set_tracked,
             start_orchestrator,
             start_shell,
             close_shell,
             set_executor_choice,
             term_write,
+            term_cli,
             term_resize,
             term_snapshot,
             stop_executor,
-            orchestrator_busy,
             has_running,
             shutdown,
             update_status,

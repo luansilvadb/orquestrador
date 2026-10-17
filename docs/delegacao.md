@@ -47,11 +47,4 @@ Limites:
 
 O fim da rodada de um executor é detectado pelo hook `Stop` do Claude Code e pelo `notify` do Codex, que chamam o próprio executável do app.
 
-O orquestrador também tem sinal de início e de fim de rodada. Ele serve à tela Issues: com o orquestrador ocupado, o Colar oferece colar agora ou quando ele terminar, e a próxima issue é colada sozinha, sem enviar, quando a rodada acaba (ver [interface](interface.md#issues)). O início é o hook `UserPromptSubmit` e o fim é o `Stop`, nos dois CLIs:
-
-- **Claude Code:** pelo `claude-settings.json` da sessão, na forma `args`, sem shell, como os hooks do executor.
-- **Codex:** por `-c hooks.UserPromptSubmit` e `-c hooks.Stop`, com `--dangerously-bypass-hook-trust`. Sem ele, o CLI abre “2 hooks are new or changed” e espera, como no executor.
-
-Os dois chamam `orquestrador.exe --hook <pasta da sessão>\orch-hook`, que grava o JSON do evento num arquivo novo da pasta. O laço da sessão (`src-tauri/src/core.rs`) lê os arquivos na ordem em que chegaram, apaga cada um e, a cada troca de estado, emite o evento `orchestrator-turn` com `busy` e, no começo da rodada, o `prompt` (o texto enviado, até 8 KB; a tela o usa para saber se a rodada é da issue em andamento). A tela lê o estado de partida pelo comando `orchestrator_busy`. Orquestrador encerrado conta como livre. Medido no Claude Code 2.1.301 e no Codex 0.162.1: cada hook dispara uma vez por rodada, com `hook_event_name`. No Codex, os hooks do `-c` somam aos do `hooks.json` do usuário, o `notify` dele fica intocado e a rodada interna que gera o título da conversa não dispara hook.
-
 Limite: interromper a rodada não manda sinal em nenhum dos dois CLIs (nem o `Stop`, nem o `notify` do Codex; medido com o Esc). Por isso o app conta o Esc sozinho no terminal do orquestrador, com ele ocupado, como fim da rodada, sem distinguir se o Esc de fato interrompeu algo. Outra forma de interromper, como o Ctrl+C, não foi medida nem é reconhecida: depois dela, o app continua vendo o orquestrador ocupado até o próximo `Stop`, um Esc ou o fim do orquestrador.

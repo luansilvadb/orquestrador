@@ -10,8 +10,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// A saída crua. O Claude desenha alguns espaços como "cursor uma coluna à frente": viram espaço, para o marcador inteiro aparecer.
 fn screen(buffer: &Shared) -> String {
-    String::from_utf8_lossy(&buffer.lock().unwrap().data).to_string()
+    String::from_utf8_lossy(&buffer.lock().unwrap().data).replace("\x1b[1C", " ")
 }
 
 fn wait_for(buffer: &Shared, marker: &str, secs: u64) -> bool {
@@ -106,18 +107,16 @@ fn colar_caminho_de_arquivo_no_cli_real() {
     std::thread::sleep(Duration::from_secs(10));
     println!("paste entre colchetes ligado pelo CLI: {}", screen(&buffer).contains("\x1b[?2004h"));
 
-    // Como `term.ts` escreve (`pasteFiles`): aspas só quando o caminho tem espaço. O Claude recebe um paste
-    // só, com um caminho por linha; o Codex, um paste por caminho, com 200 ms entre eles.
-    let paths = [plain.to_string_lossy().to_string(), format!("\"{}\"", quoted.to_string_lossy()), note.to_string_lossy().to_string()];
+    // Como `src/paste.ts` escreve: aspas só quando o caminho tem espaço. O Claude recebe um paste só, com um caminho (e um espaço) por
+    // linha; o Codex, um paste por caminho (com um espaço no fim), separados por F12, que fecha o paste
+    // anterior sem intervalo de tempo. A nota vai no meio: no Codex ela fica entre as duas imagens, na ordem.
+    let paths = [plain.to_string_lossy().to_string(), note.to_string_lossy().to_string(), format!("\"{}\"", quoted.to_string_lossy())];
+    let bracketed = |text: &str| format!("\x1b[200~{text}\x1b[201~");
     if cli == "codex" {
-        for (i, path) in paths.iter().enumerate() {
-            if i > 0 {
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            term.write(format!("\x1b[200~{}{path}\x1b[201~", if i > 0 { " " } else { "" }).as_bytes());
-        }
+        let pastes: Vec<String> = paths.iter().map(|p| bracketed(&format!("{p} "))).collect();
+        term.write(pastes.join("\x1b[24~").as_bytes());
     } else {
-        term.write(format!("\x1b[200~{}\x1b[201~", paths.join("\n")).as_bytes());
+        term.write(bracketed(&paths.map(|p| format!("{p} ")).join("\n")).as_bytes());
     }
     let first = wait_for(&buffer, "Image #1", 15);
     let second = wait_for(&buffer, "Image #2", 15);
@@ -134,4 +133,48 @@ fn colar_caminho_de_arquivo_no_cli_real() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(first && second && text, "o CLI não tratou os caminhos colados como esperado");
     assert!(!model_work, "a tela mostra trabalho do modelo");
+}
+
+/// O CLI real aberto num PowerShell, como num shell avulso do app: o terminal diz que é ele enquanto o processo vive (não
+/// pelo que foi digitado) e volta a ser shell comum quando ele sai. Sai pelo comando do próprio CLI, sem mandar mensagem.
+/// Uso: o mesmo `ORQ_PASTE`, com `cli_real` no filtro do teste.
+#[test]
+#[ignore]
+fn cli_real_no_shell_abre_e_sai() {
+    use orquestrador_lib::cli::shell;
+    let cli = std::env::var("ORQ_PASTE").unwrap_or("codex".into());
+    let dir = std::env::temp_dir().join(format!("orq-paste-shell-{}-{cli}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir_s = dir.to_string_lossy().to_string();
+    let buffer: Shared = Arc::new(Mutex::new(Buffer::default()));
+    let mut term = Term::spawn(&shell("pwsh.exe", &dir_s), (160, 40), buffer.clone(), |_, _| {}, |_| {}).expect("não iniciou o PowerShell");
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(term.cli(), None, "o PowerShell sozinho não é CLI");
+    // O Codex recebe a confiança na pasta por -c; o Claude pula o diálogo com a variável, como em `abrir_cli`.
+    let (start, quit) = if cli == "codex" {
+        (format!("codex --no-daemon -c \"projects={{'{dir_s}'={{trust_level='trusted'}}}}\"\r"), "/quit")
+    } else {
+        ("$env:CLAUDE_CODE_SANDBOXED = '1'; claude\r".to_string(), "/exit")
+    };
+    term.write(start.as_bytes());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while term.cli() != Some(cli.as_str()) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let seen = term.cli();
+    // O comando de sair, e o Enter à parte: no Codex, a linha digitada de uma vez seria tomada por paste.
+    std::thread::sleep(Duration::from_secs(8));
+    term.write(quit.as_bytes());
+    std::thread::sleep(Duration::from_millis(500));
+    term.write(b"\r");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while term.cli().is_some() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let after = term.cli();
+    println!("CLI visto com ele aberto: {seen:?}; depois de {quit}: {after:?}");
+    drop(term);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(seen, Some(cli.as_str()), "o terminal não viu o {cli} rodando");
+    assert_eq!(after, None, "o {cli} saiu e o terminal continuou como CLI");
 }

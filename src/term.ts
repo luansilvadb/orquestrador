@@ -2,7 +2,9 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import { backend } from './backend';
+import { toast } from '@lobehub/ui/base-ui';
+import { backend, message } from './backend';
+import { clipboardFiles, clipboardPaste, type Cli, type Paste } from './paste';
 
 const theme = {
   background: '#0b0c0d', foreground: '#d4d7dc', cursor: '#d4d7dc', cursorAccent: '#0b0c0d',
@@ -50,49 +52,37 @@ export class TermView {
     this.fit();
   }
 
-  /**
-   * O gesto que faz o CLI ler a imagem do clipboard do Windows sozinho: Ctrl+V (`\x16`) no Codex, Alt+V
-   * (`ESC v`) no Claude Code. Ligado pelo orquestrador depois de escolhido o CLI; vazio, o paste segue como antes.
-   */
-  imagePaste = '';
+  /** O CLI do terminal: fixo no orquestrador (`startOrchestrator`); vazio num shell, onde o backend olha o processo a cada colagem. */
+  cli: Cli | undefined;
 
   /**
-   * Como o CLI aceita vários arquivos colados. Medido no Claude Code 2.1.296 e no Codex 0.162.1: o Claude anexa
-   * as imagens de um paste só, com um caminho por linha (`\n`; com `\r`, que é o que o paste do xterm manda, ou
-   * com espaço, não anexa); o Codex só anexa quando cada caminho chega no próprio paste, com um intervalo entre eles.
-   */
-  pastePerFile = false;
-
-  /**
-   * Arquivo ou imagem no clipboard. Arquivo copiado no Explorer: cola o caminho dele (o evento não traz o
-   * caminho, o backend lê do clipboard); o CLI anexa o que for imagem e recebe o resto como caminho. Imagem solta (captura de tela): manda o gesto do CLI ao PTY no lugar dela. Texto segue
-   * pelo paste do xterm, sem mudança.
+   * Arquivo ou imagem no clipboard: o que vai ao terminal sai de `clipboardPaste`, com o CLI que roda nele agora. Arquivo copiado no
+   * Explorer: o evento não traz o caminho, o backend lê do clipboard. Texto segue pelo paste do xterm, sem mudança. O que não dá para
+   * colar, ou falha no caminho, aparece num aviso: nada some calado.
    */
   private onPaste = (e: ClipboardEvent) => {
-    if (!this.imagePaste) return;
-    const files = Array.from(e.clipboardData?.items ?? []).filter((item) => item.kind === 'file');
-    if (!files.length) return;
-    const image = files.some((item) => item.type.startsWith('image/'));
-    const text = e.clipboardData?.getData('text') ?? '';
+    const got = clipboardFiles(e.clipboardData);
+    if (!got) return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    void backend.clipboardSnapshot().then(({ paths }) => {
-      if (paths.length) return this.pasteFiles(paths);
-      else if (image) return backend.termWrite(this.id, this.imagePaste);
-      else if (text) this.term.paste(text);
-    }).catch(() => {});
+    void Promise.all([backend.clipboardSnapshot(), this.which()])
+      .then(([{ paths }, cli]) => this.put(clipboardPaste(cli, paths, got.image, got.text, this.term.modes.bracketedPasteMode)))
+      .catch((error) => toast.error({ title: message(error), duration: 7000 }));
   };
 
-  /** Os caminhos vão direto ao PTY, sem o paste do xterm, que trocaria `\n` por `\r`. Não manda Enter: fica no rascunho do CLI. */
+  private async which(): Promise<Cli> {
+    return this.cli ?? backend.termCli(this.id);
+  }
+
+  private async put(out: Paste) {
+    if ('error' in out) throw new Error(out.error);
+    if ('paste' in out) this.term.paste(out.paste);
+    else await backend.termWrite(this.id, out.write);
+  }
+
+  /** Cola caminhos como os arquivos copiados no Explorer: imagem vira anexo do CLI, o resto fica como caminho. Não manda Enter. */
   async pasteFiles(paths: string[]) {
-    const quoted = paths.map((p) => (p.includes(' ') ? `"${p}"` : p));
-    if (!this.term.modes.bracketedPasteMode) return backend.termWrite(this.id, quoted.join(' '));
-    const bracketed = (text: string) => `\x1b[200~${text}\x1b[201~`;
-    if (!this.pastePerFile) return backend.termWrite(this.id, bracketed(quoted.join('\n')));
-    for (const [i, path] of quoted.entries()) {
-      if (i) await new Promise((done) => setTimeout(done, 200));
-      await backend.termWrite(this.id, bracketed(i ? ` ${path}` : path));
-    }
+    await this.put(clipboardPaste(await this.which(), paths, false, '', this.term.modes.bracketedPasteMode));
   }
 
   /**
