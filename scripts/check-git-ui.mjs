@@ -131,6 +131,16 @@ async function visibleAndClear(locator, container, label) {
   assert.ok(ok.inside, `${label}: "${ok.name}" saiu da barra`);
 }
 
+// Arquivo novo: o motor desenha uma coluna só, com as marcas da faixa (a geometria vale para o que está na tela); o palco não põe
+// divisor nem as ações do vão, e a barra não tem a troca entre lado a lado e unificado.
+async function singleColumn(page, label) {
+  await view(page).locator('.compare-mark').first().waitFor();
+  const drawn = await page.locator('[data-body]:visible pre[data-diff-type]').evaluateAll((els) => els.map((el) => el.getAttribute('data-diff-type')));
+  assert.deepEqual(drawn, ['single'], `${label}: uma coluna só`);
+  assert.equal(await view(page).locator('[role="separator"], .compare-sash, .compare-center').count(), 0, `${label}: sem divisor`);
+  assert.equal(await tb(page, /^(Unificado|Lado a lado)$/).count(), 0, `${label}: sem troca de modo`);
+}
+
 // Toolbar do comparador numa linha: 28 px de altura, cada item dentro da faixa e nada passando da largura (a sobra vai para o caminho).
 async function toolbarOneLine(page, label) {
   const bar = await page.locator('[data-body]:visible .compare-toolbar').first().evaluate((el) => {
@@ -243,10 +253,16 @@ scenario('diff: arquivo inteiro num comparador só; preparar, tirar e descartar 
   assert.ok(untracked.diff.patch.includes('new file mode'), 'o patch do não rastreado é o arquivo inteiro');
   assert.equal(untracked.untracked, true);
   assert.ok((await engineRows(page)).some((r) => r.line === 1), 'o arquivo novo aparece desde a linha 1');
+  await singleColumn(page, 'não rastreado');
+  await page.screenshot({ path: join(OUT, 'git-ui-arquivo-novo.png') });
   await tb(page, 'Preparar arquivo').click();
   await waitCount(page, 'git_stage', 1);
   assert.deepEqual((await calls(page, 'git_stage')).at(-1).args.paths, ['docs/rascunho-painel.md']);
-  await row(page, 'staged', 'docs/rascunho-painel.md').waitFor();
+  // Preparado, o arquivo novo é um bloco só e continua numa coluna, com a ação do bloco na barra.
+  await row(page, 'staged', 'docs/rascunho-painel.md').dblclick();
+  await waitCounter(page, 'bloco 1 de 1');
+  await singleColumn(page, 'preparado');
+  await tb(page, 'Tirar bloco 1 de 1 do preparo').waitFor();
 });
 
 // Layout: 1920 e 1040 com dois grupos. As ações da barra são acessíveis, inteiras e sem sobreposição; o arquivo entra no grupo ativo.
@@ -581,6 +597,13 @@ scenario('divisor: o commit também tem o divisor entre as colunas, e arrastar n
   assert.ok(g.gap >= GAP - 0.5 && g.gap <= GAP + 0.5 && Math.abs(g.center - g.mid) <= 1, 'o divisor do commit fica no vão entre as colunas');
   await dragSashTo(page, g.center - 200);
   assert.ok((await splitGeo(page)).pct < g.pct - 3, 'arrastar para a esquerda diminui o lado esquerdo no commit');
+  // O arquivo criado no commit não tem original: uma coluna só, sem divisor.
+  await page.getByRole('button', { name: 'Voltar à lista de commits', exact: true }).click();
+  await page.locator('button[title^="9f3a1c2 · "]').click();
+  await page.locator('button[title^="docs/releases/v0.1.7.md: novo. Ver a alteração"]').click();
+  await tab(page, 'docs/releases/v0.1.7.md @ 9f3a1c2').waitFor();
+  await singleColumn(page, 'commit');
+  await page.screenshot({ path: join(OUT, 'git-ui-commit-arquivo-novo.png') });
 });
 
 // ---------- Git: histórico ----------

@@ -1334,6 +1334,9 @@ const fileHead = (patch: string) => {
   const at = patch.indexOf('\n@@');
   return at < 0 ? patch : patch.slice(0, at);
 };
+// Arquivo criado (não rastreado, preparado ou num commit): o cabeçalho traz `new file mode`, a mesma regra com que o motor desenha uma
+// coluna só. Sem original para comparar, não há divisor nem troca entre lado a lado e unificado.
+const isNewFile = (patch: string) => /^new file mode /m.test(fileHead(patch));
 
 // Geometria medida no motor, em pixels do palco: cada unidade vai do topo da primeira linha de mudança dela ao fim da última. A medida
 // vem do DOM depois de cada render (`onPostRender`), então as linhas auxiliares (o aviso de fim sem quebra) entram sem estimativa.
@@ -1349,9 +1352,10 @@ const clampSplit = (pct: number) => Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct)
 // tem uma marca na faixa da direita, e um clique numa mudança a escolhe. A rolagem vai à primeira linha da unidade atual, e só quando
 // ela, o modo ou o arquivo mudam: a atualização do diff não rola a tela. No lado a lado, a proporção das colunas de texto e a posição do vão
 // são atualizadas no palco sem refazer o diff nem rolar a tela.
-function Continuous({ patch, compare, mode, current, unitName, onPick, center }: {
+function Continuous({ patch, compare, mode: asked, current, unitName, onPick, center }: {
   patch: string; compare: CompareModel; mode: ViewMode; current: number; unitName: string; onPick: (unit: number) => void; center?: ReactNode;
 }) {
+  const mode: ViewMode = isNewFile(patch) ? 'unified' : asked;
   const body = useRef<HTMLDivElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const [geo, setGeo] = useState<Geo | null>(null);
@@ -1667,7 +1671,7 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
           </>
         )}
         {untracked && !staged && <Button size="small" disabled={blocked_} onClick={() => run(() => backend.gitStage([target.path]))}>Preparar arquivo</Button>}
-        <ModeToggle mode={mode} onChange={setMode} />
+        {!isNewFile(review.display.patch) && <ModeToggle mode={mode} onChange={setMode} />}
         {!staged && (
           <ActionIcon
             size="small" variant="borderless" danger icon={Undo2} aria-label="Descartar arquivo"
@@ -1739,7 +1743,7 @@ function CommitTab({ target }: { target: Extract<TabTarget, { kind: 'commit' }> 
             <ActionIcon size="small" variant="borderless" icon={ChevronDown} aria-label="Próxima mudança" title="Próxima mudança (F8)" disabled={cur >= n - 1} onClick={() => step(1)} />
           </>
         )}
-        <ModeToggle mode={mode} onChange={setMode} />
+        {!isNewFile(diff.patch) && <ModeToggle mode={mode} onChange={setMode} />}
       </Flexbox>
       <Continuous key={`${target.hash}|${target.path}`} patch={diff.patch} compare={compare} mode={mode} current={cur} unitName="Mudança" onPick={setAt} />
     </Flexbox>

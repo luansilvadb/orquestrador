@@ -482,13 +482,14 @@ function reviewDiff(path: string, staged: boolean): ReviewDiff {
   const none = { binary: false, tooLarge: false, patch: '' };
   if (path.endsWith('.png')) return { diff: { ...none, binary: true }, display: { ...none, binary: true }, revision: hash(''), untracked: false };
   if (path === 'dados/exportacao.json') return { diff: { ...none, tooLarge: true }, display: { ...none, tooLarge: true }, revision: hash(''), untracked: false };
-  // Não rastreado: o Git não separa em blocos. O patch é o arquivo inteiro como arquivo novo.
-  if (!staged && files.find((f) => f.path === path)?.unstaged === 'untracked') {
+  // Arquivo novo: o patch é o arquivo inteiro como arquivo novo. Não rastreado, o Git não separa em blocos; preparado, é um bloco só.
+  const entry = files.find((f) => f.path === path);
+  if (staged ? entry?.staged === 'added' : entry?.unstaged === 'untracked') {
     const lines = (TEXTS[path] ?? '').split('\n');
     if (lines[lines.length - 1] === '') lines.pop();
     const patch = `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n` + lines.map((l) => '+' + l + '\n').join('');
     const diff = { binary: false, tooLarge: false, patch };
-    return { diff, display: diff, revision: hash(patch), untracked: true };
+    return { diff, display: diff, revision: hash(patch), untracked: !staged };
   }
   const d = diffSide(path, staged);
   return {
@@ -627,8 +628,10 @@ function commitById(id: string): Rec {
   if (!found) throw `Commit não encontrado: ${id}`;
   return found;
 }
-// Patch de exemplo de um arquivo de commit (o mesmo formato para todos).
-const commitPatch = (path: string) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-antes\n+depois\n`;
+// Patch de exemplo de um arquivo de commit: o arquivo criado vem como arquivo novo, como no `diff-tree`; os outros, como alteração.
+const commitPatch = (path: string, kind: GitKind) => kind === 'added'
+  ? `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+depois\n`
+  : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-antes\n+depois\n`;
 // Log do HEAD (todos os pais, como `git log`), com filtro de caminho opcional.
 function history(limit: number, skip: number, path?: string | null): Commit[] {
   const reach = ancestors([headHash()]);
@@ -637,7 +640,7 @@ function history(limit: number, skip: number, path?: string | null): Commit[] {
 }
 function commitDiff(id: string, path?: string | null): GitDiff {
   const c = commitById(id);
-  const patch = c.files.filter((f) => !path || f.path === path || f.origPath === path).map((f) => commitPatch(f.path)).join('');
+  const patch = c.files.filter((f) => !path || f.path === path || f.origPath === path).map((f) => commitPatch(f.path, f.kind)).join('');
   return { binary: false, tooLarge: false, patch };
 }
 // Commit com o que está preparado. Recusa mensagem vazia e nada preparado; depois, o preparado sai da lista.
