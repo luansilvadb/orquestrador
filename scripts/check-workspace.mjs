@@ -4,8 +4,8 @@
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import {
-  activate, closeTabs, createWorkspace, joinGroups, loadWorkspace, markEdited, moveTab, navigate,
-  openPermanent, openPreview, planClose, remapPath, reopenClosed, reorderTab, splitTab, targetKey, togglePin,
+  activate, closeTabs, createWorkspace, draftName, isDirty, joinGroups, liveDocIds, loadWorkspace, markEdited, moveTab, navigate,
+  openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, reorderTab, splitTab, targetKey, togglePin, withoutDrafts,
 } from '../src/editor/workspace-model.ts';
 
 const NONE = new Set();
@@ -13,6 +13,7 @@ const file = (docId, path) => ({ kind: 'file', docId, path });
 const diff = (side, path) => ({ kind: 'diff', side, path });
 const commit = (hash, path) => ({ kind: 'commit', hash, path });
 const conflict = (path) => ({ kind: 'conflict', path });
+const draft = (docId, num) => ({ kind: 'draft', docId, num });
 
 // Invariantes: valem depois de qualquer operação.
 function assertConsistent(state) {
@@ -42,6 +43,7 @@ const label = (tab) => {
   if (t.kind === 'file') return t.path;
   if (t.kind === 'diff') return `${t.side}:${t.path}`;
   if (t.kind === 'commit') return `${t.hash}:${t.path}`;
+  if (t.kind === 'draft') return `Sem título-${t.num}`;
   return `conflito:${t.path}`;
 };
 const names = (state, id) => tabsOf(state, id).map(label);
@@ -390,4 +392,92 @@ check('Id no limite do inteiro seguro não trava o mint e não repete aba', () =
   assert.equal(state.nextId, 1);
   const ids = state.groups.flatMap((g) => g.tabs.map((t) => t.id));
   assert.equal(new Set(ids).size, ids.length);
+});
+
+check('Rascunho: numera pelo menor número livre, fica ativo e com o foco', () => {
+  let s = openDraft(createWorkspace(), 'A', 'x1');
+  s = openDraft(s, 'A', 'x2');
+  assert.deepEqual(names(s, 'A'), ['Sem título-1', 'Sem título-2']);
+  assert.ok(tabsOf(s, 'A').every((t) => !t.preview), 'rascunho nunca é prévia');
+  assert.equal(groupOf(s, 'A').active, tabsOf(s, 'A')[1].id);
+  s = closeTabs(s, [tabsOf(s, 'A')[0].id]);
+  s = openDraft(s, 'A', 'x3');
+  assert.deepEqual(names(s, 'A'), ['Sem título-2', 'Sem título-1'], 'reaproveita o 1 livre');
+  assert.equal(draftName(7), 'Sem título-7');
+  assertConsistent(s);
+});
+
+check('Docs vivos: arquivo e rascunho têm buffer; diff, histórico e conflito não; fechar outra aba mantém o rascunho', () => {
+  let s = openPermanent(createWorkspace(), 'A', file('d1', 'a.ts'));
+  s = openPermanent(s, 'A', diff('staged', 'a.ts'));
+  s = openDraft(s, 'A', 'x1');
+  s = openPermanent(s, 'A', conflict('b.ts'));
+  assert.deepEqual([...liveDocIds(s)].sort(), ['d1', 'x1']);
+  const closed = closeTabs(s, [tabsOf(s, 'A')[0].id]);
+  assert.deepEqual([...liveDocIds(closed)].sort(), ['x1'], 'o rascunho sobrevive ao fechamento de outra aba');
+  assertConsistent(closed);
+});
+
+check('Rascunho em outro grupo: vai para ele e leva o foco', () => {
+  let s = openPermanent(createWorkspace(), 'A', file('d1', 'a.ts'));
+  s = splitTab(s, tabsOf(s, 'A')[0].id);
+  s = openDraft(s, 'B', 'x1');
+  assert.equal(tabsOf(s, 'B').at(-1).target.num, 1);
+  assert.equal(s.focus, 'B');
+  assertConsistent(s);
+});
+
+check('Rascunho sujo conta como sujo pelo docId; vazio não, e fechar sujo pede decisão', () => {
+  const s = openDraft(createWorkspace(), 'A', 'x1');
+  const tab = tabsOf(s, 'A')[0];
+  assert.equal(isDirty(tab.target, new Set(['x1'])), true);
+  assert.equal(isDirty(tab.target, NONE), false);
+  assert.deepEqual(planClose(s, { kind: 'one', tabId: tab.id }, new Set(['x1'])).unsaved, [tab.id]);
+  assert.deepEqual(planClose(s, { kind: 'one', tabId: tab.id }, NONE).unsaved, [], 'rascunho vazio fecha sem perguntar');
+});
+
+check('Rascunho fechado não entra na pilha de fechadas (não ressuscita)', () => {
+  let s = openDraft(createWorkspace(), 'A', 'x1');
+  s = openPermanent(s, 'A', file('d1', 'a.ts'));
+  s = closeTabs(s, tabsOf(s, 'A').map((t) => t.id));
+  assert.deepEqual(s.closed, [{ group: 'A', target: file('d1', 'a.ts') }]);
+  assertConsistent(s);
+});
+
+check('withoutDrafts tira o rascunho do workspace gravado e mantém as abas de arquivo', () => {
+  let s = openPermanent(createWorkspace(), 'A', file('d1', 'a.ts'));
+  s = openDraft(s, 'A', 'x1');
+  const clean = withoutDrafts(s);
+  assert.deepEqual(names(clean, 'A'), ['a.ts']);
+  assert.equal(clean.groups[0].active, tabsOf(clean, 'A')[0].id);
+  assertConsistent(clean);
+  const onlyDraft = withoutDrafts(openDraft(createWorkspace(), 'A', 'x2'));
+  assert.deepEqual(onlyDraft.groups[0].tabs, []);
+  assert.equal(onlyDraft.groups[0].active, null);
+});
+
+check('Carregar workspace com rascunho salvo descarta a aba e avisa, sem quebrar', () => {
+  const { state, notes } = loadWorkspace(JSON.stringify(openDraft(createWorkspace(), 'A', 'x1')));
+  assert.deepEqual(state.groups[0].tabs, []);
+  assert.ok(notes.length > 0);
+  assertConsistent(state);
+});
+
+check('Salvar como dentro do projeto: rascunho vira aba de arquivo, mesmo id e mesmo docId', () => {
+  let s = openDraft(createWorkspace(), 'A', 'x1');
+  const tab = tabsOf(s, 'A')[0];
+  s = promoteDraft(s, tab.id, 'pasta/novo.ts');
+  assert.deepEqual(tabsOf(s, 'A')[0], { id: tab.id, target: file('x1', 'pasta/novo.ts'), pinned: false, preview: false });
+  assertConsistent(s);
+  assert.equal(promoteDraft(s, tab.id, 'outro.ts'), s, 'já não é rascunho: nada muda');
+  const again = openDraft(createWorkspace(), 'A', 'x2');
+  assert.equal(promoteDraft(again, tabsOf(again, 'A')[0].id, '../fora.ts'), again, 'caminho inseguro recusado');
+});
+
+check('Remapeamento não mexe no rascunho e segue movendo o arquivo ao lado', () => {
+  let s = openDraft(createWorkspace(), 'A', 'x1');
+  s = openPermanent(s, 'A', file('d1', 'src/a.ts'));
+  s = remapPath(s, 'src', 'lib');
+  assert.deepEqual(names(s, 'A'), ['Sem título-1', 'lib/a.ts']);
+  assertConsistent(s);
 });

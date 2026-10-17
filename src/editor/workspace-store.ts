@@ -15,6 +15,7 @@ export type Newline = '\n' | '\r\n';
 export type Cursor = { line: number; col: number };
 // Rolagem do editor (pixels, como o scrollTop/scrollLeft do DOM). Guardada junto do cursor, por arquivo.
 export type Scroll = { top: number; left: number };
+// `path` é '' para rascunho (sem arquivo no disco ainda): raw é '' e a gravação vai pelo "Salvar como".
 export type Buffer = {
   docId: string; path: string; raw: string; bom: boolean; newline: Newline; draft: string; readOnly: boolean;
 };
@@ -38,8 +39,9 @@ export function dirtyKeys(data: EditorData): Set<string> {
 }
 
 /** Há rascunho (de arquivo aberto ou de conflito) neste caminho, ou dentro dele se for pasta? Bloqueia descarte no Git. */
+// Rascunho (path '') não está no projeto: nunca bloqueia operação Git.
 export function hasDraftAt(data: EditorData, path: string): boolean {
-  return Object.values(data.buffers).some((b) => isBufferDirty(b) && isWithin(b.path, path))
+  return Object.values(data.buffers).some((b) => b.path !== '' && isBufferDirty(b) && isWithin(b.path, path))
     || Object.values(data.conflicts).some((c) => isConflictDirty(c) && isWithin(c.path, path));
 }
 

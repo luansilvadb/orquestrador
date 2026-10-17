@@ -7,6 +7,9 @@
 //   escolhido pelo integrador e nunca trocado. O `path` é só onde o arquivo está agora: `remapPath` o atualiza sem mexer no docId.
 //   Por isso renomear/mover não desmonta o buffer, e duas abas com o mesmo docId (em grupos diferentes) compartilham o buffer.
 // - Diff é identificado por lado + path (`staged`/`unstaged`); histórico, por hash + path; conflito, por path.
+// - Rascunho (`draft`) é uma aba sem caminho: "Sem título-<num>", identificado pelo `docId` do buffer em memória. Não entra na pilha de
+//   fechadas, `remapPath` o ignora e `withoutDrafts` o tira antes de gravar o workspace (rascunho não volta ao reabrir). `promoteDraft`
+//   o transforma em aba de arquivo quando o usuário salva como dentro do projeto, mantendo o `docId`.
 // - Dentro de um grupo, uma identidade aparece no máximo uma vez: abrir de novo só ativa a que já existe.
 // - Ordem do grupo: fixadas primeiro, depois as demais. No máximo uma prévia por grupo. Fixada nunca é prévia.
 // - Cada operação devolve um estado novo; o argumento não muda. Operação inválida (grupo ou aba inexistente) devolve o mesmo estado.
@@ -28,7 +31,8 @@ export type TabTarget =
   | { kind: 'file'; docId: string; path: string }
   | { kind: 'diff'; side: DiffSide; path: string }
   | { kind: 'commit'; hash: string; path: string }
-  | { kind: 'conflict'; path: string };
+  | { kind: 'conflict'; path: string }
+  | { kind: 'draft'; docId: string; num: number }; // sem path: "Sem título-<num>"
 export type EditorTab = { id: string; target: TabTarget; pinned: boolean; preview: boolean };
 export type EditorGroup = { id: GroupId; tabs: EditorTab[]; active: string | null };
 export type ClosedTab = { group: GroupId; target: TabTarget };
@@ -60,7 +64,38 @@ export function targetKey(target: TabTarget): string {
     case 'diff': return `diff:${target.side}:${target.path.toLowerCase()}`;
     case 'commit': return `commit:${target.hash.toLowerCase()}:${target.path.toLowerCase()}`;
     case 'conflict': return `conflict:${target.path.toLowerCase()}`;
+    case 'draft': return `draft:${target.docId}`;
   }
+}
+
+/** Nome do rascunho na aba, nos avisos e no diálogo de salvar. */
+export const draftName = (num: number) => `Sem título-${num}`;
+
+/** Abre um rascunho novo no grupo, permanente e ativo. Usa o menor número livre entre os rascunhos abertos (como o VS Code). */
+export function openDraft(state: WorkspaceState, group: GroupId, docId: string): WorkspaceState {
+  const used = new Set(state.groups.flatMap((g) => g.tabs.flatMap((t) => (t.target.kind === 'draft' ? [t.target.num] : []))));
+  let num = 1;
+  while (used.has(num)) num += 1;
+  return openPermanent(state, group, { kind: 'draft', docId, num });
+}
+
+/** Salvar como dentro do projeto: a aba de rascunho vira aba de arquivo em `path`, com o mesmo `docId` (o buffer continua o mesmo). Recusa o que não for rascunho ou caminho seguro. */
+export function promoteDraft(state: WorkspaceState, tabId: string, path: string): WorkspaceState {
+  const found = locate(state, tabId);
+  if (!found || found.tab.target.kind !== 'draft' || !isSafePath(path)) return state;
+  const { docId } = found.tab.target;
+  return updateTab(state, tabId, (tab) => ({ ...tab, target: { kind: 'file', docId, path } }));
+}
+
+/** O workspace sem os rascunhos: é o que se grava. Rascunho não sobrevive ao reabrir (a janela pergunta antes de fechar). */
+export function withoutDrafts(state: WorkspaceState): WorkspaceState {
+  const drafts = new Set(state.groups.flatMap((g) => g.tabs.filter((t) => t.target.kind === 'draft').map((t) => t.id)));
+  return tidy({ ...state, groups: state.groups.map((g) => dropFromGroup(g, drafts)) });
+}
+
+/** docIds das abas que têm buffer (arquivo e rascunho). Quem guarda os buffers mantém só estes; diff, histórico e conflito não têm docId. */
+export function liveDocIds(state: WorkspaceState): Set<string> {
+  return new Set(state.groups.flatMap((g) => g.tabs.flatMap((t) => (t.target.kind === 'file' || t.target.kind === 'draft' ? [t.target.docId] : []))));
 }
 
 /** Abre (ou ativa) uma prévia no grupo. Substitui a prévia limpa; se a prévia atual está suja (`dirty`, docIds), ela vira permanente e a nova entra depois. */
@@ -115,12 +150,12 @@ export function planClose(state: WorkspaceState, scope: CloseScope, dirty: Reado
   };
 }
 
-/** Fecha as abas (só as que existem). Guarda cada uma na pilha de fechadas e escolhe a vizinha ativa. Quem chama já decidiu sobre os rascunhos. */
+/** Fecha as abas (só as que existem). Guarda cada uma na pilha de fechadas (rascunho não entra) e escolhe a vizinha ativa. Quem chama já decidiu sobre os rascunhos. */
 export function closeTabs(state: WorkspaceState, tabIds: readonly string[]): WorkspaceState {
   const closing = new Set(tabIds);
   const closed: ClosedTab[] = [];
   const groups = state.groups.map((group) => {
-    for (const tab of group.tabs) if (closing.has(tab.id)) closed.push({ group: group.id, target: tab.target });
+    for (const tab of group.tabs) if (closing.has(tab.id) && tab.target.kind !== 'draft') closed.push({ group: group.id, target: tab.target });
     return dropFromGroup(group, closing);
   });
   return tidy({
@@ -212,7 +247,8 @@ export function remapPath(state: WorkspaceState, from: string, to: string): Work
   if (!isSafePath(from) || !isSafePath(to)) return state;
   const move = (path: string) => (isWithin(path, from) ? to + path.slice(from.length) : path);
   // Histórico é imutável: o path de um commit é o do próprio commit e não muda. Abrir o arquivo atual sai de outro localizador.
-  const retarget = (target: TabTarget): TabTarget => (target.kind === 'commit' ? target : { ...target, path: move(target.path) });
+  // Rascunho não tem caminho: fica como está.
+  const retarget = (target: TabTarget): TabTarget => (target.kind === 'commit' || target.kind === 'draft' ? target : { ...target, path: move(target.path) });
   return tidy({
     ...state,
     groups: state.groups.map((g) => ({ ...g, tabs: g.tabs.map((t) => ({ ...t, target: retarget(t.target) })) })),
@@ -396,9 +432,9 @@ export function isWithin(path: string, base: string): boolean {
   return p === b || p.startsWith(`${b}/`);
 }
 
-// Sujo: buffer de arquivo com draft (`docId`) ou rascunho de resolução de conflito (`conflict:<path>`, sem diferença de caixa).
+// Sujo: buffer de arquivo ou de rascunho com texto (`docId`) ou rascunho de resolução de conflito (`conflict:<path>`, sem diferença de caixa).
 export const isDirty = (target: TabTarget, dirty: ReadonlySet<string>) =>
-  target.kind === 'file' ? dirty.has(target.docId)
+  target.kind === 'file' || target.kind === 'draft' ? dirty.has(target.docId)
     : target.kind === 'conflict' ? dirty.has(`conflict:${target.path.toLowerCase()}`) : false;
 const isGroupId = (value: unknown): value is GroupId => value === 'A' || value === 'B';
 export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);

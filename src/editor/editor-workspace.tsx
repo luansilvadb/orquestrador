@@ -11,18 +11,22 @@
 //   remove(paths)                                       Depois de excluir: fecha as abas e descarta os buffers. Quem chama já decidiu o descarte.
 //   hasDraft(path): boolean                             Há rascunho neste caminho (ou dentro, se for pasta). Bloqueia descarte no Git.
 //   unsaved(): string[]                                 Os mesmos caminhos, para o integrador perguntar antes de fechar a janela.
-//   saveAll(): Promise<boolean>                         Salva arquivos e rascunhos de conflito (conflito é gravado sem marcar resolvido; marcadores podem ficar). false se algo falhou.
+//   saveAll(): Promise<boolean>                         Salva arquivos e rascunhos de conflito (conflito é gravado sem marcar resolvido; marcadores podem ficar). Rascunho com texto
+//                                                        abre o "Salvar como" um por um. false se algo falhou ou se cancelou.
 //   discardAll(): void                                  Descarta todos os rascunhos (volta ao texto do disco/Git) e limpa a recuperação deles.
 //   openPaths(): string[]                               Caminhos de todas as abas, para checar colisão antes de criar ou mover.
 //   refresh(): void                                     Relê do disco os arquivos abertos que estão limpos.
 //   flushRecovery(): void                               Grava a recuperação agora (antes de fechar o app).
-//   selectedText(): string                              Texto da seleção principal no arquivo da aba ativa do grupo focado. Sem seleção, a palavra sob o cursor.
-//                                                        Vazio se não há aba de arquivo, se a seleção tem quebra de linha ou se não há palavra. Não mexe no editor.
+//   selectedText(): string                              Texto da seleção principal no arquivo (ou rascunho) da aba ativa do grupo focado. Sem seleção, a palavra sob o cursor.
+//                                                        Vazio se não há aba de arquivo ou rascunho, se a seleção tem quebra de linha ou se não há palavra. Não mexe no editor.
 // Props: `project` (raiz absoluta, chave da recuperação), `locked` (executores vivos: bloqueia mutações Git), `guard` (trava compartilhada
 // com a barra do Git), `refreshGit` (chamado após mutação), `onActiveTarget` (aviso da aba ativa), `layout` (texto opaco do
 // layout externo, salvo na recuperação), `onRestoreLayout` (chamado uma vez na montagem com o layout salvo), `onReveal` (revelar no Explorer),
 // `onGroupCount` (1 ou 2 grupos), `onSaved()` (chamada depois de cada gravação bem-sucedida no disco pelo editor: Ctrl+S, salvar tudo,
 // comparação, resolução de conflito).
+// Rascunho ("Sem título-N"): duplo clique na faixa vazia ou Ctrl+N (dentro da área) abrem um buffer em memória, sem caminho. Salvar
+// (Ctrl+S, Salvar, Salvar Tudo, fechar com alterações) abre o "Salvar como" com a raiz do projeto; só grava dentro dele. Cancelar não
+// muda nada. Rascunho não é restaurado ao reabrir a janela (a janela pergunta antes de fechar) e não entra em Reabrir Fechada.
 // Recuperação: localStorage por projeto (`orquestrador.editor:<project>`), validada ao ler; nunca grava no disco.
 import {
   forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent, type FocusEvent, type KeyboardEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode,
@@ -31,6 +35,7 @@ import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownM
 import { Center, Flexbox, Hotkey, PatchDiff } from '@lobehub/ui';
 import { ArrowRight, ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
 import { EditorView } from '@codemirror/view';
+import { save } from '@tauri-apps/plugin-dialog';
 import { FileIcon } from '../shared/file-icon';
 import { Breadcrumbs } from './breadcrumbs';
 import { backend, message } from '../backend/backend';
@@ -41,8 +46,8 @@ import { action, blocked, DIVIDER, fileName, useChord } from '../shared/file-tab
 import { pathText } from '../shared/file-tab-actions';
 import { copy, splitPath } from '../shared/paths';
 import {
-  activate, closeTabs, createWorkspace, isDirty, isWithin, joinGroups, loadWorkspace, markEdited, moveTab, navigate, openPermanent, openPreview,
-  planClose, remapPath, reopenClosed, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
+  activate, closeTabs, createWorkspace, draftName, isDirty, isSafePath, isWithin, joinGroups, liveDocIds, loadWorkspace, markEdited, moveTab, navigate,
+  openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, splitTab, targetKey, togglePin, withoutDrafts, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
 } from './workspace-model';
 import { revealTab, wheelToScroll } from '../shared/tab-strip';
 import {
@@ -72,7 +77,7 @@ export type EditorWorkspaceHandle = {
   refresh(): void;
   /** Grava a recuperação agora, sem esperar o atraso. Usado antes de fechar o app. */
   flushRecovery(): void;
-  /** Texto da seleção principal (ou a palavra sob o cursor) no arquivo da aba ativa do grupo focado. Vazio se não há o que pesquisar. */
+  /** Texto da seleção principal (ou a palavra sob o cursor) no arquivo ou rascunho da aba ativa do grupo focado. Vazio se não há o que pesquisar. */
   selectedText(): string;
 };
 export type EditorWorkspaceProps = {
@@ -120,20 +125,49 @@ function detailsOf(paths: string[]) {
   return new Map(paths.map((path) => [path, (count.get(fileName(path)) ?? 0) > 1 ? splitPath(path).dir || 'raiz' : '']));
 }
 // Nome curto da aba nos avisos.
-const nameOf = (target: TabTarget) => fileName(target.path);
+const nameOf = (target: TabTarget) => (target.kind === 'draft' ? draftName(target.num) : fileName(target.path));
 
-// Texto de uma aba para a lista e os avisos: arquivo e pasta, ou o rótulo do diff/commit/conflito.
+// Texto de uma aba para a lista e os avisos: arquivo e pasta, ou o rótulo do diff/commit/conflito/rascunho.
 function labelOf(target: TabTarget): string {
   switch (target.kind) {
     case 'file': return target.path;
     case 'diff': return `${target.path} (${target.side === 'staged' ? 'preparadas' : 'alterações'})`;
     case 'commit': return `${target.path} @ ${target.hash.slice(0, 7)}`;
     case 'conflict': return `${target.path} (conflito)`;
+    case 'draft': return draftName(target.num);
   }
 }
 
-// Ícone da aba: o do tipo de arquivo.
-const tabIcon = (target: TabTarget) => <FileIcon path={target.path} className="size-4" />;
+// Ícone da aba: o do tipo de arquivo; rascunho não tem tipo ainda, então usa o de texto.
+const tabIcon = (target: TabTarget) => (target.kind === 'draft'
+  ? <FileText className="size-4" />
+  : <FileIcon path={target.path} className="size-4" />);
+
+// Caminho do diálogo "Salvar como" (absoluto, com a raiz do projeto) como caminho relativo com "/". Null se ficou fora do projeto.
+// Sem diferença de caixa, como no Windows.
+function relativeToProject(project: string, picked: string): string | null {
+  const root = project.replace(/\\/g, '/').replace(/\/+$/, '');
+  const full = picked.replace(/\\/g, '/');
+  if (full.slice(0, root.length + 1).toLowerCase() !== `${root}/`.toLowerCase()) return null;
+  return full.slice(root.length + 1);
+}
+
+// Grava `text` em `path` (relativo, dentro do projeto). Arquivo novo é criado; se já existe (o diálogo confirmou a sobrescrita), o texto
+// vai por cima da versão que está no disco agora, sem gravar às cegas.
+async function writeNewFile(path: string, text: string): Promise<void> {
+  const slash = path.lastIndexOf('/');
+  let base = '';
+  let bom = false;
+  try {
+    await backend.createFile(slash < 0 ? '' : path.slice(0, slash), path.slice(slash + 1));
+  } catch {
+    const current = await backend.readFile(path);
+    if (current.binary || current.tooLarge) throw new Error(`${fileName(path)} não é texto: não dá para salvar por cima dele.`);
+    base = current.text;
+    bom = current.bom;
+  }
+  await backend.writeFileChecked(path, text, base, bom);
+}
 
 function emptyData(): EditorData { return { buffers: {}, conflicts: {} }; }
 
@@ -276,6 +310,21 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     openFile(path, { ...options, side });
   };
 
+  // ---- Rascunho novo (duplo clique na faixa, Ctrl+N): buffer vazio em memória, aba permanente e ativa, com foco no texto ----
+  // `freshDraft` é o rascunho que acabou de nascer: a vista dele foca ao montar. Some logo depois da renderização (effect abaixo).
+  const freshDraft = useRef<string | null>(null);
+  const newDraft = (side: GroupId) => {
+    const docId = newDocId();
+    const base = groupWithDefault(wsRef.current, side);
+    setData({
+      ...dataRef.current,
+      buffers: { ...dataRef.current.buffers, [docId]: { docId, path: '', raw: '', bom: false, newline: '\n', draft: '', readOnly: false } },
+    });
+    freshDraft.current = docId;
+    setWs(openDraft(base, side, docId));
+  };
+  useEffect(() => { freshDraft.current = null; });
+
   // ---- Fechar (decisão de rascunho antes de qualquer mudança) ----
   const closeFlow = async (scope: CloseScope): Promise<boolean> => {
     const plan = planClose(wsRef.current, scope, dirtyNow());
@@ -323,10 +372,10 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     return true;
   };
 
-  // Buffers e conflitos sem aba: a aba foi fechada e o rascunho já foi decidido (salvo ou descartado).
+  // Buffers e conflitos sem aba: a aba foi fechada e o rascunho já foi decidido (salvo ou descartado). Rascunho aberto mantém o buffer.
   const pruneData = (state: WorkspaceState) => {
     const tabs = state.groups.flatMap((g) => g.tabs);
-    const docIds = new Set(tabs.flatMap((t) => (t.target.kind === 'file' ? [t.target.docId] : [])));
+    const docIds = liveDocIds(state);
     const keys = new Set(tabs.flatMap((t) => (t.target.kind === 'conflict' ? [conflictKey(t.target.path)] : [])));
     const current = dataRef.current;
     for (const id of Object.keys(current.buffers)) if (!docIds.has(id)) forgetEditorState(id);
@@ -340,6 +389,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const saveBuffer = async (docId: string): Promise<boolean> => {
     const buffer = dataRef.current.buffers[docId];
     if (!buffer || !isBufferDirty(buffer)) return true;
+    if (allTabs().some((t) => t.target.kind === 'draft' && t.target.docId === docId)) return saveDraft(docId);
     if (buffer.readOnly || saving.current.has(docId)) return false;
     saving.current.add(docId);
     const sent = toDiskNewlines(buffer.draft, buffer.newline);
@@ -416,8 +466,55 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     }
   };
 
+  // Rascunho sem caminho: "Salvar como" pede o lugar (pasta inicial = raiz do projeto). Só grava dentro do projeto; fora dele, recusa com
+  // aviso. Cancelar devolve false e nada muda. Se o caminho já está aberto noutra aba (sem alterações não salvas), o rascunho fecha e a
+  // aba existente fica ativa, com o texto gravado; se ela tem alterações, recusa antes de gravar, para não passar por cima.
+  // Dentro do projeto, a aba vira aba de arquivo com o mesmo buffer (`promoteDraft`).
+  const saveDraft = async (docId: string): Promise<boolean> => {
+    const tab = allTabs().find((t) => t.target.kind === 'draft' && t.target.docId === docId);
+    const buffer = dataRef.current.buffers[docId];
+    if (!tab || !buffer || saving.current.has(docId)) return false;
+    saving.current.add(docId);
+    try {
+      const picked = await save({ title: 'Salvar como', defaultPath: project });
+      if (picked === null) return false;
+      const path = relativeToProject(project, picked);
+      if (path === null || !isSafePath(path)) {
+        toast.error({ title: 'Salve dentro da pasta do projeto: o editor só grava arquivos do projeto.', duration: 7000 });
+        return false;
+      }
+      const lower = path.toLowerCase();
+      const existing = allTabs().find((t) => t.target.kind === 'file' && t.target.path.toLowerCase() === lower);
+      const existingBuffer = existing?.target.kind === 'file' ? dataRef.current.buffers[existing.target.docId] : undefined;
+      if (existingBuffer && isBufferDirty(existingBuffer)) {
+        toast.error({ title: `Salve ou descarte a edição aberta de ${fileName(path)} antes de salvar por cima dele.`, duration: 7000 });
+        return false;
+      }
+      const sent = toDiskNewlines(buffer.draft, buffer.newline);
+      await writeNewFile(path, sent);
+      if (existing) {
+        const next = activate(closeTabs(wsRef.current, [tab.id]), existing.id);
+        setWs(next);
+        pruneData(next);
+        if (existing.target.kind === 'file') void syncFile(existing.target.docId);
+      } else {
+        patchBuffer(docId, (b) => ({ ...b, path, raw: sent }));
+        setWs(promoteDraft(wsRef.current, tab.id, path));
+      }
+      refreshGit();
+      notifySaved();
+      return true;
+    } catch (e) {
+      toast.error({ title: message(e), duration: 7000 });
+      return false;
+    } finally {
+      saving.current.delete(docId);
+    }
+  };
+
   const saveTab = (target: TabTarget): Promise<boolean> => {
     if (target.kind === 'file') return saveBuffer(target.docId);
+    if (target.kind === 'draft') return saveDraft(target.docId);
     if (target.kind === 'conflict') return saveConflict(target.path, false);
     return Promise.resolve(true);
   };
@@ -491,7 +588,11 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   // ---- Avisos e recuperação ----
   const dirtyList = (): string[] => {
     const out: string[] = [];
-    for (const b of Object.values(dataRef.current.buffers)) if (isBufferDirty(b)) out.push(b.path);
+    for (const b of Object.values(dataRef.current.buffers)) if (isBufferDirty(b) && b.path !== '') out.push(b.path);
+    for (const tab of allTabs()) {
+      const b = tab.target.kind === 'draft' ? dataRef.current.buffers[tab.target.docId] : undefined;
+      if (tab.target.kind === 'draft' && b && isBufferDirty(b)) out.push(draftName(tab.target.num));
+    }
     for (const c of Object.values(dataRef.current.conflicts)) if (isConflictDirty(c)) out.push(c.path);
     return out;
   };
@@ -515,7 +616,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const conflicts = Object.values(dataRef.current.conflicts).filter(isConflictDirty);
     const hasState = open.length > 0 || conflicts.length > 0 || layoutRef.current !== null;
     const recovery: Recovery = {
-      workspace: JSON.stringify(wsRef.current),
+      workspace: JSON.stringify(withoutDrafts(wsRef.current)),
       layout: layoutRef.current,
       split: splitRef.current,
       buffers: [...new Map(open.flatMap((t) => (t.target.kind === 'file' ? [[t.target.docId, t.target] as const] : []))).values()].map((target) => {
@@ -563,6 +664,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const activateTab = (tabId: string) => setWs(activate(wsRef.current, tabId));
   // Copia o caminho pedido (relativo, absoluto ou de navegação); sucesso e erro vêm do helper `copy`.
   const copyPath = (kind: 'relative' | 'absolute' | 'navigation', target: TabTarget) => {
+    // Rascunho não tem caminho: o menu já mostra o item bloqueado; o atalho só não faz nada.
+    if (target.kind === 'draft') return;
     const cursor = target.kind === 'file' ? cursors.current[target.docId] : undefined;
     const text = pathText(kind, target.path, project, cursor);
     if (text === null) return;
@@ -587,7 +690,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const remove = (paths: string[]) => {
     const hit = (p: string) => paths.some((base) => isWithin(p, base));
     // Abas de commit (histórico) leem blobs imutáveis: continuam abertas mesmo quando o arquivo some da pasta.
-    const ids = allTabs().filter((t) => t.target.kind !== 'commit' && hit(t.target.path)).map((t) => t.id);
+    // Rascunho não tem caminho no projeto: nunca some com a exclusão de um arquivo.
+    const ids = allTabs().filter((t) => t.target.kind !== 'commit' && t.target.kind !== 'draft' && hit(t.target.path)).map((t) => t.id);
     const next = closeTabs(wsRef.current, ids);
     setWs(next);
     pruneData(next);
@@ -639,6 +743,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         else if (!mod && !e.altKey && e.shiftKey && e.code === 'Enter' && focused) run = () => setWs(togglePin(wsRef.current, focused.id));
       }
     } else if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyK') run = beginChord;
+    // Ctrl+N: rascunho novo no grupo com foco. Ctrl+N não tem ação no editor (CodeMirror) nem no resto do app.
+    else if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyN') run = () => newDraft(wsRef.current.focus);
     else if (mod && !e.shiftKey && !e.altKey && (e.key === 'w' || e.key === 'F4') && focused) run = () => void closeFlow({ kind: 'one', tabId: focused.id });
     else if (e.altKey && e.shiftKey && !mod && e.code === 'KeyC' && focused) run = () => void copyPath('absolute', focused.target);
     else if (e.ctrlKey && e.key === 'Tab') run = () => setWs(navigate(wsRef.current, e.shiftKey ? -1 : 1));
@@ -666,7 +772,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     hasDraft: (path: string) => hasDraftAt(dataRef.current, path),
     unsaved: () => dirtyList(),
     saveAll,
-    openPaths: () => [...new Set(allTabs().map((t) => t.target.path))],
+    openPaths: () => [...new Set(allTabs().flatMap((t) => (t.target.kind === 'draft' ? [] : [t.target.path])))],
     refresh: () => {
       const ids = new Set(allTabs().flatMap((t) => (t.target.kind === 'file' ? [t.target.docId] : [])));
       ids.forEach((id) => void syncFile(id));
@@ -674,7 +780,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     flushRecovery: () => persistRef.current(),
     selectedText: () => {
       const tab = focusedTab();
-      if (!tab || tab.target.kind !== 'file') return '';
+      if (!tab || (tab.target.kind !== 'file' && tab.target.kind !== 'draft')) return '';
       // A vista sai do corpo da aba (`data-body`, um por aba): o id de aba é único no workspace.
       const body = document.querySelector<HTMLElement>(`[data-body="${tab.id}"]`);
       const view = body && EditorView.findFromDOM(body);
@@ -760,6 +866,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
 
   const tabMenu = (tab: EditorTab): ContextMenuItem[] => {
     const target = tab.target;
+    const noPath = 'O rascunho ainda não tem caminho. Salve para ter um.';
     const dirtySet = dirtyNow();
     const dirty = isDirty(target, dirtySet);
     const buffer = target.kind === 'file' ? dataRef.current.buffers[target.docId] : undefined;
@@ -769,9 +876,10 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const saved = groupOf ? groupOf.tabs.filter((t) => !t.pinned && !isDirty(t.target, dirtySet)).length : 0;
     const all = groupOf ? groupOf.tabs.filter((t) => !t.pinned).length : 0;
     const closeBatch = (scope: CloseScope) => void closeFlow(scope);
-    const saveBlock = target.kind !== 'file' && target.kind !== 'conflict'
+    // Rascunho salva sempre (abre o "Salvar como", mesmo vazio); os outros só com alteração.
+    const saveBlock = target.kind !== 'file' && target.kind !== 'conflict' && target.kind !== 'draft'
       ? blocked('save', 'Salvar', 'Esta aba não tem texto para salvar.')
-      : !dirty ? blocked('save', 'Salvar', 'Não há alterações não salvas nesta aba.')
+      : target.kind !== 'draft' && !dirty ? blocked('save', 'Salvar', 'Não há alterações não salvas nesta aba.')
         : buffer?.readOnly ? blocked('save', 'Salvar', 'Arquivo somente leitura.')
           : action('save', 'Salvar', () => void saveTab(target), 'Ctrl+S');
     const sections: ContextMenuItem[][] = [
@@ -791,8 +899,10 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           : blocked('close-all', 'Fechar Todas', 'Não há abas para fechar. As fixadas ficam abertas.'),
       ],
       [
-        action('copy-relative', 'Copiar Caminho Relativo', () => void copyPath('relative', target), 'Ctrl+K Ctrl+Shift+C'),
-        action('copy-path', 'Copiar o Caminho', () => void copyPath('absolute', target), 'Shift+Alt+C'),
+        target.kind === 'draft' ? blocked('copy-relative', 'Copiar Caminho Relativo', noPath)
+          : action('copy-relative', 'Copiar Caminho Relativo', () => void copyPath('relative', target), 'Ctrl+K Ctrl+Shift+C'),
+        target.kind === 'draft' ? blocked('copy-path', 'Copiar o Caminho', noPath)
+          : action('copy-path', 'Copiar o Caminho', () => void copyPath('absolute', target), 'Shift+Alt+C'),
         target.kind === 'file' && cursors.current[target.docId]
           ? action('copy-navigation', 'Copiar Caminho de Navegação', () => void copyPath('navigation', target))
           : blocked('copy-navigation', 'Copiar Caminho de Navegação', 'Abra o arquivo para ter a posição do cursor.'),
@@ -805,7 +915,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       ],
       [
         action('pin', tab.pinned ? 'Desafixar' : 'Fixar', () => setWs(togglePin(wsRef.current, tab.id)), 'Ctrl+K Shift+Enter'),
-        action('reveal', 'Revelar no Explorer', () => onReveal(target.path)),
+        target.kind === 'draft' ? blocked('reveal', 'Revelar no Explorer', noPath)
+          : action('reveal', 'Revelar no Explorer', () => onReveal(target.path)),
       ],
     ];
     return sections.flatMap((items, i) => (i ? [DIVIDER, ...items] : items));
@@ -829,13 +940,14 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         />
       );
     }
-    if (mediaOf(target.path)) return <MediaView path={target.path} shown={shown} />;
+    if (target.kind === 'file' && mediaOf(target.path)) return <MediaView path={target.path} shown={shown} />;
     return (
       <FileBody
         buffer={data.buffers[target.docId]}
         status={status[target.docId]}
         disk={disk[target.docId]}
         reveal={reveal && reveal.docId === target.docId && groupActive ? reveal : null}
+        autoFocus={target.kind === 'draft' && freshDraft.current === target.docId}
         cursor={cursors.current[target.docId] ?? null}
         onChange={(value) => {
           patchBuffer(target.docId, (b) => ({ ...b, draft: value }));
@@ -845,7 +957,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           for (const g of current.groups) for (const t of g.tabs) if (t.target.kind === 'file' && t.target.docId === target.docId && t.preview) next = markEdited(next, t.id);
           if (next !== current) setWs(next);
         }}
-        onSave={() => void saveBuffer(target.docId)}
+        onSave={() => void (target.kind === 'draft' ? saveDraft(target.docId) : saveBuffer(target.docId))}
         onCursor={(line, col) => {
           const prev = cursors.current[target.docId];
           if (prev && prev.line === line && prev.col === col) return;
@@ -857,7 +969,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           scrolls.current[target.docId] = value;
           persistSoon();
         }}
-        onCompare={(mode) => openCompare(target.docId, target.path, mode)}
+        onCompare={(mode) => openCompare(target.docId, target.kind === 'file' ? target.path : '', mode)}
         onRetry={() => void syncFile(target.docId)}
       />
     );
@@ -867,6 +979,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const dirty = dirtyNow(data);
   const activeTabOf = (g: { active: string | null; tabs: EditorTab[] }) => g.tabs.find((t) => t.id === g.active) ?? null;
   const titleOf = (target: TabTarget) => {
+    if (target.kind === 'draft') return draftName(target.num);
     if (target.kind === 'file') return fileName(target.path);
     if (target.kind === 'diff') return `${fileName(target.path)} · ${target.side === 'staged' ? 'preparadas' : 'alterações'}`;
     if (target.kind === 'commit') return `${target.hash.slice(0, 7)} · ${fileName(target.path)}`;
@@ -913,7 +1026,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (!group) return null;
     const current = activeTabOf(group);
     const focusedHere = ws.focus === groupId;
-    const details = detailsOf(ws.groups.flatMap((g) => g.tabs.map((t) => t.target.path)));
+    // Rascunho não tem pasta para diferenciar: fica fora do cálculo de detalhe.
+    const details = detailsOf(ws.groups.flatMap((g) => g.tabs.flatMap((t) => (t.target.kind === 'draft' ? [] : [t.target.path]))));
     // Setas andam entre as abas da faixa (a ativação é no clique, Enter ou Espaço), como uma lista de abas.
     const onTabKey = (e: KeyboardEvent<HTMLButtonElement>) => {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return;
@@ -953,10 +1067,13 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           ref={stripRefFor(groupId)} role="tablist" aria-label={`Abas do grupo ${groupId}`}
           className="@container relative flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none]!"
           onWheel={wheelToScroll}
+          // Duplo clique na faixa, fora das abas: rascunho novo neste grupo (como no VS Code). Em cima de uma aba, não faz nada.
+          onDoubleClick={(e) => { if (!(e.target as HTMLElement).closest('[data-tab]')) newDraft(groupId); }}
         >
           {group.tabs.map((tab, index) => {
             const active = tab.id === current?.id;
             const dirtyTab = isDirtyTab(tab.target);
+            const detail = tab.target.kind === 'draft' ? '' : (details.get(tab.target.path) ?? '');
             return (
               <ContextMenuTrigger key={tab.id} items={() => tabMenu(tab)}>
                 <div
@@ -986,8 +1103,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
                       ? <Pin className="size-4 shrink-0 text-[var(--ant-color-text-secondary)]" aria-hidden />
                       : tabIcon(tab.target)}
                     <span className="min-w-0 truncate">{titleOf(tab.target)}</span>
-                    {details.get(tab.target.path) && (
-                      <span className="min-w-0 truncate text-[12px] text-[var(--ant-color-text-secondary)]">{details.get(tab.target.path)}</span>
+                    {detail && (
+                      <span className="min-w-0 truncate text-[12px] text-[var(--ant-color-text-secondary)]">{detail}</span>
                     )}
                     {tab.pinned && <span className="sr-only">(fixada)</span>}
                     {tab.preview && <span className="sr-only">(prévia)</span>}
@@ -1146,9 +1263,9 @@ function EmptyGroup() {
 
 // ---- Arquivo ----
 
-function FileBody({ buffer, status, disk, reveal, cursor, onChange, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
+function FileBody({ buffer, status, disk, reveal, autoFocus, cursor, onChange, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
   buffer: Buffer | undefined; status: Status | undefined; disk: DiskVersion | undefined;
-  reveal: Reveal | null; cursor: StartCursor | null; onChange: (value: string) => void; onSave: () => void;
+  reveal: Reveal | null; autoFocus: boolean; cursor: StartCursor | null; onChange: (value: string) => void; onSave: () => void;
   onCursor: (line: number, col: number) => void; onCompare: (mode: 'keep' | 'use') => void; onRetry: () => void;
   scroll: Scroll | null; onScroll: (scroll: Scroll) => void;
 }) {
@@ -1177,6 +1294,7 @@ function FileBody({ buffer, status, disk, reveal, cursor, onChange, onSave, onCu
           <CodeEditor
             text={buffer.draft}
             readOnly={buffer.readOnly}
+            autoFocus={autoFocus}
             path={buffer.path}
             reveal={reveal}
             onChange={onChange}

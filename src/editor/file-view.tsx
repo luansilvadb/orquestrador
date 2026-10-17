@@ -170,11 +170,13 @@ export function parseGoto(value: string, lines: number, lineLength: (line: numbe
 }
 
 // Editor do arquivo (CodeMirror com o tema do app). Exportado para o editor central (src/editor/editor-workspace.tsx) reutilizar.
-export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll }: {
+export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll, autoFocus }: {
   text: string; readOnly: boolean; path: string; reveal: Reveal | null; onChange: (text: string) => void; onSave: () => void;
   onCursor: (line: number, col: number) => void; onScroll?: (scroll: Scroll) => void; cacheKey?: string; start?: StartCursor | null;
   /** Rolagem a restaurar ao montar (ex.: a vista foi movida de grupo ou o app foi reaberto). */
   scroll?: Scroll | null;
+  /** Foca o texto ao montar (rascunho novo). Só vale na montagem. */
+  autoFocus?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -303,6 +305,8 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
     }
     view.current = new EditorView({ state, parent: host.current });
     reportCursor(view.current.state);
+    // Rascunho recém-criado: o foco já vai para o texto, pronto para digitar.
+    if (autoFocus) view.current.focus();
     const dom = view.current.scrollDOM;
     // A rolagem só é aplicada depois da medição: antes, o CodeMirror ainda não sabe a altura do documento e prende o valor.
     const restore = scroll;

@@ -45,6 +45,12 @@ function assertRevealed(s, label) {
 
 
 
+// Ponto na área vazia à direita das abas do grupo: duplo clique ali cria rascunho.
+async function emptyStripPoint(page, group = 'A') {
+  const b = await page.locator(`[data-group="${group}"] [role="tablist"]`).boundingBox();
+  return { x: b.x + b.width - 20, y: b.y + b.height / 2 };
+}
+
 // ---------- cenários (cada um com fixtures próprias; nenhum depende de estado de outro) ----------
 
 const scenario = uiSuite('editor-ui');
@@ -382,4 +388,72 @@ scenario('breadcrumbs e Mais Ações: o caminho do arquivo abre o seletor da pas
   await page.getByRole('button', { name: 'Mais Ações...' }).first().click();
   await page.getByRole('menuitem', { name: /App\.tsx/ }).click();
   await crumbs.getByRole('button', { name: 'App.tsx', exact: true }).waitFor();
+});
+
+scenario('rascunho: duplo clique na área vazia da faixa cria "Sem título-1" ativa, e o próximo é "Sem título-2"', async ({ page }) => {
+  await expand(page, ['src']);
+  await treeItem(page, 'App.tsx').dblclick();
+  const activeTitle = () => page.locator('[data-group="A"] [role="tab"][aria-selected="true"]').textContent();
+
+  const first = await emptyStripPoint(page);
+  await page.mouse.dblclick(first.x, first.y);
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-group="A"] [role="tab"]')].some((t) => t.textContent.startsWith('Sem título-1')));
+  assert.ok((await activeTitle()).startsWith('Sem título-1'), `primeiro rascunho ativo (${await activeTitle()})`);
+
+  const second = await emptyStripPoint(page);
+  await page.mouse.dblclick(second.x, second.y);
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-group="A"] [role="tab"]')].some((t) => t.textContent.startsWith('Sem título-2')));
+  assert.ok((await activeTitle()).startsWith('Sem título-2'), `segundo rascunho ativo (${await activeTitle()})`);
+  const titles = await tabTitles(page);
+  assert.equal(titles.length, 3, `App + dois rascunhos (${JSON.stringify(titles)})`);
+  assert.ok(titles.some((t) => t.startsWith('Sem título-1')) && titles.some((t) => t.startsWith('Sem título-2')), `os dois rascunhos na faixa (${JSON.stringify(titles)})`);
+});
+
+scenario('rascunho: duplo clique em cima de uma aba existente não cria rascunho', async ({ page }) => {
+  await expand(page, ['src']);
+  await treeItem(page, 'App.tsx').dblclick();
+  await tabs(page).first().dblclick();
+  await page.waitForTimeout(150);
+  assert.equal(await tabs(page).count(), 1, 'duplo clique na aba não criou aba nova');
+  assert.ok(!(await tabTitles(page)).some((t) => t.startsWith('Sem título')), `nenhum rascunho (${JSON.stringify(await tabTitles(page))})`);
+});
+
+scenario('rascunho: logo após criar, digitar sem clicar escreve no rascunho e a aba fica suja', async ({ page }) => {
+  await expand(page, ['src']);
+  await treeItem(page, 'App.tsx').dblclick();
+  const point = await emptyStripPoint(page);
+  await page.mouse.dblclick(point.x, point.y);
+  const draft = tabs(page).filter({ hasText: 'Sem título-1' });
+  await draft.waitFor();
+  assert.equal(await draft.locator('[aria-label="Alteração não salva"]').count(), 0, 'rascunho vazio ainda não está sujo');
+
+  await page.keyboard.type('rascunho novo');
+  await page.waitForTimeout(150);
+  assert.ok((await editorText(page)).includes('rascunho novo'), 'o texto digitado foi para o rascunho, sem clique no editor');
+  assert.equal(await draft.locator('[aria-label="Alteração não salva"]').count(), 1, 'aba do rascunho com texto aparece como não salva');
+});
+
+scenario('rascunho: fechar outra aba mantém o rascunho com o mesmo texto', async ({ page }) => {
+  await expand(page, ['src']);
+  await treeItem(page, 'App.tsx').dblclick();
+  const point = await emptyStripPoint(page);
+  await page.mouse.dblclick(point.x, point.y);
+  await page.keyboard.type('texto preservado');
+  await page.waitForTimeout(150);
+
+  // Fecha a aba do App.tsx (outra aba, sem alteração): o buffer do rascunho não pode sumir.
+  await tabs(page).filter({ hasText: 'App.tsx' }).getByRole('button', { name: /^Fechar/ }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-group="A"] [data-tab]')].every((t) => !t.textContent.includes('App.tsx')));
+  assert.deepEqual((await tabTitles(page)).map((t) => t.startsWith('Sem título-1')), [true], 'só o rascunho sobrou');
+  assert.ok((await editorText(page)).includes('texto preservado'), 'rascunho mantém o texto depois de fechar a outra aba');
+});
+
+scenario('rascunho: Ctrl+N com o foco no editor cria um rascunho novo', async ({ page }) => {
+  await expand(page, ['src']);
+  await treeItem(page, 'App.tsx').dblclick();
+  await focusEditor(page);
+  await page.keyboard.press('Control+n');
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-group="A"] [role="tab"]')].some((t) => t.textContent.startsWith('Sem título-1')));
+  assert.ok((await tabTitles(page)).some((t) => t.startsWith('Sem título-1')), 'Ctrl+N criou Sem título-1');
+  assert.ok((await page.locator('[data-group="A"] [role="tab"][aria-selected="true"]').textContent()).startsWith('Sem título-1'), 'o rascunho do Ctrl+N ficou ativo');
 });

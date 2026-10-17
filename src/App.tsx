@@ -772,7 +772,7 @@ export function App() {
             >
               <div className="relative h-full">
                 <div className={shown('arquivos')}>
-                  <FilesScreen openPath={activeTarget?.path ?? null} onOpen={openIn} reveal={treeReveal} actions={fileActions}
+                  <FilesScreen openPath={activeTarget && activeTarget.kind !== 'draft' ? activeTarget.path : null} onOpen={openIn} reveal={treeReveal} actions={fileActions}
                     project={folder} git={git.data?.kind === 'repo' ? git.data.status : null}
                   />
                 </div>

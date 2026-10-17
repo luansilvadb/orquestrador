@@ -26,6 +26,7 @@
     "@replit/codemirror-indentation-markers": "^6.5.3",
     "@replit/codemirror-minimap": "^0.5.2",
     "@tauri-apps/api": "^2.12.3",
+    "@tauri-apps/plugin-dialog": "2.8.2",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "antd": "^6.6.6",
