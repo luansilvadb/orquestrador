@@ -46,7 +46,7 @@ As demais checagens (em Node e de interface) estão em [desenvolvimento](docs/de
 ## Contribuir
 
 - Antes de mudar o código, leia [arquitetura](docs/arquitetura.md) para saber onde cada parte fica.
-- Mudanças nas barreiras de permissão (`session.rs`, `hook.rs`, `roles.rs`) pedem cuidado: o comportamento real está descrito e medido em [limites de segurança](docs/seguranca.md).
+- Mudanças nas permissões dos agentes pedem cuidado. A regra de cada papel fica só em `roles.rs`; as flags dos CLIs ficam em `cli.rs` e `session.rs`, e o pedido de confirmação em `hook.rs`. O comportamento real está descrito e medido em [limites de segurança](docs/seguranca.md).
 - Para publicar uma versão, siga [atualização e release](docs/atualizacao.md).
 
 ## Documentação

@@ -1,4 +1,4 @@
-//! Os modos `--hook`, `--guard` e `--ask` do executável, sem janela, chamados pelos CLIs dos executores.
+//! Os modos `--hook` e `--ask` do executável, sem janela, chamados pelos CLIs dos executores.
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -124,36 +124,6 @@ pub fn clear_asks(dir: &Path) {
     }
 }
 
-/// O que não tem volta e fica barrado aos executores (item 8 do contrato).
-pub const BARRED: [&str; 5] = ["git push", "git reset --hard", "git clean", "npm publish", "pnpm publish"];
-
-/// O comando barrado que aparece em `command`, em qualquer ponto dele (depois de `cd x &&`,
-/// dentro de `pwsh -Command "..."`). Compara texto: é uma rede, não uma parede.
-pub fn barred(command: &str) -> Option<&'static str> {
-    let flat = command.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
-    BARRED.into_iter().find(|b| flat.contains(b))
-}
-
-/// `orquestrador.exe --guard`: hook PreToolUse (Claude Code e Codex usam o mesmo formato). Recebe
-/// a chamada de ferramenta por stdin e nega a que traz um comando barrado; o resto passa em silêncio.
-pub fn guard() -> i32 {
-    let mut input = String::new();
-    let _ = std::io::stdin().read_to_string(&mut input);
-    let call: serde_json::Value = serde_json::from_str(&input).unwrap_or_default();
-    let command = match &call["tool_input"]["command"] {
-        serde_json::Value::String(s) => s.clone(),
-        other => other.to_string(),
-    };
-    if let Some(found) = barred(&command) {
-        println!("{}", serde_json::json!({ "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": format!("`{found}` é barrado nesta sessão; pare e relate a quem delegou"),
-        }}));
-    }
-    0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,16 +136,6 @@ mod tests {
                 return id.clone();
             }
             std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    #[test]
-    fn barrados_em_qualquer_ponto_do_comando() {
-        for cmd in ["git push", "git  push origin main", "cd x && git push --force", "pwsh -Command \"git clean -fd\"", "GIT RESET --hard HEAD~1", "npm publish", "pnpm publish --no-git-checks"] {
-            assert!(barred(cmd).is_some(), "{cmd}");
-        }
-        for cmd in ["git status", "git reset --soft HEAD~1", "git commit -m x", "npm run build", "git pull", "pnpm install"] {
-            assert!(barred(cmd).is_none(), "{cmd}");
         }
     }
 

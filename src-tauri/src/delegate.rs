@@ -186,7 +186,7 @@ pub fn respond(session: &Path, node: &str, choice: &str, reason: Option<&str>) -
     let ask = pending_asks(session)
         .into_iter()
         .find(|a| a.node == node)
-        .ok_or_else(|| format!("O executor {node} não tem pergunta pendente."))?;
+        .ok_or_else(|| format!("O executor {node} não tem pergunta pendente. Chame aguardar para continuar esperando o lote."))?;
     hook::put(&ask.dir, &format!("{}.reply", ask.id), decision.to_string().as_bytes())
         .map_err(|e| format!("Não foi possível gravar a resposta em {}: {e}", ask.dir.display()))
 }

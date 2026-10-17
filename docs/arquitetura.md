@@ -1,6 +1,6 @@
 # Arquitetura
 
-O front-end (React) fica em `src/` e o backend (Rust, Tauri) em `src-tauri/src/`. O mesmo `orquestrador.exe` atende também os modos `--mcp`, `--hook`, `--guard` e `--ask`, que os CLIs chamam. Mapa dos arquivos principais; os caminhos são relativos à raiz do repositório.
+O front-end (React) fica em `src/` e o backend (Rust, Tauri) em `src-tauri/src/`. O mesmo `orquestrador.exe` atende também os modos `--mcp`, `--hook` e `--ask`, que os CLIs chamam. Mapa dos arquivos principais; os caminhos são relativos à raiz do repositório.
 
 | Caminho | Papel |
 | --- | --- |
@@ -42,9 +42,9 @@ O front-end (React) fica em `src/` e o backend (Rust, Tauri) em `src-tauri/src/`
 | `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores e configuração. |
 | `src-tauri/src/delegate.rs` | A lógica de delegação: publica o lote na pasta da sessão, espera o resultado, imprime o lote e grava as respostas às perguntas de executor. |
 | `src-tauri/src/mcp.rs` | O servidor MCP da sessão, `orquestrador.exe --mcp <pasta da sessão>`: fala JSON-RPC pela entrada e saída padrão e expõe `delegar`, `aguardar` e `responder`. |
-| `src-tauri/src/hook.rs` | Os modos do executável chamados pelos CLIs dos executores: `--hook` (fim de rodada), `--guard` (comandos barrados) e `--ask` (pedido de confirmação, espera a resposta do orquestrador). O `--hook` também é chamado pelo orquestrador, no início e no fim de cada rodada. O modo `--mcp`, do orquestrador, está em `mcp.rs`. |
+| `src-tauri/src/hook.rs` | Os modos do executável chamados pelos CLIs dos executores: `--hook` (fim de rodada) e `--ask` (pedido de confirmação, espera a resposta do orquestrador). O `--hook` também é chamado pelo orquestrador, no início e no fim de cada rodada. O modo `--mcp`, do orquestrador, está em `mcp.rs`. |
 | `src-tauri/src/session.rs` | A sessão do orquestrador: pasta, `AGENTS.md`, `mcp.json` e `claude-settings.json` do Claude, e a limpeza das sobras, inclusive das regras do Codex que versões antigas deixavam em `CODEX_HOME` (até 2027-02-01). |
-| `src-tauri/src/roles.rs` | Os textos enviados ao orquestrador (no `AGENTS.md` da sessão) e a cada executor, antes da tarefa. O texto do orquestrador é o mesmo para Claude Code e Codex e descreve as três ferramentas MCP. |
+| `src-tauri/src/roles.rs` | Os textos enviados ao orquestrador (no `AGENTS.md` da sessão) e a cada executor, antes da tarefa: a única fonte da regra de cada papel, sem trava no app. O texto do orquestrador é o mesmo para Claude Code e Codex; o protocolo das ferramentas (marcadores e próxima chamada) fica nas saídas delas, em `mcp.rs`, `delegate.rs` e `core.rs`. |
 | `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a fonte do plugin oficial e os testes dos cenários. |
 | `scripts/release.mjs` | As regras do fluxo de release: versões iguais nos manifests, notas completas, o `latest.json` que o app lê e a conferência do instalador. Detalhes em [notas de release](releases/README.md). |
 | `.github/workflows/release.yml` | Release por tag: instalador assinado, `latest.json` e conferência, em rascunho. |
