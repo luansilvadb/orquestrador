@@ -38,5 +38,6 @@ export function TermHost({ id, writable, onReady }: { id: string; writable: bool
     };
   }, [id, writable]);
 
-  return <div ref={host} className="term absolute top-1.5 right-0.5 bottom-1 left-2 select-text" />;
+  // 12 px à esquerda: o texto do terminal começa na coluna dos cabeçalhos dos painéis (paddingInline 12).
+  return <div ref={host} className="term absolute top-2 right-0.5 bottom-1 left-3 select-text" />;
 }

@@ -166,7 +166,7 @@ Uma paleta de neutros quase sem matiz, onde o branco faz o papel de cor primári
 
 Layout de IDE em colunas fixas, nada rola na janela (`html body { overflow: hidden }`): titlebar de 36 px no topo; navegação de 44 px à esquerda (Arquivos, Pesquisar, Git, Issues); faixa lateral redimensionável (mínimo 200 px); área central com editor em cima e painel Terminal embaixo; painel do Orquestrador à direita. Os painéis são `DraggablePanel` redimensionáveis e lembram o tamanho.
 
-O ritmo é dado pelas alturas fixas: linha de lista de 24 px, faixa de abas e cabeçalho de 36 px, campo de 32 px, item de menu de 26 px. As faixas de abas rolam só na horizontal, com a barra escondida. Barras estreitas usam container queries (`@container`) para encolher rótulos abaixo de ~448–460 px, mantendo o texto completo no `title` e no `aria-label`.
+O ritmo é dado pelas alturas fixas: linha de lista de 24 px, faixa de abas e cabeçalho de 36 px (as abas dos arquivos no editor têm 30 px, nas medidas do Antigravity), campo de 32 px, item de menu de 26 px. As faixas de abas rolam só na horizontal, com a barra escondida. Barras estreitas usam container queries (`@container`) para encolher rótulos abaixo de ~448–460 px, mantendo o texto completo no `title` e no `aria-label`.
 
 Telas e terminais ficam montados o tempo todo; a troca usa `invisible`, nunca `display: none`, porque o xterm erra o tamanho ao sair do layout.
 
@@ -182,7 +182,7 @@ Plano por padrão. A profundidade vem do tom (preto → preto de painel → pret
 
 ## Shapes
 
-Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px nos itens de menu e badges. Os controles da janela não têm raio. Bordas de 1 px no tom do filete delimitam regiões; a aba ativa é marcada por uma linha de 2 px embaixo (`variant="square"`), não por fundo.
+Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px nos itens de menu e badges. Os controles da janela não têm raio. Bordas de 1 px no tom do filete delimitam regiões; a aba ativa é marcada por uma linha de 2 px embaixo (`variant="square"`), não por fundo. Exceção: nas abas dos arquivos do editor, nas medidas do Antigravity, a ativa é marcada pelo fundo do editor e um filete de 1 px em cima.
 
 ## Components
 
@@ -205,7 +205,7 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 
 ### Navigation
 - **Rail:** 44 px, `bg-card`, quatro `ActionIcon` de 36 px com ícone de 20 px. O ativo tem o fundo ativo do Lobe UI e um filete de 2 px na cor primária à esquerda. Contador do Git em `Badge` pequeno no canto do botão.
-- **Tabs:** `TabsRoot variant="square"`, faixa de 36 px, linha de 2 px na aba ativa, divisor de 1 px em toda a largura.
+- **Tabs:** `TabsRoot variant="square"`, faixa de 36 px, linha de 2 px na aba ativa, divisor de 1 px em toda a largura. As abas dos arquivos no editor são a exceção, nas medidas do Antigravity: 30 px, divisor à direita de cada aba, e a ativa com o fundo do editor e um filete de 1 px em cima.
 
 ### List Rows
 - 24 px, ícone `File`, nome com prioridade (até 70%) e pasta em texto secundário que corta primeiro; ações num slot de largura fixa que aparece no hover ou no foco, sem deslocar o nome. Seleção em `bg-muted` com filete primário à esquerda; na faixa Issues, a linha escolhida (a que o detalhe mostra) é marcada assim, e o Colar compacto, um botão de ícone (`ActionIcon` com o ícone de colar, na cor do texto), só aparece nela e na próxima, no fluxo da linha. As linhas da faixa Issues têm 24 px, numa linha só (ícone de estado, `#N` em mono de 12 px numa coluna alinhada à direita, para os títulos começarem na mesma coluna, título e, na escolhida e na próxima, o botão de ícone), sem bolinhas de label; tempo e nomes das labels ficam no `title` e na descrição acessível.

@@ -28,7 +28,7 @@ import {
   forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent, type FocusEvent, type KeyboardEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode,
 } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownMenu, Modal, Text, toast } from '@lobehub/ui/base-ui';
-import { Flexbox, PatchDiff } from '@lobehub/ui';
+import { Center, Flexbox, Hotkey, PatchDiff } from '@lobehub/ui';
 import { ArrowRight, ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
 import { FileIcon } from './file-icon';
 import { Breadcrumbs } from './breadcrumbs';
@@ -1060,6 +1060,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         {/* Breadcrumbs só nas abas de arquivo: diff, commit e conflito já têm a faixa própria com o caminho. */}
         {current?.target.kind === 'file' && <Breadcrumbs path={current.target.path} onOpen={(path) => openFile(path)} />}
         <Flexbox flex={1} className="min-h-0 relative">
+          {!current && <EmptyGroup />}
           {group.tabs.map((tab) => (
             <div key={tab.id} className="absolute inset-0 flex flex-col min-h-0" style={{ display: tab.id === current?.id ? 'flex' : 'none' }} data-body={tab.id}>
               {bodyOf(tab, tab.id === current?.id && ws.focus === groupId, tab.id === current?.id)}
@@ -1143,6 +1144,31 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     </Flexbox>
   );
 });
+
+// ---- Grupo sem abas ----
+
+// Como a marca d'água do editor vazio do VS Code: só atalhos que já existem no app, sem clique (é texto comum).
+const EMPTY_HINTS = [
+  ['Abrir arquivo', 'Ctrl+P'],
+  ['Pesquisar nos arquivos', 'Ctrl+Shift+F'],
+  ['Alternar o terminal', 'Ctrl+`'],
+  ['Nova issue', 'Ctrl+Shift+I'],
+] as const;
+
+function EmptyGroup() {
+  return (
+    <Center flex={1} className="min-h-0 overflow-hidden">
+      <dl className="m-0 grid grid-cols-[auto_auto] items-center gap-x-4 gap-y-3">
+        {EMPTY_HINTS.map(([label, keys]) => (
+          <Fragment key={keys}>
+            <Text as="dt" type="secondary" fontSize={13} align="right">{label}</Text>
+            <dd className="m-0"><Hotkey keys={keys} /></dd>
+          </Fragment>
+        ))}
+      </dl>
+    </Center>
+  );
+}
 
 // ---- Arquivo ----
 
