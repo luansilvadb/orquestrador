@@ -1,7 +1,6 @@
 //! Fixtures dos testes unitários que mais de um módulo usa: pastas temporárias com nome por processo, o Git de
 //! teste com identidade fixa, a junction do Windows e as sessões de delegação. Só existe em `cargo test`.
 use crate::proc::{git_saida, start_time};
-use serde_json::json;
 use std::path::{Path, PathBuf};
 
 /// Pasta vazia `<temporária>\<prefix>-<pid>-<tag>`. Quem chama a apaga quando acaba; `Tmp` faz isso sozinho.
@@ -66,20 +65,4 @@ pub fn session(prefix: &str, tag: &str, alive: bool) -> PathBuf {
     let started = start_time(me).unwrap() + u64::from(!alive);
     std::fs::write(dir.join("owner"), format!("{me} {started} strategist-{tag}")).unwrap();
     dir
-}
-
-/// Um lote de `size` tarefas, com o executor `node` na tarefa `index` e um pedido sem resposta com `payload`.
-/// Devolve o id do pedido.
-pub fn batch_with_ask(dir: &Path, batch: &str, node: &str, index: usize, size: usize, payload: &str) -> String {
-    let req = dir.join("requests").join(batch);
-    std::fs::create_dir_all(&req).unwrap();
-    for n in 1..=size {
-        std::fs::write(req.join(format!("{n}.txt")), format!("Tarefa {n}\nescopo")).unwrap();
-    }
-    let node_dir = dir.join("exec").join(node);
-    std::fs::create_dir_all(node_dir.join("ask")).unwrap();
-    std::fs::write(node_dir.join("batch.json"), json!({ "batch": batch, "index": index, "size": size }).to_string()).unwrap();
-    let id = "00000000000000000001-aaaaaaaa";
-    std::fs::write(node_dir.join("ask").join(format!("{id}.json")), payload).unwrap();
-    id.to_string()
 }

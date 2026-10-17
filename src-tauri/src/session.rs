@@ -86,7 +86,7 @@ impl Session {
         if cfg.orchestrator.tool != "codex" {
             let mcp = json!({ "mcpServers": { "orquestrador": { "command": app, "args": ["--mcp", d.to_string_lossy()] } } });
             std::fs::write(d.join("mcp.json"), serde_json::to_string_pretty(&mcp).unwrap())?;
-            std::fs::write(d.join("claude-settings.json"), cli::orchestrator_settings())?;
+            std::fs::write(d.join("claude-settings.json"), cli::orchestrator_settings(app))?;
         }
         Ok(())
     }
@@ -223,7 +223,7 @@ pub mod tests {
         assert!(is_session_name(&name));
         let agents = std::fs::read_to_string(s.dir.join("AGENTS.md")).unwrap();
         assert!(agents.contains(r"C:\proj") && !agents.contains("{{"));
-        for tool in ["`delegar`", "`aguardar`", "`responder`"] {
+        for tool in ["`delegar`", "`aguardar`"] {
             assert!(agents.contains(tool), "{tool}");
         }
         assert!(!agents.contains("cada apóstrofo é dobrado") && !agents.contains("Não use here-string"));
@@ -258,8 +258,9 @@ pub mod tests {
             json!({
                 "skipDangerousModePermissionPrompt": true,
                 "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" },
+                "hooks": { "PermissionRequest": [{ "hooks": [{ "type": "command", "command": APP, "args": ["--allow"] }] }] },
             }),
-            "sem lista de permissões e sem hooks: o aviso do bypass desligado, o PowerShell e o prazo do lote"
+            "sem lista de permissões: o aviso do bypass desligado, o PowerShell, o prazo do lote e o aceite do que o bypass pergunta"
         );
         assert!(!p.codex_rules.exists());
         assert_eq!(s.remove(), None);

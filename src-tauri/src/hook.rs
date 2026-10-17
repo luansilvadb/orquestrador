@@ -1,16 +1,7 @@
-//! Os modos `--hook` e `--ask` do executável, sem janela, chamados pelos CLIs dos executores.
-use serde_json::{json, Value};
-use std::io::{Read, Write};
+//! O modo `--hook` do executável, sem janela, chamado pelos CLIs dos executores no fim de cada rodada.
+use std::io::Read;
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-/// Quanto o `--ask` espera entre uma olhada e outra na pasta da resposta.
-const ASK_POLL: Duration = Duration::from_millis(200);
-/// Quanto o `--ask` espera a resposta do orquestrador. Medido no Claude Code 2.1.296: o diálogo nega sozinho aos
-/// ~120 s e ignora a resposta que chega depois; o `--ask` desiste antes, e o executor repete o comando.
-const ASK_DEADLINE: Duration = Duration::from_secs(100);
-const CANCELLED: &str = "O executor foi encerrado antes de o orquestrador responder.";
-const NO_ANSWER: &str = "O orquestrador ainda não respondeu a este pedido de confirmação. Não tente outro caminho: repita exatamente o mesmo comando para continuar esperando a resposta.";
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// `orquestrador.exe --hook <pasta> [json]`: o sinal de fim de rodada. O Claude Code entrega o
 /// JSON do hook `Stop` por stdin; o Codex, como último argumento do `notify`. Grava o que recebeu,
@@ -38,106 +29,16 @@ pub fn unique() -> String {
 }
 
 /// Publica `bytes` como `dir\name`, por renomeação: quem lê a pasta nunca pega o arquivo pela metade.
-pub fn put(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+fn put(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = dir.join(format!("{name}.tmp"));
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, dir.join(name))
-}
-
-/// `orquestrador.exe --ask <pasta>`: o hook `PermissionRequest` do executor. O CLI entrega o pedido de
-/// confirmação por stdin e espera a decisão que sai na saída padrão. Sempre sai com 0 e uma decisão,
-/// porque um hook que falha deixa o diálogo do CLI na tela, e ninguém responde a ele.
-pub fn ask(args: &[String]) -> i32 {
-    let decision = match args.first() {
-        Some(dir) => {
-            let mut payload = String::new();
-            let _ = std::io::stdin().read_to_string(&mut payload);
-            ask_within(Path::new(dir), &payload, ASK_DEADLINE)
-        }
-        None => deny("O pedido de confirmação veio sem a pasta de respostas."),
-    };
-    let _ = writeln!(std::io::stdout(), "{}", output(decision));
-    0
-}
-
-/// Publica o pedido `payload` em `dir` e espera a decisão dele por até `deadline`, que o `ask` passa como
-/// `ASK_DEADLINE` (os testes passam um prazo curto). Se o pedido some antes da resposta (o app encerrou o
-/// executor e limpou a pasta), nega com o motivo. Se o prazo passa, nega pedindo que o comando seja repetido: o
-/// pedido sai da pasta, e uma resposta que chegar depois não tem efeito.
-fn ask_within(dir: &Path, payload: &str, deadline: Duration) -> Value {
-    let id = unique();
-    if let Err(e) = put(dir, &format!("{id}.json"), payload.as_bytes()) {
-        return deny(&format!("Não foi possível pedir a resposta do orquestrador: {e}"));
-    }
-    let request = dir.join(format!("{id}.json"));
-    let reply = dir.join(format!("{id}.reply"));
-    let started = Instant::now();
-    let decision = loop {
-        // A resposta é lida antes do prazo: quem chega no instante do prazo vale. Uma gravada depois que este
-        // `--ask` saiu fica órfã na pasta, sem leitor, até o nó terminar e `clear_asks` a levar.
-        if let Ok(text) = std::fs::read_to_string(&reply) {
-            break serde_json::from_str(&text).unwrap_or_else(|_| deny("A resposta do orquestrador não é JSON válido."));
-        }
-        if !request.is_file() {
-            break deny(CANCELLED);
-        }
-        if started.elapsed() >= deadline {
-            break deny(NO_ANSWER);
-        }
-        std::thread::sleep(ASK_POLL);
-    };
-    // Primeiro o pedido, depois a resposta: um pedido que ainda existe sem resposta conta como pendente, e a
-    // espera do orquestrador o veria de novo entre as duas remoções.
-    let _ = std::fs::remove_file(&request);
-    let _ = std::fs::remove_file(&reply);
-    decision
-}
-
-/// A decisão no formato que o Claude Code lê do hook `PermissionRequest`.
-fn output(decision: Value) -> Value {
-    json!({ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": decision } })
-}
-
-fn deny(message: &str) -> Value {
-    json!({ "behavior": "deny", "message": message })
-}
-
-/// Os pedidos de confirmação de `dir` que ainda esperam decisão, pelo id, na ordem em que chegaram. Um
-/// pedido está pendente quando tem `<id>.json` e não tem `<id>.reply`, que é onde o orquestrador grava a decisão.
-pub fn pending_asks(dir: &Path) -> Vec<String> {
-    let mut ids: Vec<String> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| e.file_name().to_str()?.strip_suffix(".json").map(String::from))
-        .filter(|id| !dir.join(format!("{id}.reply")).exists())
-        .collect();
-    ids.sort();
-    ids
-}
-
-/// Tira tudo o que a pasta tem. Um nó que termina leva consigo os pedidos sem resposta: o `--ask` que
-/// ainda espera vê o pedido sumir e nega com `CANCELLED`.
-pub fn clear_asks(dir: &Path) {
-    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        let _ = std::fs::remove_file(entry.path());
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testutil::fresh;
-
-    /// O id do primeiro pedido que aparecer em `dir`, esperando por ele.
-    fn first_request(dir: &Path) -> String {
-        loop {
-            if let Some(id) = pending_asks(dir).first() {
-                return id.clone();
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
 
     #[test]
     fn hook_grava_um_arquivo_por_chamada() {
@@ -150,115 +51,6 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert_eq!(std::fs::read_to_string(&files[0]).unwrap(), r#"{"a":"ação"}"#);
         assert_eq!(run(&[]), 2);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A saída é a forma que o Claude Code lê do `PermissionRequest`, com a decisão dentro.
-    #[test]
-    fn saida_do_ask_tem_o_formato_do_permission_request() {
-        assert_eq!(
-            output(json!({ "behavior": "allow" })),
-            json!({ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": { "behavior": "allow" } } })
-        );
-        assert_eq!(output(deny("não"))["hookSpecificOutput"]["decision"]["message"], "não");
-    }
-
-    /// O pedido vai à pasta como chegou, e a decisão que o app grava é a que o `--ask` devolve; depois da
-    /// resposta, nem o pedido nem a resposta ficam na pasta.
-    #[test]
-    fn ask_publica_o_pedido_e_devolve_a_decisao_gravada() {
-        let dir = fresh("orq-hook", "ask-ok");
-        let (answer_dir, payload) = (dir.clone(), r#"{"tool_name":"Bash","tool_input":{"command":"rm /d/a.log\nlinha 2"}}"#);
-        let app = std::thread::spawn(move || {
-            let id = first_request(&answer_dir);
-            assert_eq!(std::fs::read_to_string(answer_dir.join(format!("{id}.json"))).unwrap(), payload);
-            put(&answer_dir, &format!("{id}.reply"), br#"{"behavior":"allow"}"#).unwrap();
-        });
-        assert_eq!(ask_within(&dir, payload, ASK_DEADLINE), json!({ "behavior": "allow" }));
-        app.join().unwrap();
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Uma resposta gravada pelo orquestrador como `<id>.reply` é lida pelo `--ask`, com o motivo de recusa inteiro.
-    #[test]
-    fn resposta_do_orquestrador_chega_ao_ask_com_o_motivo() {
-        let dir = fresh("orq-hook", "ask-recusa");
-        let app_dir = dir.clone();
-        let app = std::thread::spawn(move || {
-            let id = first_request(&app_dir);
-            put(&app_dir, &format!("{id}.reply"), br#"{"behavior":"deny","message":"use o caminho do projeto"}"#).unwrap();
-        });
-        let decision = ask_within(&dir, r#"{"tool_name":"Bash"}"#, ASK_DEADLINE);
-        app.join().unwrap();
-        assert_eq!(decision, json!({ "behavior": "deny", "message": "use o caminho do projeto" }));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Se o pedido some antes da resposta (o nó terminou e a pasta foi limpa), o `--ask` nega com o motivo
-    /// em vez de esperar para sempre.
-    #[test]
-    fn pedido_que_some_sem_resposta_e_negado() {
-        let dir = fresh("orq-hook", "ask-cancel");
-        let app_dir = dir.clone();
-        let app = std::thread::spawn(move || {
-            first_request(&app_dir);
-            clear_asks(&app_dir);
-        });
-        assert_eq!(ask_within(&dir, "{}", ASK_DEADLINE), deny(CANCELLED));
-        app.join().unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Pedido sem resposta é pendente; pedido com `.reply` não é. O `.tmp` de uma publicação em curso também não.
-    #[test]
-    fn pendentes_sao_os_pedidos_sem_decisao() {
-        let dir = fresh("orq-hook", "pendentes");
-        for name in ["a.json", "b.json", "c.json", "c.reply", "d.json", "e.json.tmp"] {
-            std::fs::write(dir.join(name), "{}").unwrap();
-        }
-        assert_eq!(pending_asks(&dir), ["a", "b", "d"]);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Sem resposta até o prazo, o `--ask` nega com a mensagem que manda repetir o comando, e o pedido sai da pasta.
-    #[test]
-    fn pedido_sem_resposta_no_prazo_e_negado_e_sai_da_pasta() {
-        let dir = fresh("orq-hook", "ask-prazo");
-        assert_eq!(ask_within(&dir, "{}", Duration::from_millis(300)), deny(NO_ANSWER));
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Resposta que chega antes do prazo continua valendo, com o prazo curto dos testes.
-    #[test]
-    fn resposta_antes_do_prazo_continua_valendo() {
-        let dir = fresh("orq-hook", "ask-antes");
-        let app_dir = dir.clone();
-        let app = std::thread::spawn(move || {
-            let id = first_request(&app_dir);
-            put(&app_dir, &format!("{id}.reply"), br#"{"behavior":"allow"}"#).unwrap();
-        });
-        assert_eq!(ask_within(&dir, "{}", Duration::from_secs(10)), json!({ "behavior": "allow" }));
-        app.join().unwrap();
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Resposta gravada depois do prazo não tem efeito: o `--ask` já saiu com a negativa, e a resposta fica órfã
-    /// na pasta, sem leitor, até `clear_asks` a levar quando o nó termina.
-    #[test]
-    fn resposta_que_chega_depois_do_prazo_nao_tem_efeito() {
-        let dir = fresh("orq-hook", "ask-tarde");
-        let asker_dir = dir.clone();
-        let asker = std::thread::spawn(move || ask_within(&asker_dir, "{}", Duration::from_millis(200)));
-        let id = first_request(&dir);
-        assert_eq!(asker.join().unwrap(), deny(NO_ANSWER));
-        put(&dir, &format!("{id}.reply"), br#"{"behavior":"allow"}"#).unwrap();
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "a resposta órfã fica na pasta, sem leitor");
-        assert!(pending_asks(&dir).is_empty());
-        clear_asks(&dir);
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "o nó que termina leva a resposta órfã");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

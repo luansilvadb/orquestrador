@@ -374,8 +374,8 @@ export function App() {
         host().listen('node-added', (node) => dispatch({ type: 'nodeAdded', node })),
         host().listen('node-state', ({ id, state: next, choice }) => {
           dispatch({ type: 'nodeState', id, state: next, choice });
-          // Os dois estados vivos: o PTY já existe, então setLive só reenvia o tamanho. Não recria nem zera o terminal.
-          if (next === 'running' || next === 'awaiting-orchestrator') terminals.get(id)?.setLive();
+          // O estado vivo: o PTY já existe, então setLive só reenvia o tamanho. Não recria nem zera o terminal.
+          if (next === 'running') terminals.get(id)?.setLive();
           // Executor que terminou fecha a própria aba; a resposta dele já seguiu para o orquestrador.
           if (FINISHED.includes(next)) {
             terminals.forget(id);
@@ -654,7 +654,7 @@ export function App() {
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
   const busy = executors.some((e) => !FINISHED.includes(e.state));
   const count = (state: NodeState) => executors.filter((e) => e.state === state).length;
-  const counts = (['running', 'queued', 'awaiting-choice', 'awaiting-orchestrator'] as const)
+  const counts = (['running', 'queued', 'awaiting-choice'] as const)
     .map((state) => [count(state), STATES[state].label] as const)
     .filter(([n]) => n);
   // Contador da navegação, branch e Histórico Git só existem no modo `repo`.

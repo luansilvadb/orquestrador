@@ -53,10 +53,22 @@ fn codex_base(dir: &str) -> Vec<String> {
 /// O Claude nos dois papéis: todas as ferramentas, sem pedir permissão.
 const CLAUDE_BYPASS: [&str; 2] = ["--permission-mode", "bypassPermissions"];
 
+/// O que o app em modo `--allow` imprime: a resposta do hook `PermissionRequest`, que aceita qualquer pedido. Medido
+/// no Claude Code 2.1.302: mesmo em bypassPermissions, um `rm` na raiz do disco pede confirmação ("cannot be
+/// auto-allowed by permission rules") e, sem resposta, é negado; com este `allow` na hora, roda.
+pub const ALLOW: &str = r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#;
+
+/// Um hook de settings do Claude que roda o app com `args`. Na forma `args`, roda sem shell, então caminho com
+/// espaço passa.
+fn app_hook(app: &str, args: &[&str]) -> Value {
+    json!({ "hooks": [{ "type": "command", "command": app, "args": args }] })
+}
+
 /// O settings do Claude nos dois papéis, passado com `--settings`: `extra` mais `skipDangerousModePermissionPrompt`,
-/// que tira o aviso do modo de bypass.
-fn claude_settings(mut extra: Value) -> String {
+/// que tira o aviso do modo de bypass, e o hook `PermissionRequest` que aceita o que o bypass ainda pergunta.
+fn claude_settings(app: &str, mut extra: Value) -> String {
     extra["skipDangerousModePermissionPrompt"] = true.into();
+    extra["hooks"]["PermissionRequest"] = json!([app_hook(app, &["--allow"])]);
     serde_json::to_string_pretty(&extra).unwrap()
 }
 
@@ -64,8 +76,8 @@ fn claude_settings(mut extra: Value) -> String {
 /// PowerShell no Windows com Git Bash (medido com um stub que mostra a lista de ferramentas enviada ao modelo), e o
 /// orquestrador ficaria no Git Bash. `MCP_TOOL_TIMEOUT` dá às chamadas ao servidor do orquestrador os 15 minutos
 /// da espera de um lote. As duas entram só por este arquivo: o ambiente do usuário e o dos executores não mudam.
-pub fn orchestrator_settings() -> String {
-    claude_settings(json!({ "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" } }))
+pub fn orchestrator_settings(app: &str) -> String {
+    claude_settings(app, json!({ "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" } }))
 }
 
 /// O servidor MCP do orquestrador pela configuração do Codex, só para este processo: o app em modo `--mcp`, com a
@@ -86,8 +98,7 @@ fn codex_mcp(app: &str, dir: &str) -> Vec<String> {
 }
 
 /// O orquestrador: o CLI interativo com a mesma permissão dos executores, mais o servidor MCP do próprio app
-/// (`delegar`, `aguardar`, `responder`). Ao contrário do executor, não recebe o hook de confirmação (quem
-/// responderia é ele mesmo).
+/// (`delegar` e `aguardar`).
 pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &str) -> Spawn {
     let dir = session.dir.to_string_lossy().to_string();
     let (program, mut args) = if choice.tool == "codex" {
@@ -136,34 +147,24 @@ pub fn executor_prompt(task: &str) -> String {
 ///
 /// Medido no Claude Code 2.1.296: o diálogo de confiança na pasta aparece mesmo em bypassPermissions e só some
 /// com CLAUDE_CODE_SANDBOXED (não documentada, pode mudar entre versões; não há flag nem chave de settings); o
-/// hook Stop traz `last_assistant_message`. Hooks na forma `args` rodam sem shell, então caminho com espaço passa.
-///
-/// O hook `PermissionRequest` leva ao orquestrador a confirmação que o Claude Code ainda abre em bypassPermissions.
-/// Medido no 2.1.296: um `rm` na raiz do disco abre "Dangerous rm operation on critical path", que o próprio Claude
-/// Code nega sozinho uns 2 minutos depois de abrir, ignorando resposta tardia do hook; o `allow` do `PreToolUse`
-/// não evita essa confirmação. Por isso o `--ask` desiste antes (`ASK_DEADLINE`, em hook.rs).
+/// hook Stop traz `last_assistant_message`.
 pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, prompt: &str) -> (Spawn, Option<String>) {
     let hook_dir = node_dir.join("hook").to_string_lossy().to_string();
-    let ask_dir = node_dir.join("ask").to_string_lossy().to_string();
     let mut spawn = Spawn { program: String::new(), args: vec![], cwd: project.to_string(), env: vec![] };
     let settings = if choice.tool == "codex" {
         spawn.program = exes.codex.clone();
         spawn.args = codex_base(project);
         let notify = [exes.app.as_str(), "--hook", &hook_dir].map(toml).join(",");
         spawn.args.extend(["-c".to_string(), format!("notify=[{notify}]")]);
-        // Sem hook de confirmação: medido no 0.162.1, com o bypass um `Remove-Item` fora do projeto roda sem
-        // confirmação e o evento `PermissionRequest` não dispara.
+        // Sem hook `PermissionRequest`: medido no 0.162.1, com o bypass um `Remove-Item` fora do projeto roda sem
+        // confirmação e o evento não dispara.
         None
     } else {
         spawn.program = exes.claude.clone();
         spawn.args = strs(&CLAUDE_BYPASS);
         spawn.args.extend(["--settings".to_string(), node_dir.join("settings.json").to_string_lossy().to_string()]);
         spawn.env.push(("CLAUDE_CODE_SANDBOXED".into(), "1".into()));
-        let run = |args: &[&str]| json!({ "hooks": [{ "type": "command", "command": exes.app, "args": args }] });
-        // O prazo do hook só vai a um dia para não ser ele a cortar: quem limita a espera é o `--ask`.
-        let mut ask = run(&["--ask", &ask_dir]);
-        ask["hooks"][0]["timeout"] = 86400.into();
-        Some(claude_settings(json!({ "hooks": { "Stop": [run(&["--hook", &hook_dir])], "PermissionRequest": [ask] } })))
+        Some(claude_settings(&exes.app, json!({ "hooks": { "Stop": [app_hook(&exes.app, &["--hook", &hook_dir])] } })))
     };
     spawn.args.extend(choice.cli_args());
     spawn.args.push(prompt.to_string());
@@ -276,11 +277,10 @@ mod tests {
         let stop = &v["hooks"]["Stop"][0]["hooks"][0];
         assert_eq!(stop["command"], r"C:\Program Files\Orq\o'rq.exe");
         assert_eq!(stop["args"], serde_json::json!(["--hook", r"C:\tmp\s\exec\exec-1\hook"]));
-        let ask = &v["hooks"]["PermissionRequest"][0]["hooks"][0];
-        assert_eq!(ask["command"], r"C:\Program Files\Orq\o'rq.exe");
-        assert_eq!(ask["args"], serde_json::json!(["--ask", r"C:\tmp\s\exec\exec-1\ask"]));
-        assert_eq!(ask["timeout"], 86400);
-        assert!(v["hooks"]["PermissionRequest"][0].get("matcher").is_none(), "o pedido de qualquer ferramenta passa pelo --ask");
+        let allow = &v["hooks"]["PermissionRequest"][0];
+        assert_eq!(allow["hooks"][0]["command"], r"C:\Program Files\Orq\o'rq.exe");
+        assert_eq!(allow["hooks"][0]["args"], serde_json::json!(["--allow"]));
+        assert!(allow.get("matcher").is_none(), "o pedido de qualquer ferramenta é aceito");
     }
 
     #[test]
@@ -300,7 +300,7 @@ mod tests {
                 "PROMPT",
             ]
         );
-        assert!(!got.args.iter().any(|a| a.contains("PermissionRequest")), "o Codex não recebe o hook de confirmação");
+        assert!(!got.args.iter().any(|a| a.contains("PermissionRequest")), "o Codex não recebe o hook PermissionRequest");
         assert!(!got.args.iter().any(|a| a.contains("mcp_servers")), "o executor não recebe o servidor do orquestrador");
     }
 

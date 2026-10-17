@@ -5,7 +5,6 @@ use crate::cli::{self, Exes};
 use crate::config::{self, Choice, Options};
 use crate::files;
 use crate::git;
-use crate::hook;
 use crate::proc;
 use crate::pty::{Buffer, Shared, Term};
 use crate::session::{self, Places, Session};
@@ -38,9 +37,6 @@ pub enum NodeState {
     AwaitingChoice,
     Queued,
     Running,
-    /// O CLI parou num pedido de confirmação e espera a resposta do orquestrador. O processo segue vivo e
-    /// ocupa o teto de simultâneos, como um nó rodando.
-    AwaitingOrchestrator,
     Done,
     Stopped,
     Failed,
@@ -49,11 +45,6 @@ pub enum NodeState {
 impl NodeState {
     fn is_final(self) -> bool {
         matches!(self, NodeState::Done | NodeState::Stopped | NodeState::Failed)
-    }
-
-    /// O processo do nó está vivo e pode terminar a rodada ou pedir confirmação.
-    fn is_live(self) -> bool {
-        matches!(self, NodeState::Running | NodeState::AwaitingOrchestrator)
     }
 }
 
@@ -511,7 +502,7 @@ impl Core {
         } else if is_shell(id) {
             inner.slots.remove(id);
             (self.emit)("shell-exit", json!({ "id": id, "code": code }));
-        } else if let Some(i) = inner.nodes.iter().position(|n| n.info.id == id && n.info.state.is_live()) {
+        } else if let Some(i) = inner.nodes.iter().position(|n| n.info.id == id && n.info.state == NodeState::Running) {
             // O sinal de fim pode ter chegado junto com a saída do processo.
             match self.signal(&inner.nodes[i]) {
                 Some(text) => self.finish(&mut inner, i, NodeState::Done, Outcome { text, exit: "0".into(), ok: true }),
@@ -536,11 +527,9 @@ impl Core {
             }
             self.accept_batches(&mut inner);
             for i in 0..inner.nodes.len() {
-                if inner.nodes[i].info.state.is_live() {
+                if inner.nodes[i].info.state == NodeState::Running {
                     if let Some(text) = self.signal(&inner.nodes[i]) {
                         self.finish(&mut inner, i, NodeState::Done, Outcome { text, exit: "0".into(), ok: true });
-                    } else {
-                        self.watch_asks(&mut inner, i);
                     }
                 }
             }
@@ -552,20 +541,6 @@ impl Core {
                 self.schedule(&mut inner);
             }
         }
-    }
-
-    /// Acompanha os pedidos de confirmação de um nó vivo: entrega as respostas do orquestrador e põe o nó em
-    /// `AwaitingOrchestrator` enquanto houver pedido sem resposta, de volta a `Running` quando não houver.
-    fn watch_asks(&self, inner: &mut Inner, i: usize) {
-        let dir = inner.nodes[i].dir.join("ask");
-        let waiting = !hook::pending_asks(&dir).is_empty();
-        let state = match (inner.nodes[i].info.state, waiting) {
-            (NodeState::Running, true) => NodeState::AwaitingOrchestrator,
-            (NodeState::AwaitingOrchestrator, false) => NodeState::Running,
-            _ => return,
-        };
-        inner.nodes[i].info.state = state;
-        self.announce(&inner.nodes[i].info, false);
     }
 
     fn signal(&self, node: &Node) -> Option<String> {
@@ -628,7 +603,7 @@ impl Core {
     /// O teto (`capacity`) é lido uma vez por passe e cada início consome uma vaga dele: os vivos nunca são
     /// interrompidos, só deixa de abrir novo enquanto não houver vaga.
     fn schedule_from(&self, inner: &mut Inner, new_from: usize, announce: bool) {
-        let mut running = inner.nodes.iter().filter(|n| n.info.state.is_live()).count();
+        let mut running = inner.nodes.iter().filter(|n| n.info.state == NodeState::Running).count();
         let admission = capacity::admission(inner.resources.cpus, (inner.resources.memory)(), running);
         for i in 0..inner.nodes.len() {
             let is_new = announce && i >= new_from;
@@ -668,11 +643,6 @@ impl Core {
         let project = inner.project.clone().unwrap_or_default();
         let io = |e: std::io::Error| format!("Não foi possível preparar o executor em {}: {e}", dir.display());
         std::fs::create_dir_all(dir.join("hook")).map_err(io)?;
-        std::fs::create_dir_all(dir.join("ask")).map_err(io)?;
-        // Quem é o executor na delegação: a espera de um lote lê isto para mostrar a pergunta com "(i/n)".
-        let size = inner.batches.iter().find(|b| b.id == inner.nodes[i].info.batch).map_or(0, |b| b.titles.len());
-        let meta = json!({ "batch": inner.nodes[i].info.batch, "index": inner.nodes[i].info.index, "size": size });
-        std::fs::write(dir.join("batch.json"), meta.to_string()).map_err(io)?;
         if prompt.len() > PROMPT_ARG_MAX {
             let file = dir.join("tarefa.md");
             std::fs::write(&file, &prompt).map_err(io)?;
@@ -699,8 +669,6 @@ impl Core {
         node.state = state;
         let (id, batch, index) = (node.id.clone(), node.batch.clone(), node.index);
         self.announce(&inner.nodes[i].info, false);
-        // O pedido sem resposta morre com o nó: quem lista as perguntas para o orquestrador deixa de vê-lo.
-        hook::clear_asks(&inner.nodes[i].dir.join("ask"));
         inner.slots.remove(&id);
         if let Some(b) = inner.batches.iter_mut().find(|b| b.id == batch) {
             b.outcomes[index] = Some(outcome);
@@ -927,7 +895,7 @@ mod tests {
     fn git_que_muda_o_repositorio_espera_os_executores_e_o_resto_nao() {
         const TRAVA: &str = "Há executores trabalhando. Espere o lote terminar.";
         let (core, root) = git_core("trava");
-        for state in [NodeState::AwaitingChoice, NodeState::Queued, NodeState::Running, NodeState::AwaitingOrchestrator] {
+        for state in [NodeState::AwaitingChoice, NodeState::Queued, NodeState::Running] {
             set_executor_state(&core, state);
             assert_eq!(core.git_idle(git::pull).unwrap_err(), TRAVA, "{state:?}");
             assert_eq!(core.git_idle(|dir| git::switch(dir, "outra")).unwrap_err(), TRAVA, "{state:?}");

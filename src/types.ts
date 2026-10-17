@@ -9,7 +9,7 @@ export type Options = {
   tools: ToolOption[];
   last: { orchestrator: Choice; executor: Choice };
 };
-export type NodeState = 'awaiting-choice' | 'queued' | 'running' | 'awaiting-orchestrator' | 'done' | 'stopped' | 'failed';
+export type NodeState = 'awaiting-choice' | 'queued' | 'running' | 'done' | 'stopped' | 'failed';
 export type ExecutorNode = {
   id: string;
   batch: string;

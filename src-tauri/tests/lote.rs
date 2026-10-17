@@ -498,7 +498,7 @@ fn lote_com_mais_de_40_mil_caracteres_chega_inteiro() {
 }
 
 /// O protocolo contra o binário de verdade, sem sessão: `initialize` devolve a versão pedida, `tools/list` traz as
-/// três ferramentas com o esquema, e um método que não existe (o Claude manda `server/discover`) é erro -32601.
+/// duas ferramentas com o esquema, e um método que não existe (o Claude manda `server/discover`) é erro -32601.
 #[test]
 fn protocolo_do_binario_initialize_tools_list_e_metodo_desconhecido() {
     let dir = std::env::temp_dir().join(format!("orq-proto-{}", std::process::id()));
@@ -514,9 +514,8 @@ fn protocolo_do_binario_initialize_tools_list_e_metodo_desconhecido() {
     let reply = m.reply(list);
     let tools = reply["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["delegar", "aguardar", "responder"]);
+    assert_eq!(names, ["delegar", "aguardar"]);
     assert_eq!(tools[0]["inputSchema"]["required"], json!(["tarefas"]));
-    assert_eq!(tools[2]["inputSchema"]["required"], json!(["executor", "decisao"]));
 
     let unknown = m.request("server/discover", json!({}));
     let reply = m.reply(unknown);
@@ -541,153 +540,22 @@ fn tarefa_invalida_e_falta_de_tarefa_fecham_com_erro_e_nao_publicam() {
     assert_eq!(b.requests(), 0, "nenhuma tarefa inválida chega a publicar lote");
 }
 
+/// O pedido de confirmação do CLI passa pelo hook `PermissionRequest`, que roda o binário de verdade em `--allow`:
+/// aceito na hora, sem parar o executor nem o lote.
 #[test]
-fn pergunta_do_executor_passa_pelo_orquestrador_e_aceita_sem_parar_o_outro() {
+fn pergunta_do_executor_e_aceita_na_hora() {
     let b = bench("pergunta", "temp", Some(8));
     b.pronto();
     let mut m = b.mcp();
 
     let run = m.start("delegar", json!({ "tarefas": ["PERGUNTA: remover o log", "Tarefa B: coração"] }));
     let nodes = b.added(2);
-    let (p, q) = (id(&nodes[0]), id(&nodes[1]));
-    b.states(&[(p.as_str(), "awaiting-orchestrator"), (q.as_str(), "done")]);
-    let (out, is_error) = m.done(run);
-    assert!(!is_error, "{out}");
-    let asked = format!("--- PERGUNTA {p} (1/2) ---\nPERGUNTA: remover o log\nO executor parou num pedido de confirmação e espera a sua resposta.\nBash: rm /d/arquivo.log\n");
-    assert!(out.starts_with(&asked) && out.ends_with("--- AGUARDANDO RESPOSTA ---\n"), "{out}");
-    assert!(!out.contains("--- FIM ---") && !out.contains("Tarefa B"), "{out}");
-
-    // `aguardar` devolve a mesma pergunta, e não publica lote nenhum.
-    let requests = b.requests();
-    let (again, is_error) = m.call("aguardar", json!({}));
-    assert!(!is_error && again.starts_with(&asked), "{again}");
-    assert_eq!(b.requests(), requests);
-
-    // Aceitar: o nó volta a rodar, termina a rodada, e o lote sai com a resposta dele.
-    let run = m.start("responder", json!({ "executor": p.as_str(), "decisao": "aceitar" }));
-    b.states(&[(p.as_str(), "running"), (p.as_str(), "done")]);
+    b.states(&[(id(&nodes[0]).as_str(), "done"), (id(&nodes[1]).as_str(), "done")]);
     let (out, is_error) = m.done(run);
     assert!(
         !is_error && out.starts_with("--- EXECUTOR 1/2 ---\nPERGUNTA: remover o log\naceito\nexecutor_exit: 0\n--- EXECUTOR 2/2 ---\nTarefa B: coração\nfeito: Tarefa B: coração\nexecutor_exit: 0\n--- GIT ---\n"),
         "{out}"
     );
-    assert_eq!(b.requests(), requests, "responder não publica lote novo");
-}
-
-/// Recusa com motivo: o motivo chega ao executor como a mensagem de erro, e ele segue. Os erros de `responder`
-/// (sem motivo, resposta desconhecida, executor sem pergunta) voltam com isError e o motivo, sem gravar nada.
-#[test]
-fn recusa_leva_o_motivo_ao_executor_e_erros_do_responder_nao_gravam_nada() {
-    let b = bench("recusa", "temp", Some(8));
-    b.pronto();
-    let mut m = b.mcp();
-
-    let run = m.start("delegar", json!({ "tarefas": ["PERGUNTA: apagar o banco"] }));
-    let p = id(&b.added(1)[0]);
-    let (out, is_error) = m.done(run);
-    assert!(!is_error && out.starts_with(&format!("--- PERGUNTA {p} (1/1) ---\n")), "{out}");
-    b.states(&[(p.as_str(), "awaiting-orchestrator")]);
-
-    let requests = b.requests();
-    for (args, why) in [
-        (json!({ "executor": p.as_str(), "decisao": "recusar" }), "recusar pede um motivo"),
-        (json!({ "executor": p.as_str(), "decisao": "talvez" }), "resposta desconhecida"),
-        (json!({ "executor": "exec-999", "decisao": "aceitar" }), "não tem pergunta pendente"),
-    ] {
-        let (text, is_error) = m.call("responder", args);
-        assert!(is_error && text.contains(why), "{why}: {text}");
-    }
-    assert_eq!(b.requests(), requests);
-
-    let run = m.start("responder", json!({ "executor": p.as_str(), "decisao": "recusar", "motivo": "não apague o banco: use o arquivo de teste que você criou" }));
-    b.states(&[(p.as_str(), "running"), (p.as_str(), "done")]);
-    let (out, is_error) = m.done(run);
-    assert!(
-        !is_error && out.starts_with("--- EXECUTOR 1/1 ---\nPERGUNTA: apagar o banco\nrecusado: não apague o banco: use o arquivo de teste que você criou\nexecutor_exit: 0\n--- GIT ---\n"),
-        "{out}"
-    );
-}
-
-/// `parar` num executor que espera resposta: ele termina como interrompido, a pergunta não volta, e o lote fecha
-/// sem ela. Responder depois disso é erro.
-#[test]
-fn parar_num_executor_que_espera_resposta_fecha_o_lote_sem_a_pergunta() {
-    let b = bench("parar", "temp", Some(8));
-    b.pronto();
-    let mut m = b.mcp();
-
-    let run = m.start("delegar", json!({ "tarefas": ["PERGUNTA: parar aqui"] }));
-    let p = id(&b.added(1)[0]);
-    let (out, is_error) = m.done(run);
-    assert!(!is_error && out.ends_with("--- AGUARDANDO RESPOSTA ---\n"), "{out}");
-    b.states(&[(p.as_str(), "awaiting-orchestrator")]);
-
-    b.core.stop_executor(&p);
-    b.state(&p, "stopped");
-    let (out, is_error) = m.call("aguardar", json!({}));
-    assert!(
-        !is_error
-            && out.starts_with("--- EXECUTOR 1/1 ---\nPERGUNTA: parar aqui\ninterrompido pelo usuário\nexecutor_exit: interrompido (FALHOU)\n--- GIT ---\n")
-            && out.ends_with("--- FIM ---\n")
-            && !out.contains("AGUARDANDO"),
-        "{out}"
-    );
-    let (text, is_error) = m.call("responder", json!({ "executor": p.as_str(), "decisao": "aceitar" }));
-    assert!(is_error && text.contains("não tem pergunta pendente"), "{text}");
-}
-
-/// O pedido que sai da pasta `ask` devolve o nó de `awaiting-orchestrator` a `running`, e a rodada segue até o fim.
-/// O `--ask` retira o próprio pedido ao expirar; o prazo de 100 s não é esperado aqui: a retirada é simulada na pasta.
-#[test]
-fn pedido_que_sai_da_pasta_devolve_o_no_a_rodando() {
-    let b = bench("expira", "temp", Some(8));
-    b.pronto();
-    let mut m = b.mcp();
-
-    let run = m.start("delegar", json!({ "tarefas": ["PERGUNTA: remover o log"] }));
-    let p = id(&b.added(1)[0]);
-    let (out, is_error) = m.done(run);
-    assert!(!is_error && out.ends_with("--- AGUARDANDO RESPOSTA ---\n"), "{out}");
-    b.states(&[(p.as_str(), "awaiting-orchestrator")]);
-
-    let ask = b.core.session_dir().unwrap().join("exec").join(&p).join("ask");
-    for entry in std::fs::read_dir(&ask).unwrap().flatten() {
-        std::fs::remove_file(entry.path()).unwrap();
-    }
-    b.state(&p, "running");
-    // Sem pedido na pasta, o `--ask` do CLI simulado nega com o motivo de encerramento e a rodada termina.
-    b.state(&p, "done");
-}
-
-/// Um executor que espera o orquestrador ocupa a vaga: com teto 1, o próximo da fila não abre enquanto ele espera,
-/// e abre quando a resposta termina a rodada dele.
-#[test]
-fn executor_que_espera_o_orquestrador_ocupa_a_vaga() {
-    let b = bench("vaga", "temp", Some(2)); // teto 1
-    b.pronto();
-    let mut m = b.mcp();
-
-    let run = m.start("delegar", json!({ "tarefas": ["PERGUNTA: remover o log", "Tarefa B: coração"] }));
-    let nodes = b.added(2);
-    let (p, q) = (id(&nodes[0]), id(&nodes[1]));
-    assert_eq!(nodes[1]["state"], "queued", "B espera a vaga de A");
-    b.states(&[(p.as_str(), "awaiting-orchestrator")]);
-    let (out, is_error) = m.done(run);
-    assert!(!is_error && out.ends_with("--- AGUARDANDO RESPOSTA ---\n"), "{out}");
-
-    // A espera a resposta e segue com a vaga: B não abre, nem com a fila andando.
-    std::thread::sleep(Duration::from_millis(1500));
-    b.drain();
-    assert!(!b.passou(&q, &["running", "done"]), "B não abriu enquanto A espera o orquestrador");
-    assert_eq!(b.core.term_snapshot(&q).seq, 0, "B não tem processo");
-
-    // Respondido, A termina a rodada e libera a vaga: B abre e termina.
-    let run = m.start("responder", json!({ "executor": p.as_str(), "decisao": "aceitar" }));
-    b.state(&p, "done");
-    b.state(&q, "running");
-    b.state(&q, "done");
-    let (out, is_error) = m.done(run);
-    assert!(!is_error && out.contains("--- EXECUTOR 2/2 ---\nTarefa B: coração\nfeito: Tarefa B: coração\n"), "{out}");
 }
 
 /// Pouca memória livre deixa um executor só. O resto espera, e a fila só anda quando a memória volta; quem já

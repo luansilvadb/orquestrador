@@ -1,6 +1,6 @@
 //! O servidor MCP do orquestrador: `orquestrador.exe --mcp <pasta da sessão>`. O CLI do orquestrador o abre como
 //! servidor stdio e fala com ele em JSON-RPC 2.0, uma mensagem por linha, pela entrada e pela saída padrão. As
-//! ferramentas são `delegar`, `aguardar` e `responder`, e cada uma age sobre o lote da sessão (`delegate.rs`).
+//! ferramentas são `delegar` e `aguardar`, e cada uma age sobre o lote da sessão (`delegate.rs`).
 use crate::delegate::{self, Waited};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -97,7 +97,7 @@ fn error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// As três ferramentas do orquestrador, com o que cada uma recebe.
+/// As duas ferramentas do orquestrador, com o que cada uma recebe.
 fn tools() -> Value {
     json!([
         {
@@ -121,19 +121,6 @@ fn tools() -> Value {
             "description": "Espera de novo o lote mais recente que ainda não foi entregue, sem publicar nada.",
             "inputSchema": { "type": "object", "properties": {} },
         },
-        {
-            "name": "responder",
-            "description": "Responde à pergunta de confirmação de um executor e volta a esperar o lote.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "executor": { "type": "string", "description": "O executor da pergunta, como exec-7." },
-                    "decisao": { "type": "string", "enum": ["aceitar", "recusar"] },
-                    "motivo": { "type": "string", "description": "Obrigatório ao recusar, e não é usado ao aceitar." },
-                },
-                "required": ["executor", "decisao"],
-            },
-        },
     ])
 }
 
@@ -149,29 +136,17 @@ struct Reply {
 fn call_tool(session: &Path, name: &str, args: &Value, window: Duration) -> Reply {
     match dispatch(session, name, args, window) {
         Ok(Waited::Result { text, marker }) => Reply { text, is_error: false, delivered: Some(marker) },
-        Ok(Waited::Asking(text)) => Reply { text, is_error: false, delivered: None },
         Ok(Waited::Running) => Reply { text: RUNNING.into(), is_error: false, delivered: None },
         Err(why) => Reply { text: why, is_error: true, delivered: None },
     }
 }
 
 fn dispatch(session: &Path, name: &str, args: &Value, window: Duration) -> Result<Waited, String> {
-    if !matches!(name, "delegar" | "aguardar" | "responder") {
+    if !matches!(name, "delegar" | "aguardar") {
         return Err(format!("Ferramenta desconhecida: {name}."));
     }
     delegate::check_session(session)?;
-    let id = match name {
-        "delegar" => delegate::publish(session, &tasks(args)?)?,
-        "aguardar" => delegate::resume(session)?,
-        _ => {
-            let node = text_arg(args, "executor")?;
-            let choice = text_arg(args, "decisao")?;
-            // Motivo em branco é o mesmo que motivo nenhum: `recusar` continua exigindo um texto.
-            let reason = args["motivo"].as_str().filter(|m| !m.trim().is_empty());
-            delegate::respond(session, &node, &choice, reason)?;
-            delegate::resume(session)?
-        }
-    };
+    let id = if name == "delegar" { delegate::publish(session, &tasks(args)?)? } else { delegate::resume(session)? };
     delegate::wait(session, &id, window)
 }
 
@@ -181,10 +156,6 @@ fn tasks(args: &Value) -> Result<Vec<String>, String> {
         .iter()
         .map(|item| item.as_str().map(String::from).ok_or_else(|| "`tarefas` tem de ser uma lista de textos.".to_string()))
         .collect()
-}
-
-fn text_arg(args: &Value, key: &str) -> Result<String, String> {
-    args[key].as_str().map(String::from).ok_or_else(|| format!("Falta o argumento `{key}`, um texto."))
 }
 
 fn result(id: &Value, reply: &Reply) -> Value {
@@ -200,13 +171,11 @@ fn write<W: Write>(out: &Mutex<W>, msg: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{batch_with_ask, session};
+    use crate::testutil::session;
     use std::io::Cursor;
 
     /// A janela dos testes: curta, para a espera acabar logo.
     const SHORT: Duration = Duration::from_millis(300);
-
-    const BASH: &str = r#"{"tool_name":"Bash","tool_input":{"command":"rm /d/a.log","description":"x"}}"#;
 
     /// Uma saída que o teste lê depois: o servidor escreve nela e o teste vê as linhas.
     #[derive(Clone, Default)]
@@ -270,17 +239,15 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_traz_as_tres_ferramentas_com_esquema() {
+    fn tools_list_traz_as_duas_ferramentas_com_esquema() {
         let s = session("orq-mcp", "list", true);
         let got = talk("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\"}\n", &s);
         let tools = got[0]["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["delegar", "aguardar", "responder"]);
+        assert_eq!(names, ["delegar", "aguardar"]);
         assert!(tools.iter().all(|t| t["description"].is_string() && t["inputSchema"]["type"] == "object"));
         assert_eq!(tools[0]["inputSchema"]["required"], json!(["tarefas"]));
         assert_eq!(tools[0]["inputSchema"]["properties"]["tarefas"]["minItems"], 1);
-        assert_eq!(tools[2]["inputSchema"]["required"], json!(["executor", "decisao"]));
-        assert_eq!(tools[2]["inputSchema"]["properties"]["decisao"]["enum"], json!(["aceitar", "recusar"]));
         let _ = std::fs::remove_dir_all(&s);
     }
 
@@ -341,46 +308,6 @@ mod tests {
     }
 
     #[test]
-    fn responder_valida_a_resposta_antes_de_gravar() {
-        let s = session("orq-mcp", "validacao", true);
-        batch_with_ask(&s, "B1", "exec-1", 0, 1, BASH);
-        let input = [
-            call(11, "responder", json!({ "executor": "exec-1", "decisao": "recusar" })),
-            call(12, "responder", json!({ "executor": "exec-1", "decisao": "aceitar", "motivo": "por quê" })),
-            call(13, "responder", json!({ "executor": "exec-7", "decisao": "aceitar" })),
-            call(14, "responder", json!({ "executor": "exec-1", "decisao": "talvez" })),
-        ]
-        .join("\n");
-        // As chamadas rodam em threads: a ordem da saída não é fixa, então cada resposta é achada pelo id.
-        let got = talk(&input, &s);
-        let by_id = |id: u64| got.iter().find(|r| r["id"] == id).unwrap();
-        for (id, expected) in [
-            (11, "recusar pede um motivo"),
-            (12, "aceitar não recebe motivo"),
-            (13, "não tem pergunta pendente"),
-            (14, "resposta desconhecida"),
-        ] {
-            let (text, is_error) = text_of(by_id(id));
-            assert!(is_error && text.contains(expected), "{id}: {text}");
-        }
-        assert!(!s.join("exec/exec-1/ask/00000000000000000001-aaaaaaaa.reply").exists(), "erro não grava nada");
-        let _ = std::fs::remove_dir_all(&s);
-    }
-
-    #[test]
-    fn responder_recusar_com_motivo_grava_e_volta_a_esperar_o_lote() {
-        let s = session("orq-mcp", "recusa", true);
-        batch_with_ask(&s, "B1", "exec-1", 0, 1, BASH);
-        let got = talk(&call(15, "responder", json!({ "executor": "exec-1", "decisao": "recusar", "motivo": "use só o arquivo que você criou" })), &s);
-        let (text, is_error) = text_of(&got[0]);
-        assert!(!is_error);
-        assert_eq!(text, RUNNING, "o lote não tem resultado, então a espera acaba no prazo");
-        let answer = std::fs::read_to_string(s.join("exec/exec-1/ask/00000000000000000001-aaaaaaaa.reply")).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&answer).unwrap(), json!({ "behavior": "deny", "message": "use só o arquivo que você criou" }));
-        let _ = std::fs::remove_dir_all(&s);
-    }
-
-    #[test]
     fn janela_curta_devolve_em_andamento_sem_marca_e_aguardar_pega_o_resultado() {
         let s = session("orq-mcp", "janela", true);
         let got = talk(&call(16, "delegar", json!({ "tarefas": ["Tarefa A"] })), &s);
@@ -403,7 +330,7 @@ mod tests {
     #[test]
     fn marca_de_entregue_so_entra_depois_que_a_resposta_sai() {
         let s = session("orq-mcp", "marca", true);
-        batch_with_ask(&s, "B1", "exec-1", 0, 1, BASH);
+        std::fs::create_dir_all(s.join("requests").join("B1")).unwrap();
         std::fs::write(s.join("results").join("B1.txt"), "0\n--- EXECUTOR 1/1 ---\nok\n--- FIM ---\n").unwrap();
         // O resultado devolvido traz a marca, que quem chama grava; a função em si não grava nada.
         let reply = call_tool(&s, "aguardar", &json!({}), SHORT);
@@ -417,27 +344,12 @@ mod tests {
     }
 
     #[test]
-    fn pergunta_interrompe_a_espera_e_nao_entrega() {
-        let s = session("orq-mcp", "pergunta", true);
-        batch_with_ask(&s, "B1", "exec-1", 0, 2, BASH);
-        let got = talk(&call(19, "aguardar", json!({})), &s);
-        let (text, is_error) = text_of(&got[0]);
-        assert!(!is_error);
-        assert!(text.contains("--- PERGUNTA exec-1 (1/2) ---") && text.contains("Bash: rm /d/a.log"), "{text}");
-        assert!(text.contains("chame responder com o executor, aceitar ou recusar e, ao recusar, o motivo"), "{text}");
-        assert!(text.ends_with("--- AGUARDANDO RESPOSTA ---\n") && !text.contains("--- FIM ---"));
-        assert!(!s.join("results").join("B1.delivered").exists());
-        let _ = std::fs::remove_dir_all(&s);
-    }
-
-    #[test]
     fn sessao_sem_dono_e_erro_em_toda_chamada() {
         let s = session("orq-mcp", "sem-dono", false);
         std::fs::remove_file(s.join("owner")).unwrap();
         let input = [
             call(20, "delegar", json!({ "tarefas": ["x"] })),
             call(21, "aguardar", json!({})),
-            call(22, "responder", json!({ "executor": "exec-1", "decisao": "aceitar" })),
         ]
         .join("\n");
         let got = talk(&input, &s);
