@@ -1,4 +1,4 @@
-// QA de interface dos fluxos de arquivos (árvore) e de pesquisa/substituição, em Chrome headless contra o app simulado (src/mock.ts,
+// QA de interface dos fluxos de arquivos (árvore) e de pesquisa/substituição, em Chrome headless contra o app simulado (src/backend/mock.ts,
 // só no `vite` de desenvolvimento). Usa o mesmo loader do check-editor-ui (editor-ui-harness.mjs): cada cenário roda com contexto novo,
 // clipboard fake e a árvore carregada. O mock só entra na fronteira de I/O: fixtures (`__mock.addFile`, `__mock.addFolder`), edição externa
 // (`__mock.external`), disco (`__mock.disk`), falha de I/O (`__mock.failOn`) e o clipboard simulado (`__mock.clipboard`).

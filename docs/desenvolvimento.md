@@ -16,34 +16,22 @@ npm run build          # tsc && vite build: checa os tipos e gera o front-end
 npm run tauri build    # gera o instalador assinado em src-tauri\target\release\bundle\nsis (exige a chave, ver atualizacao.md)
 ```
 
-`npm run dev` sobe só o front-end (Vite), com um backend simulado em `src/mock.ts`, fora do Tauri. Os modos sem Git ficam nas URLs `?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1`.
-
-## Checagens sem dependências
-
-Rodam com Node, sem dependências:
-
-```powershell
-node scripts/check-workspace.mjs
-node scripts/check-editor-store.mjs
-node scripts/check-file-tabs.mjs
-node scripts/check-explorer.mjs
-node scripts/check-git-graph.mjs
-node scripts/check-paste.mjs
-node scripts/check-release.mjs
-```
+`npm run dev` sobe só o front-end (Vite), com um backend simulado em `src/backend/mock.ts`, fora do Tauri. Os modos sem Git ficam nas URLs `?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1`.
 
 ## Testes
 
-Os checks de interface são em Chrome headless, contra o app simulado, e saem com 0 se todos os cenários passam. Todos sobem o Vite na mesma porta (1421, `SMOKE_PORT`), então rode um de cada vez:
-
 ```powershell
-node scripts/check-editor-ui.mjs
-node scripts/check-files-search-ui.mjs
-node scripts/check-git-ui.mjs
-node scripts/check-media-ui.mjs
+npm run check       # 7 checagens puras (Node, sem dependências)
+npm run check:ui    # 6 checks de interface, em sequência (Chrome headless)
 ```
 
+`npm run check` roda os arquivos listados em `package.json`; `npm run check:ui` roda os checks de interface um de cada vez, porque todos sobem o Vite na mesma porta (1421, `SMOKE_PORT`). Os dois saem com código diferente de 0 se algum teste falhou, e mostram o resultado de todos os arquivos.
+
+Os checks de interface são em Chrome headless, contra o app simulado.
+
 Capturas e logs vão para `.playwright-mcp/`, que não vai para o Git.
+
+O workflow `.github/workflows/ci.yml` roda o build, `npm run check` e `cargo test` a cada push em `main` e em pull request. Os checks de interface (`npm run check:ui`) ficam de fora do CI: sobem o Vite e um Chromium local.
 
 Os testes do backend:
 

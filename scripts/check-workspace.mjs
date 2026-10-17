@@ -1,4 +1,4 @@
-// Check do modelo do espaço de trabalho (src/workspace-model.ts): grupos, prévias, pins, fechamento por decisão externa, reabertura,
+// Check do modelo do espaço de trabalho (src/editor/workspace-model.ts): grupos, prévias, pins, fechamento por decisão externa, reabertura,
 // remapeamento de pastas e estado salvo adulterado. Roda sem dependências: `node scripts/check-workspace.mjs`.
 // Sai com 1 e mostra a falha se alguma regra quebrar.
 import assert from 'node:assert/strict';
@@ -6,7 +6,7 @@ import { test as check } from 'node:test';
 import {
   activate, closeTabs, createWorkspace, joinGroups, loadWorkspace, markEdited, moveTab, navigate,
   openPermanent, openPreview, planClose, remapPath, reopenClosed, reorderTab, splitTab, targetKey, togglePin,
-} from '../src/workspace-model.ts';
+} from '../src/editor/workspace-model.ts';
 
 const NONE = new Set();
 const file = (docId, path) => ({ kind: 'file', docId, path });

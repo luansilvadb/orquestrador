@@ -1,4 +1,4 @@
-// Paridade visual do editor central com o Antigravity (Dark Modern), em Chrome headless contra o app simulado (src/mock.ts).
+// Paridade visual do editor central com o Antigravity (Dark Modern), em Chrome headless contra o app simulado (src/backend/mock.ts).
 // Os valores esperados vêm dos arquivos do Antigravity (ver docs/interface.md, "Cores e fontes do editor"). Cada cenário abre um
 // arquivo pela árvore, espera a linguagem carregar (é assíncrona) e confere estilos computados e geometria, não aparência: a
 // comparação pixel a pixel não é feita aqui. Capturas em .playwright-mcp/editor-style-*.png para leitura humana.
@@ -279,6 +279,6 @@ scenario('docs/design-system.md real, aberto no mock: lista, código inline e ma
   });
   for (const m of marks) assert.equal(m.color, 'rgb(103, 150, 230)', 'marcador (#6796E6)');
   assert.equal((await styleOf(page, 'Concorrência dos executores')).color, 'rgb(204, 204, 204)', 'corpo da lista (#CCCCCC)');
-  assert.equal((await styleOf(page, 'src/titlebar.tsx')).color, 'rgb(206, 145, 120)', 'código inline dentro da lista (#CE9178)');
+  assert.equal((await styleOf(page, 'src/window/titlebar.tsx')).color, 'rgb(206, 145, 120)', 'código inline dentro da lista (#CE9178)');
   await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'editor-style-design-system.png') });
 });

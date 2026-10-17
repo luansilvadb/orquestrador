@@ -37,11 +37,12 @@ Pré-requisitos: Node.js, Rust com a toolchain MSVC (exige o Microsoft C++ Build
 ## Testes
 
 ```powershell
+npm run check
 cd src-tauri
 cargo test
 ```
 
-As demais checagens (em Node e de interface) estão em [desenvolvimento](docs/desenvolvimento.md).
+As checagens de interface (`npm run check:ui`) e os demais detalhes estão em [desenvolvimento](docs/desenvolvimento.md).
 
 ## Contribuir
 

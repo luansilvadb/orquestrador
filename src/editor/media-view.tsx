@@ -5,8 +5,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { backend, message } from './backend';
-import { fileName } from './file-tabs';
+import { backend, message } from '../backend/backend';
+import { fileName } from '../shared/file-tabs';
 
 export type MediaKind = 'image' | 'audio';
 const TYPES: Record<string, { kind: MediaKind; mime: string }> = {
@@ -65,7 +65,7 @@ export function MediaView({ path, shown }: { path: string; shown: boolean }) {
     : <AudioBody url={source.url} name={fileName(path)} shown={shown} />;
 }
 
-// Aviso no lugar do corpo da aba (lendo, erro, sem conteúdo). Também usado pelas abas do editor central (src/editor-workspace.tsx).
+// Aviso no lugar do corpo da aba (lendo, erro, sem conteúdo). Também usado pelas abas do editor central (src/editor/editor-workspace.tsx).
 export function Note({ text, danger, onRetry }: { text: string; danger?: boolean; onRetry?: () => void }) {
   return (
     <Flexbox padding={16} gap={8}>

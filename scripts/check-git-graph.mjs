@@ -1,9 +1,9 @@
-// Check do modelo do gráfico de commits (src/git-graph.ts): linear, branch e merge, convergência, merge com 3 pais, raiz,
+// Check do modelo do gráfico de commits (src/git/git-graph.ts): linear, branch e merge, convergência, merge com 3 pais, raiz,
 // primeira página com pai não carregado, reaproveitamento de faixa livre, cor estável e lista vazia.
 // Roda sem dependências: `node scripts/check-git-graph.mjs`. Sai com 1 e mostra a falha se alguma regra quebrar.
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
-import { layoutGraph } from '../src/git-graph.ts';
+import { layoutGraph } from '../src/git/git-graph.ts';
 const c = (hash, ...parents) => ({ hash, parents });
 // Segmentos de uma linha em forma comparável e independente da ordem: "top 0>1 c2".
 const segs = (row) => row.lines.map((l) => `${l.half} ${l.from}>${l.to} c${l.color}`).sort();

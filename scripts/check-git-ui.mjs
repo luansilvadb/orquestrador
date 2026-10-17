@@ -1,5 +1,5 @@
 // QA de interface do Git (controle de versão, comparador do arquivo inteiro com blocos, histórico, conflitos) e da preservação do shell e do editor, em Chrome headless
-// contra o app simulado (src/mock.ts, só no `vite` de desenvolvimento). Usa o loader compartilhado (editor-ui-harness.mjs): cada cenário roda
+// contra o app simulado (src/backend/mock.ts, só no `vite` de desenvolvimento). Usa o loader compartilhado (editor-ui-harness.mjs): cada cenário roda
 // com contexto novo, clipboard fake e a árvore carregada. O mock só entra na fronteira de I/O: fixtures (`__mock.addConflict`, `__mock.addFile`),
 // edição externa (`__mock.external`), disco (`__mock.disk`), remoção pela árvore (`__mock.remove`) e o registro das chamadas Git (`__mock.calls`),
 // que o check usa para conferir o payload que a UI mandou (índice, cabeçalho e revisão vistos), não só o que apareceu na tela.
@@ -806,7 +806,7 @@ scenario('conflito com arquivo ausente na pasta: restaurar o lado existente, mar
 
 // ---------- Git: gráfico ----------
 
-// Hashes completos dos quatro commits do simulado (src/mock.ts), do mais novo para o mais antigo.
+// Hashes completos dos quatro commits do simulado (src/backend/mock.ts), do mais novo para o mais antigo.
 const H9F = '9f3a1c2b7d4e5f60718293a4b5c6d7e8f9a0b1c2';
 const H4B = '4b2e8d0a1c3f5e7b9d2a4c6e8f0b1d3a5c7e9f11';
 const HD7 = 'd7e1a9c3b5f7081a2c4e6f8a0b2d4f6e8a0c2e4b';

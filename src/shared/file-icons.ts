@@ -1,7 +1,7 @@
 // Qual ícone do tema Symbols (src/assets/symbols, gerado por scripts/sync-file-icons.mjs) cabe a um arquivo ou pasta.
 // A ordem é a do VS Code: nome do arquivo, extensão (da mais longa para a mais curta, "d.ts" antes de "ts"), linguagem pelo
 // nome, linguagem pela extensão e o padrão. Pasta: pelo nome, ou a pasta padrão. Tudo sem diferenciar maiúsculas.
-import theme from './assets/symbols/theme.json' with { type: 'json' };
+import theme from '../assets/symbols/theme.json' with { type: 'json' };
 
 type Map = Record<string, string>;
 const { fileNames, fileExtensions, langNames, langExtensions, folderNames } = theme as unknown as Record<string, Map>;

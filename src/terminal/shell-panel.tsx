@@ -6,7 +6,7 @@ import { ActionIcon, Button, DraggablePanel, Popover, TabsIndicator, TabsList, T
 import { Flexbox } from '@lobehub/ui';
 import type { TermView } from './term';
 import { TermHost } from './terminals';
-import { revealTab, wheelToScroll } from './tab-strip';
+import { revealTab, wheelToScroll } from '../shared/tab-strip';
 
 // Altura ao abrir o app (não se guarda entre aberturas); o mínimo mantém a barra e uma linha de terminal.
 export const SHELL_HEIGHT = 280;

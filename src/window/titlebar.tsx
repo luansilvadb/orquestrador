@@ -4,7 +4,7 @@ import { Children, useEffect, useState, type ComponentType, type ReactNode } fro
 import { Flexbox } from '@lobehub/ui';
 import { Text, Tooltip } from '@lobehub/ui/base-ui';
 import { SECONDARY } from './text-style';
-import { host } from './backend';
+import { host } from '../backend/backend';
 import { CloseIcon, MaximizeIcon, MinimizeIcon, RestoreIcon } from './window-icons';
 
 // O Tooltip clona o botão e entrega o ref; bottomRight alinha a dica à borda direita, então ela não corta na janela.

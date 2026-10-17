@@ -6,10 +6,10 @@ import { Button, colorsPreset, DraggablePanel, DropdownMenu, Tag, TabsIndicator,
 import { Center, Flexbox, type PresetColorKey } from '@lobehub/ui';
 import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
-import { SECONDARY } from './text-style';
+import { SECONDARY } from '../window/text-style';
 import { TermHost, terminals } from './terminals';
-import { revealTab, wheelToScroll } from './tab-strip';
-import { ORCHESTRATOR, TOOL_NAME, type Choice, type ExecutorNode, type NodeState, type Tool } from './types';
+import { revealTab, wheelToScroll } from '../shared/tab-strip';
+import { ORCHESTRATOR, TOOL_NAME, type Choice, type ExecutorNode, type NodeState, type Tool } from '../backend/types';
 
 // Cada estado: rótulo e ícone com texto (regra do design system); a cor é um nome predefinido do Lobe UI, o mesmo para o Tag e para o ícone da aba.
 export const STATES: Record<NodeState, { label: string; icon: typeof Clock; color: PresetColorKey }> = {

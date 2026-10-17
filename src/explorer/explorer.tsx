@@ -12,15 +12,15 @@ import {
 } from '@lobehub/ui/base-ui';
 import { createPortal } from 'react-dom';
 import { Flexbox } from '@lobehub/ui';
-import { backend, message } from './backend';
+import { backend, message } from '../backend/backend';
 import { decorations, IGNORED } from './explorer-decorations';
-import { FileIcon } from './file-icon';
+import { FileIcon } from '../shared/file-icon';
 import { SourceControl } from './source-control-icon';
-import { fileNameError } from './file-tab-actions';
-import { action, blocked, DIVIDER, fileName, useChord } from './file-tabs';
-import { join, splitPath } from './git-history';
-import { usePolling } from './polling';
-import type { Batch, DirEntry, GitStatus, Moved } from './types';
+import { fileNameError } from '../shared/file-tab-actions';
+import { action, blocked, DIVIDER, fileName, useChord } from '../shared/file-tabs';
+import { join, splitPath } from '../shared/paths';
+import { usePolling } from '../shared/polling';
+import type { Batch, DirEntry, GitStatus, Moved } from '../backend/types';
 
 export type Route = 'arquivos' | 'pesquisa' | 'git';
 

@@ -33,7 +33,7 @@ const lower = (map) => Object.fromEntries(Object.entries(map ?? {}).map(([k, v])
 const maps = { fileNames: lower(theme.fileNames), fileExtensions: lower(theme.fileExtensions), langNames, langExtensions, folderNames: lower(theme.folderNames) };
 // Associação para ícone sem definição sai, como no VS Code: vale a regra seguinte.
 for (const map of Object.values(maps)) for (const [k, v] of Object.entries(map)) if (!theme.iconDefinitions[v]) delete map[k];
-// As chaves que src/file-icons.ts pode devolver: os valores dos mapas e os padrões.
+// As chaves que src/shared/file-icons.ts pode devolver: os valores dos mapas e os padrões.
 const reachable = new Set([theme.file, theme.folder, ...Object.values(maps).flatMap(Object.values)]);
 const icons = Object.fromEntries(Object.entries(theme.iconDefinitions)
   .filter(([key]) => reachable.has(key))

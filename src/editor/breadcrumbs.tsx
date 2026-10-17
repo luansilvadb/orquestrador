@@ -4,10 +4,10 @@
 import { useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Popover, ScrollArea } from '@lobehub/ui/base-ui';
-import { backend, message } from './backend';
-import { FileIcon } from './file-icon';
-import { join, splitPath } from './git-history';
-import type { DirEntry } from './types';
+import { backend, message } from '../backend/backend';
+import { FileIcon } from '../shared/file-icon';
+import { join, splitPath } from '../shared/paths';
+import type { DirEntry } from '../backend/types';
 
 export function Breadcrumbs({ path, onOpen }: { path: string; onOpen: (path: string) => void }) {
   const parts = path.split('/').filter(Boolean);

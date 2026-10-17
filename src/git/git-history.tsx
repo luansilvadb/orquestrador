@@ -2,14 +2,15 @@
 // Um commit abre a lista dos arquivos dele; um arquivo abre a alteração daquele commit no editor central.
 // Os caminhos são os do commit (imutáveis): um arquivo renomeado depois aparece com o nome que tinha ali.
 import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { ActionIcon, Button, Text, toast } from '@lobehub/ui/base-ui';
+import { ActionIcon, Button, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
-import { FileIcon } from './file-icon';
-import { KIND_COLOR } from './explorer-decorations';
-import { backend, message } from './backend';
-import type { TabTarget } from './workspace-model';
-import type { CommitDetail, CommitFile, GitKind } from './types';
+import { FileIcon } from '../shared/file-icon';
+import { splitPath } from '../shared/paths';
+import { KIND_COLOR } from '../explorer/explorer-decorations';
+import { backend, message } from '../backend/backend';
+import type { TabTarget } from '../editor/workspace-model';
+import type { CommitDetail, CommitFile, GitKind } from '../backend/types';
 
 /** Pedido de histórico: `path` null é o projeto inteiro. Um pedido novo (outro objeto) sempre refaz a lista. */
 export type HistoryRequest = { path: string | null };
@@ -23,14 +24,6 @@ export const KIND: Record<GitKind, { letter: string; title: string }> = {
   conflicted: { letter: 'C', title: 'em conflito' },
 };
 
-/** Pasta e nome de um caminho relativo ao projeto. */
-export function splitPath(path: string) {
-  const slash = path.lastIndexOf('/');
-  return { name: path.slice(slash + 1), dir: slash >= 0 ? path.slice(0, slash) : '' };
-}
-/** Junta pasta e nome num caminho relativo ao projeto (pasta '' é a raiz). */
-export const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
-
 /** Commits por página, no histórico e no gráfico. */
 export const PAGE = 50;
 export const when = (iso: string, style: Intl.DateTimeFormatOptions) => {
@@ -41,16 +34,6 @@ export const when = (iso: string, style: Intl.DateTimeFormatOptions) => {
 export const note = (text: string, danger = false) => (
   <Text as="p" role="status" fontSize={12} type={danger ? 'danger' : 'secondary'} style={{ paddingInline: 12, paddingBlock: 6 }}>{text}</Text>
 );
-
-/** Copia para a área de transferência. Falha vira toast de erro; sucesso, toast curto. */
-export async function copy(text: string, done: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success({ title: done, duration: 2000 });
-  } catch (e) {
-    toast.error({ title: message(e), duration: 5000 });
-  }
-}
 
 export type OpenCommitTarget = (target: TabTarget, options?: { permanent?: boolean }) => void;
 

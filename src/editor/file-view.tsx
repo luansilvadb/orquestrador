@@ -1,4 +1,4 @@
-// Editor de texto (CodeMirror com o tema do app), usado pelo editor central (src/editor-workspace.tsx). Não lê nem grava o disco:
+// Editor de texto (CodeMirror com o tema do app), usado pelo editor central (src/editor/editor-workspace.tsx). Não lê nem grava o disco:
 // o texto, o cursor e a rolagem vêm de fora, e o estado do CodeMirror fica guardado por `cacheKey` (o docId).
 import { useEffect, useRef, useState } from 'react';
 import { ContextMenuTrigger, type ContextMenuItem, toast } from '@lobehub/ui/base-ui';
@@ -12,8 +12,8 @@ import { tags } from '@lezer/highlight';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
 import { showMinimap } from '@replit/codemirror-minimap';
 import { bracketColors } from './bracket-colors';
-import { message } from './backend';
-import { action, blocked, DIVIDER } from './file-tabs';
+import { message } from '../backend/backend';
+import { action, blocked, DIVIDER } from '../shared/file-tabs';
 import type { Scroll } from './workspace-store';
 
 // ponytail: acima de 200 mil caracteres, carregar parser e colorir custa mais que a leitura simples.
@@ -169,7 +169,7 @@ export function parseGoto(value: string, lines: number, lineLength: (line: numbe
   return { line, col };
 }
 
-// Editor do arquivo (CodeMirror com o tema do app). Exportado para o editor central (src/editor-workspace.tsx) reutilizar.
+// Editor do arquivo (CodeMirror com o tema do app). Exportado para o editor central (src/editor/editor-workspace.tsx) reutilizar.
 export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll }: {
   text: string; readOnly: boolean; path: string; reveal: Reveal | null; onChange: (text: string) => void; onSave: () => void;
   onCursor: (line: number, col: number) => void; onScroll?: (scroll: Scroll) => void; cacheKey?: string; start?: StartCursor | null;

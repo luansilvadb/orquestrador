@@ -1,5 +1,5 @@
 // Loader e helpers compartilhados pelos checks de interface (editor-ui e arquivos/pesquisa): Chrome headless contra o app simulado
-// (src/mock.ts, só no `vite` de desenvolvimento). Sobe o próprio Vite (porta SMOKE_PORT, padrão 1421, com --strictPort) e encerra só esse
+// (src/backend/mock.ts, só no `vite` de desenvolvimento). Sobe o próprio Vite (porta SMOKE_PORT, padrão 1421, com --strictPort) e encerra só esse
 // processo. Cada cenário ganha um contexto de navegador novo, com clipboard fake (`window.__copied`); o clipboard do usuário não é tocado.
 // Não instala nada: usa o playwright-core e o Chromium já presentes no cache local.
 import { spawn } from 'node:child_process';

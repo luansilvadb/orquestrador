@@ -31,27 +31,27 @@ import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownM
 import { Center, Flexbox, Hotkey, PatchDiff } from '@lobehub/ui';
 import { ArrowRight, ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
 import { EditorView } from '@codemirror/view';
-import { FileIcon } from './file-icon';
+import { FileIcon } from '../shared/file-icon';
 import { Breadcrumbs } from './breadcrumbs';
-import { backend, message } from './backend';
-import { usePolling } from './polling';
+import { backend, message } from '../backend/backend';
+import { usePolling } from '../shared/polling';
 import { CodeEditor, forgetEditorState, type Reveal, type StartCursor } from './file-view';
 import { MediaView, mediaOf, Note } from './media-view';
-import { action, blocked, DIVIDER, fileName, useChord } from './file-tabs';
-import { pathText } from './file-tab-actions';
-import { copy, splitPath } from './git-history';
+import { action, blocked, DIVIDER, fileName, useChord } from '../shared/file-tabs';
+import { pathText } from '../shared/file-tab-actions';
+import { copy, splitPath } from '../shared/paths';
 import {
   activate, closeTabs, createWorkspace, isDirty, isWithin, joinGroups, loadWorkspace, markEdited, moveTab, navigate, openPermanent, openPreview,
   planClose, remapPath, reopenClosed, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
 } from './workspace-model';
-import { revealTab, wheelToScroll } from './tab-strip';
+import { revealTab, wheelToScroll } from '../shared/tab-strip';
 import {
   blockCount, type Buffer, type Choice, type ConflictDraft, decodeRecovery, dirtyKeys, encodeRecovery, hasDraftAt,
   hasMarkers, isBufferDirty, isConflictDirty, newlineOf, normalizeNewlines, parseConflict, patchHunks, type PatchHunk, type Recovery,
   remapData, renderConflict, toDiskNewlines, conflictKey, type EditorData, type Cursor, type Scroll,
 } from './workspace-store';
-import type { GitGuard } from './git-guard';
-import type { Conflict, FileContent, GitDiff, HunkRef, ReviewDiff } from './types';
+import type { GitGuard } from '../git/git-guard';
+import type { Conflict, FileContent, GitDiff, HunkRef, ReviewDiff } from '../backend/types';
 import { blockRanges, changeKeys, compareOf, type CompareModel } from './compare-rows';
 
 export type OpenOptions = { permanent?: boolean; line?: number; col?: number; side?: GroupId };

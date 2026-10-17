@@ -1,6 +1,6 @@
 // Decorações do Git na árvore de arquivos, como no Explorer do VS Code: cor e letra no arquivo alterado, cor e "•" na pasta
 // que tem algo alterado dentro, cinza no que o `.gitignore` ignora. As cores são as do tema escuro do VS Code (gitDecoration.*).
-import type { GitFile, GitKind } from './types';
+import type { GitFile, GitKind } from '../backend/types';
 
 export type Decoration = { color: string; letter: string; title: string };
 

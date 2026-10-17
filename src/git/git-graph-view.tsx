@@ -5,11 +5,12 @@ import { useEffect, useMemo, useRef } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, Cloud, CloudDownload, GitBranch, RefreshCw, Tag, Target } from 'lucide-react';
-import { backend } from './backend';
-import { CommitFileList, copy, note, type OpenCommitTarget, PAGE, useCommitDetail, usePagedList, when } from './git-history';
+import { backend } from '../backend/backend';
+import { CommitFileList, note, type OpenCommitTarget, PAGE, useCommitDetail, usePagedList, when } from './git-history';
+import { copy } from '../shared/paths';
 import { type GraphLine, type GraphRow, layoutGraph } from './git-graph';
-import type { TabTarget } from './workspace-model';
-import type { GitRef } from './types';
+import type { TabTarget } from '../editor/workspace-model';
+import type { GitRef } from '../backend/types';
 
 // Medidas em px, as do grafo do Antigravity/VS Code: faixas de 11 px (a primeira começa em 11, então uma faixa ocupa 22), linha de
 // commit de 22 px e linha de arquivo (a mesma do painel).

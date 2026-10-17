@@ -5,15 +5,16 @@ import { useEffect, useRef, useState } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, DropdownMenu, Input, Popover, Text, TextArea, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, GitBranch, History, LoaderCircle, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
-import { backend, message } from './backend';
-import { FileIcon } from './file-icon';
-import { KIND_COLOR } from './explorer-decorations';
+import { backend, message } from '../backend/backend';
+import { FileIcon } from '../shared/file-icon';
+import { KIND_COLOR } from '../explorer/explorer-decorations';
 import { GRAPH_DEFAULT, GraphSection, type GraphRemote } from './git-graph-view';
-import { HistoryPanel, type HistoryRequest, KIND, type OpenCommitTarget, splitPath } from './git-history';
-import { usePolling } from './polling';
-import type { DiffSide, TabTarget } from './workspace-model';
+import { HistoryPanel, type HistoryRequest, KIND, type OpenCommitTarget } from './git-history';
+import { splitPath } from '../shared/paths';
+import { usePolling } from '../shared/polling';
+import type { DiffSide, TabTarget } from '../editor/workspace-model';
 import type { GitGuard } from './git-guard';
-import type { GitBranches, GitFile, GitKind, GitState, GitStatus } from './types';
+import type { GitBranches, GitFile, GitKind, GitState, GitStatus } from '../backend/types';
 
 const LOCKED_TITLE = 'Há executores trabalhando. Espere o lote terminar.';
 

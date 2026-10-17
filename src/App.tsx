@@ -1,27 +1,28 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { Block, Center, Flexbox } from '@lobehub/ui';
 import { Alert, Button, DraggablePanel, Modal, Progress, setActiveScope, Text, toast } from '@lobehub/ui/base-ui';
-import { backend, connect, host, message } from './backend';
-import { ChoiceForm } from './choice-form';
-import { EditorWorkspace, type EditorWorkspaceHandle } from './editor-workspace';
-import { FilesScreen, Nav, StatusBar, type FileActions, type OpenOptions, type Route } from './explorer';
-import { fileName } from './file-tabs';
-import { createGitGuard } from './git-guard';
-import { GitSidebar, usePolled } from './git';
-import { copy, type HistoryRequest, join } from './git-history';
-import { QuickOpen } from './quick-open';
-import { SearchScreen } from './search';
-import { SHELL_HEIGHT, SHELL_MIN, ShellPanel } from './shell-panel';
-import { FINISHED, PANEL_MIN, PANEL_WIDTH, STATES, TerminalsScreen } from './terminal-screen';
-import type { TermView } from './term';
-import { terminals } from './terminals';
-import { folderName, TitleBar } from './titlebar';
-import { SECONDARY } from './text-style';
-import { pathText, relativeTo } from './file-tab-actions';
-import { isWithin, type TabTarget } from './workspace-model';
+import { backend, connect, host, message } from './backend/backend';
+import { ChoiceForm } from './terminal/choice-form';
+import { EditorWorkspace, type EditorWorkspaceHandle } from './editor/editor-workspace';
+import { FilesScreen, Nav, StatusBar, type FileActions, type OpenOptions, type Route } from './explorer/explorer';
+import { fileName } from './shared/file-tabs';
+import { createGitGuard } from './git/git-guard';
+import { GitSidebar, usePolled } from './git/git';
+import { type HistoryRequest } from './git/git-history';
+import { copy, join } from './shared/paths';
+import { QuickOpen } from './editor/quick-open';
+import { SearchScreen } from './search/search';
+import { SHELL_HEIGHT, SHELL_MIN, ShellPanel } from './terminal/shell-panel';
+import { FINISHED, PANEL_MIN, PANEL_WIDTH, STATES, TerminalsScreen } from './terminal/terminal-screen';
+import type { TermView } from './terminal/term';
+import { terminals } from './terminal/terminals';
+import { folderName, TitleBar } from './window/titlebar';
+import { SECONDARY } from './window/text-style';
+import { pathText, relativeTo } from './shared/file-tab-actions';
+import { isWithin, type TabTarget } from './editor/workspace-model';
 import {
   ORCHESTRATOR, type Choice, type ExecutorNode, type GitState, type NodeState, type Options, type UpdateStatus,
-} from './types';
+} from './backend/types';
 
 const MB = 1024 * 1024;
 // Frase do aviso da janela do Orquestrador, por modo do Git que não é `repo`: diz o que falta para o registro existir.
@@ -674,7 +675,7 @@ export function App() {
   const closeUnsaved = closeFiles.length === 1
     ? `em ${closeFiles[0]}`
     : `em ${closeFiles.length} arquivos: ${closeFiles.join(', ')}`;
-  // Ações do menu de arquivo da árvore (src/explorer.tsx). Ação sem resposta do backend avisa por toast; o que pede confirmação fica no modal.
+  // Ações do menu de arquivo da árvore (src/explorer/explorer.tsx). Ação sem resposta do backend avisa por toast; o que pede confirmação fica no modal.
   const hasDraft = (path: string) => editor.current?.hasDraft(path) ?? false;
   const fileActions: FileActions = {
     dirtyOf: (paths) => paths.filter(hasDraft),

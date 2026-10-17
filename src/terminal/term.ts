@@ -3,7 +3,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { toast } from '@lobehub/ui/base-ui';
-import { backend, message } from './backend';
+import { backend, message } from '../backend/backend';
 import { clipboardFiles, clipboardPaste, type Cli, type Paste } from './paste';
 
 const theme = {

@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Input, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { backend, message } from './backend';
-import { FileIcon } from './file-icon';
-import { splitPath } from './git-history';
-import type { QuickOpen as QuickOpenResult } from './types';
+import { backend, message } from '../backend/backend';
+import { FileIcon } from '../shared/file-icon';
+import { splitPath } from '../shared/paths';
+import type { QuickOpen as QuickOpenResult } from '../backend/types';
 
 // Espera a digitação parar antes de consultar; a resposta velha não vence a nova (cada consulta tem um número).
 const DELAY_MS = 120;

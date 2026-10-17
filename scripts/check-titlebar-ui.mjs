@@ -1,5 +1,5 @@
 // QA dos controles da janela na barra de título (minimizar, maximizar/restaurar, fechar), em Chrome headless contra o app simulado
-// (src/mock.ts, só no `vite` de desenvolvimento). Confere medidas, cores, hover, ícone centralizado, ausência de arrasto nos botões
+// (src/backend/mock.ts, só no `vite` de desenvolvimento). Confere medidas, cores, hover, ícone centralizado, ausência de arrasto nos botões
 // e o handler de fechar (o simulado troca o corpo por "Janela fechada (simulado)", sem fechar nada de verdade).
 // Minimizar, maximizar/restaurar e o estado maximizado usam o TitleBar real com o transporte da janela substituído só neste teste
 // (`windowHost`): contador, estado simulado e resize emitido. Não prova o efeito da janela nativa do Tauri (minimizar, maximizar, redimensionar).
@@ -66,7 +66,7 @@ const icon = (page, label) => page.locator(`button[aria-label="${label}"] svg`).
 // `resize` da janela (o simulado assina onResized nele), para o TitleBar reler isMaximized. Não mexe no código de produção.
 async function windowHost(page) {
   await page.evaluate(async () => {
-    const { host } = await import('/src/backend.ts');
+    const { host } = await import('/src/backend/backend.ts');
     const h = host();
     window.__win = { minimize: 0, toggle: 0, maximized: false };
     h.minimize = async () => { window.__win.minimize += 1; };

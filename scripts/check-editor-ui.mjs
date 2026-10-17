@@ -1,4 +1,4 @@
-// QA de interface do editor central, em Chrome headless contra o app simulado (src/mock.ts, só no `vite` de desenvolvimento).
+// QA de interface do editor central, em Chrome headless contra o app simulado (src/backend/mock.ts, só no `vite` de desenvolvimento).
 // Cada cenário roda com contexto de navegador próprio (localStorage e clipboard fakes limpos) e interage pela UI. O mock só entra
 // na fronteira de I/O: fixtures (`__mock.addFile`), edição externa (`__mock.external`), latência (`__mock.delay`) e o disco (`__mock.disk`).
 // Loader compartilhado em editor-ui-harness.mjs: Vite na porta 1421 (SMOKE_PORT), encerrado só aqui, e o browser deste teste. Não instala nada.

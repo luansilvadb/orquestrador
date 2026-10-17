@@ -10,11 +10,11 @@ import {
 } from 'lucide-react';
 import { ActionIcon, Button, ContextMenuTrigger, Input, Modal, ScrollArea, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { backend, message } from './backend';
-import { FileIcon } from './file-icon';
-import { copy, join, splitPath } from './git-history';
-import { action, DIVIDER } from './file-tabs';
-import type { ReplacePreview, ReplaceQuery, SearchFile, SearchMatch, SearchOptions, SearchResults, SkipReason } from './types';
+import { backend, message } from '../backend/backend';
+import { FileIcon } from '../shared/file-icon';
+import { copy, join, splitPath } from '../shared/paths';
+import { action, DIVIDER } from '../shared/file-tabs';
+import type { ReplacePreview, ReplaceQuery, SearchFile, SearchMatch, SearchOptions, SearchResults, SkipReason } from '../backend/types';
 
 const DELAY_MS = 300;
 // Mesmo limite do backend: com mais linhas casadas, só as primeiras aparecem e a lista avisa.

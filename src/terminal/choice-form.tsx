@@ -2,8 +2,8 @@
 import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { Flexbox } from '@lobehub/ui';
 import { Alert, Button, Modal, Segmented, Select, Text } from '@lobehub/ui/base-ui';
-import { message } from './backend';
-import { TOOL_NAME, type Choice, type Options, type Tool, type ToolOption } from './types';
+import { message } from '../backend/backend';
+import { TOOL_NAME, type Choice, type Options, type Tool, type ToolOption } from '../backend/types';
 
 // Valores sentinela: as opções do Select precisam de um valor não vazio. '' no Choice = padrão do CLI.
 const DEFAULT = '__default__';

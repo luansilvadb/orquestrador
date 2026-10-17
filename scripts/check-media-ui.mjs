@@ -1,4 +1,4 @@
-// QA da aba de mídia (imagem e áudio), em Chrome headless contra o app simulado (src/mock.ts, só no `vite` de desenvolvimento).
+// QA da aba de mídia (imagem e áudio), em Chrome headless contra o app simulado (src/backend/mock.ts, só no `vite` de desenvolvimento).
 // O simulado entra só na fronteira de I/O: `read_media` devolve um PNG 32×32 para `.png` e um WAV de 2 s em silêncio para
 // `.wav` (`__mock.addFile`); `__mock.failRead` faz a leitura falhar e `__mock.corruptRead` devolve bytes que o navegador não decodifica.
 // Tudo o mais é o app de verdade. O áudio usa o `<audio controls>` nativo do WebView2/Chromium: o check clica nos controles

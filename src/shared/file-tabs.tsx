@@ -1,8 +1,8 @@
-// Helpers de menu, de nome e de acorde compartilhados pela árvore (src/explorer.tsx) e pelo editor central (src/editor-workspace.tsx).
+// Helpers de menu, de nome e de acorde compartilhados pela árvore (src/explorer/explorer.tsx) e pelo editor central (src/editor/editor-workspace.tsx).
 // A faixa de abas antiga saiu: as abas agora são do editor central, com grupos e prévias.
 import { useEffect, useRef } from 'react';
 import { type ContextMenuItem } from '@lobehub/ui/base-ui';
-import { splitPath } from './git-history';
+import { splitPath } from './paths';
 
 export const fileName = (path: string) => splitPath(path).name;
 

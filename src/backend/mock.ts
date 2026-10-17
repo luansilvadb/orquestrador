@@ -23,8 +23,8 @@
 import { EDITOR_HEAD_LINES } from './mock-fixtures';
 import { parseDiffFromFile } from '@pierre/diffs';
 import type { Transport } from './backend';
-import { fileNameError } from './file-tab-actions';
-import { splitPath } from './git-history';
+import { fileNameError } from '../shared/file-tab-actions';
+import { splitPath } from '../shared/paths';
 import {
   type Batch, type Choice, type ClipboardSnapshot, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
   type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
