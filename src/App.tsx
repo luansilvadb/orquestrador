@@ -580,6 +580,13 @@ export function App() {
   useLayoutEffect(() => {
     windowKey.current = (e) => {
       const target = e.target as HTMLElement | null;
+      // Ctrl+R, Ctrl+Shift+R e F5 (com ou sem Ctrl) recarregariam a webview e voltariam à escolha de projeto, perdendo a sessão. Bloqueados sempre.
+      const reload = (e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'KeyR') || (e.code === 'F5' && !e.altKey && !e.metaKey);
+      if (reload) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       // Ctrl+` abre e fecha o painel de qualquer lugar.
       if (e.ctrlKey && !e.altKey && !e.metaKey && e.code === 'Backquote') {
         e.preventDefault();
