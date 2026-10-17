@@ -1,7 +1,7 @@
 //! A pasta temporária de uma sessão do orquestrador (`strategist-<guid>`): o `mcp.json` que aponta o servidor MCP
 //! de delegação e o settings do Claude, a limpeza e a recuperação das sobras de sessões mortas, inclusive das
 //! regras do Codex que versões antigas deixavam em CODEX_HOME.
-use crate::cli::toml;
+use crate::cli::{self, toml};
 use crate::config::Config;
 use crate::proc::{owner_state, start_time, Owner};
 use crate::roles;
@@ -86,22 +86,9 @@ impl Session {
         if cfg.orchestrator.tool != "codex" {
             let mcp = json!({ "mcpServers": { "orquestrador": { "command": app, "args": ["--mcp", d.to_string_lossy()] } } });
             std::fs::write(d.join("mcp.json"), serde_json::to_string_pretty(&mcp).unwrap())?;
-            std::fs::write(d.join("claude-settings.json"), Self::claude_settings())?;
+            std::fs::write(d.join("claude-settings.json"), cli::orchestrator_settings())?;
         }
         Ok(())
-    }
-
-    /// Sem lista de permissões: em bypassPermissions ela não muda nada. skipDangerousModePermissionPrompt tira o
-    /// aviso do modo, como no settings dos executores (`cli::executor`). Sem CLAUDE_CODE_USE_POWERSHELL_TOOL, o
-    /// Claude Code 2.1.296 não expõe o PowerShell no Windows com Git Bash, e o orquestrador ficaria no Git Bash.
-    /// MCP_TOOL_TIMEOUT dá às chamadas ao servidor do orquestrador os 15 minutos da espera de um lote. As duas
-    /// entram só por este arquivo, passado com --settings: o ambiente do usuário não muda.
-    fn claude_settings() -> String {
-        serde_json::to_string_pretty(&json!({
-            "skipDangerousModePermissionPrompt": true,
-            "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" },
-        }))
-        .unwrap()
     }
 
     /// Tira a pasta. Nunca falha: o que não saiu fica e é dito no texto devolvido.

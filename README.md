@@ -46,7 +46,7 @@ As demais checagens (em Node e de interface) estão em [desenvolvimento](docs/de
 ## Contribuir
 
 - Antes de mudar o código, leia [arquitetura](docs/arquitetura.md) para saber onde cada parte fica.
-- Mudanças nas permissões dos agentes pedem cuidado. A regra de cada papel fica só em `roles.rs`; as flags dos CLIs ficam em `cli.rs` e `session.rs`, e o pedido de confirmação em `hook.rs`. O comportamento real está descrito e medido em [limites de segurança](docs/seguranca.md).
+- Mudanças nas permissões dos agentes pedem cuidado. A regra de cada papel fica só em `roles.rs`; as permissões dos CLIs (flags, settings e env, com as medições) ficam só em `cli.rs`, e o pedido de confirmação em `hook.rs`. O resumo está em [limites de segurança](docs/seguranca.md).
 - Para publicar uma versão, siga [atualização e release](docs/atualizacao.md).
 
 ## Documentação
@@ -56,7 +56,7 @@ As demais checagens (em Node e de interface) estão em [desenvolvimento](docs/de
 | [uso](docs/uso.md) | Passo a passo, aviso de Git ausente, configuração e teto de executores |
 | [interface](docs/interface.md) | Telas, painéis, editor, pesquisa, Git e terminal |
 | [delegação](docs/delegacao.md) | Como o orquestrador delega, perguntas de executor e limites |
-| [limites de segurança](docs/seguranca.md) | Permissões de cada papel, barreiras e medições |
+| [limites de segurança](docs/seguranca.md) | Permissões dos agentes, confirmações e o Git do painel |
 | [atualização e release](docs/atualizacao.md) | Atualização automática, chave de assinatura e publicação |
 | [arquitetura](docs/arquitetura.md) | Mapa dos arquivos do código |
 | [desenvolvimento](docs/desenvolvimento.md) | Build, testes e checagens |

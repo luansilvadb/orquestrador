@@ -1,7 +1,10 @@
-//! As linhas de comando dos dois CLIs nos dois papéis.
+//! As linhas de comando dos dois CLIs nos dois papéis, e o único lugar das permissões deles: flags, settings e env.
+//! Nenhum agente tem comando barrado pelo app (sem sandbox, lista de ferramentas, `deny` ou hook `PreToolUse`); o
+//! que cada papel faz vem só dos textos de `roles.rs`.
 use crate::config::Choice;
 use crate::roles::EXECUTOR;
 use crate::session::Session;
+use serde_json::{json, Value};
 use std::path::Path;
 
 /// Os executáveis: os dois CLIs e o próprio app, que serve de servidor MCP do orquestrador (`--mcp`) e de
@@ -37,17 +40,38 @@ pub(crate) fn toml(s: &str) -> String {
     serde_json::to_string(s).unwrap()
 }
 
-/// Medido no Codex 0.162: sem isto o CLI interativo abre "Trust this folder?" e fica parado. A
-/// forma `projects.'caminho'.trust_level=...` não é aceita por `-c`; a tabela inteira é, vale só
-/// para este processo e nada é gravado no config.toml do usuário.
-fn codex_trust(dir: &str) -> Vec<String> {
-    vec!["-c".into(), format!("projects={{{}={{trust_level=\"trusted\"}}}}", toml(dir))]
+/// O Codex nos dois papéis: sem sandbox e sem aprovações, com a pasta confiada. `--no-daemon`: o agente roda neste
+/// processo, então matar o processo mata o agente. A confiança, medida no Codex 0.162: sem ela o CLI interativo
+/// abre "Trust this folder?" e fica parado; a forma `projects.'caminho'.trust_level=...` não é aceita por `-c`, a
+/// tabela inteira é, vale só para este processo e nada é gravado no config.toml do usuário.
+fn codex_base(dir: &str) -> Vec<String> {
+    let mut args = strs(&["--no-daemon", "-C", dir, "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"]);
+    args.extend(["-c".to_string(), format!("projects={{{}={{trust_level=\"trusted\"}}}}", toml(dir))]);
+    args
+}
+
+/// O Claude nos dois papéis: todas as ferramentas, sem pedir permissão.
+const CLAUDE_BYPASS: [&str; 2] = ["--permission-mode", "bypassPermissions"];
+
+/// O settings do Claude nos dois papéis, passado com `--settings`: `extra` mais `skipDangerousModePermissionPrompt`,
+/// que tira o aviso do modo de bypass.
+fn claude_settings(mut extra: Value) -> String {
+    extra["skipDangerousModePermissionPrompt"] = true.into();
+    serde_json::to_string_pretty(&extra).unwrap()
+}
+
+/// O settings do orquestrador Claude. Sem `CLAUDE_CODE_USE_POWERSHELL_TOOL`, o Claude Code 2.1.296 não expõe o
+/// PowerShell no Windows com Git Bash (medido com um stub que mostra a lista de ferramentas enviada ao modelo), e o
+/// orquestrador ficaria no Git Bash. `MCP_TOOL_TIMEOUT` dá às chamadas ao servidor do orquestrador os 15 minutos
+/// da espera de um lote. As duas entram só por este arquivo: o ambiente do usuário e o dos executores não mudam.
+pub fn orchestrator_settings() -> String {
+    claude_settings(json!({ "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" } }))
 }
 
 /// O servidor MCP do orquestrador pela configuração do Codex, só para este processo: o app em modo `--mcp`, com a
 /// pasta da sessão. `approve` libera as três ferramentas: medido no Codex 0.162.1, sem ele toda chamada MCP é
-/// negada com `approval_policy` `never`, e os outros valores não liberam. O prazo cobre a espera de 5 minutos de
-/// uma chamada, com folga.
+/// negada com `approval_policy` `never`, e os outros valores não liberam; se o bypass de `codex_base` o dispensa
+/// não foi medido, então fica. O prazo cobre a espera de 5 minutos de uma chamada, com folga.
 fn codex_mcp(app: &str, dir: &str) -> Vec<String> {
     let server = "mcp_servers.orquestrador";
     [
@@ -61,34 +85,27 @@ fn codex_mcp(app: &str, dir: &str) -> Vec<String> {
     .collect()
 }
 
-/// O orquestrador: o CLI interativo com a mesma permissão dos executores, nos dois CLIs, mais o servidor MCP do
-/// próprio app (`delegar`, `aguardar`, `responder`). O papel de líder técnico que não edita código vem do texto de
-/// `roles::ORCHESTRATOR` e dessas ferramentas, não de uma trava do app: não há sandbox, lista de ferramentas nem
-/// regra de comando específica de um CLI. Ao contrário do executor, não recebe o hook de confirmação (quem
+/// O orquestrador: o CLI interativo com a mesma permissão dos executores, mais o servidor MCP do próprio app
+/// (`delegar`, `aguardar`, `responder`). Ao contrário do executor, não recebe o hook de confirmação (quem
 /// responderia é ele mesmo).
 pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &str) -> Spawn {
     let dir = session.dir.to_string_lossy().to_string();
     let (program, mut args) = if choice.tool == "codex" {
-        // Sem sandbox e sem aprovação, como o executor: o contrato é o mesmo nos dois CLIs. O servidor do
-        // orquestrador continua com `approve` em `codex_mcp`: com `never` ele era obrigatório (medido no 0.162.1);
-        // se o bypass o dispensa não foi medido, então fica.
-        // --no-daemon: o agente roda neste processo, então matar o processo mata o agente.
-        let mut args = strs(&["--no-daemon", "-C", &dir, "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"]);
-        args.extend(codex_trust(&dir));
+        let mut args = codex_base(&dir);
         args.extend(codex_mcp(&exes.app, &dir));
         (exes.codex.clone(), args)
     } else {
-        // bypassPermissions com todas as ferramentas, como o executor: o contrato é o mesmo nos dois CLIs. O aviso
-        // do modo some com skipDangerousModePermissionPrompt, no settings da sessão. Sem --restricted e sem
-        // --strict-mcp-config, o Claude carrega os MCPs do usuário e do projeto como no shell; o --mcp-config da
-        // sessão soma o servidor do orquestrador a eles. (Medido no 2.1.300: com --restricted, nenhum MCP de
-        // usuário ou de projeto conecta, e com --setting-sources também não.) As skills globais continuam vindo
-        // como plugin de .agents (medido: as skills carregam como ".agents:nome").
+        // Sem --restricted e sem --strict-mcp-config, o Claude carrega os MCPs do usuário e do projeto como no
+        // shell, com os hooks e as regras `deny` das settings deles; o --mcp-config da sessão soma o servidor do
+        // orquestrador a eles. (Medido no 2.1.300: com --restricted, nenhum MCP de usuário ou de projeto conecta, e
+        // com --setting-sources também não.) As skills globais continuam vindo como plugin de .agents (medido: as
+        // skills carregam como ".agents:nome").
         let mut args = strs(&["--mcp-config"]);
         args.push(session.dir.join("mcp.json").to_string_lossy().to_string());
         args.push("--settings".to_string());
         args.push(session.dir.join("claude-settings.json").to_string_lossy().to_string());
-        args.extend(strs(&["--permission-mode", "bypassPermissions", "--append-system-prompt-file"]));
+        args.extend(strs(&CLAUDE_BYPASS));
+        args.push("--append-system-prompt-file".to_string());
         args.push(session.dir.join("AGENTS.md").to_string_lossy().to_string());
         if let Some(first) = session.global_dirs.first() {
             args.extend(["--plugin-dir".to_string(), first.to_string_lossy().to_string(), "--add-dir".to_string()]);
@@ -113,44 +130,40 @@ pub fn executor_prompt(task: &str) -> String {
     format!("{}\n{}", EXECUTOR.trim_end(), task.trim())
 }
 
-/// O executor: o CLI interativo com permissão total, sem comando barrado, sem diálogo de início e com
-/// o sinal de fim de rodada entregue em `node_dir\hook`. Devolve também o conteúdo do arquivo de
-/// settings que o Claude lê (`node_dir\settings.json`), quando há.
+/// O executor: o CLI interativo com permissão total, sem diálogo de início e com o sinal de fim de rodada
+/// entregue em `node_dir\hook`. Devolve também o conteúdo do arquivo de settings que o Claude lê
+/// (`node_dir\settings.json`), quando há.
 ///
-/// Medido no Claude Code 2.1.296: o diálogo de confiança na pasta aparece mesmo em
-/// bypassPermissions e só some com CLAUDE_CODE_SANDBOXED (não há flag nem chave de settings); o
-/// aviso do modo de bypass some com skipDangerousModePermissionPrompt; o hook Stop traz
-/// `last_assistant_message`. Hooks na forma `args` rodam sem shell, então caminho com espaço passa.
+/// Medido no Claude Code 2.1.296: o diálogo de confiança na pasta aparece mesmo em bypassPermissions e só some
+/// com CLAUDE_CODE_SANDBOXED (não documentada, pode mudar entre versões; não há flag nem chave de settings); o
+/// hook Stop traz `last_assistant_message`. Hooks na forma `args` rodam sem shell, então caminho com espaço passa.
+///
+/// O hook `PermissionRequest` leva ao orquestrador a confirmação que o Claude Code ainda abre em bypassPermissions.
+/// Medido no 2.1.296: um `rm` na raiz do disco abre "Dangerous rm operation on critical path", que o próprio Claude
+/// Code nega sozinho uns 2 minutos depois de abrir, ignorando resposta tardia do hook; o `allow` do `PreToolUse`
+/// não evita essa confirmação. Por isso o `--ask` desiste antes (`ASK_DEADLINE`, em hook.rs).
 pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, prompt: &str) -> (Spawn, Option<String>) {
     let hook_dir = node_dir.join("hook").to_string_lossy().to_string();
     let ask_dir = node_dir.join("ask").to_string_lossy().to_string();
     let mut spawn = Spawn { program: String::new(), args: vec![], cwd: project.to_string(), env: vec![] };
     let settings = if choice.tool == "codex" {
         spawn.program = exes.codex.clone();
-        spawn.args = strs(&["--no-daemon", "-C", project, "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"]);
-        spawn.args.extend(codex_trust(project));
+        spawn.args = codex_base(project);
         let notify = [exes.app.as_str(), "--hook", &hook_dir].map(toml).join(",");
         spawn.args.extend(["-c".to_string(), format!("notify=[{notify}]")]);
-        // Sem hook de confirmação: medido no 0.162.1, com o bypass nenhuma confirmação chega ao CLI e o evento
-        // `PermissionRequest` não dispara.
+        // Sem hook de confirmação: medido no 0.162.1, com o bypass um `Remove-Item` fora do projeto roda sem
+        // confirmação e o evento `PermissionRequest` não dispara.
         None
     } else {
         spawn.program = exes.claude.clone();
-        spawn.args = strs(&["--permission-mode", "bypassPermissions", "--settings", &node_dir.join("settings.json").to_string_lossy()]);
+        spawn.args = strs(&CLAUDE_BYPASS);
+        spawn.args.extend(["--settings".to_string(), node_dir.join("settings.json").to_string_lossy().to_string()]);
         spawn.env.push(("CLAUDE_CODE_SANDBOXED".into(), "1".into()));
-        let run = |args: &[&str]| serde_json::json!({ "hooks": [{ "type": "command", "command": exes.app, "args": args }] });
-        // O pedido de confirmação espera a resposta do orquestrador. Quem limita essa espera é o `--ask`, que
-        // desiste antes de o Claude Code negar sozinho (`ASK_DEADLINE`, em hook.rs); o prazo do hook só vai a
-        // um dia para não cortar antes disso.
+        let run = |args: &[&str]| json!({ "hooks": [{ "type": "command", "command": exes.app, "args": args }] });
+        // O prazo do hook só vai a um dia para não ser ele a cortar: quem limita a espera é o `--ask`.
         let mut ask = run(&["--ask", &ask_dir]);
         ask["hooks"][0]["timeout"] = 86400.into();
-        Some(
-            serde_json::to_string_pretty(&serde_json::json!({
-                "skipDangerousModePermissionPrompt": true,
-                "hooks": { "Stop": [run(&["--hook", &hook_dir])], "PermissionRequest": [ask] },
-            }))
-            .unwrap(),
-        )
+        Some(claude_settings(json!({ "hooks": { "Stop": [run(&["--hook", &hook_dir])], "PermissionRequest": [ask] } })))
     };
     spawn.args.extend(choice.cli_args());
     spawn.args.push(prompt.to_string());
@@ -259,7 +272,7 @@ mod tests {
         assert_eq!(got.env, [("CLAUDE_CODE_SANDBOXED".to_string(), "1".to_string())]);
         let v: serde_json::Value = serde_json::from_str(&settings.unwrap()).unwrap();
         assert_eq!(v["skipDangerousModePermissionPrompt"], true);
-        assert!(v.get("permissions").is_none() && v["hooks"].get("PreToolUse").is_none(), "nenhum comando barrado: a regra vem do roles.rs");
+        assert!(v.get("permissions").is_none() && v["hooks"].get("PreToolUse").is_none(), "nenhum comando barrado pelo app");
         let stop = &v["hooks"]["Stop"][0]["hooks"][0];
         assert_eq!(stop["command"], r"C:\Program Files\Orq\o'rq.exe");
         assert_eq!(stop["args"], serde_json::json!(["--hook", r"C:\tmp\s\exec\exec-1\hook"]));
