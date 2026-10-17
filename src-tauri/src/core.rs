@@ -315,7 +315,7 @@ impl Core {
         session::recover_orphans(&inner.places);
         let (session, created) = Session::create(&inner.places, &inner.exes.app, &project, &cfg);
         let started = created.and_then(|_| {
-            let spawn = cli::orchestrator(&inner.exes, &choice, &session, &project);
+            let spawn = cli::orchestrator(&inner.exes, &choice, &session);
             inner.slots.remove(ORCHESTRATOR);
             self.spawn(&mut inner, ORCHESTRATOR, &spawn, Some((cols, rows)))
         });
@@ -529,7 +529,7 @@ impl Core {
             inner.nodes.retain(|n| !n.info.state.is_final());
             turns = turns.wrapping_add(1);
             let queued = inner.nodes.iter().any(|n| n.info.state == NodeState::Queued);
-            if turns % 5 == 0 && queued && inner.choice.is_some() && !inner.git_exclusive {
+            if turns.is_multiple_of(5) && queued && inner.choice.is_some() && !inner.git_exclusive {
                 self.schedule(&mut inner);
             }
         }

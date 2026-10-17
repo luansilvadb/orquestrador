@@ -53,6 +53,11 @@ fn codex_base(dir: &str) -> Vec<String> {
 /// O Claude nos dois papéis: todas as ferramentas, sem pedir permissão.
 const CLAUDE_BYPASS: [&str; 2] = ["--permission-mode", "bypassPermissions"];
 
+/// O env do Claude nos dois papéis, que tira o diálogo de confiança na pasta (detalhe medido no doc de `executor()`).
+fn claude_env() -> Vec<(String, String)> {
+    vec![("CLAUDE_CODE_SANDBOXED".into(), "1".into())]
+}
+
 /// O que o app em modo `--allow` imprime: a resposta do hook `PermissionRequest`, que aceita qualquer pedido. Medido
 /// no Claude Code 2.1.302: mesmo em bypassPermissions, um `rm` na raiz do disco pede confirmação ("cannot be
 /// auto-allowed by permission rules") e, sem resposta, é negado; com este `allow` na hora, roda.
@@ -98,19 +103,20 @@ fn codex_mcp(app: &str, dir: &str) -> Vec<String> {
 }
 
 /// O orquestrador: o CLI interativo com a mesma permissão dos executores, mais o servidor MCP do próprio app
-/// (`delegar` e `aguardar`).
-pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &str) -> Spawn {
+/// (`delegar` e `aguardar`). Em qualquer CLI, inicia na pasta da sessão para não carregar automaticamente o contexto do
+/// projeto; ainda pode ler o projeto e rodar Git nele.
+pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session) -> Spawn {
     let dir = session.dir.to_string_lossy().to_string();
-    let (program, mut args) = if choice.tool == "codex" {
+    let (program, mut args, env) = if choice.tool == "codex" {
         let mut args = codex_base(&dir);
         args.extend(codex_mcp(&exes.app, &dir));
-        (exes.codex.clone(), args)
+        (exes.codex.clone(), args, vec![])
     } else {
-        // Sem --restricted e sem --strict-mcp-config, o Claude carrega os MCPs do usuário e do projeto como no
-        // shell, com os hooks e as regras `deny` das settings deles; o --mcp-config da sessão soma o servidor do
-        // orquestrador a eles. (Medido no 2.1.300: com --restricted, nenhum MCP de usuário ou de projeto conecta, e
-        // com --setting-sources também não.) As skills globais continuam vindo como plugin de .agents (medido: as
-        // skills carregam como ".agents:nome").
+        // Sem --restricted e sem --strict-mcp-config, o Claude mantém os MCPs e os hooks do usuário. Como o cwd é a
+        // pasta da sessão, não carrega automaticamente o contexto do projeto; o --mcp-config soma o servidor do
+        // orquestrador. (Medido no 2.1.300: com --restricted, nenhum MCP de usuário ou de projeto conecta, e com
+        // --setting-sources também não.) As skills globais continuam vindo como plugin de .agents (medido: as skills
+        // carregam como ".agents:nome").
         let mut args = strs(&["--mcp-config"]);
         args.push(session.dir.join("mcp.json").to_string_lossy().to_string());
         args.push("--settings".to_string());
@@ -122,10 +128,10 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session, project: &s
             args.extend(["--plugin-dir".to_string(), first.to_string_lossy().to_string(), "--add-dir".to_string()]);
             args.extend(session.global_dirs.iter().map(|d| d.to_string_lossy().to_string()));
         }
-        (exes.claude.clone(), args)
+        (exes.claude.clone(), args, claude_env())
     };
     args.extend(choice.cli_args());
-    Spawn { program, args, cwd: project.to_string(), env: vec![] }
+    Spawn { program, args, cwd: dir, env }
 }
 
 /// Os PowerShells que o shell do usuário tenta, nesta ordem: o primeiro que iniciar vale.
@@ -146,8 +152,8 @@ pub fn executor_prompt(task: &str) -> String {
 /// (`node_dir\settings.json`), quando há.
 ///
 /// Medido no Claude Code 2.1.296: o diálogo de confiança na pasta aparece mesmo em bypassPermissions e só some
-/// com CLAUDE_CODE_SANDBOXED (não documentada, pode mudar entre versões; não há flag nem chave de settings); o
-/// hook Stop traz `last_assistant_message`.
+/// com CLAUDE_CODE_SANDBOXED, que o app passa aos dois papéis Claude (não documentada, pode mudar entre versões; não
+/// há flag nem chave de settings); o hook Stop traz `last_assistant_message`.
 pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, prompt: &str) -> (Spawn, Option<String>) {
     let hook_dir = node_dir.join("hook").to_string_lossy().to_string();
     let mut spawn = Spawn { program: String::new(), args: vec![], cwd: project.to_string(), env: vec![] };
@@ -163,7 +169,7 @@ pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, pr
         spawn.program = exes.claude.clone();
         spawn.args = strs(&CLAUDE_BYPASS);
         spawn.args.extend(["--settings".to_string(), node_dir.join("settings.json").to_string_lossy().to_string()]);
-        spawn.env.push(("CLAUDE_CODE_SANDBOXED".into(), "1".into()));
+        spawn.env.extend(claude_env());
         Some(claude_settings(&exes.app, json!({ "hooks": { "Stop": [app_hook(&exes.app, &["--hook", &hook_dir])] } })))
     };
     spawn.args.extend(choice.cli_args());
@@ -194,9 +200,9 @@ mod tests {
     fn orquestrador_codex() {
         let (s, _tmp) = session("cli-codex", "codex");
         let dir = s.dir.to_string_lossy().to_string();
-        let got = orchestrator(&exes(), &Choice::new("codex", "gpt-5.5", "high"), &s, r"C:\proj");
+        let got = orchestrator(&exes(), &Choice::new("codex", "gpt-5.5", "high"), &s);
         assert_eq!(got.program, "codex");
-        assert_eq!(got.cwd, r"C:\proj");
+        assert_eq!(got.cwd, dir);
         let trust = format!("projects={{{}={{trust_level=\"trusted\"}}}}", serde_json::to_string(&dir).unwrap());
         let mcp_args = format!("mcp_servers.orquestrador.args=[\"--mcp\",{}]", serde_json::to_string(&dir).unwrap());
         assert_eq!(
@@ -216,9 +222,11 @@ mod tests {
     #[test]
     fn orquestrador_claude() {
         let (s, _tmp) = session("cli-claude", "claude");
-        let got = orchestrator(&exes(), &Choice::new("claude", "opus", ""), &s, r"C:\proj");
+        let got = orchestrator(&exes(), &Choice::new("claude", "opus", ""), &s);
         let agents = s.global_dirs[0].to_string_lossy().to_string();
         assert_eq!(got.program, "claude");
+        assert_eq!(got.cwd, s.dir.to_string_lossy().to_string());
+        assert_eq!(got.env, [("CLAUDE_CODE_SANDBOXED".to_string(), "1".to_string())]);
         assert_eq!(
             got.args,
             [
@@ -245,11 +253,11 @@ mod tests {
         r.unwrap();
         let dir = s.dir.to_string_lossy().to_string();
         let exes = Exes { claude: "claude".into(), codex: "codex".into(), app: app.into() };
-        let got = orchestrator(&exes, &Choice::new("codex", "", ""), &s, r"C:\proj");
+        let got = orchestrator(&exes, &Choice::new("codex", "", ""), &s);
         assert!(got.args.contains(&format!("mcp_servers.orquestrador.command={}", toml(app))));
         assert!(got.args.contains(&format!("mcp_servers.orquestrador.args=[{},{}]", toml("--mcp"), toml(&dir))));
         assert!(dir.contains("temp com espaço, açaí e it's"));
-        let claude = orchestrator(&exes, &Choice::new("claude", "", ""), &s, r"C:\proj");
+        let claude = orchestrator(&exes, &Choice::new("claude", "", ""), &s);
         assert_eq!(claude.args[0], "--mcp-config");
         assert_eq!(claude.args[1], s.dir.join("mcp.json").to_string_lossy());
         assert!(claude.args[1].contains("it's"));

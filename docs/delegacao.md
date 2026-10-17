@@ -5,6 +5,8 @@ O orquestrador delega por duas ferramentas MCP de um servidor da própria sessã
 - `delegar { tarefas: [textos] }`: publica o lote e espera o resultado.
 - `aguardar {}`: volta a esperar o lote mais recente ainda não entregue, sem publicar nada.
 
+Em qualquer CLI, o orquestrador inicia na pasta da sessão e não carrega automaticamente o contexto do projeto (instruções, skills, MCPs e hooks); ainda pode ler o projeto e rodar Git nele. Os executores iniciam na pasta do projeto.
+
 Os argumentos vão em JSON. Cada tarefa chega ao executor como está: aspas duplas, barras, acentos, crases, `$`, apóstrofos e quebras de linha passam sem escape, e o canal não tem limite de tamanho. O canal e o texto do orquestrador (`src-tauri/src/roles.rs`) são os mesmos para o Claude Code e para o Codex.
 
 Cada chamada espera até 5 minutos. A resposta termina de um de dois jeitos:
