@@ -243,6 +243,8 @@ export function App() {
   // Fechamento da janela: alterações não salvas (salvar, descartar ou cancelar) e terminais trabalhando (encerrar ou cancelar).
   const [closeAsk, setCloseAsk] = useState<CloseAsk | null>(null);
   const closeAnswer = useRef<((choice: CloseChoice) => void) | null>(null);
+  // Salvar em curso: o diálogo segue aberto, com o botão carregando, até o saveAll terminar.
+  const [closeSaving, setCloseSaving] = useState(false);
   const updateEvents = useRef(0);
   // Contador dos shells do painel Terminal: só cresce, então um id nunca se repete enquanto o app está aberto.
   const shellSeq = useRef(0);
@@ -287,8 +289,11 @@ export function App() {
       setCloseAsk({ files, terminals: terminalsRunning });
     });
   };
+  // Com o salvar em curso, nenhuma resposta vale (nem Esc ou Cancelar): quem fecha o diálogo é o fluxo de fechamento.
   const settleClose = (choice: CloseChoice) => {
-    setCloseAsk(null);
+    if (closeSaving) return;
+    if (choice === 'save') setCloseSaving(true);
+    else setCloseAsk(null);
     closeAnswer.current?.(choice);
     closeAnswer.current = null;
   };
@@ -393,18 +398,25 @@ export function App() {
             const unsaved = editor.current?.unsaved() ?? [];
             if (unsaved.length > 0) {
               // Três respostas: salvar tudo (só fecha se tudo gravou e nada novo ficou sujo), descartar (a recuperação é gravada
-              // antes do encerramento), ou cancelar, que mantém a janela e tudo como está.
-              const choice = await askClose(unsaved, running);
-              if (choice === 'cancel') return false;
-              if (choice === 'save') {
+              // antes do encerramento), ou cancelar, que mantém a janela e tudo como está. Salvar que falha reabre a escolha com
+              // o que ficou sujo; a janela não fecha.
+              let choice = await askClose(unsaved, running);
+              while (choice === 'save') {
                 const saved = await editor.current!.saveAll();
-                if (!saved || editor.current!.unsaved().length > 0) {
-                  report(new Error('Não foi possível salvar tudo. Nada foi fechado.'));
+                const left = editor.current!.unsaved();
+                if (saved && left.length === 0) break;
+                report(new Error('Não foi possível salvar tudo. Nada foi fechado.'));
+                setCloseSaving(false);
+                if (left.length === 0) {
+                  setCloseAsk(null);
                   return false;
                 }
-              } else {
-                editor.current!.discardAll();
+                choice = await askClose(left, running);
               }
+              if (choice === 'cancel') return false;
+              if (choice === 'discard') editor.current!.discardAll();
+              setCloseSaving(false);
+              setCloseAsk(null);
               editor.current?.flushRecovery();
             } else if (running && (await askClose([], true)) !== 'close') {
               return false;
@@ -903,27 +915,45 @@ export function App() {
         }}
         footer={(
           <Flexbox horizontal wrap="wrap" justify="flex-end" gap={8} width="100%">
-            <Button size="large" onClick={() => settleClose('cancel')}>Cancelar</Button>
+            {/* Foco inicial no Cancelar: Enter recusa o fechamento, e nunca encerra os terminais por engano. */}
+            <Button size="large" autoFocus disabled={closeSaving} onClick={() => settleClose('cancel')}>Cancelar</Button>
             {closeFiles.length > 0 ? (
               <>
-                <Button size="large" danger onClick={() => settleClose('discard')}>
+                <Button size="large" danger disabled={closeSaving} onClick={() => settleClose('discard')}>
                   {closeAsk?.terminals ? 'Descartar e encerrar todos' : 'Descartar'}
                 </Button>
-                <Button size="large" type="fill" onClick={() => settleClose('save')}>
-                  {closeAsk?.terminals ? 'Salvar e encerrar todos' : 'Salvar'}
+                <Button size="large" type="fill" loading={closeSaving} onClick={() => settleClose('save')}>
+                  {closeSaving ? 'Salvando…' : closeAsk?.terminals ? 'Salvar e encerrar todos' : 'Salvar'}
                 </Button>
               </>
             ) : (
-              <Button size="large" type="fill" onClick={() => settleClose('close')}>Fechar e encerrar todos</Button>
+              <Button size="large" type="fill" danger disabled={closeSaving} onClick={() => settleClose('close')}>Fechar e encerrar todos</Button>
             )}
           </Flexbox>
         )}
       >
-        <Text as="p" fontSize={14} lineHeight={1.6} style={{ ...SECONDARY, margin: 0, overflowWrap: 'anywhere' }}>
-          {closeFiles.length > 0
-            ? `Há alterações não salvas ${closeUnsaved}. Salvar grava tudo antes de fechar; descartar joga a edição fora.${closeAsk?.terminals ? ' Os terminais trabalhando também serão encerrados.' : ''}`
-            : 'Há terminais trabalhando; fechar encerra todos.'}
-        </Text>
+        <Flexbox gap={8}>
+          {closeFiles.length > 0 ? (
+            <>
+              <Text as="p" fontSize={14} lineHeight={1.6} style={{ ...SECONDARY, margin: 0, overflowWrap: 'anywhere' }}>
+                Há alterações não salvas {closeUnsaved}.
+              </Text>
+              <Text as="p" fontSize={14} lineHeight={1.6} style={{ ...SECONDARY, margin: 0, overflowWrap: 'anywhere' }}>
+                Salvar grava os arquivos. Descartar joga a edição fora.
+              </Text>
+              {closeAsk?.terminals && (
+                <Text as="p" fontSize={14} lineHeight={1.6} style={{ ...SECONDARY, margin: 0, overflowWrap: 'anywhere' }}>
+                  Encerrar fecha os terminais em execução, inclusive os shells: o trabalho dos executores para no meio.
+                </Text>
+              )}
+            </>
+          ) : (
+            <Text as="p" fontSize={14} lineHeight={1.6} style={{ ...SECONDARY, margin: 0, overflowWrap: 'anywhere' }}>
+              Há terminais do orquestrador ou de executores em execução. Fechar encerra todos os terminais, inclusive os shells: o trabalho
+              dos executores para no meio, e a conversa do orquestrador vai junto com o terminal dele.
+            </Text>
+          )}
+        </Flexbox>
       </Modal>
     </Flexbox>
   );
