@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { test as check } from 'node:test';
+import theme from '../src/assets/symbols/theme.json' with { type: 'json' };
 import { decorations } from '../src/explorer-decorations.ts';
 import { iconFile, iconKey } from '../src/file-icons.ts';
 
@@ -39,9 +40,14 @@ check('ordem de resolução', () => {
 });
 
 check('todo ícone mapeado tem SVG', () => {
-  for (const key of ['document', 'folder', 'ts', 'folder-github', 'vite']) {
-    assert.ok(existsSync(join(import.meta.dirname, '..', 'src', 'assets', 'symbols', 'icons', iconFile(key))), key);
-  }
+  // Toda chave que iconKey pode devolver: os valores dos mapas e os padrões. O caminho tem de bater exato com o arquivo.
+  const maps = [theme.fileNames, theme.fileExtensions, theme.langNames, theme.langExtensions, theme.folderNames];
+  const keys = new Set([theme.file, theme.folder, ...maps.flatMap(Object.values)]);
+  const broken = [...keys].filter((key) => {
+    const file = iconFile(key);
+    return !file || !existsSync(join(import.meta.dirname, '..', 'src', 'assets', 'symbols', 'icons', file));
+  });
+  assert.deepEqual(broken, []);
 });
 
 const f = (path, staged, unstaged) => ({ path, origPath: null, staged, unstaged });

@@ -31,16 +31,18 @@ for (const dir of readdirSync(extensions)) {
 
 const lower = (map) => Object.fromEntries(Object.entries(map ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
 const maps = { fileNames: lower(theme.fileNames), fileExtensions: lower(theme.fileExtensions), langNames, langExtensions, folderNames: lower(theme.folderNames) };
+// Associação para ícone sem definição sai, como no VS Code: vale a regra seguinte.
+for (const map of Object.values(maps)) for (const [k, v] of Object.entries(map)) if (!theme.iconDefinitions[v]) delete map[k];
 // As chaves que src/file-icons.ts pode devolver: os valores dos mapas e os padrões.
 const reachable = new Set([theme.file, theme.folder, ...Object.values(maps).flatMap(Object.values)]);
 const icons = Object.fromEntries(Object.entries(theme.iconDefinitions)
   .filter(([key]) => reachable.has(key))
-  .map(([key, def]) => [key, def.iconPath.replace(/^\.\/icons\//, '')]));
+  .map(([key, def]) => [key, def.iconPath.replace(/^\.\/icons\//, '').trimEnd()]));
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
-// Alguns caminhos do tema terminam com espaço: o arquivo não tem, e o valor gravado fica como vem.
-for (const path of new Set(Object.values(icons).map((p) => p.trimEnd()))) cpSync(join(source, 'src', 'icons', path), join(out, 'icons', path));
+// Alguns caminhos do tema terminam com espaço: o arquivo não tem, e o espaço sai do valor gravado.
+for (const path of new Set(Object.values(icons))) cpSync(join(source, 'src', 'icons', path), join(out, 'icons', path));
 cpSync(join(source, 'LICENSE'), join(out, 'LICENSE'));
 writeFileSync(join(out, 'theme.json'), `${JSON.stringify({ file: theme.file, folder: theme.folder, icons, ...maps })}\n`);
 console.log(`${Object.keys(icons).length} de ${Object.keys(theme.iconDefinitions).length} ícones alcançáveis; ${Object.keys(langExtensions).length} extensões e ${Object.keys(langNames).length} nomes vindos das linguagens.`);
