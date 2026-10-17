@@ -23,7 +23,7 @@ Requisitos:
 
 O passo a passo está em [uso](docs/uso.md), a tela em [interface](docs/interface.md) e a delegação em [delegação](docs/delegacao.md).
 
-> **Atenção:** os executores têm permissão total na pasta do projeto (Claude em `bypassPermissions`, Codex sem sandbox), e o orquestrador faz Git completo quando você pede. Abra só pastas em que você confia. Limites, exceções e o que foi medido estão em [limites de segurança](docs/seguranca.md).
+> **Atenção:** os executores têm permissão total na pasta do projeto (Claude em `bypassPermissions`, Codex sem sandbox), e o orquestrador faz stage e commit dentro da alçada dele e consulta você antes de push. Abra só pastas em que você confia. Limites, exceções e o que foi medido estão em [limites de segurança](docs/seguranca.md).
 
 ## Desenvolvimento
 
