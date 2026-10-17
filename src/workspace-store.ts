@@ -16,7 +16,7 @@ export type Cursor = { line: number; col: number };
 // Rolagem do editor (pixels, como o scrollTop/scrollLeft do DOM). Guardada junto do cursor, por arquivo.
 export type Scroll = { top: number; left: number };
 export type Buffer = {
-  docId: string; path: string; raw: string; bom: boolean; newline: Newline; draft: string; readOnly: boolean; cursor: Cursor | null;
+  docId: string; path: string; raw: string; bom: boolean; newline: Newline; draft: string; readOnly: boolean;
 };
 // `revision` é a da pasta do Git que a tela leu; `origin` é o texto carregado (para saber se o rascunho mudou).
 export type ConflictDraft = { path: string; origin: string; draft: string; revision: string };
@@ -54,16 +54,6 @@ export function remapData(data: EditorData, from: string, to: string): EditorDat
     const path = move(draft.path);
     conflicts[path.toLowerCase()] = { ...draft, path };
   }
-  return { buffers, conflicts };
-}
-
-/** Tira buffers e conflitos de `paths` (arquivo ou pasta). Quem chama já decidiu o descarte dos rascunhos. */
-export function dropData(data: EditorData, paths: readonly string[]): EditorData {
-  const hit = (p: string) => paths.some((base) => isWithin(p, base));
-  const buffers: Record<string, Buffer> = {};
-  for (const [id, buffer] of Object.entries(data.buffers)) if (!hit(buffer.path)) buffers[id] = buffer;
-  const conflicts: Record<string, ConflictDraft> = {};
-  for (const [key, draft] of Object.entries(data.conflicts)) if (!hit(draft.path)) conflicts[key] = draft;
   return { buffers, conflicts };
 }
 
@@ -105,7 +95,7 @@ export function encodeRecovery(project: string, recovery: Recovery): { text: str
   while (text.length > MAX_RECOVERY_CHARS && (keepConflicts.length > 0 || keepBuffers.some((b) => b.dirty))) {
     if (keepConflicts.length > 0) keepConflicts = keepConflicts.slice(0, -1);
     else {
-      const at = keepBuffers.map((b) => b.dirty !== null).lastIndexOf(true);
+      const at = keepBuffers.findLastIndex((b) => b.dirty !== null);
       keepBuffers = keepBuffers.map((b, i) => (i === at ? { ...b, dirty: null } : b));
     }
     notes.push('Espaço de recuperação cheio: alguns rascunhos não foram guardados.');
@@ -203,7 +193,6 @@ const MARKER = /^(<{7}|\|{7}|={7}|>{7})(\s|$)/;
 export function parseConflict(text: string): { pieces: ConflictPiece[]; malformed: boolean } {
   const lines = text.split('\n');
   const pieces: ConflictPiece[] = [];
-  let malformed = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!line.startsWith('<<<<<<<')) {
@@ -221,23 +210,15 @@ export function parseConflict(text: string): { pieces: ConflictPiece[]; malforme
       base = [];
       while (j < lines.length && !lines[j].startsWith('=======')) base.push(lines[j++]);
     }
-    if (j >= lines.length) {
-      malformed = true;
-      pieces.push({ line }, ...ours.map((l) => ({ line: l })));
-      break;
-    }
+    if (j >= lines.length) return { pieces, malformed: true };
     const mid = lines[j++];
     const theirs: string[] = [];
     while (j < lines.length && !lines[j].startsWith('>>>>>>>')) theirs.push(lines[j++]);
-    if (j >= lines.length) {
-      malformed = true;
-      pieces.push({ line }, ...ours.map((l) => ({ line: l })));
-      break;
-    }
+    if (j >= lines.length) return { pieces, malformed: true };
     pieces.push({ block: { ours, base, theirs, head, baseHead, mid, tail: lines[j] } });
     i = j;
   }
-  return { pieces, malformed };
+  return { pieces, malformed: false };
 }
 
 /** Texto final: cada bloco vira o lado escolhido; `pending` devolve o bloco com os marcadores originais. */
@@ -271,7 +252,7 @@ export const hasMarkers = (text: string) => text.split('\n').some((line) => MARK
 
 // ---- Blocos de diff (um patch de um arquivo: cabeçalho e `@@`). ----
 
-export type PatchHunk = { index: number; header: string; text: string; newLine: number };
+export type PatchHunk = { header: string; text: string };
 
 /** Separa o patch nos blocos `@@`, na ordem do backend. O texto de cada bloco é o que a tela mostra ao confirmar um descarte. */
 export function patchHunks(patch: string): PatchHunk[] {
@@ -279,10 +260,7 @@ export function patchHunks(patch: string): PatchHunk[] {
   const hunks: PatchHunk[] = [];
   let current: string[] | null = null;
   const flush = () => {
-    if (!current) return;
-    const header = current[0];
-    const match = /\+(\d+)/.exec(header);
-    hunks.push({ index: hunks.length, header, text: current.join('\n'), newLine: match ? Number(match[1]) : 1 });
+    if (current) hunks.push({ header: current[0], text: current.join('\n') });
   };
   for (const line of lines) {
     if (line.startsWith('@@')) {

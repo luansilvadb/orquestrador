@@ -60,7 +60,7 @@ fn marker(name: &str) -> String {
 
 impl Session {
     /// Cria a pasta e tudo o que a sessão usa. `app` é o caminho do próprio app, que a sessão põe como servidor
-    /// MCP do orquestrador. O que falhar no meio é desfeito por quem chamou, com `remove`: por isso `dir` é
+    /// MCP do orquestrador. O que falhar no meio é desfeito por quem chamou, com `remove_dir`: por isso `dir` é
     /// devolvido mesmo no erro.
     pub fn create(places: &Places, app: &str, project: &str, cfg: &Config) -> (Session, Result<(), String>) {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
@@ -90,14 +90,9 @@ impl Session {
         }
         Ok(())
     }
-
-    /// Tira a pasta. Nunca falha: o que não saiu fica e é dito no texto devolvido.
-    pub fn remove(&self) -> Option<String> {
-        remove_dir(&self.dir)
-    }
 }
 
-/// Apaga uma pasta de sessão. Link e junção são desfeitos sem tocar o alvo, inclusive quando a própria pasta
+/// Apaga uma pasta de sessão. Nunca falha: o que não saiu fica e é dito no texto devolvido. Link e junção são desfeitos sem tocar o alvo, inclusive quando a própria pasta
 /// é um. Tenta de novo por um instante, porque um processo recém-morto ainda pode segurar um arquivo.
 pub fn remove_dir(dir: &Path) -> Option<String> {
     let mut last = None;
@@ -194,20 +189,19 @@ pub fn recover_orphans(places: &Places) {
 pub mod tests {
     use super::*;
     use crate::config::Choice;
+    use crate::testutil::Tmp;
 
     /// O caminho do app que as sessões de teste põem no servidor MCP.
     pub const APP: &str = r"C:\Program Files\Orq\orquestrador.exe";
 
-    pub fn places(tag: &str) -> Places {
-        let root = std::env::temp_dir().join(format!("orq-ses-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+    /// Os lugares de uma sessão de teste, dentro de uma pasta que some com o `Tmp` devolvido.
+    pub fn places(tag: &str) -> (Tmp, Places) {
+        let tmp = Tmp::new("orq-ses", tag);
+        let root = &tmp.0;
         std::fs::create_dir_all(root.join("home").join(".agents").join("skills").join("exemplo")).unwrap();
         std::fs::create_dir_all(root.join("temp")).unwrap();
-        Places { temp: root.join("temp"), codex_rules: root.join("codex").join("rules"), global_dirs: vec![root.join("home").join(".agents")] }
-    }
-
-    pub fn discard(p: &Places) {
-        let _ = std::fs::remove_dir_all(p.temp.parent().unwrap());
+        let p = Places { temp: root.join("temp"), codex_rules: root.join("codex").join("rules"), global_dirs: vec![root.join("home").join(".agents")] };
+        (tmp, p)
     }
 
     fn cfg(orchestrator: &str) -> Config {
@@ -216,7 +210,7 @@ pub mod tests {
 
     #[test]
     fn sessao_codex_escreve_agents_e_owner_nenhuma_regra_e_limpa_tudo() {
-        let p = places("codex");
+        let (_tmp, p) = places("codex");
         let (s, r) = Session::create(&p, APP, r"C:\proj", &cfg("codex"));
         r.unwrap();
         let name = s.dir.file_name().unwrap().to_string_lossy().to_string();
@@ -236,14 +230,13 @@ pub mod tests {
         // O que o app deixa na pasta durante o uso também sai.
         std::fs::create_dir_all(s.dir.join("requests").join("x")).unwrap();
         std::fs::write(s.dir.join("requests").join("x").join("1.txt"), "t").unwrap();
-        assert_eq!(s.remove(), None);
+        assert_eq!(remove_dir(&s.dir), None);
         assert!(!s.dir.exists());
-        discard(&p);
     }
 
     #[test]
     fn sessao_claude_escreve_mcp_settings_e_nenhuma_regra() {
-        let p = places("claude");
+        let (_tmp, p) = places("claude");
         let (s, r) = Session::create(&p, APP, r"C:\proj", &cfg("claude"));
         r.unwrap();
         let agents = std::fs::read_to_string(s.dir.join("AGENTS.md")).unwrap();
@@ -263,14 +256,13 @@ pub mod tests {
             "sem lista de permissões: o aviso do bypass desligado, o PowerShell, o prazo do lote e o aceite do que o bypass pergunta"
         );
         assert!(!p.codex_rules.exists());
-        assert_eq!(s.remove(), None);
-        discard(&p);
+        assert_eq!(remove_dir(&s.dir), None);
     }
 
     /// Pasta e app com espaço, acento e apóstrofo: o `mcp.json` leva o caminho inteiro, sem nome curto.
     #[test]
     fn caminho_com_espaco_acento_e_apostrofo_vai_inteiro_ao_mcp_json() {
-        let mut p = places("caminho");
+        let (_tmp, mut p) = places("caminho");
         p.temp = p.temp.parent().unwrap().join("temp com espaço e açaí it's");
         std::fs::create_dir_all(&p.temp).unwrap();
         let app = r"C:\Users\Maria Silva\it's\ação\orquestrador.exe";
@@ -279,13 +271,12 @@ pub mod tests {
         let mcp: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("mcp.json")).unwrap()).unwrap();
         assert_eq!(mcp["mcpServers"]["orquestrador"]["command"], app);
         assert_eq!(mcp["mcpServers"]["orquestrador"]["args"][1], *s.dir.to_string_lossy());
-        assert_eq!(s.remove(), None);
-        discard(&p);
+        assert_eq!(remove_dir(&s.dir), None);
     }
 
     #[test]
     fn regra_orfa_so_sai_com_prova() {
-        let p = places("orphans");
+        let (_tmp, p) = places("orphans");
         std::fs::create_dir_all(&p.codex_rules).unwrap();
         let temp = p.temp.clone();
         // `first` escolhe a primeira linha da regra: o marcador atual, a forma antiga ou uma estrangeira.
@@ -338,14 +329,13 @@ pub mod tests {
         assert!(two_dead.1.exists() && !two_dead.0.exists(), "regra antiga com dois tokens não é nossa: fica");
         assert!(token_dead.1.exists() && !token_dead.0.exists(), "token com espaço a mais não é nosso: fica");
         assert!(p.codex_rules.join("default.rules").exists());
-        discard(&p);
     }
 
     #[test]
     fn regra_com_git_e_skills_sai_como_orfa_pela_primeira_linha() {
         // A regra que versões antigas escreviam: o marcador e, depois dele, o Git e as skills. Feita à mão, porque a
         // sessão não a escreve mais; a sessão morta sai inteira.
-        let p = places("orfa-git");
+        let (_tmp, p) = places("orfa-git");
         let me = std::process::id();
         let name = format!("strategist-{}", "9".repeat(32));
         let dir = p.temp.join(&name);
@@ -366,7 +356,6 @@ pub mod tests {
         .unwrap();
         recover_orphans(&p);
         assert!(!rule_file.exists() && !dir.exists());
-        discard(&p);
     }
 
     /// Lembrete com data: a limpeza das regras órfãs do Codex é transição e sai a partir de 2027-02-01.
@@ -387,13 +376,12 @@ pub mod tests {
 
     #[test]
     fn pasta_de_sessao_claude_morta_sai_pelo_dono() {
-        let p = places("claude-orphan");
+        let (_tmp, p) = places("claude-orphan");
         let name = format!("strategist-{}", "f".repeat(32));
         let dir = p.temp.join(&name);
         std::fs::create_dir_all(dir.join("exec")).unwrap();
         std::fs::write(dir.join("owner"), format!("{} 1 {name}", std::process::id())).unwrap();
         recover_orphans(&p);
         assert!(!dir.exists());
-        discard(&p);
     }
 }

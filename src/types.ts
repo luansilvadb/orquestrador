@@ -69,12 +69,9 @@ export type CommitDetail = { commit: Commit; files: CommitFile[] };
 // `current` só na branch em uso (ou no HEAD destacado); ordem: current, branches, remotes, tags.
 export type GitRef = { name: string; kind: 'branch' | 'remote' | 'tag' | 'head'; current: boolean };
 export type GraphCommit = Commit & { parents: string[]; refs: GitRef[] };
-// Conflito de merge: `base`, `ours` e `theirs` são os lados (`null` se o lado apagou o arquivo); `worktree` é o texto atual, sem BOM e com `\n`.
+// Conflito de merge: `ours` e `theirs` são os lados (`null` se o lado apagou o arquivo); `worktree` é o texto atual, sem BOM e com `\n`.
 // `revision` é a da pasta: a gravação da resolução manda de volta a que a tela leu.
-export type Conflict = {
-  path: string; base: string | null; ours: string | null; theirs: string | null; worktree: string | null;
-  binary: boolean; revision: string;
-};
+export type Conflict = { ours: string | null; theirs: string | null; worktree: string | null; binary: boolean; revision: string };
 
 // Pesquisa de texto (contrato do backend, JSON em camelCase). `path` é relativo à raiz, com "/"; uma entrada por linha que casa.
 // `col` é a coluna da primeira ocorrência, em unidades UTF-16 (como o CodeMirror) e a partir de 1; emoji ocupa 2. `skipped` lista os arquivos que ficaram de fora e por quê
@@ -95,15 +92,11 @@ export type QuickOpen = { paths: string[]; total: number };
 // Substituição em vários arquivos. A prévia não grava; a aplicação só toca nos arquivos escolhidos, com a revisão que a prévia mostrou.
 // `preserveCase`: a substituição segue a caixa da ocorrência (toda maiúscula, toda minúscula ou inicial maiúscula). Só vale na substituição.
 export type ReplaceQuery = SearchOptions & SearchFilter & { text: string; preserveCase?: boolean };
-export type PreviewFile = { path: string; revision: string; bom: boolean; count: number; original: string; result: string };
+export type PreviewFile = { path: string; revision: string; count: number; original: string; result: string };
 export type ReplacePreview = {
   files: PreviewFile[];
-  totalFiles: number;
-  totalMatches: number;
   // Arquivos com ocorrência que não entraram em `files` (limite de arquivos ou de texto): não são aplicáveis por esta prévia.
   omittedFiles: number;
-  skipped: Skipped[];
-  skippedOmitted: number;
 };
 export type ReplacePick = { path: string; revision: string };
 export type ReplaceRequest = { query: ReplaceQuery; replacement: string; files: ReplacePick[] };
@@ -113,9 +106,8 @@ export type ReplaceApplied = { applied: { path: string; count: number }[]; error
 // `done` vem mesmo com erro: o que já foi feito não é desfeito.
 export type Batch<T> = { done: T[]; error: string | null };
 // Mover: `from` e `to` relativos ao projeto; em pasta, o que está dentro acompanha o prefixo.
+// Colar usa o mesmo tipo: `from` é o caminho absoluto que estava no clipboard; `to` é o relativo ao projeto do que foi criado.
 export type Moved = { from: string; to: string };
-// Colar: `from` é o caminho absoluto que estava no clipboard; `to` é o relativo ao projeto do que foi criado.
-export type Pasted = { from: string; to: string };
 
 export type TermData = { id: string; seq: number; data: string };
 export type Snapshot = { seq: number; data: string };

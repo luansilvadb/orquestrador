@@ -38,11 +38,11 @@ fn put(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::fresh;
+    use crate::testutil::Tmp;
 
     #[test]
     fn hook_grava_um_arquivo_por_chamada() {
-        let dir = fresh("orq-hook", "hook");
+        let dir = &Tmp::new("orq-hook", "hook").0;
         let d = dir.to_string_lossy().to_string();
         assert_eq!(run(&[d.clone(), r#"{"a":"ação"}"#.into()]), 0);
         assert_eq!(run(&[d.clone(), r#"{"b":2}"#.into()]), 0);
@@ -51,6 +51,5 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert_eq!(std::fs::read_to_string(&files[0]).unwrap(), r#"{"a":"ação"}"#);
         assert_eq!(run(&[]), 2);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

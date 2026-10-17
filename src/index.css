@@ -18,12 +18,12 @@
     --color-muted: var(--ant-color-fill-tertiary);
     --color-card: var(--ant-color-bg-container);
     --color-foreground: var(--ant-color-text);
-    --color-terminal: var(--terminal);
+    /* Fundo dos terminais: o mesmo de theme.background em term.ts (o xterm recebe a cor por lá, não por este token). */
+    --color-terminal: #0b0c0d;
     --color-background: var(--ant-color-bg-layout);
     --radius-sm: calc(var(--ant-border-radius) * 0.6);
     --radius-md: calc(var(--ant-border-radius) * 0.8);
     --radius-lg: var(--ant-border-radius);
-    --radius-xl: calc(var(--ant-border-radius) * 1.4);
 }
 
 @layer base {
@@ -33,11 +33,6 @@
   html {
     @apply font-sans;
     }
-}
-
-/* Fundo dos terminais: o mesmo de theme.background em term.ts (o xterm recebe a cor por lá, não por este token). */
-:root {
-    --terminal: #0b0c0d;
 }
 
 html,
@@ -54,7 +49,6 @@ html body {
 
 body {
     user-select: none;
-    -webkit-font-smoothing: antialiased;
 }
 
 .xterm .xterm-viewport {
@@ -157,9 +151,6 @@ body {
 .compare-stage {
   position: relative;
   min-height: 100%;
-  --compare-l: 50fr;
-  --compare-r: 50fr;
-  --compare-center-x: 50%;
 }
 /* A unidade atual: uma barra azul à esquerda do trecho, sem véu (o vermelho e o verde das linhas continuam visíveis). Não toma o clique. */
 .compare-current {

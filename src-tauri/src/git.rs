@@ -278,11 +278,8 @@ fn untracked(file: &Path, rel: &str) -> Result<Diff, String> {
 /// Prepara os caminhos. Lista vazia prepara tudo, inclusive o não rastreado e o apagado.
 pub fn stage(dir: &Path, paths: &[String]) -> Result<(), String> {
     let specs = specs(paths)?;
-    let mut args = vec!["add", "-A"];
-    if !specs.is_empty() {
-        args.push("--");
-        args.extend(specs);
-    }
+    let mut args = vec!["add", "-A", "--"];
+    args.extend(specs);
     proc::git_saida(dir, &args).map(|_| ())
 }
 
@@ -290,11 +287,8 @@ pub fn stage(dir: &Path, paths: &[String]) -> Result<(), String> {
 pub fn unstage(dir: &Path, paths: &[String]) -> Result<(), String> {
     let specs = specs(paths)?;
     if has_head(dir) {
-        let mut args = vec!["reset", "-q"];
-        if !specs.is_empty() {
-            args.push("--");
-            args.extend(specs);
-        }
+        let mut args = vec!["reset", "-q", "--"];
+        args.extend(specs);
         return proc::git_saida(dir, &args).map(|_| ());
     }
     // Sem commit não há HEAD para o `reset`. Tirar do índice é `rm --cached`, que não apaga nada da pasta.
@@ -417,7 +411,6 @@ fn specs(paths: &[String]) -> Result<Vec<&str>, String> {
 
 /// Quantos commits uma página do histórico pode trazer, no máximo.
 const MAX_HISTORY: usize = 200;
-const LOG_FORMAT: &str = "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1e";
 
 /// Um bloco (hunk) do diff de um arquivo, como a UI o recebeu. `index` é a posição entre os blocos do diff,
 /// `header` é a linha `@@` e `revision` é a impressão digital do diff bruto que a UI viu. O patch nunca vem da UI.
@@ -469,15 +462,13 @@ pub struct CommitDetail {
     pub files: Vec<CommitFile>,
 }
 
-/// Um arquivo em conflito. `base`, `ours` e `theirs` são os estágios 1, 2 e 3 do índice; `None` quando o lado
-/// não existe (ex.: o outro lado apagou o arquivo). `worktree` é o texto atual da pasta, sem BOM e com `\n`. `binary`
+/// Um arquivo em conflito. `ours` e `theirs` são os estágios 2 e 3 do índice; `None` quando o lado não existe (ex.: o
+/// outro lado apagou o arquivo). `worktree` é o texto atual da pasta, sem BOM e com `\n`. `binary`
 /// vale também para o texto que não é UTF-8 válido: nesse caso `worktree` vem `None` e a tela não o edita. `revision` é a
 /// impressão digital dos estágios do índice e dos bytes da pasta: quem grava ou remove manda de volta esta revisão.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Conflict {
-    pub path: String,
-    pub base: Option<String>,
     pub ours: Option<String>,
     pub theirs: Option<String>,
     pub worktree: Option<String>,
@@ -624,34 +615,16 @@ fn pagina(dir: &Path, limit: usize, skip: usize) -> Option<[String; 2]> {
 /// Com `path`, só os commits que tocaram o caminho, seguindo renomeações. Repositório sem commit: lista vazia.
 pub fn history(dir: &Path, limit: usize, skip: usize, path: Option<&str>) -> Result<Vec<Commit>, String> {
     let Some([max, skip]) = pagina(dir, limit, skip) else { return Ok(Vec::new()) };
-    let mut args = vec!["log", LOG_FORMAT, "--no-color", &max, &skip];
+    let mut args = vec!["log", GRAPH_FORMAT, "--no-color", &max, &skip];
     if let Some(path) = path {
         args.extend(["--follow", "--", spec(path)?]);
     }
-    Ok(parse_commits(&proc::git_saida(dir, &args)?))
+    Ok(parse_graph(&proc::git_saida(dir, &args)?).into_iter().map(|g| g.commit).collect())
 }
 
 /// Os registros de uma saída do Git: separados por 0x1e, sem as quebras de linha do começo e sem os vazios.
 fn records(out: &str) -> impl Iterator<Item = &str> {
     out.split('\x1e').map(|rec| rec.trim_start_matches('\n')).filter(|rec| !rec.is_empty())
-}
-
-/// Monta o `Commit` com os cinco campos do `LOG_FORMAT`, nessa ordem: hash, abreviado, autor, data e assunto.
-fn commit_de(hash: &str, short: &str, author: &str, date: &str, subject: &str) -> Commit {
-    Commit { hash: hash.into(), short: short.into(), author: author.into(), date: date.into(), subject: subject.into() }
-}
-
-/// Lê a saída de `log`/`show` com `LOG_FORMAT`: cada registro acaba em 0x1e e os campos são separados por 0x1f.
-fn parse_commits(out: &str) -> Vec<Commit> {
-    records(out)
-        .filter_map(|rec| {
-            let f: Vec<&str> = rec.splitn(5, '\x1f').collect();
-            match f.as_slice() {
-                [hash, short, author, date, subject] => Some(commit_de(hash, short, author, date, subject)),
-                _ => None,
-            }
-        })
-        .collect()
 }
 
 /// Um commit do gráfico: o `Commit` mais os pais e as refs que apontam para ele. No JSON, `commit` é achatado: os campos
@@ -702,14 +675,14 @@ pub fn graph(dir: &Path, limit: usize, skip: usize) -> Result<Vec<GraphCommit>, 
     Ok(parse_graph(&proc::git_saida(dir, &args)?))
 }
 
-/// Lê a saída de `log` com `GRAPH_FORMAT`. Registro que não tem todos os campos é descartado.
+/// Lê a saída de `log`/`show` com `GRAPH_FORMAT`. Registro que não tem todos os campos é descartado.
 fn parse_graph(out: &str) -> Vec<GraphCommit> {
     records(out)
         .filter_map(|rec| {
             let f: Vec<&str> = rec.splitn(7, '\x1f').collect();
             match f.as_slice() {
                 [hash, short, author, date, parents, refs, subject] => Some(GraphCommit {
-                    commit: commit_de(hash, short, author, date, subject),
+                    commit: Commit { hash: hash.to_string(), short: short.to_string(), author: author.to_string(), date: date.to_string(), subject: subject.to_string() },
                     parents: parents.split_whitespace().map(str::to_string).collect(),
                     refs: parse_refs(refs),
                 }),
@@ -765,10 +738,11 @@ fn resolve_commit(dir: &Path, id: &str) -> Result<String, String> {
 /// Cabeçalho do commit e os arquivos que ele mudou. Commit raiz também lista tudo como adicionado.
 pub fn commit_detail(dir: &Path, id: &str) -> Result<CommitDetail, String> {
     let hash = resolve_commit(dir, id)?;
-    let commit = parse_commits(&proc::git_saida(dir, &["show", "-s", LOG_FORMAT, &hash])?)
+    let commit = parse_graph(&proc::git_saida(dir, &["show", "-s", GRAPH_FORMAT, &hash])?)
         .into_iter()
         .next()
-        .ok_or_else(|| format!("Commit não encontrado: {id}"))?;
+        .ok_or_else(|| format!("Commit não encontrado: {id}"))?
+        .commit;
     Ok(CommitDetail { commit, files: commit_files(dir, &hash)? })
 }
 
@@ -782,19 +756,9 @@ fn commit_files(dir: &Path, hash: &str) -> Result<Vec<CommitFile>, String> {
     let mut files = Vec::new();
     while let Some(status) = fields.next() {
         let letter = status.chars().next().unwrap_or(' ');
-        let kind = match letter {
-            'A' | 'C' => Kind::Added,
-            'D' => Kind::Deleted,
-            'R' => Kind::Renamed,
-            _ => Kind::Modified,
-        };
-        let (orig_path, path) = if letter == 'R' || letter == 'C' {
-            (fields.next().map(str::to_string), fields.next())
-        } else {
-            (None, fields.next())
-        };
-        if let Some(path) = path {
-            files.push(CommitFile { path: path.to_string(), orig_path, kind });
+        let orig_path = if matches!(letter, 'R' | 'C') { fields.next().map(str::to_string) } else { None };
+        if let Some(path) = fields.next() {
+            files.push(CommitFile { path: path.to_string(), orig_path, kind: kind(letter).unwrap_or(Kind::Modified) });
         }
     }
     Ok(files)
@@ -814,12 +778,9 @@ pub fn commit_diff(dir: &Path, id: &str, path: Option<&str>) -> Result<Diff, Str
     }
     let mut args = vec![
         "diff-tree", "--root", "-r", "-p", "-M", "--no-commit-id", "--no-color", "--no-ext-diff", "--no-textconv", CONTEXTO_TODO,
-        "--diff-merges=first-parent", &hash,
+        "--diff-merges=first-parent", &hash, "--",
     ];
-    if !specs.is_empty() {
-        args.push("--");
-        args.extend(specs.iter().map(String::as_str));
-    }
+    args.extend(specs.iter().map(String::as_str));
     Ok(read_diff(&proc::git_saida(dir, &args)?))
 }
 
@@ -927,37 +888,14 @@ fn read_capped(file: &Path, rel: &str) -> Result<Option<Vec<u8>>, String> {
     Ok(Some(bytes))
 }
 
-/// Caminho de `rel` dentro do projeto, para ler ou gravar sem seguir nada. Recusa `.git` (em qualquer caixa, e com ponto
-/// ou espaço no fim, que o Windows descarta), barra invertida e link ou junction em qualquer nível. A pasta do projeto
-/// fica de fora: ela pode ser um link legítimo. O último nível pode não existir: o conflito de um arquivo apagado não o tem.
+/// Caminho de `rel` dentro do projeto, para ler sem seguir nada: `files::no_git` e `files::no_links` recusam `.git`,
+/// barra invertida e link ou junction em qualquer nível. A pasta do projeto fica de fora: ela pode ser um link legítimo.
+/// O último nível pode não existir: o conflito de um arquivo apagado não o tem.
 fn guarded(dir: &Path, rel: &str) -> Result<PathBuf, String> {
     let rel = spec(rel)?;
-    if rel.contains('\\') {
-        return Err(format!("Caminho inválido: {rel}. Use / como separador."));
-    }
-    let mut real = dir.canonicalize().map_err(|e| format!("Não foi possível abrir o projeto: {e}"))?;
-    let mut lexical = dir.to_path_buf();
-    for part in rel.split('/') {
-        if part.trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".git") {
-            return Err("A pasta .git não pode ser alterada aqui.".into());
-        }
-        lexical.push(part);
-        if fs::symlink_metadata(&lexical).is_err() {
-            continue;
-        }
-        let link = format!("{rel} passa por um link ou junction. Caminhos com link não são usados aqui.");
-        if fs::symlink_metadata(&lexical).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(link);
-        }
-        // O nível tem de ser o que o Windows acha dentro da pasta real. Junction aponta para outro lugar e cai aqui.
-        let canon = lexical.canonicalize().map_err(|_| link.clone())?;
-        let same_name = canon.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case(part));
-        if canon.parent() != Some(real.as_path()) || !same_name {
-            return Err(link);
-        }
-        real = canon;
-    }
-    Ok(lexical)
+    files::no_git(rel)?;
+    files::no_links(dir, rel)?;
+    Ok(dir.join(rel))
 }
 
 /// BOM e CRLF do arquivo em conflito. O marcador `<<<<<<<` vem antes do conteúdo, então o BOM pode estar no começo
@@ -988,19 +926,11 @@ fn texto_da_tela(bytes: &[u8]) -> String {
 pub fn conflict(dir: &Path, rel: &str) -> Result<Conflict, String> {
     let rel = spec(rel)?;
     let snap = Snap::read(dir, rel)?;
-    let [base, ours, theirs] = snap.sides(dir, rel)?;
+    let [_, ours, theirs] = snap.sides(dir, rel)?;
     let binary = snap.worktree.as_deref().is_some_and(|b| files::is_binary(b) || std::str::from_utf8(sem_bom_bytes(b)).is_err());
     let worktree = snap.worktree.as_deref().filter(|_| !binary).map(texto_da_tela);
     let sem = |t: Option<String>| t.map(|s| sem_bom(&s).replace("\r\n", "\n"));
-    Ok(Conflict {
-        path: rel.to_string(),
-        base: sem(base),
-        ours: sem(ours),
-        theirs: sem(theirs),
-        worktree,
-        binary,
-        revision: snap.revision(),
-    })
+    Ok(Conflict { ours: sem(ours), theirs: sem(theirs), worktree, binary, revision: snap.revision() })
 }
 
 /// Linha de marcador de conflito (`<<<<<<<`, `|||||||`, `=======`, `>>>>>>>`), com ou sem o rótulo depois.
@@ -1036,20 +966,15 @@ pub fn write_resolution(dir: &Path, rel: &str, content: &str, revision: &str, ma
         return Err(stale(rel));
     }
     let worktree = snap.worktree.as_deref();
-    if worktree.is_some_and(files::is_binary) {
-        return Err(format!("{rel} é binário: resolva pelo terminal ou escolha um lado."));
-    }
-    if worktree.is_some_and(|b| std::str::from_utf8(sem_bom_bytes(b)).is_err()) {
-        return Err(format!("{rel} não é UTF-8 válido: resolva pelo terminal. Nada foi gravado."));
-    }
     let lados = snap.sides(dir, rel)?;
     let refs: Vec<&str> = lados.iter().flatten().map(String::as_str).collect();
     let (bom, crlf) = estilo(worktree, &refs);
     let body = layout(content, crlf);
     match worktree {
         Some(bytes) => {
-            // Já confirmado como UTF-8 acima, então a conversão não troca nada. O BOM do próprio arquivo volta sozinho na
-            // gravação; o BOM que só os lados têm (o arquivo começa pelo marcador) entra no texto.
+            // Binário e texto que não é UTF-8 são recusados por `write_checked` antes de gravar; no UTF-8 a conversão não
+            // troca nada. O BOM do próprio arquivo volta sozinho na gravação; o BOM que só os lados têm (o arquivo começa
+            // pelo marcador) entra no texto.
             let base = String::from_utf8_lossy(sem_bom_bytes(bytes)).into_owned();
             let file_bom = bytes.starts_with(&files::BOM);
             let text = if bom && !file_bom { format!("\u{feff}{body}") } else { body };
@@ -1110,8 +1035,6 @@ mod tests {
     use super::*;
     use crate::testutil::{commit_all, git, identity, junction, write, Tmp};
     use std::fs;
-    use std::io::Write;
-    use std::process::Stdio;
 
     /// Repositório novo, sem commit, com a branch `main`.
     fn repo(tmp: &Tmp, name: &str) -> std::path::PathBuf {
@@ -2017,29 +1940,12 @@ mod tests {
         dir
     }
 
-    /// Roda o Git com `entrada` pela entrada padrão e devolve a saída. Para o que `proc` não alcança (`update-index --index-info`).
-    fn git_com(dir: &Path, args: &[&str], entrada: &[u8]) -> String {
-        let mut child = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child.stdin.take().unwrap().write_all(entrada).unwrap();
-        let out = child.wait_with_output().unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    }
-
     #[test]
     fn conflito_mostra_os_tres_lados_e_grava_resolucao_protegida() {
         let tmp = Tmp::new("orq-git", "resolve-tres");
         let dir = conflito(&tmp, "r", "base\n", "main\n", "outra\n");
         let c = conflict(&dir, "x.txt").unwrap();
-        assert_eq!((c.base.as_deref(), c.ours.as_deref(), c.theirs.as_deref()), (Some("base\n"), Some("main\n"), Some("outra\n")));
+        assert_eq!((c.ours.as_deref(), c.theirs.as_deref()), (Some("main\n"), Some("outra\n")));
         assert!(c.worktree.as_deref().unwrap().contains("<<<<<<<"));
         assert!(!c.binary);
         assert!(conflict(&dir, "y.txt").unwrap_err().contains("não está em conflito"));
@@ -2115,7 +2021,7 @@ mod tests {
 
         let c = conflict(&dir, "a.txt").unwrap();
         assert_eq!(c.ours, None, "o lado que apagou não tem estágio 2");
-        assert!(c.base.is_some() && c.theirs.as_deref().unwrap().contains("mudou"));
+        assert!(c.theirs.as_deref().unwrap().contains("mudou"));
         assert!(accept_deletion(&dir, "a.txt", "obsoleta").unwrap_err().contains("mudou desde"));
         accept_deletion(&dir, "a.txt", &c.revision).unwrap();
         assert!(!dir.join("a.txt").exists());
@@ -2128,9 +2034,9 @@ mod tests {
         let dir = conflito(&tmp, "r", "base\n", "main\n", "outra\n");
         let lido = conflict(&dir, "x.txt").unwrap();
         let antes = fs::read(dir.join("x.txt")).unwrap();
-        // Troca só o estágio 3 do índice: a pasta fica igual, mas o conflito já não é o que a UI leu.
-        let sha = git_com(&dir, &["hash-object", "-w", "--stdin"], b"outra2\n").trim().to_string();
-        git_com(&dir, &["update-index", "--index-info"], format!("100644 {sha} 3\tx.txt\n").as_bytes());
+        // Troca só o estágio 3 do índice (passa a ser o blob da base): a pasta fica igual, mas o conflito já não é o que a UI leu.
+        let base = git(&dir, &["rev-parse", ":1:x.txt"]);
+        proc::git_entrada(&dir, &["update-index", "--index-info"], format!("100644 {} 3\tx.txt\n", base.trim()).as_bytes()).unwrap();
         assert_eq!(fs::read(dir.join("x.txt")).unwrap(), antes, "a pasta não mudou");
         assert_ne!(conflict(&dir, "x.txt").unwrap().revision, lido.revision, "a revisão cobre os estágios");
         assert!(write_resolution(&dir, "x.txt", "novo\n", &lido.revision, true).unwrap_err().contains("mudou desde"));

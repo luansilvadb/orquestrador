@@ -8,9 +8,9 @@
 // Capturas em .playwright-mcp/media-ui-*.png só quando um cenário falha: evidência para leitura humana, não asserção.
 // Limite de codec: o que toca depende do WebView2/Windows; o simulado só prova WAV (PCM) e PNG.
 import assert from 'node:assert/strict';
-import { uiSuite, expand, treeItem, tabs } from './editor-ui-harness.mjs';
+import { uiSuite, openApp, expand, treeItem, tabs } from './editor-ui-harness.mjs';
 
-const { scenario, run } = uiSuite('media-ui');
+const scenario = uiSuite('media-ui');
 
 // Renomeia pelo menu da árvore (mesmo caminho do usuário: botão direito, Renomear..., campo Novo nome).
 async function rename(page, from, to) {
@@ -195,12 +195,8 @@ scenario('imagem aberta volta na aba depois de recarregar o app', async ({ page 
   await page.locator('img[alt="logo.png"]').waitFor();
   await page.waitForFunction(() => document.querySelector('img[alt="logo.png"]')?.naturalWidth > 0);
 
-  await page.reload();
-  await page.getByRole('button', { name: 'Escolher pasta do projeto' }).click();
-  await page.getByRole('navigation', { name: 'Telas' }).waitFor();
+  await openApp(page);
   await page.locator('[data-tab]').filter({ hasText: 'logo.png' }).first().waitFor();
   await page.waitForFunction(() => document.querySelector('img[alt="logo.png"]')?.naturalWidth > 0);
   assert.equal(await page.locator('.cm-content').count(), 0, 'restaurada sem editor de texto');
 });
-
-process.exitCode = await run();

@@ -6,11 +6,10 @@
 // Uso: node scripts/check-titlebar-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 // Capturas em .playwright-mcp/titlebar-controls-*.png a cada execução: recorte para revisão visual, não asserção.
 import assert from 'node:assert/strict';
-import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { uiSuite, OUT } from './editor-ui-harness.mjs';
 
-const { scenario, run } = uiSuite('titlebar-ui');
+const scenario = uiSuite('titlebar-ui');
 const WINDOW_LABELS = ['Minimizar', 'Maximizar', 'Restaurar', 'Fechar'];
 const button = (page, name) => page.getByRole('button', { name, exact: true });
 
@@ -61,22 +60,11 @@ async function controlsClip(page) {
   return { x, y, width: right - x, height: bottom - y };
 }
 
-// Só neste teste: a resposta de src/mock.ts ganha o fim com a captura do handler de resize. O mock assina onResized com um no-op,
-// e o TitleBar assina no mount; a captura precisa estar no módulo antes de a página montar a barra (por isso o reload abaixo).
-// Começa com quebra de linha: o Vite termina o módulo com um comentário `//# sourceMappingURL`, e sem ela o trecho ficaria comentado.
-const RESIZE_CAPTURE = '\nwindow.__resizeHandlers = [];\nmock.onResized = async (handler) => { window.__resizeHandlers.push(handler); return () => {}; };\n';
 const icon = (page, label) => page.locator(`button[aria-label="${label}"] svg`).evaluate((el) => el.outerHTML);
 
 // Transporte de janela de teste sobre o objeto `host()` real (o mesmo `mock`): contador de minimizar, estado de maximizar e
-// resize emitido para o TitleBar, que relê isMaximized. Não mexe no código de produção.
+// `resize` da janela (o simulado assina onResized nele), para o TitleBar reler isMaximized. Não mexe no código de produção.
 async function windowHost(page) {
-  await page.route((url) => url.pathname === '/src/mock.ts', async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ status: 200, contentType: 'text/javascript', body: (await response.text()) + RESIZE_CAPTURE });
-  });
-  await page.reload();
-  await page.getByRole('button', { name: 'Escolher pasta do projeto' }).click();
-  await page.getByRole('navigation', { name: 'Telas' }).waitFor();
   await page.evaluate(async () => {
     const { host } = await import('/src/backend.ts');
     const h = host();
@@ -85,7 +73,7 @@ async function windowHost(page) {
     h.toggleMaximize = async () => {
       window.__win.toggle += 1;
       window.__win.maximized = !window.__win.maximized;
-      window.__resizeHandlers.forEach((handler) => handler());
+      dispatchEvent(new Event('resize'));
     };
     h.isMaximized = async () => window.__win.maximized;
   });
@@ -157,7 +145,6 @@ scenario('Fechar chama o handler de fechar (o simulado mostra a janela fechada)'
 });
 
 scenario('recorte dos controles para revisão visual (normal e Fechar em hover)', async ({ page }) => {
-  mkdirSync(OUT, { recursive: true });
   const clip = await controlsClip(page);
   await page.mouse.move(0, 0);
   await page.waitForTimeout(50);
@@ -191,7 +178,6 @@ scenario('estado maximizado: Restaurar e Fechar em hover, com recorte para revis
   await windowHost(page);
   await button(page, 'Maximizar').click();
   await button(page, 'Restaurar').waitFor();
-  mkdirSync(OUT, { recursive: true });
   const clip = await controlsClip(page);
   await button(page, 'Restaurar').hover();
   let m = await measure(page);
@@ -206,6 +192,3 @@ scenario('estado maximizado: Restaurar e Fechar em hover, com recorte para revis
   await page.waitForTimeout(50);
   await page.screenshot({ path: join(OUT, 'titlebar-controls-restaurar-fechar-hover.png'), clip });
 });
-
-const exitCode = await run();
-process.exit(exitCode);

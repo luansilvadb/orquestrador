@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { OUT, uiSuite, expand, treeItem, tabs, editorText, focusEditor, columnPoint, primaryCursor } from './editor-ui-harness.mjs';
 
-const { scenario, run } = uiSuite('files-search');
+const scenario = uiSuite('files-search');
 
 // ---------- helpers ----------
 
@@ -708,5 +708,3 @@ scenario('visual do Explorer: ícones do tema Symbols, cores e letras do Git (pa
   await section.click();
   await treeItem(page, 'docs').waitFor();
 });
-
-process.exitCode = await run();

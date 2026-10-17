@@ -36,29 +36,16 @@ impl Resources {
     }
 }
 
-/// Teto pela CPU: metade das lógicas, de 1 a 16.
-fn cpu_ceiling(cpus: usize) -> usize {
-    (cpus / 2).clamp(MIN, MAX)
-}
-
-/// Teto pela memória física total: o que sobra depois da reserva, um executor por 1 GiB.
-fn total_ceiling(total: u64) -> usize {
-    (total.saturating_sub(RESERVA) / POR_EXECUTOR).clamp(MIN as u64, MAX as u64) as usize
-}
-
-/// Vagas pela memória livre agora: o que sobra depois da reserva, um executor por 1 GiB.
-fn free_slots(available: u64) -> usize {
-    (available.saturating_sub(RESERVA) / POR_EXECUTOR).min(MAX as u64) as usize
-}
-
 /// O teto de admissão de um passe: `min(CPU, RAM total, vivos + vagas pela RAM livre)`, com pelo menos um quando
 /// nada está vivo, para a fila não parar. Sem a memória, o teto cai para o conservador. Quem chama passa `live`
 /// como os vivos agora: nunca manda parar ninguém, só deixa de abrir novos enquanto `live` for igual ou maior.
 pub fn admission(cpus: Option<usize>, memory: Option<Memory>, live: usize) -> usize {
-    let cpu = cpus.map_or(FALLBACK, cpu_ceiling);
+    // Teto pela CPU: metade das lógicas, de 1 a 16.
+    let cpu = cpus.map_or(FALLBACK, |n| (n / 2).clamp(MIN, MAX));
     let Some(memory) = memory else { return cpu.min(FALLBACK) };
-    let ceiling = cpu.min(total_ceiling(memory.total));
-    let admitted = ceiling.min(live.saturating_add(free_slots(memory.available)));
+    // Pela memória (a total dá o teto, a livre agora dá as vagas): o que sobra depois da reserva, um executor por 1 GiB.
+    let slots = |b: u64| (b.saturating_sub(RESERVA) / POR_EXECUTOR).min(MAX as u64) as usize;
+    let admitted = cpu.min(slots(memory.total).max(MIN)).min(live.saturating_add(slots(memory.available)));
     if live == 0 { admitted.max(MIN) } else { admitted }
 }
 

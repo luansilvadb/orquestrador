@@ -4,10 +4,11 @@ import { Alert, Button, DraggablePanel, Modal, Progress, setActiveScope, Text, t
 import { backend, connect, host, message } from './backend';
 import { ChoiceForm } from './choice-form';
 import { EditorWorkspace, type EditorWorkspaceHandle } from './editor-workspace';
-import { BatchError, FilesScreen, Nav, StatusBar, type FileActions, type Route } from './explorer';
+import { FilesScreen, Nav, StatusBar, type FileActions, type OpenOptions, type Route } from './explorer';
+import { fileName } from './file-tabs';
 import { createGitGuard } from './git-guard';
 import { GitSidebar, usePolled } from './git';
-import { copy, type HistoryRequest, nextHistoryId, splitPath } from './git-history';
+import { copy, type HistoryRequest, join } from './git-history';
 import { QuickOpen } from './quick-open';
 import { SearchScreen } from './search';
 import { SHELL_HEIGHT, SHELL_MIN, ShellPanel } from './shell-panel';
@@ -19,7 +20,7 @@ import { SECONDARY } from './text-style';
 import { pathText, relativeTo } from './file-tab-actions';
 import { isWithin, type TabTarget } from './workspace-model';
 import {
-  ORCHESTRATOR, type Choice, type ExecutorNode, type GitState, type Moved, type NodeState, type Options, type UpdateStatus,
+  ORCHESTRATOR, type Choice, type ExecutorNode, type GitState, type NodeState, type Options, type UpdateStatus,
 } from './types';
 
 const MB = 1024 * 1024;
@@ -213,25 +214,20 @@ export function App() {
   const [syncing, setSyncing] = useState(false);
   // Alvo da aba ativa do editor: a barra Git marca o diff (ou conflito) que está aberto.
   const [activeTarget, setActiveTarget] = useState<TabTarget | null>(null);
-  const [activePath, setActivePath] = useState<string | null>(null);
-  // Caminho com a árvore revelada (o Explorer abre as pastas e marca o arquivo). O `id` é novo a cada pedido.
-  const [treeReveal, setTreeReveal] = useState<{ path: string; id: number } | null>(null);
-  const treeSeq = useRef(0);
-  // Pedido de histórico Git (arquivo ou projeto). Um `id` novo sempre refaz a lista.
-  const [historyRequest, setHistoryRequest] = useState<HistoryRequest>({ path: null, id: 0 });
-  // Pesquisa com pasta: vazio é o projeto inteiro; o `id` novo refaz o escopo mesmo se a pasta é a mesma.
-  const [scope, setScope] = useState<{ path: string; id: number } | null>(null);
-  const scopeSeq = useRef(0);
+  // Caminho com a árvore revelada (o Explorer abre as pastas e marca o arquivo). Um objeto novo a cada pedido.
+  const [treeReveal, setTreeReveal] = useState<{ path: string } | null>(null);
+  // Pedido de histórico Git (arquivo ou projeto). Um pedido novo sempre refaz a lista; sem pedido, a barra Git abre nas alterações.
+  const [historyRequest, setHistoryRequest] = useState<HistoryRequest>();
+  // Pesquisa com pasta: vazio é o projeto inteiro; um pedido novo refaz o escopo mesmo se a pasta é a mesma.
+  const [scope, setScope] = useState<{ path: string } | null>(null);
   // Sobe a cada Ctrl+Shift+F: a pesquisa refoca o campo mesmo se já estiver na tela.
   const [searchFocus, setSearchFocus] = useState(0);
-  // Seleção do editor que vira a consulta da pesquisa (Ctrl+Shift+F com texto selecionado). O `id` é novo a cada pedido.
-  const [seed, setSeed] = useState<{ text: string; id: number } | null>(null);
-  const seedSeq = useRef(0);
+  // Seleção do editor que vira a consulta da pesquisa (Ctrl+Shift+F com texto selecionado). Um objeto novo a cada pedido.
+  const [seed, setSeed] = useState<{ text: string } | null>(null);
   // Sobe a cada gravação do editor: a pesquisa refaz a busca atual para não mostrar linhas velhas.
   const [saveTick, setSaveTick] = useState(0);
-  // F4 e Shift+F4: próximo ou anterior resultado da pesquisa. O `id` é novo a cada tecla.
-  const [step, setStep] = useState<{ dir: 1 | -1; id: number } | null>(null);
-  const stepSeq = useRef(0);
+  // F4 e Shift+F4: próximo ou anterior resultado da pesquisa. Um objeto novo a cada tecla.
+  const [step, setStep] = useState<{ dir: 1 | -1 } | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
   // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
@@ -310,31 +306,25 @@ export function App() {
     const hit = targets.find((t) => open.some((p) => isWithin(p, t)));
     return hit ? new Error(`Feche a aba aberta em “${hit}” antes de mover ou colar aqui.`) : null;
   };
-  const targetOf = (dir: string, path: string) => {
-    const name = splitPath(path).name;
-    return dir ? `${dir}/${name}` : name;
-  };
   // Renomear: o backend troca o nome (arquivo ou pasta) e o editor troca só o caminho das abas e dos rascunhos. Nada é recusado por rascunho.
   async function renameFile(path: string, name: string) {
     const next = await backend.renameFile(path, name);
     editor.current?.remap(path, next);
     return next;
   }
-  // Excluir em lote: o backend manda à Lixeira e devolve o que foi feito. Só o feito sai das abas; uma parada no meio vira BatchError com o feito.
+  // Excluir em lote: o backend manda à Lixeira e devolve o que foi feito. Só o feito sai das abas; o lote (com o erro de uma parada no meio) vai à árvore.
   async function removeMany(paths: string[]) {
     const batch = await backend.deleteFiles(paths);
     editor.current?.remove(batch.done);
-    if (batch.error) throw new BatchError(batch.error, batch.done);
-    return batch.done;
+    return batch;
   }
   // Mover: confere colisão com as abas antes de qualquer mudança; depois troca o caminho só do que o backend moveu.
-  async function moveItems(paths: string[], dest: string): Promise<Moved[]> {
-    const clash = clashAt(paths.map((p) => targetOf(dest, p)));
+  async function moveItems(paths: string[], dest: string) {
+    const clash = clashAt(paths.map((p) => join(dest, fileName(p))));
     if (clash) throw clash;
     const batch = await backend.moveFiles(paths, dest);
     for (const m of batch.done) editor.current?.remap(m.from, m.to);
-    if (batch.error) throw new BatchError(batch.error, batch.done);
-    return batch.done;
+    return batch;
   }
   // Colar na pasta `dir`. O clipboard é lido aqui, e essa mesma lista vai para o backend. Recorte troca o caminho do que foi movido
   // (inclusive numa parada no meio); cópia não mexe nas abas. Devolve as origens que o recorte tirou do projeto.
@@ -343,7 +333,7 @@ export function App() {
     if (snap.paths.length === 0) throw new Error('Não há arquivo ou pasta copiado para colar.');
     if (snap.cut) {
       const sources = snap.paths.map((p) => relativeTo(stateRef.current.project, p)).filter((p): p is string => p !== null);
-      const clash = clashAt(sources.map((s) => targetOf(dir, s)));
+      const clash = clashAt(sources.map((s) => join(dir, fileName(s))));
       if (clash) throw clash;
     }
     const batch = await backend.pasteFilesDetailed(dir, snap);
@@ -355,7 +345,7 @@ export function App() {
       editor.current?.remap(from, item.to);
       moved.push(from);
     }
-    if (batch.error) throw new BatchError(batch.error, moved);
+    if (batch.error) throw new Error(batch.error);
     return moved;
   }
   // Cola o caminho absoluto no rascunho do Orquestrador, sem Enter. O foco vai para o terminal, para a mensagem continuar dali.
@@ -421,7 +411,6 @@ export function App() {
             } else if (running && (await askClose([], true)) !== 'close') {
               return false;
             }
-            await backend.shutdown();
           } catch { /* sem backend para responder não há o que proteger: deixa fechar */ }
           return true;
         }),
@@ -604,7 +593,7 @@ export function App() {
         e.preventDefault();
         e.stopPropagation();
         const text = editor.current?.selectedText() ?? '';
-        if (text) setSeed({ text, id: ++seedSeq.current });
+        if (text) setSeed({ text });
         setRoute('pesquisa');
         setSearchFocus((n) => n + 1);
         return;
@@ -615,7 +604,7 @@ export function App() {
         e.preventDefault();
         e.stopPropagation();
         setRoute('pesquisa');
-        setStep({ dir: e.shiftKey ? -1 : 1, id: ++stepSeq.current });
+        setStep({ dir: e.shiftKey ? -1 : 1 });
         return;
       }
       // Ctrl+P abre o arquivo rápido. Não consome o atalho dentro do terminal (xterm) nem dos campos de texto: ali a tecla segue como antes.
@@ -683,33 +672,26 @@ export function App() {
   const fileActions: FileActions = {
     dirtyOf: (paths) => paths.filter(hasDraft),
     copyPaths,
-    reveal: (path) => void backend.revealFile(path).catch(report),
-    openWith: (path) => void backend.openWith(path).catch(report),
     openInTerminal: (dir) => openShellAt(dir),
     addToChat: orchestrator?.choice ? addToChat : null,
-    // Copiar e recortar põem os itens no clipboard do Windows: colar é no Explorer. Recortar não move nada agora.
-    copyMany: (paths, cut) => {
-      backend.copyFiles(paths, cut).then(
-        () => toast.success({ title: cut ? `${paths.length} itens recortados. Cole no Explorer para mover.` : `${paths.length} itens copiados. Cole no Explorer.`, duration: 4000 }),
-        report,
-      );
-    },
     rename: renameFile,
     removeMany,
     move: moveItems,
-    revealDir: (dir) => void backend.revealDir(dir).catch(report),
     history: git.data?.kind === 'repo' ? (path) => {
-      setHistoryRequest({ path, id: nextHistoryId() });
+      setHistoryRequest({ path });
       setRoute('git');
     } : null,
     // Localizar na pasta: a pasta vai para o campo de incluir da pesquisa (vazio é o projeto inteiro), com o campo focado.
     search: (dir = '') => {
-      setScope({ path: dir, id: ++scopeSeq.current });
+      setScope({ path: dir });
       setRoute('pesquisa');
       setSearchFocus((n) => n + 1);
     },
     paste: pasteInto,
   };
+
+  // Abre na área da direita ou no grupo atual (árvore e arquivo rápido).
+  const openIn = (p: string, o?: OpenOptions) => (o?.side ? editor.current?.openBeside(p, { permanent: o.permanent }) : editor.current?.openFile(p, { permanent: o?.permanent }));
 
   // ---------- telas ----------
 
@@ -782,8 +764,8 @@ export function App() {
             >
               <div className="relative h-full">
                 <div className={shown('arquivos')}>
-                  <FilesScreen openPath={activePath} onOpen={(path, options) => (options?.side ? editor.current?.openBeside(path, { permanent: options.permanent }) : editor.current?.openFile(path, { permanent: options?.permanent }))} reveal={treeReveal} actions={fileActions}
-                    project={state.project.split(/[\\/]/).filter(Boolean).pop() ?? state.project} git={git.data?.kind === 'repo' ? git.data.status : null}
+                  <FilesScreen openPath={activeTarget?.path ?? null} onOpen={openIn} reveal={treeReveal} actions={fileActions}
+                    project={folder} git={git.data?.kind === 'repo' ? git.data.status : null}
                   />
                 </div>
                 <div className={shown('pesquisa')}>
@@ -812,7 +794,7 @@ export function App() {
                     <EditorWorkspace
                       key={state.project} ref={editor} project={state.project} locked={busy} guard={gitGuard}
                       refreshGit={() => git.refresh()} onSaved={() => setSaveTick((n) => n + 1)}
-                      onActivePath={setActivePath} onActiveTarget={setActiveTarget}
+                      onActiveTarget={setActiveTarget}
                       onGroupCount={setGroupCount}
                       layout={layoutText}
                       onRestoreLayout={(text) => {
@@ -822,7 +804,7 @@ export function App() {
                         if (saved.panelWidth !== undefined) setPanelWidth(saved.panelWidth);
                         if (saved.shellHeight !== undefined) setShellHeight(saved.shellHeight);
                       }}
-                      onReveal={(path) => { setTreeReveal({ path, id: ++treeSeq.current }); setRoute('arquivos'); }}
+                      onReveal={(path) => { setTreeReveal({ path }); setRoute('arquivos'); }}
                     />
                   </Flexbox>
                 </div>
@@ -889,11 +871,7 @@ export function App() {
       {quickOpen && (
         <QuickOpen
           onClose={() => setQuickOpen(false)}
-          onOpen={(path, choice) => {
-            setQuickOpen(false);
-            if (choice.side) editor.current?.openBeside(path, { permanent: choice.permanent });
-            else editor.current?.openFile(path, { permanent: choice.permanent });
-          }}
+          onOpen={(p, c) => { setQuickOpen(false); openIn(p, c); }}
         />
       )}
       {/* Esc, clique fora e Cancelar recusam o fechamento; só o botão de confirmação fecha. */}

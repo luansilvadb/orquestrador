@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ContextMenuTrigger, type ContextMenuItem, toast } from '@lobehub/ui/base-ui';
 import { basicSetup } from 'codemirror';
-import { Compartment, EditorSelection, EditorState, Prec, StateEffect } from '@codemirror/state';
+import { Compartment, EditorSelection, EditorState, Prec, StateEffect, Text } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { copyLineDown, deleteLine, indentWithTab, moveLineDown, moveLineUp, redo, selectAll, toggleComment, undo } from '@codemirror/commands';
 import { openSearchPanel, selectNextOccurrence } from '@codemirror/search';
@@ -12,7 +12,6 @@ import { tags } from '@lezer/highlight';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
 import { showMinimap } from '@replit/codemirror-minimap';
 import { bracketColors } from './bracket-colors';
-import { listMarkers } from './list-markers';
 import { message } from './backend';
 import { action, blocked, DIVIDER } from './file-tabs';
 import type { Scroll } from './workspace-store';
@@ -104,7 +103,7 @@ const darkHighlight = HighlightStyle.define([
   { tag: [tags.punctuation, tags.separator], color: '#cccccc' },
   { tag: tags.invalid, color: '#f44747' },
   // Markdown (markup.heading, markup.bold e markup.inline.raw do Dark Modern): título e negrito azuis, código inline salmão
-  // (tags.monospace é o que o Markdown usa para `código`). O marcador de lista tem cor própria (list-markers.ts): `tags.list` do
+  // (tags.monospace é o que o Markdown usa para `código`). O marcador de lista tem cor própria (bracket-colors.ts): `tags.list` do
   // parser cobre a lista inteira, então não entra aqui.
   { tag: tags.heading, color: '#569cd6', fontWeight: 'bold' },
   { tag: tags.emphasis, fontStyle: 'italic' },
@@ -120,7 +119,6 @@ const basicExtensions = [
   darkTheme,
   syntaxHighlighting(darkHighlight),
   bracketColors,
-  listMarkers,
   // Guias de recuo de 1 px; a do bloco do cursor fica mais forte.
   indentationMarkers({
     thickness: 1,
@@ -134,31 +132,13 @@ const basicExtensions = [
 
 
 // Pedido de navegação a uma linha (1-based) e coluna opcional (1-based, em unidades UTF-16), vindo de um resultado da pesquisa. `id` é novo a cada clique.
-export type Reveal = { path: string; line: number; col?: number; id: number };
+export type Reveal = { line: number; col?: number; id: number };
 
 // Estado do CodeMirror por buffer (`cacheKey`). Ao mover a aba para outro grupo o React desmonta a vista; o estado guardado
 // mantém o histórico de Desfazer e a seleção. Quem fecha a aba ou o buffer chama `forgetEditorState`.
 const savedStates = new Map<string, EditorState>();
 export function forgetEditorState(cacheKey: string) {
   savedStates.delete(cacheKey);
-}
-// Vistas montadas, pela mesma chave (docId). Mesmo arquivo pode estar em dois grupos: a última focada fica no fim da lista.
-// Só o editor central lê daqui (texto selecionado); cada vista sai da lista ao desmontar.
-const liveViews = new Map<string, EditorView[]>();
-export function liveEditorView(cacheKey: string): EditorView | null {
-  const list = liveViews.get(cacheKey);
-  return list?.[list.length - 1] ?? null;
-}
-function markLive(cacheKey: string, view: EditorView, focused: boolean) {
-  const list = (liveViews.get(cacheKey) ?? []).filter((v) => v !== view);
-  if (focused) list.push(view);
-  else list.unshift(view);
-  liveViews.set(cacheKey, list);
-}
-function unmarkLive(cacheKey: string, view: EditorView) {
-  const list = (liveViews.get(cacheKey) ?? []).filter((v) => v !== view);
-  if (list.length) liveViews.set(cacheKey, list);
-  else liveViews.delete(cacheKey);
 }
 
 // Pedido de cursor inicial (1-based), usado quando o buffer ainda não tem estado guardado (ex.: restaurado da recuperação).
@@ -172,14 +152,11 @@ const goTo = (view: EditorView, at: number) => {
   view.focus();
 };
 
-// Posição (offset UTF-16) de linha:coluna 1-based num texto com `\n`. Limita ao documento.
-function offsetOf(text: string, start: StartCursor): number {
-  const lines = text.split('\n');
-  const line = Math.min(Math.max(start.line, 1), lines.length);
-  let at = 0;
-  for (let i = 1; i < line; i++) at += lines[i - 1].length + 1;
-  return at + Math.min(Math.max(start.col - 1, 0), lines[line - 1].length);
-}
+// Posição (offset UTF-16) de linha:coluna 1-based no documento. Limita a linha ao documento e a coluna à linha.
+const posOf = (doc: Text, line: number, col = 1) => {
+  const l = doc.line(Math.min(Math.max(line, 1), doc.lines));
+  return l.from + Math.min(Math.max(col - 1, 0), l.length);
+};
 
 // Ir para linha:coluna, com validação (linha dentro do documento e coluna não negativa).
 export function parseGoto(value: string, lines: number, lineLength: (line: number) => number): { line: number; col: number } | string {
@@ -304,12 +281,6 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
         run: (v) => openSearchPanel(v),
       }])),
       editable.current.of(readOnlyExt(readOnly)),
-      // Foco nesta vista: ela passa a ser a entrada do arquivo para o texto selecionado.
-      EditorView.domEventHandlers({
-        focus: (_event, v) => {
-          if (cacheKey) markLive(cacheKey, v, true);
-        },
-      }),
       language.current.of([]),
       mini.current.of(minimap()),
       EditorView.updateListener.of((update) => {
@@ -327,11 +298,10 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
     if (cached && cached.doc.toString() === text) {
       state = cached.update({ effects: StateEffect.reconfigure.of(extensions) }).state;
     } else {
-      const at = start ? offsetOf(text, start) : 0;
-      state = EditorState.create({ doc: text, selection: EditorSelection.cursor(at), extensions });
+      const doc = Text.of(text.split('\n'));
+      state = EditorState.create({ doc, selection: EditorSelection.cursor(start ? posOf(doc, start.line, start.col) : 0), extensions });
     }
     view.current = new EditorView({ state, parent: host.current });
-    if (cacheKey) markLive(cacheKey, view.current, false);
     reportCursor(view.current.state);
     const dom = view.current.scrollDOM;
     // A rolagem só é aplicada depois da medição: antes, o CodeMirror ainda não sabe a altura do documento e prende o valor.
@@ -349,7 +319,6 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
       cancelAnimationFrame(frame);
       dom.removeEventListener('scroll', onDomScroll);
       if (cacheKey && view.current) savedStates.set(cacheKey, view.current.state);
-      if (cacheKey && view.current) unmarkLive(cacheKey, view.current);
       view.current?.destroy();
       view.current = null;
     };
@@ -405,10 +374,7 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
     const current = view.current;
     if (!current || !reveal || reveal.id === revealed.current) return;
     revealed.current = reveal.id;
-    const { doc } = current.state;
-    const line = doc.line(Math.min(Math.max(reveal.line, 1), doc.lines));
-    const at = line.from + Math.min(Math.max((reveal.col ?? 1) - 1, 0), line.length);
-    goTo(current, at);
+    goTo(current, posOf(current.state.doc, reveal.line, reveal.col));
   }, [reveal]);
 
   useEffect(() => {
@@ -427,9 +393,7 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
       setGotoError(result);
       return;
     }
-    const line = doc.line(result.line);
-    const at = line.from + Math.min(result.col - 1, line.length);
-    goTo(current, at);
+    goTo(current, posOf(doc, result.line, result.col));
     setGotoOpen(false);
     setGotoError('');
   };

@@ -4,6 +4,7 @@
 // Não instala nada: usa o playwright-core e o Chromium já presentes no cache local.
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
+import { test, before, after } from 'node:test';
 import { existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -77,10 +78,15 @@ export async function session(browser) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`${m.type()}: ${m.text()}`); });
-  await page.goto(BASE);
+  await openApp(page);
+  return { context, page, errors };
+}
+
+/** Abre o app na URL dada (o simulado lê a query) e escolhe a pasta: a página recomeça do zero. */
+export async function openApp(page, query = '') {
+  await page.goto(`${BASE}${query}`);
   await page.getByRole('button', { name: 'Escolher pasta do projeto' }).click();
   await page.getByRole('navigation', { name: 'Telas' }).waitFor();
-  return { context, page, errors };
 }
 
 // Árvore: pasta só é aberta se estiver fechada (clicar de novo fecharia).
@@ -128,51 +134,31 @@ export const primaryCursor = (page) => page.evaluate(() => {
 });
 
 /**
- * Registro e execução dos cenários de um check de interface. `prefix` nomeia as capturas de falha (`<prefix>-falha-N.png`).
- * `diagnose(page)`, opcional, devolve linhas extras que entram na saída de cada falha, antes da captura.
- * `run()` sobe o Vite, roda cada cenário num contexto novo, encerra o Vite e devolve o código de saída (0 ou 1).
+ * Cenários de um check de interface em `node:test`: o `before` sobe o Vite e o Chromium, o `after` fecha os dois, e cada cenário roda num
+ * contexto novo. `prefix` nomeia as capturas de falha (`<prefix>-falha-N.png`, N = posição do cenário). `diagnose(page)`, opcional,
+ * devolve linhas extras que saem, com o caminho da captura, como diagnóstico da falha. Devolve `scenario(name, fn)`.
  */
 export function uiSuite(prefix, { diagnose } = {}) {
-  const scenarios = [];
-  const scenario = (name, fn) => scenarios.push({ name, fn });
-  async function run() {
-    const vite = startVite();
-    let exitCode = 1;
-    const results = [];
-    try {
-      await waitForServer();
-      const browser = await launchBrowser();
+  let vite, browser, count = 0;
+  before(async () => { vite = startVite(); await waitForServer(); browser = await launchBrowser(); });
+  after(async () => { await browser?.close(); vite?.stop(); });
+  return (name, fn) => {
+    const index = ++count;
+    test(name, async (t) => {
+      const { context, page, errors } = await session(browser);
       try {
-        for (const { name, fn } of scenarios) {
-          const { context, page, errors } = await session(browser);
-          try {
-            await fn({ page, errors });
-            const bad = errors.filter((e) => !KNOWN.some((k) => k.test(e)));
-            assert.deepEqual(bad, [], 'erros/avisos no console');
-            results.push({ name, ok: true });
-            console.log(`ok    ${name}`);
-          } catch (e) {
-            const shot = join(OUT, `${prefix}-falha-${results.length + 1}.png`);
-            await page.screenshot({ path: shot }).catch(() => {});
-            const extra = diagnose ? await diagnose(page) : [];
-            results.push({ name, ok: false, error: e.message });
-            console.log(`FAIL  ${name}\n      ${e.message.split('\n').join('\n      ')}\n${extra.map((l) => `      ${l}\n`).join('')}      captura da falha: ${shot}`);
-          } finally {
-            await context.close();
-          }
-        }
+        await fn({ page, errors });
+        const bad = errors.filter((e) => !KNOWN.some((k) => k.test(e)));
+        assert.deepEqual(bad, [], 'erros/avisos no console');
+      } catch (e) {
+        const shot = join(OUT, `${prefix}-falha-${index}.png`);
+        await page.screenshot({ path: shot }).catch(() => {});
+        for (const line of diagnose ? await diagnose(page) : []) t.diagnostic(line);
+        t.diagnostic(`captura da falha: ${shot}`);
+        throw e;
       } finally {
-        await browser.close();
+        await context.close();
       }
-      exitCode = results.every((r) => r.ok) ? 0 : 1;
-    } catch (e) {
-      console.error(e);
-    } finally {
-      vite.stop();
-      const passed = results.filter((r) => r.ok).length;
-      console.log(`\n${passed}/${results.length} cenários passaram`);
-    }
-    return exitCode;
-  }
-  return { scenario, run };
+    });
+  };
 }

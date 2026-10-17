@@ -5,20 +5,19 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::io::Write;
 use std::process::{Command, Stdio};
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, FILETIME, HANDLE};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, FILETIME, HANDLE, STILL_ACTIVE};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
     QueryInformationJobObject, SetInformationJobObject, TerminateJobObject, JOBOBJECT_BASIC_PROCESS_ID_LIST,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+    GetExitCodeProcess, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, CREATE_NO_WINDOW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
 };
 
 /// Um comando que não abre janela de console (o app é de janela; cada filho abriria a sua).
 pub fn quiet(program: &str) -> Command {
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut cmd = Command::new(program);
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd
@@ -269,11 +268,10 @@ pub enum Owner {
 /// Um PID sozinho não prova nada, o Windows reaproveita: só é o mesmo dono se a hora de início
 /// também bater. Processo que não pode ser lido é `Unknown`.
 pub fn owner_state(pid: u32, started: u64) -> Owner {
-    const STILL_ACTIVE: u32 = 259;
     match consulta(pid, |p| Some((hora_de_criacao(p)?, codigo_de_saida(p)?))) {
         Err(erro) if erro == ERROR_INVALID_PARAMETER => Owner::Dead,
         Err(_) | Ok(None) => Owner::Unknown,
-        Ok(Some((criada, code))) if code == STILL_ACTIVE && criada == started => Owner::Alive,
+        Ok(Some((criada, code))) if code == STILL_ACTIVE as u32 && criada == started => Owner::Alive,
         Ok(Some(_)) => Owner::Dead,
     }
 }
@@ -281,7 +279,7 @@ pub fn owner_state(pid: u32, started: u64) -> Owner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::fresh;
+    use crate::testutil::Tmp;
 
     #[test]
     fn dono_vivo_morto_e_pid_reaproveitado() {
@@ -308,7 +306,7 @@ mod tests {
 
     #[test]
     fn branch_le_o_nome_e_em_head_destacado_o_hash() {
-        let dir = fresh("orq-proc", "branch");
+        let dir = &Tmp::new("orq-proc", "branch").0;
         git_saida(&dir, &["init", "-q"]).unwrap();
         // Sem commit ainda: a branch já tem nome, mesmo sem nascer.
         git_saida(&dir, &["symbolic-ref", "HEAD", "refs/heads/trabalho"]).unwrap();
@@ -318,14 +316,12 @@ mod tests {
         git_saida(&dir, &["checkout", "--detach", "-q"]).unwrap();
         let hash = git_saida(&dir, &["rev-parse", "--short", "HEAD"]).unwrap();
         assert_eq!(branch(&dir).unwrap(), hash.trim());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn mesma_pasta_ignora_maiusculas_e_pasta_inexistente_nao_e() {
-        let dir = fresh("orq-proc", "mesma");
+        let dir = &Tmp::new("orq-proc", "mesma").0;
         assert!(mesma_pasta(&dir, Path::new(&dir.to_string_lossy().to_uppercase())));
         assert!(!mesma_pasta(&dir, &dir.join("nao-existe")));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

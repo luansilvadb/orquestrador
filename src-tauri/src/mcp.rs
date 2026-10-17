@@ -33,49 +33,40 @@ pub fn serve_io<W: Write + Send + 'static>(input: impl BufRead, output: W, sessi
         if line.trim().is_empty() {
             continue;
         }
-        match route(&line) {
-            Route::Silent => {}
-            Route::Reply(msg) => {
-                write(&out, &msg);
-            }
-            Route::Call { id, name, args } => {
-                let (out, session) = (Arc::clone(&out), session.clone());
-                calls.push(std::thread::spawn(move || {
-                    let reply = call_tool(&session, &name, &args, window);
-                    // A marca só entra depois que a resposta saiu inteira: se a saída falhar, o lote segue pendente.
-                    if write(&out, &result(&id, &reply)) {
-                        if let Some(marker) = reply.delivered {
-                            let _ = std::fs::write(marker, "");
-                        }
-                    }
-                }));
-            }
+        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            write(&out, &error(Value::Null, -32700, "JSON ilegível."));
+            continue;
+        };
+        if !msg.is_object() {
+            write(&out, &error(Value::Null, -32600, "A mensagem não é um objeto JSON-RPC."));
+            continue;
         }
+        // Sem `id` é notificação, e notificação não tem resposta.
+        let Some(id) = msg.get("id").cloned() else { continue };
+        if msg["method"] != "tools/call" {
+            write(&out, &handle(id, &msg));
+            continue;
+        }
+        let name = msg["params"]["name"].as_str().unwrap_or_default().to_string();
+        let args = msg["params"]["arguments"].clone();
+        let (out, session) = (Arc::clone(&out), session.clone());
+        calls.push(std::thread::spawn(move || {
+            // Erro vira resposta com `isError`; a marca do lote só vem com o resultado.
+            let (text, is_error, marker) = match dispatch(&session, &name, &args, window) {
+                Ok(Waited::Result { text, marker }) => (text, false, Some(marker)),
+                Ok(Waited::Running) => (RUNNING.into(), false, None),
+                Err(why) => (why, true, None),
+            };
+            let reply = json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": text }], "isError": is_error } });
+            // A marca só entra depois que a resposta saiu inteira: se a saída falhar, o lote segue pendente.
+            if write(&out, &reply) {
+                if let Some(marker) = marker {
+                    let _ = std::fs::write(marker, "");
+                }
+            }
+        }));
     }
     calls
-}
-
-/// O que uma linha da entrada pede: nada (notificação), uma resposta pronta, ou uma chamada de ferramenta.
-enum Route {
-    Silent,
-    Reply(Value),
-    Call { id: Value, name: String, args: Value },
-}
-
-fn route(line: &str) -> Route {
-    let Ok(msg) = serde_json::from_str::<Value>(line) else {
-        return Route::Reply(error(Value::Null, -32700, "JSON ilegível."));
-    };
-    if !msg.is_object() {
-        return Route::Reply(error(Value::Null, -32600, "A mensagem não é um objeto JSON-RPC."));
-    }
-    // Sem `id` é notificação, e notificação não tem resposta.
-    let Some(id) = msg.get("id").cloned() else { return Route::Silent };
-    if msg["method"] == "tools/call" {
-        let name = msg["params"]["name"].as_str().unwrap_or_default().to_string();
-        return Route::Call { id, name, args: msg["params"]["arguments"].clone() };
-    }
-    Route::Reply(handle(id, &msg))
 }
 
 /// A resposta de um método que não é `tools/call`. Método desconhecido com `id` é erro -32601.
@@ -124,23 +115,7 @@ fn tools() -> Value {
     ])
 }
 
-/// O que uma ferramenta devolve ao CLI. `delivered` é a marca do lote, que o laço grava só depois que a resposta sai.
-#[derive(Debug)]
-struct Reply {
-    text: String,
-    is_error: bool,
-    delivered: Option<PathBuf>,
-}
-
-/// Roda a ferramenta `name` sobre a sessão e espera o lote por até `window`. Erro vira resposta com `isError`.
-fn call_tool(session: &Path, name: &str, args: &Value, window: Duration) -> Reply {
-    match dispatch(session, name, args, window) {
-        Ok(Waited::Result { text, marker }) => Reply { text, is_error: false, delivered: Some(marker) },
-        Ok(Waited::Running) => Reply { text: RUNNING.into(), is_error: false, delivered: None },
-        Err(why) => Reply { text: why, is_error: true, delivered: None },
-    }
-}
-
+/// Roda a ferramenta `name` sobre a sessão e espera o lote por até `window`.
 fn dispatch(session: &Path, name: &str, args: &Value, window: Duration) -> Result<Waited, String> {
     if !matches!(name, "delegar" | "aguardar") {
         return Err(format!("Ferramenta desconhecida: {name}."));
@@ -156,10 +131,6 @@ fn tasks(args: &Value) -> Result<Vec<String>, String> {
         .iter()
         .map(|item| item.as_str().map(String::from).ok_or_else(|| "`tarefas` tem de ser uma lista de textos.".to_string()))
         .collect()
-}
-
-fn result(id: &Value, reply: &Reply) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": reply.text }], "isError": reply.is_error } })
 }
 
 /// Escreve uma mensagem numa linha e a descarrega. Devolve se saiu inteira.
@@ -217,7 +188,7 @@ mod tests {
 
     #[test]
     fn initialize_devolve_a_versao_pedida_ou_a_padrao() {
-        let s = session("orq-mcp", "init", true);
+        let s = &session("orq-mcp", "init", true).0;
         let got = talk(
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"initialize\",\"params\":{}}\n",
             &s,
@@ -227,20 +198,18 @@ mod tests {
         assert_eq!(got[0]["result"]["capabilities"], json!({ "tools": {} }));
         assert_eq!(got[0]["result"]["serverInfo"], json!({ "name": "orquestrador", "version": env!("CARGO_PKG_VERSION") }));
         assert_eq!(got[0]["id"], 1);
-        let _ = std::fs::remove_dir_all(&s);
     }
 
     #[test]
     fn ping_devolve_resultado_vazio() {
-        let s = session("orq-mcp", "ping", true);
+        let s = &session("orq-mcp", "ping", true).0;
         let got = talk("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}\n", &s);
         assert_eq!(got, [json!({ "jsonrpc": "2.0", "id": 3, "result": {} })]);
-        let _ = std::fs::remove_dir_all(&s);
     }
 
     #[test]
     fn tools_list_traz_as_duas_ferramentas_com_esquema() {
-        let s = session("orq-mcp", "list", true);
+        let s = &session("orq-mcp", "list", true).0;
         let got = talk("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\"}\n", &s);
         let tools = got[0]["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -248,42 +217,38 @@ mod tests {
         assert!(tools.iter().all(|t| t["description"].is_string() && t["inputSchema"]["type"] == "object"));
         assert_eq!(tools[0]["inputSchema"]["required"], json!(["tarefas"]));
         assert_eq!(tools[0]["inputSchema"]["properties"]["tarefas"]["minItems"], 1);
-        let _ = std::fs::remove_dir_all(&s);
     }
 
     #[test]
     fn notificacao_nao_tem_resposta() {
-        let s = session("orq-mcp", "notif", true);
+        let s = &session("orq-mcp", "notif", true).0;
         let got = talk(
             "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":7}}\n",
             &s,
         );
         assert!(got.is_empty(), "{got:?}");
-        let _ = std::fs::remove_dir_all(&s);
     }
 
     #[test]
     fn metodo_desconhecido_com_id_e_erro_32601() {
         // O Claude manda `server/discover` antes do `initialize`: o erro é a resposta certa.
-        let s = session("orq-mcp", "metodo", true);
+        let s = &session("orq-mcp", "metodo", true).0;
         let got = talk("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"server/discover\"}\n", &s);
         assert_eq!(got[0]["id"], 5);
         assert_eq!(got[0]["error"]["code"], -32601);
-        let _ = std::fs::remove_dir_all(&s);
     }
 
     #[test]
     fn json_ilegivel_e_erro_32700_com_id_nulo() {
-        let s = session("orq-mcp", "ilegivel", true);
+        let s = &session("orq-mcp", "ilegivel", true).0;
         let got = talk("{\"jsonrpc\":\"2.0\",\"id\":6,\n", &s);
         assert_eq!(got[0]["id"], Value::Null);
         assert_eq!(got[0]["error"]["code"], -32700);
-        let _ = std::fs::remove_dir_all(&s);
     }
 
     #[test]
     fn delegar_com_lista_vazia_ou_tarefa_em_branco_nao_publica_nada() {
-        let s = session("orq-mcp", "invalido", true);
+        let s = &session("orq-mcp", "invalido", true).0;
         let input = [call(7, "delegar", json!({ "tarefas": [] })), call(8, "delegar", json!({ "tarefas": ["ok", "  "] })), call(9, "delegar", json!({}))].join("\n");
         let got = talk(&input, &s);
         let by_id = |id: u64| got.iter().find(|r| r["id"] == id).unwrap();
@@ -293,23 +258,21 @@ mod tests {
         assert!(is_error && text.contains("Tarefa vazia"), "{text}");
         assert!(text_of(by_id(9)).1, "sem `tarefas` é erro");
         assert_eq!(std::fs::read_dir(s.join("requests")).unwrap().count(), 0, "nenhum lote publicado");
-        let _ = std::fs::remove_dir_all(&s);
     }
 
     #[test]
     fn aguardar_sem_lote_e_erro_sem_prefixo_nem_fim() {
-        let s = session("orq-mcp", "sem-lote", true);
+        let s = &session("orq-mcp", "sem-lote", true).0;
         let got = talk(&call(10, "aguardar", json!({})), &s);
         let (text, is_error) = text_of(&got[0]);
         assert!(is_error);
         assert_eq!(text, "Nenhum lote aguardando entrega.");
         assert!(!text.contains("wrapper_error") && !text.contains("--- FIM ---"));
-        let _ = std::fs::remove_dir_all(&s);
     }
 
     #[test]
     fn janela_curta_devolve_em_andamento_sem_marca_e_aguardar_pega_o_resultado() {
-        let s = session("orq-mcp", "janela", true);
+        let s = &session("orq-mcp", "janela", true).0;
         let got = talk(&call(16, "delegar", json!({ "tarefas": ["Tarefa A"] })), &s);
         let (text, is_error) = text_of(&got[0]);
         assert!(!is_error);
@@ -318,34 +281,30 @@ mod tests {
         let id = std::fs::read_dir(s.join("requests")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
         assert!(!s.join("results").join(format!("{id}.delivered")).exists(), "em andamento não entrega nada");
         // O app grava o resultado; `aguardar` o pega, e só então o lote fica entregue.
-        std::fs::write(s.join("results").join(format!("{id}.txt")), "0\n--- EXECUTOR 1/1 ---\nTarefa A\nfeito\nexecutor_exit: 0\n--- FIM ---\n").unwrap();
+        std::fs::write(s.join("results").join(format!("{id}.txt")), "--- EXECUTOR 1/1 ---\nTarefa A\nfeito\nexecutor_exit: 0\n--- FIM ---\n").unwrap();
         let got = talk(&call(17, "aguardar", json!({})), &s);
         let (text, is_error) = text_of(&got[0]);
         assert!(!is_error);
         assert_eq!(text, "--- EXECUTOR 1/1 ---\nTarefa A\nfeito\nexecutor_exit: 0\n--- FIM ---\n");
         assert!(s.join("results").join(format!("{id}.delivered")).exists(), "a resposta saiu, então a marca entra");
-        let _ = std::fs::remove_dir_all(&s);
     }
 
     #[test]
     fn marca_de_entregue_so_entra_depois_que_a_resposta_sai() {
-        let s = session("orq-mcp", "marca", true);
+        let s = &session("orq-mcp", "marca", true).0;
         std::fs::create_dir_all(s.join("requests").join("B1")).unwrap();
-        std::fs::write(s.join("results").join("B1.txt"), "0\n--- EXECUTOR 1/1 ---\nok\n--- FIM ---\n").unwrap();
+        std::fs::write(s.join("results").join("B1.txt"), "--- EXECUTOR 1/1 ---\nok\n--- FIM ---\n").unwrap();
         // O resultado devolvido traz a marca, que quem chama grava; a função em si não grava nada.
-        let reply = call_tool(&s, "aguardar", &json!({}), SHORT);
-        assert!(!reply.is_error);
-        let marker = reply.delivered.clone().expect("o resultado traz a marca");
+        let Ok(Waited::Result { marker, .. }) = dispatch(&s, "aguardar", &json!({}), SHORT) else { panic!("o resultado traz a marca") };
         assert!(!marker.exists(), "devolver o resultado não grava a marca");
         // Pelo laço, a marca entra depois da resposta escrita.
         let _ = talk(&call(18, "aguardar", json!({})), &s);
         assert!(marker.exists());
-        let _ = std::fs::remove_dir_all(&s);
     }
 
     #[test]
     fn sessao_sem_dono_e_erro_em_toda_chamada() {
-        let s = session("orq-mcp", "sem-dono", false);
+        let s = &session("orq-mcp", "sem-dono", false).0;
         std::fs::remove_file(s.join("owner")).unwrap();
         let input = [
             call(20, "delegar", json!({ "tarefas": ["x"] })),
@@ -358,15 +317,13 @@ mod tests {
             assert!(is_error && text == "A pasta não é uma sessão ativa do orquestrador.", "{text}");
         }
         assert_eq!(std::fs::read_dir(s.join("requests")).unwrap().count(), 0, "nada publicado");
-        let _ = std::fs::remove_dir_all(&s);
     }
 
     #[test]
     fn ferramenta_desconhecida_e_erro() {
-        let s = session("orq-mcp", "desconhecida", true);
+        let s = &session("orq-mcp", "desconhecida", true).0;
         let got = talk(&call(23, "apagar", json!({})), &s);
         let (text, is_error) = text_of(&got[0]);
         assert!(is_error && text.contains("Ferramenta desconhecida"), "{text}");
-        let _ = std::fs::remove_dir_all(&s);
     }
 }

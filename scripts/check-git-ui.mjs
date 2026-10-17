@@ -7,10 +7,10 @@
 // Capturas em .playwright-mcp/git-ui-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { BASE, OUT, uiSuite, expand, treeItem, tabs, editorText, focusEditor } from './editor-ui-harness.mjs';
+import { OUT, uiSuite, openApp, expand, treeItem, tabs, editorText, focusEditor } from './editor-ui-harness.mjs';
 
 // Diagnóstico extra da falha: as chamadas Git que o simulado recusou explicam uma falha de fluxo melhor que a espera que estourou.
-const { scenario, run } = uiSuite('git-ui', {
+const scenario = uiSuite('git-ui', {
   diagnose: async (page) => {
     const refused = await page.evaluate(() => (window.__mock?.calls ?? []).filter((c) => c.error).map((c) => `${c.cmd}: ${c.error}`)).catch(() => []);
     return [`chamadas Git recusadas: ${refused.length ? refused.join(' | ') : 'nenhuma'}`];
@@ -42,12 +42,6 @@ const waitCount = async (page, cmd, n) => {
   for (let i = 0; i < 100 && (await calls(page, cmd)).length < n; i++) await page.waitForTimeout(50);
 };
 const cancelBtn = (page, title) => dialogBtn(page, title, 'Cancelar');
-// Reabre o app com a URL dada (o modo do Git e a pasta escolhida vêm dela) e escolhe a pasta de novo: a página recomeça do zero.
-async function reopen(page, query = '') {
-  await page.goto(`${BASE}${query}`);
-  await page.getByRole('button', { name: 'Escolher pasta do projeto' }).click();
-  await page.getByRole('navigation', { name: 'Telas' }).waitFor();
-}
 const NO_REPO_TEXT = /^A pasta aberta não tem um repositório Git\./;
 const initBtn = (page) => page.getByRole('button', { name: 'Inicializar repositório', exact: true });
 const historyItem = (page) => page.getByRole('menuitem', { name: /Histórico Git/ });
@@ -67,9 +61,11 @@ const tb = (page, name) => bar(page).getByRole('button', { name, exact: true });
 // Texto do contador da barra: "bloco 1 de 2", "mudança 1 de 3", "arquivo novo, não rastreado", "preparadas" ou "alterações".
 const counterOf = async (page) => (await bar(page).locator('span').filter({ hasText: /^(bloco|mudança|arquivo novo|preparadas$|alterações$)/ }).first().textContent()).trim();
 const waitCounter = (page, text) => bar(page).locator('span').filter({ hasText: new RegExp(`^${text}$`) }).first().waitFor();
+// Palco e corpo do comparador visível (o primeiro, se houver mais de um).
+const stage = (page) => page.locator('[data-body] .compare-stage:visible').first();
+const body = (page) => page.locator('[data-body] .compare-body:visible').first();
 // Linhas do motor: número, tipo e topo relativo ao corpo do comparador (um item por lado na visão lado a lado).
-const engineRows = (page) => page.evaluate(() => {
-  const stage = [...document.querySelectorAll('[data-body] .compare-stage')].find((el) => el.getClientRects().length > 0);
+const engineRows = (page) => stage(page).evaluate((stage) => {
   const root = [...stage.querySelectorAll('*')].find((e) => e.shadowRoot).shadowRoot;
   const box = stage.getBoundingClientRect();
   const area = stage.parentElement.getBoundingClientRect();
@@ -83,8 +79,7 @@ const engineRows = (page) => page.evaluate(() => {
 // A marca aparece depois da medida do motor (um render depois do bloco mudar), então o helper espera por ela.
 const current = async (page) => {
   await page.locator('[data-body]:visible .compare-current').waitFor();
-  return page.evaluate(() => {
-    const stage = [...document.querySelectorAll('[data-body] .compare-stage')].find((el) => el.getClientRects().length > 0);
+  return stage(page).evaluate((stage) => {
     const cur = stage.querySelector('.compare-current');
     if (!cur) return null;
     const box = stage.getBoundingClientRect();
@@ -95,12 +90,8 @@ const current = async (page) => {
   });
 };
 // Rola o corpo do comparador visível até `top` (pixels): a linha do motor precisa estar na tela para o clique cair nela.
-const scrollBody = (page, top) => page.evaluate((t) => {
-  const body = [...document.querySelectorAll('[data-body] .compare-body')].find((el) => el.getClientRects().length > 0);
-  body.scrollTop = t;
-}, top);
-const visibleTopLine = (page) => page.evaluate(() => {
-  const body = [...document.querySelectorAll('[data-body] .compare-body')].find((el) => el.getClientRects().length > 0);
+const scrollBody = (page, top) => body(page).evaluate((el, t) => { el.scrollTop = t; }, top);
+const visibleTopLine = (page) => body(page).evaluate((body) => {
   const stage = body.querySelector('.compare-stage');
   const root = stage.querySelector('diffs-container').shadowRoot;
   const top = body.getBoundingClientRect().top;
@@ -158,7 +149,7 @@ async function toolbarOneLine(page, label) {
 
 // Texto de conflito de 2 trechos, com texto fora dos trechos (topo, meio e fim).
 const DOIS = 'topo\n<<<<<<< ours\natual-1\n=======\nrecebida-1\n>>>>>>> theirs\nmeio\n<<<<<<< ours\natual-2\n=======\nrecebida-2\n>>>>>>> theirs\nfim\n';
-const DOIS_SIDES = { base: 'topo\nmeio\nfim\n', ours: 'topo\natual-1\nmeio\natual-2\nfim\n', theirs: 'topo\nrecebida-1\nmeio\nrecebida-2\nfim\n' };
+const DOIS_SIDES = { ours: 'topo\natual-1\nmeio\natual-2\nfim\n', theirs: 'topo\nrecebida-1\nmeio\nrecebida-2\nfim\n' };
 const addDois = (page) => page.evaluate(([t, s]) => window.__mock.addConflict('src/dois.ts', s, t), [DOIS, DOIS_SIDES]);
 const conflictTab = (page, path = 'src/dois.ts') => tab(page, `${path} (conflito)`);
 // Escolhe o lado de um trecho na lista (Atual, Recebida ou Ambas), pelo rótulo do trecho.
@@ -422,14 +413,13 @@ scenario('comparador com inserção desigual e sem quebra de linha no fim: marca
   const polls = (await calls(page, 'git_review_diff')).length;
   await page.waitForTimeout(3200);
   assert.ok((await calls(page, 'git_review_diff')).length > polls, 'a consulta do diff rodou durante a espera');
-  assert.equal(await page.evaluate(() => [...document.querySelectorAll('[data-body] .compare-body')].find((el) => el.getClientRects().length > 0).scrollTop), 300, 'polling igual não mexe na rolagem');
+  assert.equal(await body(page).evaluate((el) => el.scrollTop), 300, 'polling igual não mexe na rolagem');
 });
 
 // Divisor do lado a lado (`.compare-sash`): um separador focável no vão de 40 px entre as colunas do motor; a área de pegar tem 8 px e ocupa
 // o palco todo, então pega em qualquer ponto da rolagem. Medido nas colunas que o motor desenhou (o grid do split).
 const GAP = 40;
 const sash = (page) => view(page).locator('.compare-sash');
-const scrollOf = (page) => page.evaluate(() => [...document.querySelectorAll('[data-body] .compare-body')].find((el) => el.getClientRects().length > 0).scrollTop);
 // Contraste WCAG entre duas cores `rgb(r, g, b)`: (mais clara + 0,05) / (mais escura + 0,05), com a luminância relativa de cada uma.
 const luminance = (rgb) => {
   const [r, g, b] = rgb.match(/\d+(\.\d+)?/g).slice(0, 3).map((v) => {
@@ -443,8 +433,7 @@ const contrast = (a, b) => {
   return (hi + 0.05) / (lo + 0.05);
 };
 // Mede a proporção nas caixas de texto (as calhas numéricas são trilhas separadas); o vão começa após o texto esquerdo e termina na calha direita.
-const splitGeo = (page) => page.evaluate(() => {
-  const stage = [...document.querySelectorAll('[data-body] .compare-stage')].find((el) => el.getClientRects().length > 0);
+const splitGeo = (page) => stage(page).evaluate((stage) => {
   const root = stage.querySelector('diffs-container').shadowRoot;
   const pre = root.querySelector('pre[data-diff-type]');
   const delText = pre.querySelector(':scope > [data-deletions] > [data-content]').getBoundingClientRect();
@@ -466,11 +455,11 @@ const splitGeo = (page) => page.evaluate(() => {
   };
 });
 // Ponto do divisor no meio da parte visível do corpo, e se nele o clique cai no divisor (e não no texto do motor).
-const sashPoint = (page) => page.evaluate(() => {
-  const body = [...document.querySelectorAll('[data-body] .compare-body')].find((el) => el.getClientRects().length > 0).getBoundingClientRect();
-  const sash = [...document.querySelectorAll('[data-body] .compare-sash')].find((el) => el.getClientRects().length > 0).getBoundingClientRect();
+const sashPoint = (page) => body(page).evaluate((el) => {
+  const box = el.getBoundingClientRect();
+  const sash = el.querySelector('.compare-sash').getBoundingClientRect();
   const x = sash.left + sash.width / 2;
-  const y = Math.max(body.top + 1, Math.min(body.bottom - 1, sash.top + sash.height / 2));
+  const y = Math.max(box.top + 1, Math.min(box.bottom - 1, sash.top + sash.height / 2));
   return { x, y, hit: document.elementFromPoint(x, y)?.classList.contains('compare-sash') === true };
 });
 // Arrasta o divisor com o mouse até `x` (pixels da tela), em passos, a partir do ponto dele.
@@ -528,12 +517,12 @@ scenario('divisor: arrastar muda a proporção e mantém a mesma linha no topo; 
   // Rolado para o meio do arquivo, o divisor continua pegando (ele cobre o palco todo).
   await scrollBody(page, 900);
   const topBeforeDrag = await visibleTopLine(page);
-  await page.evaluate(() => { window.__motor = [...document.querySelectorAll('[data-body] .compare-stage')].find((el) => el.getClientRects().length > 0).querySelector('diffs-container'); });
+  await stage(page).evaluate((el) => { window.__motor = el.querySelector('diffs-container'); });
   await dragSashTo(page, start.center + 200);
   const right = await splitGeo(page);
   assert.ok(right.pct > start.pct + 3, `arrastar para a direita aumenta o lado esquerdo (${start.pct} → ${right.pct})`);
   await assertSameTopLine(page, topBeforeDrag, 'arrastar mantém a linha no topo');
-  assert.equal(await page.evaluate(() => window.__motor === [...document.querySelectorAll('[data-body] .compare-stage')].find((el) => el.getClientRects().length > 0).querySelector('diffs-container')), true, 'o motor do diff não foi refeito');
+  assert.equal(await stage(page).evaluate((el) => window.__motor === el.querySelector('diffs-container')), true, 'o motor do diff não foi refeito');
   // Mínimo e máximo: o arraste além do limite para no 15% e no 85%.
   await dragSashTo(page, right.stageLeft + 1);
   const topBeforeMax = await visibleTopLine(page);
@@ -1032,7 +1021,7 @@ scenario('editor: Ctrl+G vai para a linha e Ctrl+H abre a busca sem mandar a tec
 // ---------- Git: pasta sem repositório ----------
 
 scenario('pasta sem repositório: o painel traz o texto e o botão, sem contador, branch, gráfico nem Histórico Git; Inicializar chama git_init uma vez e o painel volta ao normal', async ({ page }) => {
-  await reopen(page, '?git=no-repo');
+  await openApp(page, '?git=no-repo');
   await openGit(page);
   await page.getByText(NO_REPO_TEXT).waitFor();
   await initBtn(page).waitFor();
@@ -1076,13 +1065,13 @@ scenario('barra de status: 22 px, branch abre o Controle do Código-Fonte; Sincr
 });
 
 scenario('Git ausente e repositório acima: cada caso diz o motivo certo, sem botão e sem ações do painel', async ({ page }) => {
-  await reopen(page, '?git=no-git');
+  await openApp(page, '?git=no-git');
   await openGit(page);
   await page.getByText('O Git não foi encontrado neste computador. Instale o Git e abra o app de novo.').waitFor();
   await page.screenshot({ path: join(OUT, 'git-ui-sem-git.png') });
   assert.equal(await initBtn(page).count(), 0, 'sem Inicializar');
   assert.equal(await page.getByRole('button', { name: 'Atualizar status' }).count(), 0, 'sem ações do painel');
-  await reopen(page, '?git=repo-above');
+  await openApp(page, '?git=repo-above');
   await openGit(page);
   await page.getByText('Esta pasta está dentro do repositório C:\\projetos, que não é a raiz do projeto. O painel Git só funciona com a raiz do repositório aberta como projeto.').waitFor();
   assert.equal(await initBtn(page).count(), 0, 'sem Inicializar');
@@ -1097,14 +1086,14 @@ scenario('janela do Orquestrador: o aviso sem Git aparece nos modos sem reposit�
     ['?git=repo-above', 'Para ter isso, abra a raiz do repositório como projeto.'],
   ];
   for (const [query, fix] of cases) {
-    await reopen(page, query);
+    await openApp(page, query);
     await page.getByRole('button', { name: 'Abrir terminal', exact: true }).click();
     await dialog(page, 'Orquestrador').getByText(`Esta pasta não tem Git: o que os executores mudarem não fica registrado e não pode ser desfeito pelo Git. ${fix}`).waitFor();
     if (query === '?git=no-repo') await page.screenshot({ path: join(OUT, 'git-ui-aviso-orquestrador.png') });
     await page.keyboard.press('Escape');
     await dialog(page, 'Orquestrador').waitFor({ state: 'detached' });
   }
-  await reopen(page);
+  await openApp(page);
   await openGit(page);
   await section(page, 'Alterações').waitFor();
   await page.getByRole('button', { name: 'Abrir terminal', exact: true }).click();
@@ -1113,7 +1102,7 @@ scenario('janela do Orquestrador: o aviso sem Git aparece nos modos sem reposit�
 });
 
 scenario('pasta escolhida dentro de um repositório: toast informativo com o caminho do projeto aberto', async ({ page }) => {
-  await reopen(page, '?subfolder=1');
+  await openApp(page, '?subfolder=1');
   await page.getByText('Esta pasta está dentro do repositório C:\\projetos\\exemplo. O projeto aberto é a raiz dele.').waitFor();
   await openGit(page);
   await section(page, 'Alterações').waitFor();
@@ -1129,5 +1118,3 @@ scenario('troca em tempo de execução: o painel vai do estado vazio ao normal (
   await section(page, 'Alterações').waitFor();
   assert.equal(await page.evaluate(() => window.__semRecarregar), 1, 'a página não recarregou');
 });
-
-process.exitCode = await run();

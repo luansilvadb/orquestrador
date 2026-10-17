@@ -175,23 +175,24 @@ pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, pr
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::session::tests::{discard, places, APP};
+    use crate::session::tests::{places, APP};
+    use crate::testutil::Tmp;
 
     fn exes() -> Exes {
         Exes { claude: "claude".into(), codex: "codex".into(), app: r"C:\Program Files\Orq\o'rq.exe".into() }
     }
 
-    fn session(tag: &str, tool: &str) -> (Session, crate::session::Places) {
+    fn session(tag: &str, tool: &str) -> (Session, Tmp) {
         let cfg = Config { orchestrator: Choice::new(tool, "", ""), ..Config::default() };
-        let p = places(tag);
+        let (tmp, p) = places(tag);
         let (s, r) = Session::create(&p, APP, r"C:\proj", &cfg);
         r.unwrap();
-        (s, p)
+        (s, tmp)
     }
 
     #[test]
     fn orquestrador_codex() {
-        let (s, p) = session("cli-codex", "codex");
+        let (s, _tmp) = session("cli-codex", "codex");
         let dir = s.dir.to_string_lossy().to_string();
         let got = orchestrator(&exes(), &Choice::new("codex", "gpt-5.5", "high"), &s, r"C:\proj");
         assert_eq!(got.program, "codex");
@@ -210,13 +211,11 @@ mod tests {
                 "-m", "gpt-5.5", "-c", "model_reasoning_effort=high",
             ]
         );
-        s.remove();
-        discard(&p);
     }
 
     #[test]
     fn orquestrador_claude() {
-        let (s, p) = session("cli-claude", "claude");
+        let (s, _tmp) = session("cli-claude", "claude");
         let got = orchestrator(&exes(), &Choice::new("claude", "opus", ""), &s, r"C:\proj");
         let agents = s.global_dirs[0].to_string_lossy().to_string();
         assert_eq!(got.program, "claude");
@@ -231,15 +230,13 @@ mod tests {
                 "--model", "opus",
             ]
         );
-        s.remove();
-        discard(&p);
     }
 
     /// Caminho do app e da sessão com espaço, acento e apóstrofo: cada um entra como um argumento só, e no
     /// `-c` do Codex vai como texto TOML.
     #[test]
     fn caminhos_com_espaco_acento_e_apostrofo_passam_inteiros() {
-        let mut p = places("cli-odd");
+        let (_tmp, mut p) = places("cli-odd");
         p.temp = p.temp.parent().unwrap().join("temp com espaço, açaí e it's");
         std::fs::create_dir_all(&p.temp).unwrap();
         let app = r"C:\Users\Maria Silva\it's\ação\orquestrador.exe";
@@ -256,8 +253,6 @@ mod tests {
         assert_eq!(claude.args[0], "--mcp-config");
         assert_eq!(claude.args[1], s.dir.join("mcp.json").to_string_lossy());
         assert!(claude.args[1].contains("it's"));
-        s.remove();
-        discard(&p);
     }
 
     #[test]

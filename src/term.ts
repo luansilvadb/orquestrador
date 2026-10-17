@@ -15,8 +15,6 @@ const theme = {
   brightBlue: '#8fb6f2', brightMagenta: '#c9a6ee', brightCyan: '#7dd3d9', brightWhite: '#f2f3f5',
 };
 
-const bytes = (base64: string) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-
 export class TermView {
   readonly term: Terminal;
   private fitAddon = new FitAddon();
@@ -85,15 +83,6 @@ export class TermView {
     await this.put(clipboardPaste(await this.which(), paths, false, '', this.term.modes.bracketedPasteMode));
   }
 
-  /**
-   * Um texto de várias linhas como um paste só, sem Enter: fica no rascunho do CLI. Com o bracketed paste ligado, vai direto ao PTY
-   * entre as marcas, com as quebras `\n` (o paste do xterm trocaria por `\r`, que o CLI leria como Enter). Sem ele, segue pelo paste do xterm.
-   */
-  async pasteText(text: string) {
-    if (!this.term.modes.bracketedPasteMode) return this.term.paste(text);
-    await backend.termWrite(this.id, `\x1b[200~${text}\x1b[201~`);
-  }
-
   fit() {
     if (this.term.element?.offsetParent) this.fitAddon.fit();
   }
@@ -114,7 +103,7 @@ export class TermView {
     const waiting = this.pending ?? [];
     this.pending = null;
     this.seq = snapshot.seq;
-    if (snapshot.data) this.term.write(bytes(snapshot.data));
+    if (snapshot.data) this.term.write(Uint8Array.fromBase64(snapshot.data));
     for (const chunk of waiting) this.push(chunk.seq, chunk.data);
   }
 
@@ -122,7 +111,7 @@ export class TermView {
     if (this.pending) this.pending.push({ seq, data });
     else if (seq > this.seq) {
       this.seq = seq;
-      this.term.write(bytes(data));
+      this.term.write(Uint8Array.fromBase64(data));
     }
   }
 

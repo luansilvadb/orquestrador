@@ -36,9 +36,9 @@ function shellLabel(tab: ShellTab) {
 export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, active, onSelect, onAdd, onHide, onClose, onReady }: {
   open: boolean;
   maxHeight: number;
-  /** Altura que o usuário deu ao painel (o App guarda e restaura). Sem ela, a inicial. Só controla o tamanho: não mexe nos shells. */
-  height?: number;
-  onHeightChange?: (height: number) => void;
+  /** Altura que o usuário deu ao painel (o App guarda e restaura). Só controla o tamanho: não mexe nos shells. */
+  height: number;
+  onHeightChange: (height: number) => void;
   tabs: ShellTab[];
   active: string;
   onSelect: (id: string) => void;
@@ -174,8 +174,8 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
     <div className={open ? 'shrink-0' : 'hidden'}>
       <DraggablePanel
         placement="bottom" expandable={false} showHandleWideArea={false}
-        size={{ height: height ?? SHELL_HEIGHT }} defaultSize={DEFAULT_SIZE} minHeight={SHELL_MIN} maxHeight={Math.max(maxHeight, SHELL_MIN)}
-        onSizeChange={(_, size) => typeof size?.height === 'number' && onHeightChange?.(size.height)}
+        size={{ height }} defaultSize={DEFAULT_SIZE} minHeight={SHELL_MIN} maxHeight={Math.max(maxHeight, SHELL_MIN)}
+        onSizeChange={(_, size) => typeof size?.height === 'number' && onHeightChange(size.height)}
         backgroundColor="var(--ant-color-bg-container)"
       >
         <Flexbox height="100%" className="min-h-0 overflow-hidden bg-card">

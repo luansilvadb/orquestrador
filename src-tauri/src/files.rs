@@ -155,10 +155,8 @@ pub fn write_checked(project: &Path, rel: &str, text: &str, base: &str, base_bom
     if is_binary(&current) {
         return Err("Não é possível gravar um arquivo binário. Nada foi gravado.".into());
     }
-    let (bom, content) = match current.strip_prefix(&BOM) {
-        Some(content) => (true, content),
-        None => (false, current.as_slice()),
-    };
+    let content = current.strip_prefix(&BOM).unwrap_or(&current[..]);
+    let bom = content.len() < current.len();
     if std::str::from_utf8(content).is_err() {
         return Err("Não é possível gravar um arquivo que não é UTF-8 válido. Nada foi gravado.".into());
     }
@@ -245,13 +243,14 @@ pub fn check_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Recusas que valem para toda ação sobre arquivo: a pasta `.git` nunca entra, e o caminho sai do projeto só por erro.
-/// Caminho com barra invertida é recusado: o contrato é `/`, e o `Path` do Windows também aceita `\`, o que contornaria as checagens.
-fn no_git(rel: &str) -> Result<(), String> {
+/// Recusas que valem para toda ação sobre arquivo: a pasta `.git` nunca entra (em qualquer caixa, e com ponto ou espaço no
+/// fim, que o Windows descarta), e o caminho sai do projeto só por erro. Caminho com barra invertida é recusado: o contrato
+/// é `/`, e o `Path` do Windows também aceita `\`, o que contornaria as checagens.
+pub(crate) fn no_git(rel: &str) -> Result<(), String> {
     if rel.contains('\\') {
         return Err(format!("Caminho inválido: {rel}. Use / como separador."));
     }
-    if rel.split('/').any(|part| part.eq_ignore_ascii_case(".git")) {
+    if rel.split('/').any(|part| part.trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".git")) {
         return Err("A pasta .git não pode ser alterada aqui.".into());
     }
     Ok(())
@@ -260,7 +259,7 @@ fn no_git(rel: &str) -> Result<(), String> {
 /// Recusa link simbólico ou junction em qualquer parte de `rel`, inclusive pasta do meio. Seguir um desses faria a ação
 /// cair em outro lugar, mesmo que o destino esteja dentro do projeto (um alias para `.git`, por exemplo). A raiz do
 /// projeto fica de fora: ela pode ser um link legítimo.
-fn no_links(project: &Path, rel: &str) -> Result<(), String> {
+pub(crate) fn no_links(project: &Path, rel: &str) -> Result<(), String> {
     let parts: Vec<&str> = rel.split('/').filter(|p| !p.is_empty()).collect();
     let mut cur = project.to_path_buf();
     for (i, part) in parts.iter().enumerate() {
@@ -343,7 +342,8 @@ struct Item {
 }
 
 /// Um item que foi de `from` para `to` (caminhos relativos ao projeto). Em pasta, o que está dentro acompanha: quem atualiza
-/// as abas troca o prefixo `from/` por `to/`.
+/// as abas troca o prefixo `from/` por `to/`. Ao colar, `from` é o caminho absoluto que veio do clipboard, como o Windows o
+/// deu, e `to` é o que foi criado (com o nome que ganhou, se houve conflito).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Moved {
     pub from: String,
@@ -404,13 +404,23 @@ fn selection(project: &Path, rels: &[String]) -> Result<Vec<Item>, String> {
     Ok(items)
 }
 
-/// Texto do erro de um lote: se alguns itens já foram feitos, diz quantos e que não são desfeitos aqui.
-fn partial_text(done: usize, total: usize, msg: &str) -> String {
-    if done == 0 {
-        msg.to_string()
-    } else {
-        format!("Feitos {done} de {total} antes da falha; os primeiros não são desfeitos aqui. {msg}")
+/// Roda `step` em cada item do plano, na ordem, e para no primeiro erro. Plano recusado não mexe em nada. Se alguns itens
+/// já foram feitos, o erro diz quantos e que não são desfeitos aqui.
+fn each<I, T>(plan: Result<Vec<I>, String>, mut step: impl FnMut(I) -> Result<T, String>) -> Batch<T> {
+    let plan = match plan {
+        Ok(plan) => plan,
+        Err(error) => return refused(error),
+    };
+    let total = plan.len();
+    let mut done = Vec::with_capacity(total);
+    for item in plan {
+        match step(item) {
+            Ok(t) => done.push(t),
+            Err(msg) if done.is_empty() => return Batch { done, error: Some(msg) },
+            Err(msg) => return Batch { error: Some(format!("Feitos {} de {total} antes da falha; os primeiros não são desfeitos aqui. {msg}", done.len())), done },
+        }
     }
+    Batch { done, error: None }
 }
 
 /// Confere o plano de mover `rels` para a pasta `dest`, antes de mexer em qualquer coisa. Recusa pasta dentro dela mesma ou
@@ -446,19 +456,7 @@ fn move_plan(project: &Path, rels: &[String], dest: &str) -> Result<Vec<(Item, P
 /// (ver `move_plan`); colisão não ganha nome novo, recusa. Se um movimento falha depois de outros, os que já saíram vêm em
 /// `done` e não voltam sozinhos.
 pub fn move_items(project: &Path, rels: &[String], dest: &str) -> Batch<Moved> {
-    let plan = match move_plan(project, rels, dest) {
-        Ok(plan) => plan,
-        Err(error) => return refused(error),
-    };
-    let total = plan.len();
-    let mut done = Vec::with_capacity(total);
-    for (it, to, to_rel) in plan {
-        if let Err(msg) = move_no_replace(&it.path, &to) {
-            return Batch { error: Some(partial_text(done.len(), total, &msg)), done };
-        }
-        done.push(Moved { from: it.rel, to: to_rel });
-    }
-    Batch { done, error: None }
+    each(move_plan(project, rels, dest), |(it, to, to_rel)| move_no_replace(&it.path, &to).map(|()| Moved { from: it.rel, to: to_rel }))
 }
 
 /// Põe os itens `rels` no clipboard como copiados ou recortados, com a mesma checagem de `selection`. Nada é movido ou
@@ -471,19 +469,7 @@ pub fn copy_items(project: &Path, rels: &[String], cut: bool) -> Result<(), Stri
 /// Manda os itens `rels` para a Lixeira do Windows (pasta inteira ou arquivo), com a checagem de `selection` antes. Se um
 /// falha depois de outros, os que já foram ficam na Lixeira e vêm em `done`.
 pub fn recycle_many(project: &Path, rels: &[String]) -> Batch<String> {
-    let items = match selection(project, rels) {
-        Ok(items) => items,
-        Err(error) => return refused(error),
-    };
-    let total = items.len();
-    let mut done = Vec::with_capacity(total);
-    for it in items {
-        if let Err(msg) = recycle_path(&it.path) {
-            return Batch { error: Some(partial_text(done.len(), total, &msg)), done };
-        }
-        done.push(it.rel);
-    }
-    Batch { done, error: None }
+    each(selection(project, rels), |it| recycle_path(&it.path).map(|()| it.rel))
 }
 
 /// Manda o arquivo ou a pasta `rel` para a Lixeira do Windows, pelo `IFileOperation` com `FOFX_RECYCLEONDELETE`: a operação pede
@@ -655,21 +641,13 @@ pub fn reveal_dir(project: &Path, rel: &str) -> Result<(), String> {
     abrir_programa("explorer.exe", format!("\"{}\"", path.display()), "Não foi possível abrir o Explorer")
 }
 
-/// Uma colagem feita. `from` é o caminho absoluto que estava no clipboard, como o Windows o deu; `to` é o caminho
-/// relativo ao projeto do que foi criado (com o nome que ganhou, se houve conflito).
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Pasted {
-    pub from: String,
-    pub to: String,
-}
-
 /// Cola em `dest` (pasta do projeto, vazio é a raiz) os itens de `snap`: copia, ou move se `snap.cut`. `done` traz cada item
 /// colado; se parou, `error` traz o motivo (os que já foram antes continuam em `done`, sem desfazer). Tudo é
 /// checado antes de começar: se um item é recusado, nada é colado. Nome que já existe vira "nome (2).ext", "nome (3).ext"...;
 /// nada existente é sobrescrito. A cópia e o movimento são do IFileOperation do Windows, que copia pasta inteira e move
 /// entre volumes. Recusa antes de mexer se um item está dentro de outro da mesma colagem, ou se um aparece duas vezes:
 /// a cópia ou o recorte falharia no meio sem motivo.
-pub fn paste_detailed(project: &Path, dest: &str, snap: &Snapshot) -> Batch<Pasted> {
+pub fn paste_detailed(project: &Path, dest: &str, snap: &Snapshot) -> Batch<Moved> {
     let (parent, plan) = match paste_plan(project, dest, snap) {
         Ok(plan) => plan,
         Err(error) => return refused(error),
@@ -683,7 +661,7 @@ pub fn paste_detailed(project: &Path, dest: &str, snap: &Snapshot) -> Batch<Past
             return Batch { done, error: Some(error) };
         }
         let to = if base.is_empty() { name.clone() } else { format!("{base}/{name}") };
-        done.push(Pasted { from: src.display().to_string(), to });
+        done.push(Moved { from: src.display().to_string(), to });
     }
     Batch { done, error: None }
 }
@@ -902,38 +880,37 @@ fn inside(project: &Path, rel: &str, dir: bool) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{fresh, junction};
+    use crate::testutil::{junction, Tmp};
 
     fn e(name: &str, dir: bool) -> Entry {
         Entry { name: name.into(), dir, ignored: false }
     }
 
     /// Um projeto de teste: pastas e arquivos com nomes que misturam caixa, mais um `.git` na raiz e outro na subpasta.
-    fn fixture(tag: &str) -> PathBuf {
-        let root = fresh("orq-files", tag);
+    fn fixture(tag: &str) -> Tmp {
+        let tmp = Tmp::new("orq-files", tag);
+        let root = &tmp.0;
         for dir in ["Zeta", "alfa", "Beta", ".git", "sub/.git", "sub/dentro"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
         for file in ["b.txt", "A.txt", ".env", "sub/x.md"] {
             std::fs::write(root.join(file), "").unwrap();
         }
-        root
+        tmp
     }
 
     #[test]
     fn pastas_primeiro_e_alfabetico_sem_diferenciar_caixa() {
-        let root = fixture("ordem");
+        let root = &fixture("ordem").0;
         let got = list(&root, "").unwrap();
         assert_eq!(got, vec![e("alfa", true), e("Beta", true), e("sub", true), e("Zeta", true), e(".env", false), e("A.txt", false), e("b.txt", false)]);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn git_fica_fora_da_raiz_e_aparece_na_subpasta() {
-        let root = fixture("git");
+        let root = &fixture("git").0;
         assert!(!list(&root, "").unwrap().iter().any(|x| x.name == ".git"));
         assert_eq!(list(&root, "sub").unwrap(), vec![e(".git", true), e("dentro", true), e("x.md", false)]);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -958,109 +935,98 @@ src/gerado/
 
     #[test]
     fn lista_so_um_nivel_da_subpasta() {
-        let root = fixture("sub");
+        let root = &fixture("sub").0;
         assert_eq!(list(&root, "sub/dentro").unwrap(), vec![]);
         assert_eq!(list(&root, "Zeta").unwrap(), vec![]);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn recusa_caminho_que_sai_da_pasta_ou_e_absoluto() {
-        let root = fixture("fora");
+        let root = &fixture("fora").0;
         for rel in ["..", "../x", "sub/../../x", "/", "/etc", "C:/", "\\\\servidor\\x", "./sub", "sub/.."] {
             let got = list(&root, rel);
             assert!(got.is_err(), "{rel} deveria ser recusado");
         }
         let absoluto = root.to_string_lossy().into_owned();
         assert_eq!(list(&root, &absoluto).unwrap_err(), format!("Caminho fora do projeto: {absoluto}"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn pasta_inexistente_e_arquivo_sao_recusados_em_portugues() {
-        let root = fixture("inexistente");
+        let root = &fixture("inexistente").0;
         assert_eq!(list(&root, "nao-existe").unwrap_err(), "Pasta não encontrada: nao-existe");
         assert_eq!(list(&root, "sub/x.md").unwrap_err(), "Não é uma pasta: sub/x.md");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn texto_com_acento_e_crlf_volta_igual_e_sem_bom() {
-        let root = fixture("texto");
+        let root = &fixture("texto").0;
         std::fs::write(root.join("sub/nota.md"), "\u{feff}Olá\r\nmundo\r\n").unwrap();
         assert_eq!(read(&root, "sub/nota.md").unwrap(), Content { binary: false, too_large: false, read_only: false, bom: true, text: "Olá\r\nmundo\r\n".into() });
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn arquivo_vazio_devolve_texto_vazio() {
-        let root = fixture("vazio");
+        let root = &fixture("vazio").0;
         assert_eq!(read(&root, "A.txt").unwrap(), Content { binary: false, too_large: false, read_only: false, bom: false, text: String::new() });
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn arquivo_com_byte_nulo_e_binario() {
-        let root = fixture("binario");
+        let root = &fixture("binario").0;
         std::fs::write(root.join("img.bin"), [0x89, b'P', 0, b'N', b'G']).unwrap();
         assert_eq!(read(&root, "img.bin").unwrap(), Content { binary: true, too_large: false, read_only: false, bom: false, text: String::new() });
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn arquivo_com_mais_de_1_mib_volta_too_large() {
-        let root = fixture("grande");
+        let root = &fixture("grande").0;
         std::fs::write(root.join("grande.txt"), vec![b'a'; 1_048_577]).unwrap();
         assert_eq!(read(&root, "grande.txt").unwrap(), Content { binary: false, too_large: true, read_only: false, bom: false, text: String::new() });
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn recusa_caminho_de_leitura_que_sai_da_pasta_ou_e_absoluto() {
-        let root = fixture("ler-fora");
+        let root = &fixture("ler-fora").0;
         for rel in ["..", "../x", "sub/../../x", "/etc", "C:/", "./sub/x.md"] {
             let got = read(&root, rel);
             assert!(got.is_err(), "{rel} deveria ser recusado");
         }
         let absoluto = root.join("sub/x.md").to_string_lossy().into_owned();
         assert_eq!(read(&root, &absoluto).unwrap_err(), format!("Caminho fora do projeto: {absoluto}"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn arquivo_inexistente_e_pasta_sao_recusados_em_portugues() {
-        let root = fixture("ler-inexistente");
+        let root = &fixture("ler-inexistente").0;
         assert_eq!(read(&root, "nao-existe.md").unwrap_err(), "Arquivo não encontrado: nao-existe.md");
         assert_eq!(read(&root, "sub").unwrap_err(), "Não é um arquivo: sub");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn midia_devolve_os_bytes_de_imagem_e_audio_sem_olhar_o_conteudo() {
-        let root = fixture("midia-ok");
+        let root = &fixture("midia-ok").0;
         let png = [0x89, b'P', b'N', b'G', 0, 0, 0, 0];
         std::fs::write(root.join("sub/logo.PNG"), png).unwrap();
         std::fs::write(root.join("sub/tom.wav"), b"RIFF\0\0\0\0WAVEfmt ").unwrap();
         assert_eq!(read_media(&root, "sub/logo.PNG").unwrap(), png);
         assert_eq!(read_media(&root, "sub/tom.wav").unwrap(), b"RIFF\0\0\0\0WAVEfmt ");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn midia_recusa_extensao_fora_da_lista_e_arquivo_sem_extensao() {
-        let root = fixture("midia-ext");
+        let root = &fixture("midia-ext").0;
         for name in ["x.svg", "x.html", "x.exe", "x.txt", "sem-ext", ".png"] {
             std::fs::write(root.join(name), b"x").unwrap();
             let got = read_media(&root, name).unwrap_err();
             assert_eq!(got, format!("Tipo de arquivo não aberto como mídia: {name}"), "{name}");
         }
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn midia_recusa_caminho_que_sai_do_projeto_entra_no_git_ou_passa_por_link() {
-        let root = fixture("midia-caminho");
-        let outside = fresh("orq-files-fora", "midia");
+        let root = &fixture("midia-caminho").0;
+        let outside = &Tmp::new("orq-files-fora", "midia").0;
         std::fs::write(outside.join("segredo.png"), b"x").unwrap();
         std::fs::write(root.join(".git/x.png"), b"x").unwrap();
         std::fs::write(root.join("sub/.git/y.png"), b"x").unwrap();
@@ -1076,16 +1042,13 @@ src/gerado/
         } else {
             eprintln!("sem junction: parte do teste pulada");
         }
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]
     fn midia_acima_do_limite_e_recusada_com_mensagem() {
-        let root = fixture("midia-grande");
+        let root = &fixture("midia-grande").0;
         std::fs::write(root.join("grande.png"), vec![0u8; (MAX_MEDIA + 1) as usize]).unwrap();
         assert_eq!(read_media(&root, "grande.png").unwrap_err(), "Arquivo grande demais para abrir aqui (limite de 32 MiB): grande.png");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1100,42 +1063,38 @@ src/gerado/
 
     #[test]
     fn renomeia_na_mesma_pasta_e_devolve_o_caminho_novo() {
-        let root = fixture("renomeia");
+        let root = &fixture("renomeia").0;
         assert_eq!(rename(&root, "sub/x.md", "y.md").unwrap(), "sub/y.md");
         assert!(root.join("sub/y.md").exists());
         assert!(!root.join("sub/x.md").exists());
         assert_eq!(rename(&root, "b.txt", "novo.txt").unwrap(), "novo.txt");
         assert!(root.join("novo.txt").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn colisao_nao_sobrescreve_e_deixa_os_dois_arquivos() {
-        let root = fixture("colisao");
+        let root = &fixture("colisao").0;
         std::fs::write(root.join("A.txt"), "primeiro").unwrap();
         std::fs::write(root.join("b.txt"), "segundo").unwrap();
         assert_eq!(rename(&root, "b.txt", "A.txt").unwrap_err(), "Já existe um item chamado “A.txt” nesta pasta.");
         assert_eq!(std::fs::read_to_string(root.join("A.txt")).unwrap(), "primeiro");
         assert_eq!(std::fs::read_to_string(root.join("b.txt")).unwrap(), "segundo");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn troca_so_de_maiusculas_funciona_e_nome_igual_nao_faz_nada() {
-        let root = fixture("caixa");
+        let root = &fixture("caixa").0;
         assert_eq!(rename(&root, "b.txt", "B.txt").unwrap(), "B.txt");
         assert!(std::fs::read_dir(&root).unwrap().flatten().any(|e| e.file_name() == "B.txt"));
         assert_eq!(rename(&root, "B.txt", "B.txt").unwrap(), "B.txt");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn link_quebrado_ocupa_o_nome_e_link_nao_e_renomeado() {
-        let root = fixture("links");
+        let root = &fixture("links").0;
         // Criar link simbólico exige privilégio no Windows; sem ele, o teste só não roda esta parte.
         if std::os::windows::fs::symlink_file(root.join("sub/x.md"), root.join("link.md")).is_err() {
             eprintln!("sem privilégio para link simbólico: teste de links pulado");
-            let _ = std::fs::remove_dir_all(&root);
             return;
         }
         std::os::windows::fs::symlink_file(root.join("nao-existe.md"), root.join("quebrado.md")).unwrap();
@@ -1143,12 +1102,11 @@ src/gerado/
         assert!(rename(&root, "link.md", "outro.md").unwrap_err().contains("é um link"));
         assert!(rename(&root, "link.md", "outro.md").is_err());
         assert!(root.join("sub/x.md").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn git_pastas_e_caminhos_de_fora_nao_entram_nas_acoes() {
-        let root = fixture("acoes-recusas");
+        let root = &fixture("acoes-recusas").0;
         std::fs::write(root.join(".git/config"), "").unwrap();
         for rel in [".git/config", "sub/.git/config"] {
             assert!(rename(&root, rel, "x").is_err(), "{rel}");
@@ -1162,12 +1120,11 @@ src/gerado/
         assert!(plain(&root, "b.txt", true).is_err());
         assert!(plain(&root, "..", true).is_err());
         assert!(root.join(".git/config").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn junction_no_meio_do_caminho_nao_entra_nas_acoes() {
-        let root = fixture("junction");
+        let root = &fixture("junction").0;
         std::fs::write(root.join(".git/config"), "").unwrap();
         // Junction não pede privilégio. Se o `mklink` não criar, o teste só não roda esta parte.
         if !junction(&root.join("alias"), &root.join("sub")) || !junction(&root.join("git-alias"), &root.join(".git")) {
@@ -1186,29 +1143,26 @@ src/gerado/
         // Remove os links sem seguir: `remove_dir` tira a junction, o destino fica.
         let _ = std::fs::remove_dir(root.join("alias"));
         let _ = std::fs::remove_dir(root.join("git-alias"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn barra_invertida_nao_contorna_git_nem_links() {
-        let root = fixture("barra-invertida");
+        let root = &fixture("barra-invertida").0;
         for rel in [".git\\config", "sub\\arquivo", "alias\\arquivo.txt"] {
             assert!(rename(&root, rel, "x").unwrap_err().starts_with("Caminho inválido"), "{rel}");
             assert!(recycle(&root, rel).unwrap_err().starts_with("Caminho inválido"), "{rel}");
             assert!(plain(&root, rel, false).unwrap_err().starts_with("Caminho inválido"), "{rel}");
         }
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Manda para a Lixeira só um arquivo temporário criado aqui: o arquivo do projeto nunca entra.
     #[test]
     fn arquivo_temporario_vai_para_a_lixeira_e_sai_do_lugar() {
-        let root = fixture("lixeira");
+        let root = &fixture("lixeira").0;
         let file = root.join("sub/descartavel.txt");
         std::fs::write(&file, "temporário").unwrap();
         assert_eq!(recycle(&root, "sub/descartavel.txt"), Ok(()));
         assert!(std::fs::symlink_metadata(&file).is_err());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Cola como `paste_detailed`, devolvendo só os caminhos criados ou o erro. Só os testes usam esta forma.
@@ -1226,27 +1180,25 @@ src/gerado/
 
     #[test]
     fn cria_arquivo_vazio_na_raiz_e_na_subpasta() {
-        let root = fixture("cria-arquivo");
+        let root = &fixture("cria-arquivo").0;
         assert_eq!(create_file(&root, "", "novo.txt").unwrap(), "novo.txt");
         assert_eq!(create_file(&root, "sub", "dentro.md").unwrap(), "sub/dentro.md");
         assert_eq!(std::fs::metadata(root.join("novo.txt")).unwrap().len(), 0);
         assert_eq!(std::fs::metadata(root.join("sub/dentro.md")).unwrap().len(), 0);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn cria_pasta_na_raiz_e_na_subpasta() {
-        let root = fixture("cria-pasta");
+        let root = &fixture("cria-pasta").0;
         assert_eq!(create_dir(&root, "", "nova").unwrap(), "nova");
         assert_eq!(create_dir(&root, "sub/", "nova").unwrap(), "sub/nova");
         assert!(root.join("nova").is_dir());
         assert!(root.join("sub/nova").is_dir());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn criacao_nao_sobrescreve_arquivo_nem_pasta_existente() {
-        let root = fixture("cria-colisao");
+        let root = &fixture("cria-colisao").0;
         std::fs::write(root.join("A.txt"), "original").unwrap();
         assert_eq!(create_file(&root, "", "A.txt").unwrap_err(), "Já existe um item chamado “A.txt” nesta pasta. Nada foi criado.");
         assert_eq!(create_file(&root, "", "a.txt").unwrap_err(), "Já existe um item chamado “a.txt” nesta pasta. Nada foi criado.");
@@ -1255,28 +1207,25 @@ src/gerado/
         assert!(create_dir(&root, "", "Zeta").is_err());
         assert!(create_dir(&root, "", "A.txt").is_err());
         assert!(root.join("Zeta").is_dir());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn criacao_nao_sobrescreve_link_quebrado() {
-        let root = fixture("cria-quebrado");
+        let root = &fixture("cria-quebrado").0;
         // Criar link simbólico exige privilégio no Windows; sem ele, o teste só não roda esta parte.
         if std::os::windows::fs::symlink_file(root.join("nao-existe.md"), root.join("quebrado.md")).is_err() {
             eprintln!("sem privilégio para link simbólico: teste de link quebrado pulado");
-            let _ = std::fs::remove_dir_all(&root);
             return;
         }
         assert!(create_file(&root, "", "quebrado.md").is_err());
         assert!(create_dir(&root, "", "quebrado.md").is_err());
         assert!(std::fs::symlink_metadata(root.join("quebrado.md")).unwrap().file_type().is_symlink());
         assert!(!root.join("nao-existe.md").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn criacao_recusa_nome_invalido_git_e_caminho_que_sai() {
-        let root = fixture("cria-recusas");
+        let root = &fixture("cria-recusas").0;
         for name in ["", "a/b", "..", ".", "x:y", "CON.txt", " x", ".git", ".GIT", ".Git"] {
             assert!(create_file(&root, "", name).is_err(), "{name:?} deveria ser recusado");
             assert!(create_dir(&root, "", name).is_err(), "{name:?} deveria ser recusado");
@@ -1289,12 +1238,11 @@ src/gerado/
         assert!(!root.join("novo").exists());
         assert!(!root.join("sub/novo.txt").exists());
         assert!(!root.join("sub/.git/novo.txt").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn criacao_recusa_pasta_que_e_junction_para_fora_ou_para_git() {
-        let root = fixture("cria-junction");
+        let root = &fixture("cria-junction").0;
         std::fs::write(root.join(".git/config"), "").unwrap();
         if !junction(&root.join("alias"), &root.join("sub")) || !junction(&root.join("git-alias"), &root.join(".git")) {
             eprintln!("sem junction: teste pulado");
@@ -1308,46 +1256,41 @@ src/gerado/
         }
         let _ = std::fs::remove_dir(root.join("alias"));
         let _ = std::fs::remove_dir(root.join("git-alias"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn revelar_pasta_aceita_raiz_e_subpasta_e_recusa_git_e_fora() {
-        let root = fixture("revela");
-        assert_eq!(plain(&root, "", true).unwrap(), root);
+        let root = &fixture("revela").0;
+        assert_eq!(plain(&root, "", true).unwrap(), *root);
         assert_eq!(plain(&root, "sub/dentro", true).unwrap(), root.join("sub").join("dentro"));
         for rel in [".git", "sub/.git", "..", "../x", "/", "b.txt"] {
             assert!(plain(&root, rel, true).is_err(), "{rel} deveria ser recusado");
         }
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn copia_arquivo_de_fora_para_subpasta_e_mantem_o_original() {
-        let root = fixture("cola-copia");
-        let ext = fresh("orq-files-fora", "cola-copia");
+        let root = &fixture("cola-copia").0;
+        let ext = &Tmp::new("orq-files-fora", "cola-copia").0;
         std::fs::write(ext.join("de-fora.txt"), "conteúdo").unwrap();
         assert_eq!(paste(&root, "sub", &snap(&[ext.join("de-fora.txt")], false)).unwrap(), vec!["sub/de-fora.txt"]);
         assert_eq!(std::fs::read_to_string(root.join("sub/de-fora.txt")).unwrap(), "conteúdo");
         assert_eq!(std::fs::read_to_string(ext.join("de-fora.txt")).unwrap(), "conteúdo");
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&ext);
     }
 
     #[test]
     fn recorte_de_arquivo_move_e_tira_da_origem() {
-        let root = fixture("cola-recorte");
+        let root = &fixture("cola-recorte").0;
         std::fs::write(root.join("b.txt"), "movido").unwrap();
         assert_eq!(paste(&root, "sub", &snap(&[root.join("b.txt")], true)).unwrap(), vec!["sub/b.txt"]);
         assert_eq!(std::fs::read_to_string(root.join("sub/b.txt")).unwrap(), "movido");
         assert!(std::fs::symlink_metadata(root.join("b.txt")).is_err());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn copia_pasta_inteira_com_conteudo_e_mantem_a_origem() {
-        let root = fixture("cola-pasta");
-        let ext = fresh("orq-files-fora", "cola-pasta");
+        let root = &fixture("cola-pasta").0;
+        let ext = &Tmp::new("orq-files-fora", "cola-pasta").0;
         std::fs::create_dir_all(ext.join("pasta/deep")).unwrap();
         std::fs::write(ext.join("pasta/a.txt"), "a").unwrap();
         std::fs::write(ext.join("pasta/deep/b.txt"), "bê").unwrap();
@@ -1355,24 +1298,21 @@ src/gerado/
         assert_eq!(std::fs::read_to_string(root.join("pasta/a.txt")).unwrap(), "a");
         assert_eq!(std::fs::read_to_string(root.join("pasta/deep/b.txt")).unwrap(), "bê");
         assert_eq!(std::fs::read_to_string(ext.join("pasta/deep/b.txt")).unwrap(), "bê");
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&ext);
     }
 
     #[test]
     fn recorte_de_pasta_move_o_conteudo_inteiro() {
-        let root = fixture("cola-recorte-pasta");
+        let root = &fixture("cola-recorte-pasta").0;
         std::fs::write(root.join("sub/dentro/f.txt"), "f").unwrap();
         assert_eq!(paste(&root, "Beta", &snap(&[root.join("sub/dentro")], true)).unwrap(), vec!["Beta/dentro"]);
         assert_eq!(std::fs::read_to_string(root.join("Beta/dentro/f.txt")).unwrap(), "f");
         assert!(std::fs::symlink_metadata(root.join("sub/dentro")).is_err());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn colisao_ganha_nome_novo_e_o_existente_fica_igual() {
-        let root = fixture("cola-colisao");
-        let ext = fresh("orq-files-fora", "cola-colisao");
+        let root = &fixture("cola-colisao").0;
+        let ext = &Tmp::new("orq-files-fora", "cola-colisao").0;
         std::fs::write(root.join("A.txt"), "primeiro").unwrap();
         std::fs::write(ext.join("A.txt"), "segundo").unwrap();
         std::fs::create_dir_all(root.join("alfa")).unwrap();
@@ -1385,13 +1325,11 @@ src/gerado/
         assert_eq!(std::fs::read_to_string(root.join("A (2).txt")).unwrap(), "segundo");
         assert_eq!(std::fs::read_to_string(root.join("alfa/keep.txt")).unwrap(), "guardado");
         assert_eq!(std::fs::read_to_string(root.join("alfa (2)/novo.txt")).unwrap(), "de fora");
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&ext);
     }
 
     #[test]
     fn auto_colagem_e_recorte_na_mesma_pasta_sao_recusados() {
-        let root = fixture("cola-auto");
+        let root = &fixture("cola-auto").0;
         let err = paste(&root, "", &snap(&[root.join("b.txt")], true)).unwrap_err();
         assert!(err.contains("já está nesta pasta"), "{err}");
         assert!(root.join("b.txt").exists());
@@ -1402,27 +1340,24 @@ src/gerado/
         assert!(err.contains("dela mesma"), "{err}");
         assert!(!root.join("pai/filho/pai").exists());
         assert!(root.join("pai/filho").is_dir());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn um_item_recusado_faz_nada_ser_colado() {
-        let root = fixture("cola-previa");
-        let ext = fresh("orq-files-fora", "cola-previa");
+        let root = &fixture("cola-previa").0;
+        let ext = &Tmp::new("orq-files-fora", "cola-previa").0;
         std::fs::write(root.join(".git/config"), "").unwrap();
         std::fs::write(ext.join("ok.txt"), "ok").unwrap();
         let err = paste(&root, "sub", &snap(&[ext.join("ok.txt"), root.join(".git/config")], false)).unwrap_err();
         assert!(err.contains(".git"), "{err}");
         assert!(!root.join("sub/ok.txt").exists());
         assert!(paste(&root, "sub", &snap(&[], false)).is_err());
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&ext);
     }
 
     #[test]
     fn colar_em_git_ou_de_git_e_recusado() {
-        let root = fixture("cola-git");
-        let ext = fresh("orq-files-fora", "cola-git");
+        let root = &fixture("cola-git").0;
+        let ext = &Tmp::new("orq-files-fora", "cola-git").0;
         std::fs::write(ext.join("x.txt"), "x").unwrap();
         for dest in [".git", "sub/.git", "../fora", "/"] {
             assert!(paste(&root, dest, &snap(&[ext.join("x.txt")], false)).is_err(), "{dest}");
@@ -1432,14 +1367,12 @@ src/gerado/
         assert!(paste(&root, "", &snap(&[root.join(".git/config")], false)).is_err());
         assert!(!root.join("x.txt").exists());
         assert!(!root.join("repo").exists());
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&ext);
     }
 
     #[test]
     fn colar_item_que_some_ou_que_e_junction_e_recusado() {
-        let root = fixture("cola-junction");
-        let ext = fresh("orq-files-fora", "cola-junction");
+        let root = &fixture("cola-junction").0;
+        let ext = &Tmp::new("orq-files-fora", "cola-junction").0;
         assert!(paste(&root, "", &snap(&[ext.join("sumiu.txt")], false)).unwrap_err().contains("não existe mais"));
         std::fs::create_dir_all(ext.join("pasta")).unwrap();
         let atalho = ext.join("pasta").join("atalho");
@@ -1452,29 +1385,25 @@ src/gerado/
             assert!(!root.join("sub/pasta").exists());
         }
         let _ = std::fs::remove_dir(&atalho);
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&ext);
     }
 
     #[test]
     fn paste_detailed_devolve_origem_absoluta_e_destino_relativo() {
-        let root = fixture("detalhe-ok");
-        let ext = fresh("orq-files-fora", "detalhe-ok");
+        let root = &fixture("detalhe-ok").0;
+        let ext = &Tmp::new("orq-files-fora", "detalhe-ok").0;
         std::fs::write(ext.join("A.txt"), "a").unwrap();
         std::fs::write(root.join("A.txt"), "ja existe").unwrap();
         let sources = [ext.join("A.txt")];
         let done = ok_lote(paste_detailed(&root, "sub", &snap(&sources, false)));
-        assert_eq!(done, vec![Pasted { from: ext.join("A.txt").display().to_string(), to: "sub/A.txt".into() }]);
+        assert_eq!(done, vec![Moved { from: ext.join("A.txt").display().to_string(), to: "sub/A.txt".into() }]);
         // A API antiga continua dando só os destinos, com o mesmo nome.
         assert_eq!(paste(&root, "", &snap(&sources, false)).unwrap(), vec!["A (2).txt"]);
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&ext);
     }
 
     #[test]
     fn paste_detailed_recusa_pasta_com_o_proprio_filho_antes_de_mexer() {
-        let root = fixture("detalhe-filho");
-        let ext = fresh("orq-files-fora", "detalhe-filho");
+        let root = &fixture("detalhe-filho").0;
+        let ext = &Tmp::new("orq-files-fora", "detalhe-filho").0;
         std::fs::create_dir_all(ext.join("pasta")).unwrap();
         std::fs::write(ext.join("pasta/f.txt"), "f").unwrap();
         let sources = [ext.join("pasta"), ext.join("pasta/f.txt")];
@@ -1484,8 +1413,6 @@ src/gerado/
         assert!(ext.join("pasta/f.txt").exists(), "nada foi movido");
         let twice = [ext.join("pasta/f.txt"), ext.join("pasta/f.txt")];
         assert!(erro_lote(paste_detailed(&root, "", &snap(&twice, false))).contains("repetido"));
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&ext);
     }
 
     /// Uma pasta limpa, sem `.git`, com um arquivo dentro e outro ao lado: `origem/interna/f.txt` e `origem/g.txt`.
@@ -1512,7 +1439,7 @@ src/gerado/
 
     #[test]
     fn renomeia_pasta_e_os_descendentes_seguem() {
-        let root = fixture("renomeia-pasta");
+        let root = &fixture("renomeia-pasta").0;
         pasta(&root);
         assert_eq!(rename(&root, "origem", "destino").unwrap(), "destino");
         assert_eq!(std::fs::read_to_string(root.join("destino/interna/f.txt")).unwrap(), "f");
@@ -1522,12 +1449,11 @@ src/gerado/
         assert!(rename(&root, "", "x").is_err());
         assert!(rename(&root, "Zeta", "alfa").unwrap_err().starts_with("Já existe"));
         assert!(root.join("Zeta").is_dir() && root.join("alfa").is_dir());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn move_arquivo_e_pasta_para_outra_pasta_e_devolve_o_mapeamento() {
-        let root = fixture("move-ok");
+        let root = &fixture("move-ok").0;
         pasta(&root);
         let got = ok_lote(move_items(&root, &rels(&["origem", "b.txt"]), "Beta"));
         assert_eq!(
@@ -1542,13 +1468,12 @@ src/gerado/
         // De volta para a raiz: "" é o destino.
         assert_eq!(ok_lote(move_items(&root, &rels(&["Beta/b.txt"]), ""))[0].to, "b.txt");
         assert!(root.join("b.txt").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Cada caso recusa o lote inteiro, com `done` vazio, e a mensagem diz o motivo. Depois de todos, nada saiu do lugar.
     #[test]
     fn move_recusa_o_lote_inteiro_antes_de_mexer() {
-        let root = fixture("move-recusa");
+        let root = &fixture("move-recusa").0;
         pasta(&root);
         std::fs::create_dir_all(root.join("x")).unwrap();
         std::fs::write(root.join("x/c.txt"), "x").unwrap();
@@ -1579,12 +1504,11 @@ src/gerado/
         assert!(root.join("b.txt").exists() && root.join("c.txt").exists() && root.join("x/c.txt").exists());
         assert_eq!(std::fs::read_to_string(root.join("Beta/b.txt")).unwrap(), "já estava");
         assert!(!root.join("Beta/c.txt").exists() && !root.join("Beta/origem").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn move_recusa_link_e_junction_no_item_e_no_destino() {
-        let root = fixture("move-junction");
+        let root = &fixture("move-junction").0;
         pasta(&root);
         let junction_ok = junction(&root.join("alias"), &root.join("origem"));
         if !junction_ok {
@@ -1598,12 +1522,11 @@ src/gerado/
             assert!(!root.join("Beta/b.txt").exists());
         }
         let _ = std::fs::remove_dir(root.join("alias"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn lixeira_em_lote_recusa_tudo_antes_de_mexer() {
-        let root = fixture("lote-lixeira");
+        let root = &fixture("lote-lixeira").0;
         pasta(&root);
         std::fs::write(root.join(".git/config"), "").unwrap();
         let err = recycle_many(&root, &rels(&["b.txt", ".git/config"]));
@@ -1613,37 +1536,34 @@ src/gerado/
         assert!(recycle_many(&root, &rels(&[""])).error.is_some());
         assert!(recycle_many(&root, &[]).error.is_some());
         assert!(root.join("b.txt").exists() && root.join(".git/config").exists() && root.join("origem/interna/f.txt").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Vai para a Lixeira só o que foi criado dentro do temporário; a pasta e o arquivo somem da origem.
     #[test]
     fn lixeira_leva_pasta_inteira_e_arquivo_em_lote() {
-        let root = fixture("lixeira-pasta");
+        let root = &fixture("lixeira-pasta").0;
         std::fs::create_dir_all(root.join("lixo/dentro")).unwrap();
         std::fs::write(root.join("lixo/dentro/f.txt"), "f").unwrap();
         std::fs::write(root.join("descartavel.txt"), "d").unwrap();
         assert_eq!(ok_lote(recycle_many(&root, &rels(&["lixo", "descartavel.txt"]))), rels(&["lixo", "descartavel.txt"]));
         assert!(std::fs::symlink_metadata(root.join("lixo")).is_err());
         assert!(std::fs::symlink_metadata(root.join("descartavel.txt")).is_err());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn gravacao_verificada_recusa_mudanca_externa_e_nao_grava() {
-        let root = fixture("verifica-externa");
+        let root = &fixture("verifica-externa").0;
         std::fs::write(root.join("A.txt"), "base").unwrap();
         let lido = read(&root, "A.txt").unwrap();
         std::fs::write(root.join("A.txt"), "de outro programa").unwrap();
         let err = write_checked(&root, "A.txt", "minha versão", &lido.text, lido.bom).unwrap_err();
         assert!(err.contains("foi alterado"), "{err}");
         assert_eq!(std::fs::read_to_string(root.join("A.txt")).unwrap(), "de outro programa");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn gravacao_verificada_preserva_bom_e_fim_de_linha() {
-        let root = fixture("verifica-bom");
+        let root = &fixture("verifica-bom").0;
         std::fs::write(root.join("A.txt"), b"\xEF\xBB\xBFa\r\nb\r\n").unwrap();
         let lido = read(&root, "A.txt").unwrap();
         // O textarea devolve só LF: o CRLF do arquivo volta, e o BOM continua.
@@ -1658,39 +1578,35 @@ src/gerado/
         let lido = read(&root, "b.txt").unwrap();
         write_checked(&root, "b.txt", "fim", &lido.text, lido.bom).unwrap();
         assert_eq!(std::fs::read(root.join("b.txt")).unwrap(), b"fim");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn gravacao_verificada_recusa_bom_trocado_e_arquivo_apagado() {
-        let root = fixture("verifica-bom-troca");
+        let root = &fixture("verifica-bom-troca").0;
         std::fs::write(root.join("A.txt"), b"\xEF\xBB\xBFantes").unwrap();
         assert!(write_checked(&root, "A.txt", "depois", "antes", false).unwrap_err().contains("alterado"));
         assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), b"\xEF\xBB\xBFantes");
         std::fs::remove_file(root.join("A.txt")).unwrap();
         assert!(write_checked(&root, "A.txt", "x", "antes", true).is_err());
         assert!(!root.join("A.txt").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn gravacao_verificada_recusa_link_no_lugar_do_arquivo() {
-        let root = fixture("verifica-link");
+        let root = &fixture("verifica-link").0;
         std::fs::write(root.join("sub/x.md"), "alvo").unwrap();
         // Criar link simbólico exige privilégio no Windows; sem ele, o teste só não roda esta parte.
         if std::os::windows::fs::symlink_file(root.join("sub/x.md"), root.join("link.md")).is_err() {
             eprintln!("sem privilégio para link simbólico: teste pulado");
-            let _ = std::fs::remove_dir_all(&root);
             return;
         }
         assert!(write_checked(&root, "link.md", "novo", "alvo", false).unwrap_err().contains("é um link"));
         assert_eq!(std::fs::read_to_string(root.join("sub/x.md")).unwrap(), "alvo");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn gravacao_verificada_recusa_utf8_invalido_binario_e_caminhos_ruins() {
-        let root = fixture("verifica-recusas");
+        let root = &fixture("verifica-recusas").0;
         std::fs::write(root.join("A.txt"), [b'a', 0xFF, b'b']).unwrap();
         std::fs::write(root.join("bin.dat"), [b'a', 0, b'b']).unwrap();
         assert!(write_checked(&root, "A.txt", "x", "a", false).unwrap_err().contains("UTF-8"));
@@ -1700,13 +1616,12 @@ src/gerado/
         }
         assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), [b'a', 0xFF, b'b']);
         assert!(!root.join("novo.txt").exists() && !root.join("nao-existe.txt").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Enquanto a gravação segura o arquivo, outro programa que tenta gravar nele leva erro, e a gravação dela própria também.
     #[test]
     fn enquanto_a_gravacao_segura_o_arquivo_outro_gravador_nao_entra() {
-        let root = fixture("verifica-trava");
+        let root = &fixture("verifica-trava").0;
         std::fs::write(root.join("A.txt"), "base").unwrap();
         let held = hold(&root, "A.txt").unwrap();
         assert!(OpenOptions::new().write(true).open(root.join("A.txt")).is_err(), "outro gravador entrou com o arquivo travado");
@@ -1714,6 +1629,5 @@ src/gerado/
         drop(held);
         write_checked(&root, "A.txt", "novo", "base", false).unwrap();
         assert_eq!(std::fs::read_to_string(root.join("A.txt")).unwrap(), "novo");
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

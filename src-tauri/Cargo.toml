@@ -5,17 +5,12 @@ edition = "2021"
 
 [lib]
 name = "orquestrador_lib"
-path = "src/lib.rs"
-
-[[bin]]
-name = "orquestrador"
-path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = "2"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = "2"
 tauri-plugin-dialog = "2"
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }

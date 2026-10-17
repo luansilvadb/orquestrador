@@ -136,7 +136,7 @@ function glyphGeometry(page) {
   });
 }
 
-const { scenario, run } = uiSuite('editor-style');
+const scenario = uiSuite('editor-style');
 
 scenario('Markdown: fonte, medidas, fundo, medianiz, seleção e cores de markup como no Antigravity', async ({ page }) => {
   await open(page, 'estilo-editor.md', MD);
@@ -282,5 +282,3 @@ scenario('docs/design-system.md real, aberto no mock: lista, código inline e ma
   assert.equal((await styleOf(page, 'src/titlebar.tsx')).color, 'rgb(206, 145, 120)', 'código inline dentro da lista (#CE9178)');
   await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'editor-style-design-system.png') });
 });
-
-process.exitCode = await run();

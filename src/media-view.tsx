@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
+import { fileName } from './file-tabs';
 
 export type MediaKind = 'image' | 'audio';
 const TYPES: Record<string, { kind: MediaKind; mime: string }> = {
@@ -25,7 +26,7 @@ const TYPES: Record<string, { kind: MediaKind; mime: string }> = {
 
 /** Tipo da mídia pelo nome do arquivo; null se não é mídia (texto e binário desconhecido seguem o caminho de sempre). */
 export function mediaOf(path: string): { kind: MediaKind; mime: string } | null {
-  const name = path.slice(path.lastIndexOf('/') + 1);
+  const name = fileName(path);
   const dot = name.lastIndexOf('.');
   if (dot <= 0) return null;
   return TYPES[name.slice(dot + 1).toLowerCase()] ?? null;
@@ -57,19 +58,19 @@ export function MediaView({ path, shown }: { path: string; shown: boolean }) {
   }, [path]);
 
   if (!media) return null;
-  if (!source) return <Notice text="Lendo o arquivo…" />;
-  if ('error' in source) return <Notice text={source.error} danger />;
+  if (!source) return <Note text="Lendo o arquivo…" />;
+  if ('error' in source) return <Note text={source.error} danger />;
   return media.kind === 'image'
-    ? <ImageBody url={source.url} name={fileNameOf(path)} />
-    : <AudioBody url={source.url} name={fileNameOf(path)} shown={shown} />;
+    ? <ImageBody url={source.url} name={fileName(path)} />
+    : <AudioBody url={source.url} name={fileName(path)} shown={shown} />;
 }
 
-const fileNameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
-
-function Notice({ text, danger }: { text: string; danger?: boolean }) {
+// Aviso no lugar do corpo da aba (lendo, erro, sem conteúdo). Também usado pelas abas do editor central (src/editor-workspace.tsx).
+export function Note({ text, danger, onRetry }: { text: string; danger?: boolean; onRetry?: () => void }) {
   return (
     <Flexbox padding={16} gap={8}>
       <Text as="p" role="status" fontSize={14} type={danger ? 'danger' : 'secondary'}>{text}</Text>
+      {onRetry && <Button size="small" onClick={onRetry} className="self-start">Tentar de novo</Button>}
     </Flexbox>
   );
 }
@@ -91,7 +92,7 @@ function ImageBody({ url, name }: { url: string; name: string }) {
         </Button>
       </Flexbox>
       {failed ? (
-        <Notice text="Não foi possível exibir esta imagem." danger />
+        <Note text="Não foi possível exibir esta imagem." danger />
       ) : natural ? (
         <div className="flex min-h-0 flex-1 overflow-auto">
           <div className="flex min-h-full min-w-full">

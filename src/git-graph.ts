@@ -16,21 +16,11 @@ export function layoutGraph(commits: readonly { hash: string; parents: readonly 
   };
 
   return commits.map((commit) => {
-    const expecting: number[] = [];
-    lanes.forEach((lane, k) => {
-      if (lane?.hash === commit.hash) expecting.push(k);
-    });
+    const expecting = lanes.flatMap((l, k) => (l?.hash === commit.hash ? [k] : []));
 
     // Sem filho conhecido, o commit entra na primeira faixa livre com cor nova; caso contrário, na primeira que o espera.
-    let col: number;
-    let color: number;
-    if (expecting.length) {
-      col = expecting[0];
-      color = lanes[col]!.color;
-    } else {
-      col = freeLane();
-      color = nextColor++;
-    }
+    const col = expecting.length ? expecting[0] : freeLane();
+    const color = expecting.length ? lanes[col]!.color : nextColor++;
 
     const lines: GraphLine[] = [];
     // Faixas que esperavam este commit convergem no ponto (a primeira é a própria faixa do commit).
@@ -64,8 +54,7 @@ export function layoutGraph(commits: readonly { hash: string; parents: readonly 
 
     while (lanes.length && lanes[lanes.length - 1] === null) lanes.pop();
 
-    let width = col + 1;
-    for (const line of lines) width = Math.max(width, line.from + 1, line.to + 1);
+    const width = 1 + Math.max(col, ...lines.flatMap((l) => [l.from, l.to]));
     return { col, color, lines, width };
   });
 }

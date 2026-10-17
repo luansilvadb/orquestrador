@@ -33,7 +33,7 @@ type Props = {
   /** Esc, clique fora e o X fazem o mesmo que este. Sem ele a janela só fecha ao confirmar. */
   onCancel?: () => void;
   /** Chamado depois de fechar. O foco não volta ao botão que abriu a janela: quem chama decide para onde ele vai. */
-  onClosed?: () => void;
+  onClosed: () => void;
 };
 
 export function ChoiceForm({ open, title, onCancel, onClosed, ...form }: Props) {

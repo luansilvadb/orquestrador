@@ -6,7 +6,7 @@
 // Capturas em .playwright-mcp/editor-ui-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { OUT, uiSuite, expand, treeItem, tabs, tabTitles, editorText, focusEditor, columnPoint, primaryCursor } from './editor-ui-harness.mjs';
+import { OUT, uiSuite, openApp, expand, treeItem, tabs, tabTitles, editorText, focusEditor, columnPoint, primaryCursor } from './editor-ui-harness.mjs';
 
 
 // Geometria real da faixa: área visível (scroll), ações do editor à direita, aba ativa e o X dela.
@@ -47,7 +47,7 @@ function assertRevealed(s, label) {
 
 // ---------- cenários (cada um com fixtures próprias; nenhum depende de estado de outro) ----------
 
-const { scenario, run } = uiSuite('editor-ui');
+const scenario = uiSuite('editor-ui');
 
 scenario('faixa de abas em 1040px: aba ativa visível com 1 e 2 grupos, nomes repetidos e longos, X e contador sem sobreposição', async ({ page }) => {
   await page.evaluate(() => {
@@ -235,9 +235,7 @@ scenario('grupo vazio: fechar a última aba de um lado mostra o outro; recupera�
   assert.equal(await page.locator('[data-pane="A"]').count(), 0, 'sem área do grupo A');
 
   // Recuperação com só o B: depois de recarregar, o editor continua visível.
-  await page.reload();
-  await page.getByRole('button', { name: 'Escolher pasta do projeto' }).click();
-  await page.getByRole('navigation', { name: 'Telas' }).waitFor();
+  await openApp(page);
   await page.locator('[data-group="B"] [data-tab]').first().waitFor();
   assert.equal(await page.locator('[data-group="A"]').count(), 0, 'após recarregar, sem grupo A vazio');
   const reloaded = await page.locator('.cm-editor:visible').first().boundingBox();
@@ -385,5 +383,3 @@ scenario('breadcrumbs e Mais Ações: o caminho do arquivo abre o seletor da pas
   await page.getByRole('menuitem', { name: /App\.tsx/ }).click();
   await crumbs.getByRole('button', { name: 'App.tsx', exact: true }).waitFor();
 });
-
-process.exitCode = await run();

@@ -1,7 +1,8 @@
 // A navegação da coluna de ícones, a árvore de pastas (na tela principal) e a barra de status com a branch e o botão do Terminal.
 // A árvore se atualiza sozinha (usePolling). O status do Git vem do App, que o usa no contador da navegação e na barra de status.
 // Arquivo e pasta da árvore têm menu de contexto (clique direito, Shift+F10 e a tecla de contexto); a área vazia do painel tem o menu da raiz do projeto.
-// Seleção com Ctrl e Shift; arrastar e soltar move para pasta ou para a raiz, com o destino mostrado e validado. As ações reais vêm do App pelo `actions`.
+// Seleção com Ctrl e Shift; arrastar e soltar move para pasta ou para a raiz, com o destino mostrado e validado. As ações que mexem no App (abas,
+// rascunhos, telas) vêm pelo `actions`; as que só chamam o backend a árvore chama direto.
 // O visual segue o Explorer do Antigravity/VS Code: ícones do tema Symbols, decorações do Git (cor, letra e "•" na pasta; cinza no ignorado),
 // barra com as ações da view e a seção recolhível com o nome do projeto.
 import { type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -16,47 +17,35 @@ import { decorations, IGNORED } from './explorer-decorations';
 import { FileIcon } from './file-icon';
 import { SourceControl } from './source-control-icon';
 import { fileNameError } from './file-tab-actions';
-import { action, blocked, DIVIDER, useChord } from './file-tabs';
-import { splitPath } from './git-history';
+import { action, blocked, DIVIDER, fileName, useChord } from './file-tabs';
+import { join, splitPath } from './git-history';
 import { usePolling } from './polling';
-import type { DirEntry, GitStatus, Moved } from './types';
+import type { Batch, DirEntry, GitStatus, Moved } from './types';
 
 export type Route = 'arquivos' | 'pesquisa' | 'git';
 
 /** Opções de abertura. Sem elas, o clique simples abre como prévia (a aba seguinte substitui). `permanent`: a aba fica. `side`: abre na área da direita. */
 export type OpenOptions = { permanent?: boolean; side?: boolean };
 
-/** Falha de uma ação em lote: `done` são os itens que já foram feitos (não são desfeitos) e `message` diz o que parou. Quem chama reconcilia com `done`. */
-export class BatchError<T> extends Error {
-  readonly done: T[];
-  constructor(text: string, done: T[]) {
-    super(text);
-    this.name = 'BatchError';
-    this.done = done;
-  }
-}
-
-/** O que o menu e os atalhos da árvore pedem ao App. Erros chegam como exceção (Renomear, Excluir, Mover, Colar) ou viram toast no App (o resto). */
+/**
+ * O que o menu e os atalhos da árvore pedem ao App. Excluir e Mover resolvem com o lote: `done` são os itens já feitos (não são desfeitos)
+ * e `error` diz o que parou; quem chama reconcilia com `done`. Erros que impedem a ação toda chegam como exceção (Renomear, Excluir, Mover,
+ * Colar) ou viram toast no App (o resto).
+ */
 export type FileActions = {
   /** Dos caminhos dados (arquivos ou pastas), os que têm alteração não salva, pastas incluídas. Excluir avisa antes. */
   dirtyOf: (paths: string[]) => string[];
   /** Copia os caminhos de uma lista, um por linha, no formato absoluto ou relativo. Lista com um caminho só copia esse. */
   copyPaths: (kind: 'relative' | 'absolute', paths: string[]) => void;
-  reveal: (path: string) => void;
-  openWith: (path: string) => void;
   openInTerminal: (dir: string) => void;
   /** Cola o caminho no rascunho do Orquestrador. `null` quando ele não está rodando (o item fica desabilitado). */
   addToChat: ((path: string) => void) | null;
-  /** Copia ou recorta um ou vários itens (arquivos ou pastas), por caminho. */
-  copyMany: (paths: string[], cut: boolean) => void;
   /** Renomeia um arquivo ou uma pasta na mesma pasta e devolve o caminho novo. Rejeita com a mensagem do motivo, sem mexer em nada. */
   rename: (path: string, name: string) => Promise<string>;
-  /** Manda os itens (pastas incluídas, com o que está dentro) para a Lixeira e fecha as abas deles. Resolve com os caminhos feitos; se parar no meio, rejeita com `BatchError` (`done` = feitos). */
-  removeMany: (paths: string[]) => Promise<string[]>;
-  /** Move itens para a pasta `dest` ('' é a raiz), relativos ao projeto. Resolve com `{from, to}` de cada um; parada no meio rejeita com `BatchError<Moved>`. */
-  move: (paths: string[], dest: string) => Promise<Moved[]>;
-  /** Abre a pasta (a raiz, '') no Explorer do Windows. */
-  revealDir: (path: string) => void;
+  /** Manda os itens (pastas incluídas, com o que está dentro) para a Lixeira e fecha as abas deles. `done` são os caminhos feitos. */
+  removeMany: (paths: string[]) => Promise<Batch<string>>;
+  /** Move itens para a pasta `dest` ('' é a raiz), relativos ao projeto. `done` tem o `{from, to}` de cada um. */
+  move: (paths: string[], dest: string) => Promise<Batch<Moved>>;
   /** Abre o histórico Git do arquivo ou da pasta. `null` fora do modo `repo`: o item some do menu. */
   history: ((path: string) => void) | null;
   /** Vai para a pesquisa de todo o projeto (`dir` vazio ou omitido) ou da pasta `dir` (relativa, com "/"), com o campo focado. */
@@ -66,14 +55,21 @@ export type FileActions = {
 };
 
 // Caminho relativo com "/" (como o backend); a raiz é ''.
-const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 const inside = (dir: string, path: string) => path.startsWith(`${dir}/`);
 const under = (base: string, path: string) => path === base || inside(base, path);
-const dirOf = (path: string) => splitPath(path).dir;
-const nameOf = (path: string) => splitPath(path).name;
 // Nó provisório ("Lendo a pasta…") tem a chave `<pasta>/`. Nenhum caminho real termina com barra.
 const provisional = (key: string) => key.endsWith('/');
 const where = (dest: string) => (dest ? `“${dest}”` : 'a raiz do projeto');
+
+// Ações que só chamam o backend: o erro vira toast aqui mesmo.
+const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
+// Revelar no Explorer do Windows: a pasta (a raiz, '') abre nela; o arquivo abre a pasta dele com ele marcado.
+const revealPath = (path: string, folder: boolean) => void (folder ? backend.revealDir(path) : backend.revealFile(path)).catch(report);
+// Copiar e recortar põem os itens no clipboard do Windows: colar é no Explorer. Recortar não move nada agora.
+const copyMany = (paths: string[], cut: boolean) => void backend.copyFiles(paths, cut).then(
+  () => toast.success({ title: cut ? `${paths.length} itens recortados. Cole no Explorer para mover.` : `${paths.length} itens copiados. Cole no Explorer.`, duration: 4000 }),
+  report,
+);
 
 type ExplorerTree = { children: Record<string, DirEntry[]>; expanded: string[] };
 /** Tira uma pasta e tudo o que está dentro dela, aberto ou com lista guardada. */
@@ -93,8 +89,8 @@ const remapPath = (path: string, moves: Moved[]) => {
 /** Motivo para soltar `paths` em `dest`, ou null se pode. Pasta não vai para si nem para dentro dela; item já na pasta não tem o que mover. */
 function dropProblem(paths: string[], dest: string): string | null {
   const into = paths.find((p) => under(p, dest));
-  if (into) return `Não dá para mover “${nameOf(into)}” para dentro dele mesmo.`;
-  if (paths.every((p) => dirOf(p) === dest)) return dest ? 'Os itens já estão nesta pasta.' : 'Os itens já estão na raiz do projeto.';
+  if (into) return `Não dá para mover “${fileName(into)}” para dentro dele mesmo.`;
+  if (paths.every((p) => splitPath(p).dir === dest)) return dest ? 'Os itens já estão nesta pasta.' : 'Os itens já estão na raiz do projeto.';
   return null;
 }
 
@@ -158,42 +154,36 @@ const LIST_MAX = 10;
 const DIALOG_BUTTON = 'flex h-7 min-w-[64px] items-center justify-center gap-1.5 rounded-[2px] border border-[var(--ant-color-fill-tertiary)] px-2.5 text-[13px] outline-none focus:ring-1 focus:ring-[var(--ant-color-primary)] focus:ring-offset-2 focus:ring-offset-[var(--ant-color-bg-elevated)] disabled:cursor-default disabled:opacity-40';
 
 /**
- * Casco do diálogo de Excluir, no formato do diálogo do Antigravity/VS Code (Renomear e Criar são inline): caixa de 522 px com raio de 3 px e
- * borda de 1 px, o X no canto, o ícone de 48 px à esquerda (quando há), a pergunta em 18 px, o detalhe em 13 px e os botões à direita,
- * o de confirmar primeiro e o Cancelar depois. Esc, o X e Cancelar não fecham com o pedido rodando; clicar fora não fecha.
+ * Diálogo de Excluir, no formato do diálogo do Antigravity/VS Code (Renomear e Criar são inline): caixa de 522 px com raio de 3 px e
+ * borda de 1 px, o X no canto, o ícone de 48 px à esquerda, a pergunta em 18 px, o detalhe em 13 px e os botões à direita,
+ * o "Mover para a Lixeira" primeiro e o Cancelar depois. Esc, o X e Cancelar não fecham com o pedido rodando; clicar fora não fecha.
+ * O foco começa no confirmar, como no VS Code: Enter confirma.
  */
-function FormDialog({ open, title, detail, icon, busy, confirmLabel, confirmDisabled = false, focusConfirm = false, onClose, onConfirm, children }: {
+function FormDialog({ open, title, detail, busy, onClose, onConfirm, children }: {
   open: boolean;
   /** A pergunta: é também o nome acessível do diálogo. */
   title: string;
-  detail?: ReactNode;
-  icon?: LucideIcon;
+  detail: ReactNode;
   busy: boolean;
-  confirmLabel: string;
-  /** Desabilita o confirmar além de `busy` (ex.: nome inválido). */
-  confirmDisabled?: boolean;
-  /** Foco inicial no confirmar (diálogo sem campo), como no VS Code: Enter confirma. */
-  focusConfirm?: boolean;
   onClose: () => void;
   onConfirm: () => void;
   children?: ReactNode;
 }) {
-  const Icon = icon;
   const close = () => !busy && onClose();
   const body = useRef<HTMLDivElement>(null);
   const confirm = useRef<HTMLButtonElement>(null);
   // O foco fica no diálogo enquanto ele está aberto: o menu de contexto, ao fechar, devolve o foco à árvore logo depois de o diálogo
-  // abrir; aqui ele volta ao ponto de partida (o confirmar ou o primeiro campo), para Enter e a digitação irem ao diálogo.
+  // abrir; aqui ele volta ao confirmar, para Enter ir ao diálogo.
   useEffect(() => {
     if (!open) return;
     const keep = (e: FocusEvent) => {
       const dialog = body.current?.closest('[role="dialog"]');
       if (!dialog || !(e.target instanceof Node) || dialog.contains(e.target)) return;
-      ((focusConfirm ? null : dialog.querySelector('input')) ?? confirm.current)?.focus();
+      confirm.current?.focus();
     };
     document.addEventListener('focusin', keep);
     return () => document.removeEventListener('focusin', keep);
-  }, [open, focusConfirm]);
+  }, [open]);
   return (
     <Modal
       open={open} title={title} closable={false} draggable={false} keyboard maskClosable={false} width={522} onCancel={close}
@@ -202,11 +192,11 @@ function FormDialog({ open, title, detail, icon, busy, confirmLabel, confirmDisa
       footer={(
         <>
           <button
-            ref={confirm} type="button" autoFocus={focusConfirm} disabled={confirmDisabled || busy} onClick={onConfirm}
+            ref={confirm} type="button" autoFocus disabled={busy} onClick={onConfirm}
             className={`${DIALOG_BUTTON} bg-[var(--ant-color-primary)] text-[var(--ant-color-bg-layout)] enabled:hover:bg-[var(--ant-color-primary-hover)]`}
           >
             {busy && <LoaderCircle className="size-3.5 animate-spin" aria-hidden />}
-            {confirmLabel}
+            Mover para a Lixeira
           </button>
           <button
             type="button" disabled={busy} onClick={onClose}
@@ -227,10 +217,10 @@ function FormDialog({ open, title, detail, icon, busy, confirmLabel, confirmDisa
         </button>
       </Flexbox>
       <Flexbox horizontal className="px-2.5 text-[13px] leading-[22px]">
-        {Icon && <Icon className="size-12 shrink-0 text-[var(--ant-color-info)]" strokeWidth={1.5} aria-hidden />}
-        <Flexbox className={`min-w-0 flex-1${Icon ? ' pl-6' : ''}`}>
+        <Info className="size-12 shrink-0 text-[var(--ant-color-info)]" strokeWidth={1.5} aria-hidden />
+        <Flexbox className="min-w-0 flex-1 pl-6">
           <p className="mb-2 flex min-h-12 items-center text-[18px] font-normal leading-[22px] [overflow-wrap:anywhere]">{title}</p>
-          {detail && <p>{detail}</p>}
+          <p>{detail}</p>
           {children}
         </Flexbox>
       </Flexbox>
@@ -336,12 +326,12 @@ function HeaderAction({ icon, label, onClick }: { icon: LucideIcon; label: strin
 }
 
 /** Árvore de pastas do projeto, na faixa à esquerda da tela principal. Pasta abre e fecha; arquivo abre na área do meio (prévia no clique, permanente no duplo clique e no Enter).
- * `reveal` abre as pastas de um arquivo e o seleciona (`id` novo a cada pedido). `project` é o nome da pasta do projeto, título da seção.
+ * `reveal` abre as pastas de um arquivo e o seleciona (um objeto novo a cada pedido). `project` é o nome da pasta do projeto, título da seção.
  * `git` é o status do repositório (null fora do modo `repo`): dá as cores e letras das linhas. */
 export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }: {
   openPath: string | null;
   onOpen: (path: string, options?: OpenOptions) => void;
-  reveal?: { path: string; id: number } | null;
+  reveal?: { path: string } | null;
   actions: FileActions;
   project: string;
   git: GitStatus | null;
@@ -474,8 +464,8 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
 
   // Arquivo de verdade na lista atual. Pasta, nó provisório ("Lendo a pasta…") e caminho que sumiu ficam de fora.
   const isFile = (path: string) => {
-    const dir = dirOf(path);
-    return (tree.children[dir] ?? []).some((entry) => !entry.dir && entry.name === nameOf(path));
+    const { dir, name } = splitPath(path);
+    return (tree.children[dir] ?? []).some((entry) => !entry.dir && entry.name === name);
   };
 
   // Marcação exibida: a seleção, ou o arquivo aberto quando não há seleção.
@@ -485,7 +475,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
 
   const startRename = (path: string) => {
     if (selection.length > 1) return toast.warning({ title: 'Renomeie um item de cada vez.', duration: 3000 });
-    setRenaming({ path, name: nameOf(path), error: '', busy: false });
+    setRenaming({ path, name: fileName(path), error: '', busy: false });
   };
   const startDelete = (paths: string[]) => setDeleting({ paths, error: '', busy: false });
   // Criar abre a pasta de destino (a linha do nome entra nela) e põe ali a linha editável, como no VS Code.
@@ -506,7 +496,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     const history = actions.history;
     const chatLabel = folder ? 'Adicionar Pasta ao Chat' : 'Adicionar ao Chat';
     const chatReason = 'Abra o Orquestrador para mandar ao chat.';
-    const pasteDir = folder ? one : dirOf(one);
+    const pasteDir = folder ? one : splitPath(one).dir;
     const sections: ContextMenuItem[][] = [];
     if (folder) {
       sections.push([
@@ -516,10 +506,10 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     }
     sections.push([
       ...(folder ? [] : [
-        single('open-with', 'Abrir com...', () => actions.openWith(one)),
+        single('open-with', 'Abrir com...', () => void backend.openWith(one).catch(report)),
         single('open-side', 'Abrir à Direita', () => onOpen(one, { side: true })),
       ]),
-      single('reveal', 'Revelar no Explorador', () => (folder ? actions.revealDir(one) : actions.reveal(one)), 'Shift+Alt+R'),
+      single('reveal', 'Revelar no Explorador', () => revealPath(one, folder), 'Shift+Alt+R'),
       single('terminal', 'Abrir no Terminal', () => actions.openInTerminal(pasteDir)),
       ...(history ? [single('history', 'Histórico Git', () => history(one))] : []),
       ...(folder ? [single('find-in', 'Localizar na Pasta...', () => actions.search(one))] : []),
@@ -528,8 +518,8 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
       chat ? action('chat', chatLabel, () => paths.forEach((p) => chat(p))) : blocked('chat', chatLabel, chatReason),
     ]);
     sections.push([
-      action('cut', 'Recortar', () => actions.copyMany(paths, true), 'Ctrl+X'),
-      action('copy', 'Copiar', () => actions.copyMany(paths, false), 'Ctrl+C'),
+      action('cut', 'Recortar', () => copyMany(paths, true), 'Ctrl+X'),
+      action('copy', 'Copiar', () => copyMany(paths, false), 'Ctrl+C'),
       hasFiles
         ? action('paste', 'Colar', () => void pasteInto(pasteDir), 'Ctrl+V')
         : blocked('paste', 'Colar', 'Não há arquivo ou pasta copiado.'),
@@ -556,7 +546,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
       action('root-new-file', 'Novo Arquivo...', () => startCreate('file', '')),
       action('root-new-dir', 'Nova Pasta...', () => startCreate('dir', '')),
       DIVIDER,
-      action('root-reveal', 'Revelar no Explorador de Arquivos', () => actions.revealDir(''), 'Shift+Alt+R'),
+      action('root-reveal', 'Revelar no Explorador de Arquivos', () => revealPath('', true), 'Shift+Alt+R'),
       action('root-search', 'Pesquisar no Projeto', () => actions.search(''), 'Shift+Alt+F'),
       DIVIDER,
       chat ? action('root-chat', 'Adicionar Pasta ao Chat', () => chat(''))
@@ -595,16 +585,9 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
   async function moveInto(paths: string[], dest: string) {
     const problem = dropProblem(paths, dest);
     if (problem) return toast.warning({ title: problem, duration: 4000 });
-    const moving = paths.filter((p) => dirOf(p) !== dest);
-    let done: Moved[] = [];
-    let failure = '';
-    try {
-      done = await actions.move(moving, dest);
-    } catch (e) {
-      failure = message(e);
-      if (e instanceof BatchError) done = e.done as Moved[];
-    }
-    settle([...moving.map(dirOf), dest], done.map((m) => m.from), done);
+    const moving = paths.filter((p) => splitPath(p).dir !== dest);
+    const { done, error: failure } = await actions.move(moving, dest).catch((e: unknown): Batch<Moved> => ({ done: [], error: message(e) }));
+    settle([...moving.map((p) => splitPath(p).dir), dest], done.map((m) => m.from), done);
     if (done.length) await openDir(dest);
     const count = `${done.length} ${done.length === 1 ? 'item' : 'itens'}`;
     if (failure) toast.error({ title: done.length ? `${failure} Antes disso, ${count} foi movido.` : failure, duration: 7000 });
@@ -678,16 +661,16 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
       return;
     }
     const folder = real && !isFile(path);
-    const dirFor = real ? (folder ? path : dirOf(path)) : '';
+    const dirFor = real ? (folder ? path : splitPath(path).dir) : '';
     let handled = true;
     if (ctrl && !e.shiftKey && e.code === 'KeyK') beginChord();
     else if (ctrl && !e.shiftKey && e.code === 'KeyV') void pasteInto(dirFor);
-    else if (real && ctrl && !e.shiftKey && e.code === 'KeyX') actions.copyMany(targets, true);
-    else if (real && ctrl && !e.shiftKey && e.code === 'KeyC') actions.copyMany(targets, false);
+    else if (real && ctrl && !e.shiftKey && e.code === 'KeyX') copyMany(targets, true);
+    else if (real && ctrl && !e.shiftKey && e.code === 'KeyC') copyMany(targets, false);
     else if (real && plain && e.key === 'F2') startRename(path);
     else if (real && plain && e.key === 'Delete') startDelete(targets);
     else if (real && plain && e.key === 'Enter' && !folder) onOpen(path, { permanent: true });
-    else if (altShift && e.code === 'KeyR') (real ? (folder ? actions.revealDir(path) : actions.reveal(path)) : actions.revealDir(''));
+    else if (altShift && e.code === 'KeyR') revealPath(path, !real || folder);
     else if (altShift && e.code === 'KeyF') actions.search(dirFor);
     else if (altShift && e.code === 'KeyC') actions.copyPaths('absolute', real ? targets : ['']);
     else handled = false;
@@ -725,7 +708,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     const key = row.dataset.id ?? '';
     if (!key) return null;
     if (provisional(key)) return key.slice(0, -1); // Nó provisório: a pasta dele.
-    return isFile(key) ? dirOf(key) : key;
+    return isFile(key) ? splitPath(key).dir : key;
   };
   const onDragStart = (e: ReactDragEvent<HTMLElement>) => {
     const key = (e.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]')?.dataset.id ?? '';
@@ -767,7 +750,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
   // diferença de caixa). Mostra junto ao campo; o App e o backend conferem de novo.
   const renameIssue = (r: Renaming) => {
     if (!r.name.trim()) return 'É necessário fornecer um nome de arquivo ou pasta.';
-    const clash = (tree.children[dirOf(r.path)] ?? []).some((e) => e.name !== nameOf(r.path) && e.name.toLowerCase() === r.name.toLowerCase());
+    const clash = (tree.children[splitPath(r.path).dir] ?? []).some((e) => e.name !== fileName(r.path) && e.name.toLowerCase() === r.name.toLowerCase());
     return fileNameError(r.name) || (clash ? `Um arquivo ou pasta ${r.name} já existe nesta localização. Escolha um nome diferente.` : '');
   };
   // Foco na linha da árvore (ou no painel, se a linha não aceita foco): depois do menu, do Enter ou do Esc, a tecla volta ao item.
@@ -786,7 +769,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
   async function submitRename(leaving = false) {
     if (!renaming || renaming.busy || renamingNow.current) return;
     const { path, name } = renaming;
-    if (name === nameOf(path)) return endRename(path, leaving);
+    if (name === fileName(path)) return endRename(path, leaving);
     const problem = renameIssue(renaming);
     if (problem) return setRenaming({ ...renaming, error: problem });
     renamingNow.current = true;
@@ -796,7 +779,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     try {
       const next = await actions.rename(path, name);
       setRenaming(null);
-      settle([dirOf(path)], folder ? [path] : [], [{ from: path, to: next }]);
+      settle([splitPath(path).dir], folder ? [path] : [], [{ from: path, to: next }]);
       setSelection([next]);
       if (!leaving) requestAnimationFrame(() => focusRow(next));
       if (folder && wasOpen) await openDir(next);
@@ -813,15 +796,8 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     if (!deleting || deleting.busy) return;
     const { paths } = deleting;
     setDeleting({ ...deleting, busy: true, error: '' });
-    let gone: string[] = [];
-    let failure = '';
-    try {
-      gone = await actions.removeMany(paths);
-    } catch (e) {
-      failure = message(e);
-      if (e instanceof BatchError) gone = e.done as string[];
-    }
-    settle(paths.map(dirOf), gone);
+    const { done: gone, error: failure } = await actions.removeMany(paths).catch((e: unknown): Batch<string> => ({ done: [], error: message(e) }));
+    settle(paths.map((p) => splitPath(p).dir), gone);
     if (!failure) {
       setDeleting(null);
       toast.success({ title: gone.length === 1 ? 'Enviado para a Lixeira' : `${gone.length} itens enviados para a Lixeira`, duration: 3000 });
@@ -895,7 +871,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
   // Novo Arquivo e Nova Pasta da barra: na pasta selecionada (ou na do arquivo selecionado); sem seleção única, na raiz.
   const barDir = () => {
     const one = selection.length === 1 ? selection[0] : '';
-    return one && isFile(one) ? dirOf(one) : one;
+    return one && isFile(one) ? splitPath(one).dir : one;
   };
 
   const deleteDrafts = deleting ? actions.dirtyOf(deleting.paths) : [];
@@ -989,12 +965,9 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
           aviso das alterações não salvas (que se perdem e fecham as abas). */}
       <FormDialog
         open={!!deleting}
-        icon={Info}
         title={deleteQuestion}
         detail={deleteDetail}
         busy={!!deleting?.busy}
-        confirmLabel="Mover para a Lixeira"
-        focusConfirm
         onClose={() => setDeleting(null)}
         onConfirm={submitDelete}
       >

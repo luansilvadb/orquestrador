@@ -6,10 +6,8 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Popover, ScrollArea } from '@lobehub/ui/base-ui';
 import { backend, message } from './backend';
 import { FileIcon } from './file-icon';
+import { join, splitPath } from './git-history';
 import type { DirEntry } from './types';
-
-const joinPath = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
-const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
 
 export function Breadcrumbs({ path, onOpen }: { path: string; onOpen: (path: string) => void }) {
   const parts = path.split('/').filter(Boolean);
@@ -37,7 +35,7 @@ export function Breadcrumbs({ path, onOpen }: { path: string; onOpen: (path: str
       {dir && (
         <div className="flex h-[22px] items-center gap-1 border-b px-1.5 text-[12px] text-[var(--ant-color-text-secondary)]">
           <button
-            type="button" aria-label="Pasta de cima" title="Pasta de cima" onClick={() => load(parentOf(dir))}
+            type="button" aria-label="Pasta de cima" title="Pasta de cima" onClick={() => load(splitPath(dir).dir)}
             className="flex size-4 items-center justify-center rounded-sm outline-none hover:bg-[var(--ant-color-fill-tertiary)] focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <ChevronLeft className="size-3.5" aria-hidden />
@@ -50,7 +48,7 @@ export function Breadcrumbs({ path, onOpen }: { path: string; onOpen: (path: str
           {error && <p role="alert" className="px-2 py-1 text-[12px] text-[var(--ant-color-error)]">{error}</p>}
           {!entries && !error && <p className="px-2 py-1 text-[12px] text-[var(--ant-color-text-secondary)]">Lendo a pasta…</p>}
           {entries?.map((e) => {
-            const full = joinPath(dir, e.name);
+            const full = join(dir, e.name);
             return (
               <button
                 key={full} type="button" role="option" aria-selected={full === marked} title={full}

@@ -24,9 +24,10 @@ import { EDITOR_HEAD_LINES } from './mock-fixtures';
 import { parseDiffFromFile } from '@pierre/diffs';
 import type { Transport } from './backend';
 import { fileNameError } from './file-tab-actions';
+import { splitPath } from './git-history';
 import {
-  type Batch, type Choice, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
-  type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type Pasted, type QuickOpen,
+  type Batch, type Choice, type ClipboardSnapshot, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
+  type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
   type SearchResults, type SkipReason,
 } from './types';
@@ -53,11 +54,7 @@ const handlers = new Map<string, Handler[]>();
 const emit = <K extends keyof Events>(event: K, payload: Events[K]) =>
   handlers.get(event)?.forEach((h) => (h as (p: Events[K]) => void)(payload));
 
-const base64 = (text: string) => {
-  let binary = '';
-  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
-  return btoa(binary);
-};
+const base64 = (text: string) => new TextEncoder().encode(text).toBase64();
 const terms = new Map<string, { seq: number; text: string }>();
 function out(id: string, text: string) {
   const term = terms.get(id) ?? { seq: 0, text: '' };
@@ -194,8 +191,8 @@ const relOf = (abs: string) => {
   return abs.slice(MOCK_ROOT.length + 1).split('\\').join('/');
 };
 // Clipboard simulado: caminhos absolutos, como o do Windows. Começa vazio e só o simulado o altera.
-let clip: { paths: string[]; cut: boolean } = { paths: [], cut: false };
-const sameClip = (snap: { paths: string[]; cut: boolean }) =>
+let clip: ClipboardSnapshot = { paths: [], cut: false };
+const sameClip = (snap: ClipboardSnapshot) =>
   clip.cut === snap.cut && clip.paths.length === snap.paths.length && clip.paths.every((p, i) => p === snap.paths[i]);
 
 // Chave real de um nome na pasta, sem diferença de caixa (o Windows não diferencia). Undefined se não existe.
@@ -212,7 +209,7 @@ function create(dirPath: string, name: string, asFolder: boolean): string {
 }
 // Colar como o backend: confere todas as origens antes; nome repetido vira "nome (2)", "nome (3)"...; recorte move a entrada e os textos, cópia duplica.
 // `done` recebe cada item assim que sai (como o backend): se um item falha no meio, o que já saiu continua registrado.
-function paste(dest: string, snap: { paths: string[]; cut: boolean }, done: Pasted[] = []): Pasted[] {
+function paste(dest: string, snap: ClipboardSnapshot, done: Moved[]) {
   if (snap.paths.length === 0) throw 'Não há arquivo ou pasta copiado para colar.';
   const target = folderAt(dest);
   if (!target) throw `Pasta não encontrada: ${dest}`;
@@ -220,13 +217,13 @@ function paste(dest: string, snap: { paths: string[]; cut: boolean }, done: Past
   const rels = snap.paths.map(relOf);
   rels.forEach((r, i) => rels.forEach((o, j) => {
     if (i === j) return;
-    const name = split(r).name;
+    const name = splitPath(r).name;
     if (i < j && o.toLowerCase() === r.toLowerCase()) throw `“${name}” está repetido na colagem. Nada foi colado.`;
-    if (r.toLowerCase().startsWith(`${o.toLowerCase()}/`)) throw `“${name}” está dentro de “${split(o).name}”, que também está na colagem. Escolha só um dos dois. Nada foi colado.`;
+    if (r.toLowerCase().startsWith(`${o.toLowerCase()}/`)) throw `“${name}” está dentro de “${splitPath(o).name}”, que também está na colagem. Escolha só um dos dois. Nada foi colado.`;
   }));
   const plan = snap.paths.map((abs) => {
     const rel = relOf(abs);
-    const { dir, name } = split(rel);
+    const { dir, name } = splitPath(rel);
     const entry = folderAt(dir)?.children[name];
     if (!entry) throw `“${name}” não existe mais. Nada foi colado.`;
     if (rel.split('/').some((part) => part.toLowerCase() === '.git')) throw `“${name}” está dentro de uma pasta .git. Nada foi colado.`;
@@ -246,36 +243,30 @@ function paste(dest: string, snap: { paths: string[]; cut: boolean }, done: Past
       }
     }
   };
-  const cloneEntry = (entry: Entry): Entry => (entry.dir
-    ? folder(Object.fromEntries(Object.entries(entry.children).map(([k, v]) => [k, cloneEntry(v)])))
-    : file());
   for (const { rel, name, dir, entry } of plan) {
     if (debug.failOn.includes(rel)) throw `Falha de I/O simulada ao colar “${name}”.`;
     const newName = pick(name, entry.dir);
     const newRel = dest ? `${dest}/${newName}` : newName;
     if (snap.cut) delete folderAt(dir)!.children[name];
-    target.children[newName] = snap.cut ? entry : cloneEntry(entry);
-    // Textos da árvore sob a origem (o próprio arquivo ou os de dentro da pasta) seguem para o destino; cópia deixa os originais.
-    for (const key of Object.keys(TEXTS)) {
-      if (key !== rel && !key.startsWith(`${rel}/`)) continue;
-      const to = newRel + key.slice(rel.length);
-      TEXTS[to] = TEXTS[key];
-      if (snap.cut) delete TEXTS[key];
-    }
+    target.children[newName] = snap.cut ? entry : structuredClone(entry);
+    // Cópia deixa os textos originais.
+    moveTexts(rel, newRel, !snap.cut);
     done.push({ from: absolute(rel), to: newRel });
   }
   // Recorte colado esvazia o clipboard, mas só se ele ainda for o mesmo que foi colado (como o backend).
   if (snap.cut && sameClip(snap)) clip = { paths: [], cut: false };
-  return done;
 }
-// Caminho relativo partido em pasta e nome (pasta '' é a raiz).
-const split = (path: string) => {
-  const cut = path.lastIndexOf('/');
-  return { dir: cut < 0 ? '' : path.slice(0, cut), name: path.slice(cut + 1) };
+// Textos da árvore sob `from` (o próprio arquivo ou os de dentro da pasta) seguem para `to`; com `keep`, os originais ficam.
+const moveTexts = (from: string, to: string, keep = false) => {
+  for (const key of Object.keys(TEXTS)) {
+    if (key !== from && !key.startsWith(`${from}/`)) continue;
+    TEXTS[to + key.slice(from.length)] = TEXTS[key];
+    if (!keep) delete TEXTS[key];
+  }
 };
 // Arquivo que precisa existir para a ação; pasta ou ausente dá a mesma mensagem do backend.
 function requireFile(path: string) {
-  const { dir, name } = split(path);
+  const { dir, name } = splitPath(path);
   const entry = folderAt(dir)?.children[name];
   if (!entry || entry.dir) throw `Arquivo não encontrado: ${path}`;
   return entry;
@@ -297,9 +288,9 @@ const debug = { close: async () => {
   // Texto do disco simulado (o que está gravado, não o rascunho do editor).
   disk: (rel: string) => TEXTS[rel] ?? '',
   // Arquivo novo no disco simulado (fixture de teste): aparece na árvore com o texto dado.
-  addFile: (rel: string, text = '') => { const { dir, name } = split(rel); addFile(dir, name); TEXTS[rel] = text; },
+  addFile: (rel: string, text = '') => { const { dir, name } = splitPath(rel); addFile(dir, name); TEXTS[rel] = text; },
   // Pasta nova no disco simulado (fixture de teste): aparece na árvore. Pasta-mãe que não existe é ignorada.
-  addFolder: (rel: string) => { const { dir, name } = split(rel); const parent = folderAt(dir); if (parent && !parent.children[name]) parent.children[name] = folder(); },
+  addFolder: (rel: string) => { const { dir, name } = splitPath(rel); const parent = folderAt(dir); if (parent && !parent.children[name]) parent.children[name] = folder(); },
   // Falha de I/O simulada: colar ou mover para quando chega num destes caminhos de origem (relativos), como um disco que recusa um item.
   failOn: [] as string[],
   // Falha de leitura de mídia (`read_media`) nestes caminhos, como um disco que não entrega o arquivo.
@@ -308,9 +299,9 @@ const debug = { close: async () => {
   corruptRead: [] as string[],
   // Latência de I/O por comando (ms, somada à base): a gravação demora e o usuário pode digitar enquanto ela não chega.
   delay: {} as Record<string, number>,
-  // Conflito de fixture (só o check de Git): lados `base/ours/theirs` e o texto da pasta (`null` = arquivo ausente).
+  // Conflito de fixture (só o check de Git): lados `ours/theirs` e o texto da pasta (`null` = arquivo ausente).
   addConflict: (rel: string, sides: Sides, text: string | null) => {
-    const { dir, name } = split(rel);
+    const { dir, name } = splitPath(rel);
     if (text !== null) { addFile(dir, name); TEXTS[rel] = text; }
     conflicts.set(rel, sides);
     files.push({ path: rel, origPath: null, staged: null, unstaged: 'conflicted' });
@@ -432,7 +423,7 @@ const hash = (text: string) => {
   for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
   return (h >>> 0).toString(16).padStart(8, '0');
 };
-const isFile = (path: string) => { const { dir, name } = split(path); const e = folderAt(dir)?.children[name]; return !!e && !e.dir; };
+const isFile = (path: string) => { const { dir, name } = splitPath(path); const e = folderAt(dir)?.children[name]; return !!e && !e.dir; };
 const textOf = (path: string) => (isFile(path) ? TEXTS[path] ?? '' : '');
 // Revisão de um arquivo na pasta: a do texto, ou `ausente` quando não existe (como no backend).
 const revOf = (path: string) => (isFile(path) ? hash(textOf(path)) : 'ausente');
@@ -638,10 +629,10 @@ function commitStaged(message: string) {
 }
 
 // Conflitos de merge: os dois lados. `theirs` `null` quer dizer que o outro lado apagou o arquivo.
-type Sides = { base: string | null; ours: string | null; theirs: string | null };
+type Sides = { ours: string | null; theirs: string | null };
 const conflicts = new Map<string, Sides>([
-  ['src/conflito.ts', { base: 'export const v = 1;\n', ours: 'export const v = 2;\n', theirs: 'export const v = 3;\n' }],
-  ['docs/apagado.md', { base: '# Rascunho\n', ours: '# Rascunho\n\nAjuste.\n', theirs: null }],
+  ['src/conflito.ts', { ours: 'export const v = 2;\n', theirs: 'export const v = 3;\n' }],
+  ['docs/apagado.md', { ours: '# Rascunho\n\nAjuste.\n', theirs: null }],
 ]);
 const conflictOf = (path: string): Sides => {
   const found = conflicts.get(path);
@@ -650,7 +641,7 @@ const conflictOf = (path: string): Sides => {
 };
 function conflictState(path: string): Conflict {
   const c = conflictOf(path);
-  return { path, base: c.base, ours: c.ours, theirs: c.theirs, worktree: isFile(path) ? textOf(path) : null, binary: false, revision: revOf(path) };
+  return { ours: c.ours, theirs: c.theirs, worktree: isFile(path) ? textOf(path) : null, binary: false, revision: revOf(path) };
 }
 // Grava a resolução só se a pasta ainda está na revisão lida. Com `markResolved`, o arquivo sai do conflito e fica preparado.
 function writeResolution(path: string, content: string, revision: string, markResolved: boolean) {
@@ -659,7 +650,7 @@ function writeResolution(path: string, content: string, revision: string, markRe
   if (markResolved && /^(<<<<<<<|=======|>>>>>>>)/m.test(content)) {
     throw 'Ainda há marcadores de conflito no texto (<<<<<<<, =======, >>>>>>>). Remova-os antes de marcar como resolvido.';
   }
-  if (!isFile(path)) { const { dir, name } = split(path); addFile(dir, name); }
+  if (!isFile(path)) { const { dir, name } = splitPath(path); addFile(dir, name); }
   TEXTS[path] = content;
   if (markResolved) {
     conflicts.delete(path);
@@ -671,7 +662,7 @@ function acceptDeletion(path: string, revision: string) {
   const c = conflictOf(path);
   if (c.ours !== null && c.theirs !== null) throw 'Os dois lados têm conteúdo: resolva o texto em vez de aceitar a remoção.';
   if (revision !== revOf(path)) throw 'O arquivo mudou desde que foi lido. Nada foi removido; atualize a tela.';
-  const { dir, name } = split(path);
+  const { dir, name } = splitPath(path);
   delete folderAt(dir)!.children[name];
   delete TEXTS[path];
   conflicts.delete(path);
@@ -775,20 +766,17 @@ function searchText(q: ReplaceQuery): SearchResults {
 
 // Prévia: não grava. Arquivo com ocorrência entra com texto original e resultado; o que passa do limite só conta.
 function replacePreview(q: ReplaceQuery, replacement: string): ReplacePreview {
-  const out: ReplacePreview = { files: [], totalFiles: 0, totalMatches: 0, omittedFiles: 0, skipped: [], skippedOmitted: 0 };
+  const out: ReplacePreview = { files: [], omittedFiles: 0 };
   if (!q.text.trim()) return out;
   if (/[\n\r\0]/.test(replacement)) throw 'A substituição precisa ser de uma linha só.';
   const re = compile(q);
   for (const path of candidates(q.include, q.exclude, q.only)) {
-    const why = unreadable(path);
-    if (why) { out.skipped.push({ path, reason: why }); continue; }
+    if (unreadable(path)) continue;
     const { result, count } = replaceIn(textOf(path), re, !q.regex, replacement, !!q.preserveCase);
     if (count === 0) continue;
-    out.totalFiles++;
-    out.totalMatches += count;
-    if (out.files.length < PREVIEW_FILES) out.files.push({ path, revision: revOf(path), bom: false, count, original: textOf(path), result });
+    if (out.files.length < PREVIEW_FILES) out.files.push({ path, revision: revOf(path), count, original: textOf(path), result });
+    else out.omittedFiles++;
   }
-  out.omittedFiles = out.totalFiles - out.files.length;
   return out;
 }
 
@@ -817,9 +805,8 @@ function replaceApply({ query, replacement, files: picks }: ReplaceRequest): Rep
 // Abertura rápida: os caminhos que têm todos os termos. Nome primeiro, depois o mais curto.
 function quickOpen(term: string): QuickOpen {
   const words = term.toLowerCase().split(/\s+/).filter(Boolean);
-  const nameOf = (p: string) => p.slice(p.lastIndexOf('/') + 1).toLowerCase();
   const hits = allFiles().filter((p) => words.every((w) => p.toLowerCase().includes(w)));
-  const nameHit = (p: string) => (words.every((w) => nameOf(p).includes(w)) ? 0 : 1);
+  const nameHit = (p: string) => (words.every((w) => splitPath(p).name.toLowerCase().includes(w)) ? 0 : 1);
   hits.sort((a, b) => nameHit(a) - nameHit(b) || a.length - b.length || a.localeCompare(b));
   return { paths: hits.slice(0, 100), total: hits.length };
 }
@@ -840,7 +827,7 @@ function batchOf<T>(run: (done: T[]) => void): Batch<T> {
 function checkSelection(paths: string[]) {
   if (paths.length === 0) throw 'Nenhum item selecionado.';
   for (const p of paths) if (!existsAt(p)) throw `Item não encontrado: ${p}`;
-  const names = paths.map((p) => split(p).name);
+  const names = paths.map((p) => splitPath(p).name);
   const keys = paths.map((p) => p.toLowerCase());
   keys.forEach((k, i) => keys.forEach((o, j) => {
     if (i === j) return;
@@ -848,10 +835,10 @@ function checkSelection(paths: string[]) {
     if (k.startsWith(`${o}/`)) throw `“${names[i]}” está dentro de “${names[j]}”, que também está na seleção. Escolha só um dos dois.`;
   }));
 }
-const existsAt = (path: string) => { const { dir, name } = split(path); return folderAt(dir)?.children[name] !== undefined; };
+const existsAt = (path: string) => { const { dir, name } = splitPath(path); return folderAt(dir)?.children[name] !== undefined; };
 // Tira `path` (e o que está dentro, se for pasta) da árvore e dos textos.
 function deleteEntry(path: string) {
-  const { dir, name } = split(path);
+  const { dir, name } = splitPath(path);
   delete folderAt(dir)!.children[name];
   for (const key of Object.keys(TEXTS)) if (key === path || key.startsWith(`${path}/`)) delete TEXTS[key];
 }
@@ -862,25 +849,20 @@ function moveItems(paths: string[], dest: string): Batch<Moved> {
     if (!target) throw `Pasta não encontrada: ${dest}`;
     const taken = new Set<string>();
     for (const p of paths) {
-      const { dir, name } = split(p);
+      const { dir, name } = splitPath(p);
       if (dest === p || dest.startsWith(`${p}/`)) throw `Não é possível mover “${name}” para dentro dela mesma ou de uma pasta dentro dela. Nada foi movido.`;
       if (dir === dest) throw `“${name}” já está nesta pasta. Nada foi movido.`;
       if (taken.has(name.toLowerCase()) || existingKey(target, name) !== undefined) throw `Já existe um item chamado “${name}” na pasta de destino. Nada foi movido.`;
       taken.add(name.toLowerCase());
     }
     for (const p of paths) {
-      const { dir, name } = split(p);
+      const { dir, name } = splitPath(p);
       if (debug.failOn.includes(p)) throw `Falha de I/O simulada ao mover “${name}”.`;
       const entry = folderAt(dir)!.children[name];
       delete folderAt(dir)!.children[name];
       target.children[name] = entry;
       const to = dest ? `${dest}/${name}` : name;
-      for (const key of Object.keys(TEXTS)) {
-        if (key === p || key.startsWith(`${p}/`)) {
-          TEXTS[to + key.slice(p.length)] = TEXTS[key];
-          delete TEXTS[key];
-        }
-      }
+      moveTexts(p, to);
       done.push({ from: p, to });
     }
   });
@@ -892,11 +874,11 @@ const MOCK_PNG = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAGxElEQVR4nBXWkd
 const mockBytes = (path: string): ArrayBuffer => {
   if (debug.failRead.includes(path)) throw `Falha de leitura simulada em “${path}”.`;
   if (debug.corruptRead.includes(path)) return Uint8Array.of(0, 1, 2, 3).buffer;
-  const { dir, name } = split(path);
+  const { name } = splitPath(path);
   const dot = name.lastIndexOf('.');
   const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
-  if (!folderAt(dir)?.children[name] || folderAt(dir)?.children[name].dir) throw `Arquivo não encontrado: ${path}`;
-  if (ext === 'png') return Uint8Array.from(atob(MOCK_PNG), (c) => c.charCodeAt(0)).buffer;
+  requireFile(path);
+  if (ext === 'png') return Uint8Array.fromBase64(MOCK_PNG).buffer;
   if (ext === 'wav') return wavSilence(2);
   throw `Tipo de arquivo não aberto como mídia: ${path}`;
 };
@@ -935,7 +917,7 @@ const commands: Record<string, (args: any) => unknown> = {
   },
   // Arquivo ou pasta: a pasta leva os textos de dentro (o backend renomeia a pasta inteira).
   rename_file: ({ path, name }: { path: string; name: string }) => {
-    const { dir, name: from } = split(path);
+    const { dir, name: from } = splitPath(path);
     if (!existsAt(path)) throw `Item não encontrado: ${path}`;
     const problem = fileNameError(name);
     if (problem) throw problem;
@@ -945,12 +927,7 @@ const commands: Record<string, (args: any) => unknown> = {
     parent.children[name] = parent.children[from];
     delete parent.children[from];
     const next = dir ? `${dir}/${name}` : name;
-    for (const key of Object.keys(TEXTS)) {
-      if (key === path || key.startsWith(`${path}/`)) {
-        TEXTS[next + key.slice(path.length)] = TEXTS[key];
-        delete TEXTS[key];
-      }
-    }
+    moveTexts(path, next);
     return next;
   },
   reveal_file: ({ path }: { path: string }) => void requireFile(path),
@@ -964,15 +941,8 @@ const commands: Record<string, (args: any) => unknown> = {
   clipboard_snapshot: () => structuredClone(clip),
   // Colagem com o detalhe: o que foi colado (`from` absoluto, `to` relativo) e o erro do que parou. Recusas antes de mexer não deixam nada feito;
   // uma falha de I/O no meio deixa feito o que já saiu, como o backend.
-  paste_files_detailed: ({ dest, snap }: { dest: string; snap: { paths: string[]; cut: boolean } }): Batch<Pasted> => {
-    const done: Pasted[] = [];
-    try {
-      paste(dest, snap, done);
-      return { done, error: null };
-    } catch (e) {
-      return { done, error: String(e) };
-    }
-  },
+  paste_files_detailed: ({ dest, snap }: { dest: string; snap: ClipboardSnapshot }): Batch<Moved> =>
+    batchOf<Moved>((done) => paste(dest, snap, done)),
   write_file_checked: ({ path, text, base, bom }: { path: string; text: string; base: string; bom: boolean }) => {
     requireFile(path);
     // Como o backend: o BOM do disco tem de bater com `bom`, e o texto cru com `base`. Nada é normalizado.
@@ -1014,9 +984,7 @@ const commands: Record<string, (args: any) => unknown> = {
     return listing(dir, path);
   },
   read_file: ({ path }: { path: string }) => {
-    const parts = path.split('/'), name = parts.pop()!;
-    const entry = folderAt(parts.join('/'))?.children[name];
-    if (!entry || entry.dir) throw `Arquivo não encontrado: ${path}`;
+    requireFile(path);
     if (path.endsWith('.png')) return { binary: true, tooLarge: false, readOnly: false, bom: false, text: '' };
     if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, readOnly: false, bom: false, text: '' };
     return { binary: false, tooLarge: false, readOnly: false, bom: false, text: TEXTS[path] ?? '' };
@@ -1069,7 +1037,6 @@ const commands: Record<string, (args: any) => unknown> = {
   },
   stop_executor: () => {},
   has_running: () => false,
-  shutdown: () => {},
 };
 
 export const mock: Transport = {
@@ -1096,5 +1063,8 @@ export const mock: Transport = {
   close: async () => void (await debug.close()),
   isMaximized: async () => false,
   setTitle: async (title) => { document.title = title; },
-  onResized: async () => () => {},
+  onResized: async (h) => {
+    addEventListener('resize', h);
+    return () => removeEventListener('resize', h);
+  },
 };

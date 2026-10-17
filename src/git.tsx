@@ -9,7 +9,7 @@ import { backend, message } from './backend';
 import { FileIcon } from './file-icon';
 import { KIND_COLOR } from './explorer-decorations';
 import { GRAPH_DEFAULT, GraphSection, type GraphRemote } from './git-graph-view';
-import { HistoryPanel, type HistoryRequest, KIND, nextHistoryId, splitPath } from './git-history';
+import { HistoryPanel, type HistoryRequest, KIND, type OpenCommitTarget, splitPath } from './git-history';
 import { usePolling } from './polling';
 import type { DiffSide, TabTarget } from './workspace-model';
 import type { GitGuard } from './git-guard';
@@ -67,8 +67,6 @@ export function usePolled<T>(read: () => Promise<T>, enabled: boolean) {
 }
 
 type GitPoll = ReturnType<typeof usePolled<GitState>>;
-/** Opções de abertura pedidas à tela de cima. `permanent` abre de vez (duplo clique) em vez de prévia. */
-export type OpenTargetOptions = { permanent?: boolean };
 export type GitSidebarProps = {
   git: GitPoll;
   locked: boolean;
@@ -78,19 +76,19 @@ export type GitSidebarProps = {
   active: boolean;
   /** Alvo aberto no editor central: marca a linha de diff (do mesmo lado) ou de conflito correspondente. */
   selected?: TabTarget | null;
-  onOpenTarget: (target: TabTarget, options?: OpenTargetOptions) => void;
-  onOpenFile: (path: string, options?: OpenTargetOptions) => void;
-  /** Pedido de histórico: um `id` novo abre a lista (do projeto, ou do arquivo em `path`). */
+  onOpenTarget: OpenCommitTarget;
+  /** `permanent` abre de vez (duplo clique) em vez de prévia. */
+  onOpenFile: (path: string, options?: { permanent?: boolean }) => void;
+  /** Pedido de histórico: um pedido novo abre a lista (do projeto, ou do arquivo em `path`). */
   historyRequest?: HistoryRequest;
 };
 
-type Remote = 'fetch' | 'pull' | 'push';
 // Operação em curso. O commit com push passa por 'commit' e depois por 'push'.
 // stage e branch entram na mesma trava: enquanto uma roda, nada mexe no índice nem na branch.
-type Busy = Remote | 'commit' | 'stage' | 'branch';
+type Busy = GraphRemote | 'commit' | 'stage' | 'branch';
 type CommitMode = 'commit' | 'commit-push';
 type WithBusy = <T>(kind: Busy, task: () => Promise<T>) => Promise<T | undefined>;
-const REMOTE: Record<Remote, { run: () => Promise<string>; done: string }> = {
+const REMOTE: Record<GraphRemote, { run: () => Promise<string>; done: string }> = {
   fetch: { run: () => backend.gitFetch(), done: 'Busca concluída' },
   pull: { run: () => backend.gitPull(), done: 'Commits recebidos' },
   push: { run: () => backend.gitPush(), done: 'Enviado' },
@@ -129,8 +127,9 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
   /** Tela Git aberta e esta lista visível: só então o gráfico consulta o Git. */
   active: boolean;
   selected: TabTarget | null | undefined;
-  onOpenTarget: (target: TabTarget, options?: OpenTargetOptions) => void;
-  onOpenFile: (path: string, options?: OpenTargetOptions) => void;
+  onOpenTarget: OpenCommitTarget;
+  /** `permanent` abre de vez (duplo clique) em vez de prévia. */
+  onOpenFile: (path: string, options?: { permanent?: boolean }) => void;
   onShowHistory: () => void;
 }) {
   const [busy, setBusy] = useState<Busy | null>(null);
@@ -197,7 +196,7 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
     }
   };
 
-  const remote = (kind: Remote) => withBusy(kind, () => run(async () => {
+  const remote = (kind: GraphRemote) => withBusy(kind, () => run(async () => {
     const out = await REMOTE[kind].run();
     toast.success({ title: REMOTE[kind].done, description: lastLine(out), duration: 3000 });
   }, refreshWithGraph));
@@ -518,9 +517,7 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
           type="button" onClick={onToggle} aria-expanded={!collapsed}
           className="flex h-full min-w-0 flex-1 items-center text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
         >
-          {collapsed
-            ? <ChevronRight className="mx-0.5 size-4 shrink-0" aria-hidden />
-            : <ChevronDown className="mx-0.5 size-4 shrink-0" aria-hidden />}
+          <ChevronRight className={`mx-0.5 size-4 shrink-0 transition-transform${collapsed ? '' : ' rotate-90'}`} aria-hidden />
           <span className="min-w-0 shrink truncate text-[12px] font-medium">{title}</span>
           <span className="ml-auto shrink-0 rounded-full bg-[var(--ant-color-fill-secondary)] px-[5px] text-[11px] leading-[18px] tabular-nums">{files.length}</span>
         </button>
@@ -607,24 +604,20 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
  */
 export function GitSidebar({ git, locked, guard, active, selected, onOpenTarget, onOpenFile, historyRequest }: GitSidebarProps) {
   const [view, setView] = useState<'changes' | 'history'>('changes');
-  const [request, setRequest] = useState<HistoryRequest>({ path: null, id: 0 });
-  const requestId = historyRequest?.id;
+  const [request, setRequest] = useState<HistoryRequest>({ path: null });
 
-  // Pedido com `id` novo abre o histórico no escopo pedido. O mesmo id não repete o pedido.
+  // Pedido novo abre o histórico no escopo pedido. Sem pedido (a montagem), a barra abre nas alterações.
   useEffect(() => {
-    // id 0 é o pedido inicial da montagem: não é pedido de histórico, a barra abre nas alterações.
-    if (!historyRequest || historyRequest.id === 0) return;
+    if (!historyRequest) return;
     setRequest(historyRequest);
     setView('history');
-    // Só o id conta: o App pode passar um objeto novo a cada render.
-  }, [requestId]);
+  }, [historyRequest]);
 
   // O cabeçalho alterna para o histórico do projeto inteiro; de volta, a lista de mudanças.
   const showHistory = () => {
-    setRequest({ path: null, id: nextHistoryId() });
+    setRequest({ path: null });
     setView('history');
   };
-  const showChanges = () => setView('changes');
 
   const { data, error, refresh } = git;
   if (data && data.kind !== 'repo') {
@@ -645,7 +638,7 @@ export function GitSidebar({ git, locked, guard, active, selected, onOpenTarget,
       <div className={view === 'history' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
         <HistoryPanel
           request={request} active={active && view === 'history'} selected={selected}
-          onOpenTarget={onOpenTarget} onShowChanges={showChanges}
+          onOpenTarget={onOpenTarget} onShowChanges={() => setView('changes')}
         />
       </div>
     </Flexbox>

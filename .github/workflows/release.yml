@@ -42,32 +42,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "As versões dos manifests não batem com $version." }
 
           # Release já publicada para a tag não é tocada. Rascunho de tentativa anterior pode ser refeito.
-          $errFile = Join-Path $env:RUNNER_TEMP 'gh-view.err'
-          $view = & gh release view $env:TAG --repo $env:REPO --json isDraft 2> $errFile
-          $code = $LASTEXITCODE
-          $err = if (Test-Path $errFile) { Get-Content $errFile -Raw } else { '' }
-          if ($code -eq 0) {
+          $view = gh release view $env:TAG --repo $env:REPO --json isDraft 2>&1
+          if ($LASTEXITCODE -eq 0) {
             if (-not ($view | ConvertFrom-Json).isDraft) {
               throw "A release $($env:TAG) já está publicada. Ela não é alterada por este job: crie uma versão nova."
             }
             Write-Host "Rascunho de $($env:TAG) de uma tentativa anterior: será refeito."
-          } elseif ($err -notmatch 'not found') {
-            throw "gh release view falhou (código $code): $err"
+          } elseif ("$view" -notmatch 'not found') {
+            throw "gh release view falhou (código $LASTEXITCODE): $view"
           }
 
           # A versão nova precisa ser maior que a última publicada; o app não instala versão menor.
-          $errFile = Join-Path $env:RUNNER_TEMP 'gh-latest.err'
-          $latest = & gh api "repos/$($env:REPO)/releases/latest" --jq .tag_name 2> $errFile
-          $code = $LASTEXITCODE
-          $err = if (Test-Path $errFile) { Get-Content $errFile -Raw } else { '' }
+          $latest = gh api "repos/$($env:REPO)/releases/latest" --jq .tag_name 2>&1
           $previous = ''
-          if ($code -eq 0) {
+          if ($LASTEXITCODE -eq 0) {
             $previous = ([string]$latest).Trim().TrimStart('v')
             if (-not ([version]$version -gt [version]$previous)) {
               throw "$version não é maior que a última release publicada ($previous)."
             }
-          } elseif ($err -notmatch 'HTTP 404') {
-            throw "gh api releases/latest falhou (código $code): $err"
+          } elseif ("$latest" -notmatch 'HTTP 404') {
+            throw "gh api releases/latest falhou (código $LASTEXITCODE): $latest"
           }
 
           node scripts/release.mjs check-notes $version $previous
@@ -102,10 +96,11 @@ jobs:
 
       # Notas completas (docs/releases/vX.Y.Z.md) no latest.json (com o H1) e, sem o título, no corpo da release (o GitHub já mostra o nome).
       # Na URL do instalador, o tauri-action grava a URL da API do asset; o app precisa da URL pública da tag.
+      # Daqui em diante, comando nativo que sai com código diferente de 0 lança: o runner já põe $ErrorActionPreference = 'stop'.
       - name: Pôr as notas completas e a URL pública no latest.json
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $version = $env:TAG.Substring(1)
           $notes = "docs/releases/v$version.md"
           $dir = Join-Path $env:RUNNER_TEMP 'release-manifest'
@@ -114,66 +109,44 @@ jobs:
           $body = Join-Path $dir 'body.md'
 
           node scripts/release.mjs release-body $version $body
-          if ($LASTEXITCODE -ne 0) { throw 'Não consegui gerar o corpo da release a partir de docs/releases.' }
-
           & gh release edit $env:TAG --repo $env:REPO --notes-file $body
-          if ($LASTEXITCODE -ne 0) { throw "gh release edit (notas) falhou com código $LASTEXITCODE." }
-
           & gh release download $env:TAG --repo $env:REPO --pattern latest.json --dir $dir --clobber
-          if ($LASTEXITCODE -ne 0) { throw "gh release download (latest.json) falhou com código $LASTEXITCODE." }
-
           node scripts/release.mjs prepare-manifest $version $manifest $notes
-          if ($LASTEXITCODE -ne 0) { throw 'Não consegui preparar o latest.json.' }
-
           & gh release upload $env:TAG $manifest --repo $env:REPO --clobber
-          if ($LASTEXITCODE -ne 0) { throw "gh release upload (latest.json) falhou com código $LASTEXITCODE." }
 
       # Antes de publicar: rascunho, instalador (baixado e verificado com a chave pública do tauri.conf.json), .sig, manifesto e corpo da release.
+      # Asset ausente faz o download falhar; .exe vazio não passa na assinatura.
       - name: Conferir o rascunho antes de publicar
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $version = $env:TAG.Substring(1)
           $exe = "Orquestrador_${version}_x64-setup.exe"
 
-          $json = & gh release view $env:TAG --repo $env:REPO --json isDraft,assets,body
-          if ($LASTEXITCODE -ne 0) { throw "gh release view falhou com código $LASTEXITCODE." }
+          $json = & gh release view $env:TAG --repo $env:REPO --json isDraft,body
           $release = $json | ConvertFrom-Json
           if (-not $release.isDraft) { throw "A release $($env:TAG) já não é rascunho; não será publicada por este job." }
-          $names = @($release.assets | ForEach-Object { $_.name })
-          foreach ($needed in @($exe, "$exe.sig", 'latest.json')) {
-            if ($names -notcontains $needed) { throw "Falta $needed na release $($env:TAG). Assets: $($names -join ', ')" }
-          }
-          if (($release.assets | Where-Object { $_.name -eq $exe } | Select-Object -First 1).size -le 0) { throw "$exe está vazio na release." }
 
           $dir = Join-Path $env:RUNNER_TEMP 'release-check'
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           & gh release download $env:TAG --repo $env:REPO --pattern latest.json --pattern "$exe.sig" --pattern $exe --dir $dir --clobber
-          if ($LASTEXITCODE -ne 0) { throw "gh release download (conferência) falhou com código $LASTEXITCODE." }
-
           node scripts/release.mjs verify-manifest $version (Join-Path $dir 'latest.json') (Join-Path $dir "$exe.sig") "docs/releases/v$version.md"
-          if ($LASTEXITCODE -ne 0) { throw "latest.json ou $exe.sig não conferem com a versão $version." }
 
           # Assinatura Minisign do instalador baixado, com a pubkey do tauri.conf.json: key id, payload e comentário confiável.
           node scripts/release.mjs verify-installer $version (Join-Path $dir $exe) (Join-Path $dir "$exe.sig")
-          if ($LASTEXITCODE -ne 0) { throw "$exe não confere com a assinatura e a chave pública." }
 
           # O corpo da release tem de ser o texto das notas sem o título (começa em ## Resumo; só CRLF/LF e espaço final podem diferir).
           $bodyFile = Join-Path $dir 'body.md'
           [System.IO.File]::WriteAllText($bodyFile, [string]$release.body)
           node scripts/release.mjs verify-body $bodyFile "docs/releases/v$version.md"
-          if ($LASTEXITCODE -ne 0) { throw "O corpo da release $($env:TAG) não é o texto de docs/releases/v$version.md sem o título." }
 
       # Último passo: a release vira a latest estável, que é o endereço que os apps consultam. Só chega aqui se a conferência passou.
       - name: Publicar como a última release estável
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           & gh release edit $env:TAG --repo $env:REPO --draft=false --latest
-          if ($LASTEXITCODE -ne 0) { throw "gh release edit (publicar) falhou com código $LASTEXITCODE." }
-
           $json = & gh release view $env:TAG --repo $env:REPO --json isDraft,isPrerelease
-          if ($LASTEXITCODE -ne 0) { throw "gh release view (estado) falhou com código $LASTEXITCODE." }
           $state = $json | ConvertFrom-Json
           if ($state.isDraft -or $state.isPrerelease) { throw "Estado inesperado depois de publicar: $json" }
 

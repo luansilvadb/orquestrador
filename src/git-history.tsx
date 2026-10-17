@@ -11,13 +11,8 @@ import { backend, message } from './backend';
 import type { TabTarget } from './workspace-model';
 import type { CommitDetail, CommitFile, GitKind } from './types';
 
-/** Pedido de histórico: `path` null é o projeto inteiro. Um `id` novo sempre refaz a lista. */
-export type HistoryRequest = { path: string | null; id: number };
-
-// Um só contador para todo pedido de histórico (do menu da árvore e do cabeçalho da barra): dois pedidos nunca dividem o id,
-// senão o painel acha que o segundo já foi carregado e mostra a lista anterior.
-let historyIds = 0;
-export const nextHistoryId = () => ++historyIds;
+/** Pedido de histórico: `path` null é o projeto inteiro. Um pedido novo (outro objeto) sempre refaz a lista. */
+export type HistoryRequest = { path: string | null };
 
 export const KIND: Record<GitKind, { letter: string; title: string }> = {
   modified: { letter: 'M', title: 'modificado' },
@@ -33,6 +28,8 @@ export function splitPath(path: string) {
   const slash = path.lastIndexOf('/');
   return { name: path.slice(slash + 1), dir: slash >= 0 ? path.slice(0, slash) : '' };
 }
+/** Junta pasta e nome num caminho relativo ao projeto (pasta '' é a raiz). */
+export const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 
 /** Commits por página, no histórico e no gráfico. */
 export const PAGE = 50;
@@ -71,22 +68,15 @@ export function usePagedList<T>(fetchPage: (offset: number, scope: string | null
   // Cada pedido tem o seu número: a resposta de um pedido já trocado por outro é descartada.
   const listSeq = useRef(0);
 
-  function reload(next: string | null) {
-    const seq = ++listSeq.current;
-    setScope(next);
-    if (emptyOnReload) {
-      setItems(null);
-      setMore(false);
-      setError('');
-    }
+  // Busca uma página: a primeira troca a lista (e limpa o erro), as seguintes (`add`) entram no fim.
+  function page(offset: number, scope: string | null, seq: number, add: boolean) {
     setLoading(true);
-    fetchPage(0, next).then(
+    fetchPage(offset, scope).then(
       (list) => {
-        if (seq === listSeq.current) {
-          setItems(list);
-          setMore(list.length === PAGE);
-          setError('');
-        }
+        if (seq !== listSeq.current) return;
+        setItems((p) => (add ? [...(p ?? []), ...list] : list));
+        setMore(list.length === PAGE);
+        if (!add) setError('');
       },
       (e: unknown) => {
         if (seq === listSeq.current) setError(message(e));
@@ -96,23 +86,18 @@ export function usePagedList<T>(fetchPage: (offset: number, scope: string | null
     });
   }
 
+  function reload(next: string | null) {
+    setScope(next);
+    if (emptyOnReload) {
+      setItems(null);
+      setMore(false);
+      setError('');
+    }
+    page(0, next, ++listSeq.current, false);
+  }
+
   function loadMore() {
-    if (!items || loading) return;
-    const seq = listSeq.current;
-    setLoading(true);
-    fetchPage(items.length, scope).then(
-      (list) => {
-        if (seq === listSeq.current) {
-          setItems((prev) => [...(prev ?? []), ...list]);
-          setMore(list.length === PAGE);
-        }
-      },
-      (e: unknown) => {
-        if (seq === listSeq.current) setError(message(e));
-      },
-    ).finally(() => {
-      if (seq === listSeq.current) setLoading(false);
-    });
+    if (items && !loading) page(items.length, scope, listSeq.current, true);
   }
 
   return { scope, items, more, loading, error, reload, loadMore };
@@ -204,7 +189,7 @@ export type HistoryPanelProps = {
   /** Visível e com a tela Git aberta. Só então carrega; a lista fica na memória enquanto o painel está escondido. */
   active: boolean;
   selected: TabTarget | null | undefined;
-  onOpenTarget: (target: TabTarget, options?: { permanent?: boolean }) => void;
+  onOpenTarget: OpenCommitTarget;
   onShowChanges: () => void;
 };
 
@@ -214,7 +199,7 @@ export function HistoryPanel({ request, active, selected, onOpenTarget, onShowCh
   const { scope, items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList(historyPage, true);
   const { openHash, detail, detailError, open: openCommit, close: closeCommit } = useCommitDetail();
   // Último pedido que já foi carregado: voltar à tela não recarrega a lista à toa.
-  const loadedId = useRef<number | null>(null);
+  const loaded = useRef<HistoryRequest | null>(null);
 
   // Escopo da lista carregada: null é o projeto. Vem do pedido, ou do "Projeto inteiro" da barra.
   function reload(path: string | null) {
@@ -222,13 +207,13 @@ export function HistoryPanel({ request, active, selected, onOpenTarget, onShowCh
     reloadList(path);
   }
 
-  // Pedido novo (id diferente) ou primeira vez visível: recarrega o escopo pedido.
+  // Pedido novo ou primeira vez visível: recarrega o escopo pedido.
   useEffect(() => {
-    if (!active || loadedId.current === request.id) return;
-    loadedId.current = request.id;
+    if (!active || loaded.current === request) return;
+    loaded.current = request;
     reload(request.path);
     // `reload` só lê refs e setters: não precisa estar nas dependências.
-  }, [request.id, request.path, active]);
+  }, [request, active]);
 
   const inDetail = openHash !== null;
 

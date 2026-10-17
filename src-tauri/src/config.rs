@@ -94,11 +94,8 @@ pub fn check_choice(role: &str, c: &Choice) -> Result<(), String> {
     if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
 }
 
-pub fn config_path() -> Result<PathBuf, String> {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .filter(|v| !v.is_empty())
-        .ok_or("LOCALAPPDATA não está definido; não há onde guardar a configuração.")?;
-    Ok(PathBuf::from(base).join("orquestrador").join("config.json"))
+pub fn config_path() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(|b| PathBuf::from(b).join("orquestrador").join("config.json"))
 }
 
 /// O arquivo é lido como `Config` (ver o derive): chave que falta vale o padrão do que ela cobre. Forma errada é
@@ -204,41 +201,38 @@ pub fn options(cfg: &Config, codex_exe: &str) -> Options {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::fresh;
+    use crate::testutil::Tmp;
 
-    fn temp(name: &str) -> PathBuf {
-        fresh("orq-cfg", name).join("config.json")
-    }
-
-    fn drop_dir(config: &Path) {
-        let _ = std::fs::remove_dir_all(config.parent().unwrap());
+    /// O `config.json` de uma pasta que some com o `Tmp` devolvido.
+    fn temp(name: &str) -> (Tmp, PathBuf) {
+        let tmp = Tmp::new("orq-cfg", name);
+        let path = tmp.0.join("config.json");
+        (tmp, path)
     }
 
     #[test]
     fn sem_arquivo_valem_os_padroes() {
-        let path = temp("none");
+        let (_tmp, path) = temp("none");
         let cfg = read(&path).unwrap();
-        drop_dir(&path);
         assert_eq!(cfg, Config::default());
         assert_eq!((cfg.orchestrator.tool.as_str(), cfg.executor.tool.as_str()), ("codex", "claude"));
     }
 
     #[test]
     fn arquivo_sobrepoe_os_padroes_e_volta_igual_depois_de_salvo() {
-        let path = temp("over");
+        let (_tmp, path) = temp("over");
         std::fs::write(&path, r#"{"orchestrator":{"tool":"claude","model":"opus","effort":"high"}}"#).unwrap();
         let cfg = read(&path).unwrap();
         assert_eq!(cfg.orchestrator, Choice::new("claude", "opus", "high"));
         assert_eq!(cfg.executor, Choice::new("claude", "", ""));
         save(&path, &cfg).unwrap();
         assert_eq!(read(&path).unwrap(), cfg);
-        drop_dir(&path);
     }
 
     /// Uma chave `maxParallel` de versões antigas não dita teto, seja qual for o valor, e some ao salvar.
     #[test]
     fn maxparallel_antigo_e_ignorado_e_nao_e_gravado() {
-        let path = temp("legado");
+        let (_tmp, path) = temp("legado");
         for legacy in ["0", "17", "\"muitos\"", "null", "7"] {
             let json = format!(r#"{{"executor":{{"tool":"codex","effort":"low"}},"maxParallel":{legacy}}}"#);
             std::fs::write(&path, json).unwrap();
@@ -247,31 +241,28 @@ mod tests {
             save(&path, &cfg).unwrap();
             assert!(!std::fs::read_to_string(&path).unwrap().contains("maxParallel"), "maxParallel {legacy} saiu do arquivo");
         }
-        drop_dir(&path);
     }
 
     #[test]
     fn arquivo_ilegivel_e_erro_sem_fallback() {
-        let path = temp("bad");
+        let (_tmp, path) = temp("bad");
         std::fs::write(&path, "{ isto nao e json").unwrap();
         assert!(read(&path).unwrap_err().contains("JSON ilegível"));
-        drop_dir(&path);
     }
 
     /// A forma errada não cai no padrão: papel sem `tool`, valor `null` e arquivo que não é objeto são erro.
     #[test]
     fn forma_errada_e_erro_e_nao_cai_no_padrao() {
-        let path = temp("forma");
+        let (_tmp, path) = temp("forma");
         for json in [r#"{"executor":{"model":"opus"}}"#, r#"{"executor":{"tool":"claude","model":null}}"#, r#"["claude"]"#] {
             std::fs::write(&path, json).unwrap();
             assert!(read(&path).unwrap_err().contains("JSON ilegível"), "{json}");
         }
-        drop_dir(&path);
     }
 
     #[test]
     fn valores_invalidos_sao_recusados_com_o_motivo() {
-        let path = temp("invalid");
+        let (_tmp, path) = temp("invalid");
         for (json, why) in [
             (r#"{"executor":{"tool":"gemini"}}"#, "ferramenta 'gemini' desconhecida"),
             (r#"{"executor":{"tool":"claude","effort":"ultra"}}"#, "esforço 'ultra' inválido para claude"),
@@ -282,7 +273,6 @@ mod tests {
             let err = read(&path).unwrap_err();
             assert!(err.contains(why), "{json}: {err}");
         }
-        drop_dir(&path);
     }
 
     #[test]

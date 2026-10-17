@@ -3,12 +3,12 @@
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import {
-  blockCount, conflictKey, decodeRecovery, dirtyKeys, dropData, encodeRecovery, hasDraftAt, hasMarkers, isBufferDirty, MAX_DRAFT_CHARS,
+  blockCount, conflictKey, decodeRecovery, dirtyKeys, encodeRecovery, hasDraftAt, hasMarkers, isBufferDirty, MAX_DRAFT_CHARS,
   MAX_RECOVERY_CHARS, parseConflict, patchHunks, remapData, renderConflict, toDiskNewlines,
 } from '../src/workspace-store.ts';
 
 const buffer = (over = {}) => ({
-  docId: 'doc-1', path: 'src/a.ts', raw: 'a\nb', bom: false, newline: '\n', draft: 'a\nb', readOnly: false, cursor: null, ...over,
+  docId: 'doc-1', path: 'src/a.ts', raw: 'a\nb', bom: false, newline: '\n', draft: 'a\nb', readOnly: false, ...over,
 });
 
 // ---- Buffers compartilhados e sujeira ----
@@ -63,15 +63,6 @@ check('Conflito acompanha o rename: a chave muda para o caminho novo', () => {
   const moved = remapData(data, 'src', 'lib');
   assert.deepEqual(Object.keys(moved.conflicts), ['lib/c.ts']);
   assert.equal(moved.conflicts['lib/c.ts'].draft, 'p');
-});
-check('Remoção por pasta descarta buffers e conflitos dentro dela', () => {
-  const data = {
-    buffers: { 'd1': buffer({ docId: 'd1', path: 'src/a.ts' }), 'd2': buffer({ docId: 'd2', path: 'src2/b.ts' }) },
-    conflicts: { 'src/c.ts': { path: 'src/c.ts', origin: 'o', draft: 'p', revision: 'r' } },
-  };
-  const left = dropData(data, ['src']);
-  assert.deepEqual(Object.keys(left.buffers), ['d2']);
-  assert.deepEqual(Object.keys(left.conflicts), []);
 });
 check('hasDraftAt: rascunho dentro da pasta bloqueia, irmã não', () => {
   const data = { buffers: { 'd1': buffer({ docId: 'd1', path: 'src/a.ts', draft: 'mudou' }) }, conflicts: {} };
@@ -222,13 +213,11 @@ const patch = [
   '+y',
   '',
 ].join('\n');
-check('patchHunks: índice, cabeçalho, linha do novo e texto sem o cabeçalho do arquivo', () => {
+check('patchHunks: cabeçalho e texto sem o cabeçalho do arquivo', () => {
   const hunks = patchHunks(patch);
   assert.equal(hunks.length, 2);
-  assert.equal(hunks[0].index, 0);
   assert.equal(hunks[0].header, '@@ -1,2 +1,2 @@');
-  assert.equal(hunks[0].newLine, 1);
-  assert.equal(hunks[1].newLine, 10);
+  assert.equal(hunks[1].header, '@@ -10,1 +10,2 @@');
   assert.ok(!hunks[0].text.includes('diff --git'));
   assert.ok(hunks[0].text.includes('+new'));
 });

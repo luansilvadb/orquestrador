@@ -5,7 +5,6 @@
 use crate::core::Emit;
 use serde::Serialize;
 use serde_json::json;
-use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::AppHandle;
@@ -105,75 +104,56 @@ impl Gate {
     }
 }
 
-/// De onde vêm as versões. Em produção é o plugin do Tauri; nos testes, uma falsa.
-pub trait Remote: Send + Sync + 'static {
-    /// Atualização anunciada e ainda não baixada.
-    type Pending: Send + Sync;
-
-    /// Consulta o endpoint. `Ok(None)` quando não há versão superior.
-    fn check(&self) -> impl Future<Output = Result<Option<Self::Pending>, String>> + Send;
-
-    fn version(&self, pending: &Self::Pending) -> String;
-
-    /// Baixa e valida a assinatura. `on_chunk` recebe os bytes de cada pedaço e o tamanho total, se houver.
-    fn download(
-        &self,
-        pending: &Self::Pending,
-        on_chunk: &mut (dyn FnMut(u64, Option<u64>) + Send),
-    ) -> impl Future<Output = Result<Vec<u8>, String>> + Send;
-
-    /// Lança o instalador. No Windows o processo encerra daqui; nos outros sistemas volta `Ok`.
-    fn install(&self, pending: &Self::Pending, bytes: &[u8]) -> Result<(), String>;
-
-    /// Reabre o app, quando a instalação não o fez sozinha.
-    fn relaunch(&self);
-}
-
-/// Uma rodada completa: consulta, baixa e instala se houver versão superior. Devolve o estado final.
-async fn attempt<R: Remote>(gate: &Gate, remote: &R) -> Status {
-    let pending = match remote.check().await {
-        Ok(Some(pending)) => pending,
+/// Uma rodada completa pelo plugin oficial do Tauri, com a fonte de `plugins.updater` em `tauri.conf.json`:
+/// consulta, baixa e instala se houver versão superior. Devolve o estado final.
+async fn attempt(app: &AppHandle, gate: &Gate) -> Status {
+    let checked = async { app.updater_builder().timeout(CHECK_TIMEOUT).build()?.check().await }.await;
+    let mut update = match checked {
+        Ok(Some(update)) => update,
         Ok(None) => return Status::Ready,
-        Err(why) => return Status::Failed { message: format!("Não foi possível verificar atualizações: {why}.") },
+        Err(why) => return Status::Failed { message: format!("Não foi possível verificar atualizações: {}.", explain(why)) },
     };
-    let version = remote.version(&pending);
+    update.timeout = Some(DOWNLOAD_TIMEOUT);
+    let version = update.version.clone();
     gate.set(Status::Downloading { version: version.clone(), downloaded: 0, total: None });
     let (mut downloaded, mut shown) = (0u64, 0u64);
-    let bytes = remote
-        .download(&pending, &mut |chunk: u64, total: Option<u64>| {
-            downloaded += chunk;
-            if downloaded - shown >= PROGRESS_STEP || total == Some(downloaded) {
-                shown = downloaded;
-                gate.set(Status::Downloading { version: version.clone(), downloaded, total });
-            }
-        })
+    let bytes = update
+        .download(
+            |chunk, total| {
+                downloaded += chunk as u64;
+                if downloaded - shown >= PROGRESS_STEP || total == Some(downloaded) {
+                    shown = downloaded;
+                    gate.set(Status::Downloading { version: version.clone(), downloaded, total });
+                }
+            },
+            || {},
+        )
         .await;
     let bytes = match bytes {
         Ok(bytes) => bytes,
-        Err(why) => return Status::Failed { message: format!("Não foi possível baixar a atualização {version}: {why}.") },
+        Err(why) => return Status::Failed { message: format!("Não foi possível baixar a atualização {version}: {}.", explain(why)) },
     };
     gate.set(Status::Installing { version: version.clone() });
-    match remote.install(&pending, &bytes) {
-        Ok(()) => {
-            remote.relaunch();
-            Status::Installing { version }
-        }
-        Err(why) => Status::Failed { message: format!("Não foi possível instalar a atualização {version}: {why}.") },
+    // No Windows o processo encerra no `install`; nos outros sistemas, o app reabre aqui.
+    match update.install(&bytes) {
+        Ok(()) => app.restart(),
+        Err(why) => Status::Failed { message: format!("Não foi possível instalar a atualização {version}: {}.", explain(why)) },
     }
 }
 
-/// Começa a rodada se não houver outra em curso e o uso ainda não foi liberado.
-pub fn start<R: Remote>(gate: &Gate, remote: R) {
+/// Verificação da abertura e do "Tentar novamente": começa a rodada se não houver outra em curso e o uso
+/// ainda não foi liberado.
+pub fn check(app: &AppHandle, gate: &Gate) {
     if !gate.reserve() {
         return;
     }
-    let gate = gate.clone();
-    tauri::async_runtime::spawn(async move { settle(&gate, &remote).await });
+    let (app, gate) = (app.clone(), gate.clone());
+    tauri::async_runtime::spawn(async move { settle(&app, &gate).await });
 }
 
 /// Roda a rodada e registra o fim dela. Se algo estourar um pânico, a tela recebe a falha: o uso
 /// fica bloqueado com `Tentar novamente`, e não preso em "verificando".
-async fn settle<R: Remote>(gate: &Gate, remote: &R) {
+async fn settle(app: &AppHandle, gate: &Gate) {
     struct Abort<'a>(Option<&'a Gate>);
     impl Drop for Abort<'_> {
         fn drop(&mut self) {
@@ -183,55 +163,9 @@ async fn settle<R: Remote>(gate: &Gate, remote: &R) {
         }
     }
     let mut abort = Abort(Some(gate));
-    let status = attempt(gate, remote).await;
+    let status = attempt(app, gate).await;
     abort.0 = None;
     gate.finish(status);
-}
-
-/// Verificação da abertura e do "Tentar novamente", pelo plugin oficial do Tauri.
-pub fn check(app: &AppHandle, gate: &Gate) {
-    start(gate, Plugin { app: app.clone() });
-}
-
-/// O plugin oficial, com a fonte de `plugins.updater` em `tauri.conf.json`.
-struct Plugin {
-    app: AppHandle,
-}
-
-impl Remote for Plugin {
-    type Pending = tauri_plugin_updater::Update;
-
-    fn check(&self) -> impl Future<Output = Result<Option<Self::Pending>, String>> + Send {
-        let app = self.app.clone();
-        async move {
-            let updater = app.updater_builder().timeout(CHECK_TIMEOUT).build().map_err(explain)?;
-            let update = updater.check().await.map_err(explain)?;
-            Ok(update.map(|mut update| {
-                update.timeout = Some(DOWNLOAD_TIMEOUT);
-                update
-            }))
-        }
-    }
-
-    fn version(&self, pending: &Self::Pending) -> String {
-        pending.version.clone()
-    }
-
-    fn download(
-        &self,
-        pending: &Self::Pending,
-        on_chunk: &mut (dyn FnMut(u64, Option<u64>) + Send),
-    ) -> impl Future<Output = Result<Vec<u8>, String>> + Send {
-        async move { pending.download(|chunk, total| on_chunk(chunk as u64, total), || {}).await.map_err(explain) }
-    }
-
-    fn install(&self, pending: &Self::Pending, bytes: &[u8]) -> Result<(), String> {
-        pending.install(bytes).map_err(explain)
-    }
-
-    fn relaunch(&self) {
-        self.app.restart();
-    }
 }
 
 /// O motivo de uma falha em português, com o detalhe técnico quando ele ajuda.
@@ -255,64 +189,6 @@ mod tests {
     use super::*;
     use base64::Engine;
     use serde_json::{json, Value};
-    use std::collections::VecDeque;
-
-    /// Fonte falsa: cada consulta devolve a próxima resposta da fila, e as chamadas ficam registradas.
-    struct Fake {
-        checks: Mutex<VecDeque<Result<Option<String>, String>>>,
-        download: Result<Vec<u8>, String>,
-        install: Result<(), String>,
-        calls: Mutex<Vec<&'static str>>,
-    }
-
-    fn fake(checks: Vec<Result<Option<&str>, &str>>) -> Fake {
-        Fake {
-            checks: Mutex::new(checks.into_iter().map(|c| c.map(|v| v.map(String::from)).map_err(String::from)).collect()),
-            download: Ok(b"instalador".to_vec()),
-            install: Ok(()),
-            calls: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn calls(fake: &Fake) -> Vec<&'static str> {
-        fake.calls.lock().unwrap().clone()
-    }
-
-    impl Remote for Fake {
-        type Pending = String;
-
-        fn check(&self) -> impl Future<Output = Result<Option<String>, String>> + Send {
-            self.calls.lock().unwrap().push("check");
-            let next = self.checks.lock().unwrap().pop_front().expect("consulta sem resposta prevista");
-            async move { next }
-        }
-
-        fn version(&self, pending: &String) -> String {
-            pending.clone()
-        }
-
-        fn download(
-            &self,
-            _pending: &String,
-            on_chunk: &mut (dyn FnMut(u64, Option<u64>) + Send),
-        ) -> impl Future<Output = Result<Vec<u8>, String>> + Send {
-            self.calls.lock().unwrap().push("download");
-            on_chunk(300_000, Some(600_000));
-            on_chunk(300_000, Some(600_000));
-            let result = self.download.clone();
-            async move { result }
-        }
-
-        fn install(&self, _pending: &String, bytes: &[u8]) -> Result<(), String> {
-            self.calls.lock().unwrap().push("install");
-            assert_eq!(bytes, b"instalador", "o instalador instalado é o que foi baixado");
-            self.install.clone()
-        }
-
-        fn relaunch(&self) {
-            self.calls.lock().unwrap().push("relaunch");
-        }
-    }
 
     /// Um portão e o registro de tudo que ele mandou para a tela.
     fn new_gate(bypass: bool) -> (Gate, Arc<Mutex<Vec<Value>>>) {
@@ -323,124 +199,6 @@ mod tests {
             sink.lock().unwrap().push(payload);
         });
         (Gate::new(bypass, emit), log)
-    }
-
-    fn phases(log: &Arc<Mutex<Vec<Value>>>) -> Vec<String> {
-        log.lock().unwrap().iter().map(|v| v["phase"].as_str().unwrap().to_string()).collect()
-    }
-
-    /// Uma rodada completa, como `start` faria, e o estado final.
-    fn run(gate: &Gate, fake: &Fake) -> Status {
-        assert!(gate.reserve(), "a rodada deveria começar");
-        tauri::async_runtime::block_on(settle(gate, fake));
-        gate.status()
-    }
-
-    /// Fonte que estoura logo na consulta: nada pode deixar a tela presa em "verificando".
-    struct Exploding;
-
-    impl Remote for Exploding {
-        type Pending = String;
-
-        async fn check(&self) -> Result<Option<String>, String> {
-            panic!("falha inesperada na consulta")
-        }
-
-        fn version(&self, pending: &String) -> String {
-            pending.clone()
-        }
-
-        fn download(
-            &self,
-            _pending: &String,
-            _on_chunk: &mut (dyn FnMut(u64, Option<u64>) + Send),
-        ) -> impl Future<Output = Result<Vec<u8>, String>> + Send {
-            async { Ok(Vec::new()) }
-        }
-
-        fn install(&self, _pending: &String, _bytes: &[u8]) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn relaunch(&self) {}
-    }
-
-    #[test]
-    fn versao_em_dia_libera_o_uso_sem_baixar_nada() {
-        let (gate, log) = new_gate(false);
-        let fake = fake(vec![Ok(None)]);
-        assert_eq!(run(&gate, &fake), Status::Ready);
-        assert!(gate.ensure_open().is_ok());
-        assert_eq!(calls(&fake), ["check"]);
-        assert_eq!(phases(&log), ["ready"]);
-    }
-
-    #[test]
-    fn versao_superior_baixa_valida_instala_e_reabre() {
-        let (gate, log) = new_gate(false);
-        let fake = Fake { download: Ok(b"instalador".to_vec()), ..fake(vec![Ok(Some("0.2.0"))]) };
-        assert_eq!(run(&gate, &fake), Status::Installing { version: "0.2.0".into() });
-        assert_eq!(calls(&fake), ["check", "download", "install", "relaunch"]);
-        assert!(gate.ensure_open().is_err(), "enquanto instala, o uso continua fechado");
-        let log = log.lock().unwrap();
-        let progress: Vec<(u64, Option<u64>)> = log
-            .iter()
-            .filter(|v| v["phase"] == "downloading")
-            .map(|v| (v["downloaded"].as_u64().unwrap(), v["total"].as_u64()))
-            .collect();
-        assert_eq!(progress, [(0, None), (300_000, Some(600_000)), (600_000, Some(600_000))]);
-        assert_eq!(log.last().unwrap(), &json!({"phase": "installing", "version": "0.2.0"}));
-    }
-
-    #[test]
-    fn sem_conexao_bloqueia_com_o_erro_e_a_nova_tentativa_libera() {
-        let (gate, log) = new_gate(false);
-        let fake = fake(vec![Err("sem conexão com o GitHub"), Ok(None)]);
-        assert_eq!(
-            run(&gate, &fake),
-            Status::Failed { message: "Não foi possível verificar atualizações: sem conexão com o GitHub.".into() }
-        );
-        assert!(gate.ensure_open().is_err(), "a falha mantém o uso bloqueado");
-        assert_eq!(run(&gate, &fake), Status::Ready, "a nova tentativa liberou o uso");
-        assert_eq!(phases(&log), ["failed", "checking", "ready"]);
-    }
-
-    #[test]
-    fn falha_inesperada_nao_deixa_a_tela_presa_em_verificando() {
-        let (gate, log) = new_gate(false);
-        assert!(gate.reserve());
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tauri::async_runtime::block_on(settle(&gate, &Exploding));
-        }));
-        assert!(outcome.is_err(), "o pânico continua sendo um pânico");
-        assert_eq!(gate.status(), Status::Failed { message: "A verificação parou inesperadamente.".into() });
-        assert_eq!(phases(&log).last().map(String::as_str), Some("failed"), "a tela recebe a falha");
-        assert!(gate.ensure_open().is_err());
-        assert!(gate.reserve(), "a nova tentativa fica disponível");
-    }
-
-    #[test]
-    fn falha_no_download_bloqueia_e_nao_instala() {
-        let (gate, _) = new_gate(false);
-        let fake = Fake { download: Err("conexão caiu".into()), ..fake(vec![Ok(Some("0.2.0"))]) };
-        assert_eq!(
-            run(&gate, &fake),
-            Status::Failed { message: "Não foi possível baixar a atualização 0.2.0: conexão caiu.".into() }
-        );
-        assert!(gate.ensure_open().is_err());
-        assert_eq!(calls(&fake), ["check", "download"]);
-    }
-
-    #[test]
-    fn falha_na_instalacao_bloqueia_e_nao_reabre() {
-        let (gate, _) = new_gate(false);
-        let fake = Fake { install: Err("instalador bloqueado".into()), ..fake(vec![Ok(Some("0.2.0"))]) };
-        assert_eq!(
-            run(&gate, &fake),
-            Status::Failed { message: "Não foi possível instalar a atualização 0.2.0: instalador bloqueado.".into() }
-        );
-        assert!(gate.ensure_open().is_err());
-        assert_eq!(calls(&fake), ["check", "download", "install"]);
     }
 
     #[test]

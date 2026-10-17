@@ -45,7 +45,7 @@ pub struct Query {
     pub preserve_case: bool,
 }
 
-/// Por que um arquivo candidato ficou de fora. Busca e prévia listam o caminho com esta razão.
+/// Por que um arquivo candidato ficou de fora. A busca lista o caminho com esta razão.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SkipReason {
@@ -116,13 +116,7 @@ pub struct Quick {
 #[serde(rename_all = "camelCase")]
 pub struct Preview {
     pub files: Vec<PreviewFile>,
-    /// Arquivos com pelo menos uma ocorrência (mostrados ou não).
-    pub total_files: usize,
-    /// Ocorrências em todos esses arquivos.
-    pub total_matches: usize,
     pub omitted_files: usize,
-    pub skipped: Vec<Skipped>,
-    pub skipped_omitted: usize,
 }
 
 /// Um arquivo da prévia. `revision` é a impressão digital dos bytes lidos: a aplicação só grava se ela ainda for a mesma.
@@ -132,7 +126,6 @@ pub struct Preview {
 pub struct PreviewFile {
     pub path: String,
     pub revision: String,
-    pub bom: bool,
     pub count: usize,
     pub original: String,
     pub result: String,
@@ -243,7 +236,7 @@ pub fn quick_open(dir: &Path, term: &str) -> Result<Quick, String> {
 
 /// A prévia da substituição de `query` por `replacement`. Lê tudo e não grava nada. Consulta vazia devolve prévia vazia.
 pub fn preview(dir: &Path, query: &Query, replacement: &str) -> Result<Preview, String> {
-    let mut out = Preview { files: Vec::new(), total_files: 0, total_matches: 0, omitted_files: 0, skipped: Vec::new(), skipped_omitted: 0 };
+    let mut out = Preview { files: Vec::new(), omitted_files: 0 };
     if query.text.trim().is_empty() {
         return Ok(out);
     }
@@ -252,27 +245,19 @@ pub fn preview(dir: &Path, query: &Query, replacement: &str) -> Result<Preview, 
     let filter = filters(query)?;
     let mut shown = 0usize;
     for path in candidates(dir, &filter)? {
-        let doc = match load(dir, &path) {
-            Ok(doc) => doc,
-            Err(reason) => {
-                skip(&mut out.skipped, &mut out.skipped_omitted, path, reason);
-                continue;
-            }
-        };
+        let Ok(doc) = load(dir, &path) else { continue };
         let (result, count) = replace_text(&re, &doc.text, &rep, query.preserve_case);
         if count == 0 {
             continue;
         }
-        out.total_files += 1;
-        out.total_matches += count;
         let size = doc.text.len() + result.len();
         if out.files.len() >= MAX_PREVIEW_FILES || shown + size > MAX_PREVIEW_BYTES {
+            out.omitted_files += 1;
             continue;
         }
         shown += size;
-        out.files.push(PreviewFile { path, revision: doc.revision, bom: doc.bom, count, original: doc.text, result });
+        out.files.push(PreviewFile { path, revision: doc.revision, count, original: doc.text, result });
     }
-    out.omitted_files = out.total_files - out.files.len();
     Ok(out)
 }
 
@@ -465,12 +450,9 @@ fn load(dir: &Path, path: &str) -> Result<Doc, SkipReason> {
     if files::is_binary(&bytes) {
         return Err(SkipReason::Binary);
     }
-    let (bom, body) = match bytes.strip_prefix(&files::BOM) {
-        Some(body) => (true, body),
-        None => (false, bytes.as_slice()),
-    };
+    let body = bytes.strip_prefix(&files::BOM).unwrap_or(&bytes[..]);
     let text = std::str::from_utf8(body).map_err(|_| SkipReason::NotUtf8)?.to_string();
-    Ok(Doc { bom, revision: files::fingerprint(&bytes), text })
+    Ok(Doc { bom: body.len() < bytes.len(), revision: files::fingerprint(&bytes), text })
 }
 
 /// As linhas do texto como a busca as vê: número a partir de 1, sem CR no fim.
@@ -490,14 +472,8 @@ fn replace_text(re: &Regex, text: &str, rep: &str, preserve: bool) -> (String, u
     let mut count = 0;
     let mut out = String::with_capacity(text.len());
     for piece in text.split_inclusive('\n') {
-        let (rest, nl) = match piece.strip_suffix('\n') {
-            Some(rest) => (rest, "\n"),
-            None => (piece, ""),
-        };
-        let (body, cr) = match rest.strip_suffix('\r') {
-            Some(body) => (body, "\r"),
-            None => (rest, ""),
-        };
+        let rest = piece.strip_suffix('\n').unwrap_or(piece);
+        let body = rest.strip_suffix('\r').unwrap_or(rest);
         let replaced = re.replace_all(body, |caps: &Captures| {
             if caps[0].is_empty() {
                 return String::new();
@@ -512,8 +488,7 @@ fn replace_text(re: &Regex, text: &str, rep: &str, preserve: bool) -> (String, u
             }
         });
         out.push_str(&replaced);
-        out.push_str(cr);
-        out.push_str(nl);
+        out.push_str(&piece[body.len()..]);
     }
     (out, count)
 }
@@ -540,7 +515,7 @@ fn keep_case(matched: &str, rep: &str) -> String {
     }
 }
 
-/// Registra um arquivo ignorado na lista da busca ou da prévia, até o limite; o resto só entra na contagem `omitted`.
+/// Registra um arquivo ignorado na lista da busca, até o limite; o resto só entra na contagem `omitted`.
 fn skip(list: &mut Vec<Skipped>, omitted: &mut usize, path: String, reason: SkipReason) {
     if list.len() < MAX_SKIPPED {
         list.push(Skipped { path, reason });
@@ -794,19 +769,18 @@ mod tests {
     }
 
     #[test]
-    fn preview_nao_grava_e_traz_original_resultado_e_bom() {
+    fn preview_nao_grava_e_traz_original_e_resultado_sem_bom() {
         let t = repo_tmp("preview");
         write(&t.0, "a.txt", b"\xEF\xBB\xBFtroca isto\r\nisto de novo\r\n");
         commit_all(&t.0, "base");
         let before = read(&t.0, "a.txt");
         let prev = preview(&t.0, &q("isto"), "aquilo").unwrap();
         assert_eq!(read(&t.0, "a.txt"), before, "a prévia não pode gravar");
+        assert_eq!(prev.files.len(), 1);
         let f = &prev.files[0];
-        assert!(f.bom);
         assert_eq!(f.count, 2);
         assert_eq!(f.original, "troca isto\r\nisto de novo\r\n");
         assert_eq!(f.result, "troca aquilo\r\naquilo de novo\r\n");
-        assert_eq!(prev.total_matches, 2);
         assert_eq!(prev.omitted_files, 0);
     }
 
@@ -818,7 +792,7 @@ mod tests {
         write(&t.0, "c.txt", "foo\n");
         commit_all(&t.0, "base");
         let prev = preview(&t.0, &q("foo"), "bar").unwrap();
-        assert_eq!(prev.total_files, 3);
+        assert_eq!(prev.files.len(), 3);
         let req = ApplyRequest { query: q("foo"), replacement: "bar".into(), files: vec![pick(&prev, "a.txt"), pick(&prev, "b.txt")] };
         let out = apply(&t.0, &req).unwrap();
         assert_eq!(out.applied, vec![Done { path: "a.txt".into(), count: 1 }, Done { path: "b.txt".into(), count: 2 }]);
@@ -972,7 +946,7 @@ mod tests {
         git(&t.0, &["add", "-A"]);
         let prev = preview(&t.0, &q("foo"), "bar").unwrap();
         assert_eq!(prev.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), vec!["real.txt"]);
-        assert!(prev.skipped.iter().any(|s| s.path == "atalho.txt" && s.reason == SkipReason::NotFile));
+        assert!(buscar(&t.0, &q("foo")).skipped.iter().any(|s| s.path == "atalho.txt" && s.reason == SkipReason::NotFile));
     }
 
     #[test]

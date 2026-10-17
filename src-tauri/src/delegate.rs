@@ -67,19 +67,16 @@ pub fn resume(session: &Path) -> Result<String, String> {
     pending.pop().ok_or_else(|| "Nenhum lote aguardando entrega.".to_string())
 }
 
-/// Espera o resultado do lote por até `window`. A espera acaba com o resultado (a primeira linha do arquivo é o
-/// código de saída do app, e não segue ao orquestrador) ou com o prazo. Se a sessão morrer antes, falha em vez de
-/// esperar para sempre.
+/// Espera o resultado do lote por até `window`. A espera acaba com o resultado, que segue inteiro ao orquestrador,
+/// ou com o prazo. Se a sessão morrer antes, falha em vez de esperar para sempre.
 pub fn wait(session: &Path, id: &str, window: Duration) -> Result<Waited, String> {
     let result = session.join("results").join(format!("{id}.txt"));
     let started = Instant::now();
     loop {
         if result.is_file() {
             let text = std::fs::read_to_string(&result).map_err(|e| format!("Não foi possível ler {}: {e}", result.display()))?;
-            let (code, body) = text.split_once('\n').ok_or("o resultado do lote não traz o código de saída.")?;
-            code.trim().parse::<i32>().map_err(|_| format!("código de saída ilegível no resultado do lote: {code:?}"))?;
             let marker = session.join("results").join(format!("{id}.delivered"));
-            return Ok(Waited::Result { text: body.to_string(), marker });
+            return Ok(Waited::Result { text, marker });
         }
         if !owner_alive(session) {
             return Err(DEAD.into());
@@ -98,7 +95,7 @@ mod tests {
 
     #[test]
     fn lote_sai_inteiro_e_renomeado_com_o_texto_exato() {
-        let dir = session("orq-delegar", "publica", true);
+        let dir = &session("orq-delegar", "publica", true).0;
         let tasks = ["Tarefa A\nlinha 2 d'água", "Diga \"oi\" e \\\"tchau\\\" e a barra \\", "{\"a\":\"b\\\"c\"}"];
         let id = publish(&dir, &tasks.map(String::from)).unwrap();
         let batch = dir.join("requests").join(&id);
@@ -111,7 +108,7 @@ mod tests {
 
     #[test]
     fn tarefa_invalida_nao_publica_nada() {
-        let dir = session("orq-delegar", "invalida", true);
+        let dir = &session("orq-delegar", "invalida", true).0;
         assert!(publish(&dir, &[]).unwrap_err().contains("Nenhuma tarefa"));
         assert!(publish(&dir, &["ok".into(), "  \n".into()]).unwrap_err().contains("Tarefa vazia"));
         assert_eq!(std::fs::read_dir(dir.join("requests")).unwrap().count(), 0);
@@ -119,7 +116,7 @@ mod tests {
 
     #[test]
     fn aguardar_pega_o_lote_mais_recente_que_nao_foi_entregue() {
-        let dir = session("orq-delegar", "retoma", true);
+        let dir = &session("orq-delegar", "retoma", true).0;
         for id in ["00000000000000000001-aaaaaaaa", "00000000000000000002-bbbbbbbb", "00000000000000000003-cccccccc", "00000000000000000004-dddddddd.tmp"] {
             std::fs::create_dir_all(dir.join("requests").join(id)).unwrap();
         }
@@ -132,9 +129,9 @@ mod tests {
     }
 
     #[test]
-    fn espera_separa_o_codigo_de_saida_do_texto() {
-        let dir = session("orq-delegar", "espera", true);
-        std::fs::write(dir.join("results").join("x.txt"), "1\n--- EXECUTOR 1/1 ---\nok\n").unwrap();
+    fn espera_devolve_o_resultado_inteiro_e_a_marca() {
+        let dir = &session("orq-delegar", "espera", true).0;
+        std::fs::write(dir.join("results").join("x.txt"), "--- EXECUTOR 1/1 ---\nok\n").unwrap();
         let Waited::Result { text, marker } = wait(&dir, "x", WINDOW).unwrap() else { panic!("o resultado devia sair") };
         assert_eq!(text, "--- EXECUTOR 1/1 ---\nok\n");
         assert!(marker.ends_with("x.delivered"));
@@ -142,18 +139,16 @@ mod tests {
 
     #[test]
     fn sessao_morta_com_lote_pendente_falha_em_vez_de_esperar() {
-        let dir = session("orq-delegar", "morta", false);
+        let dir = &session("orq-delegar", "morta", false).0;
         assert_eq!(wait(&dir, "nunca", WINDOW).unwrap_err(), DEAD);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn pasta_sem_dono_nao_e_sessao_ativa() {
-        let dir = session("orq-delegar", "ativa", true);
+        let dir = &session("orq-delegar", "ativa", true).0;
         assert!(check_session(&dir).is_ok());
         let nowhere = std::env::temp_dir().join(format!("orq-delegar-{}-inexistente", std::process::id()));
         assert_eq!(check_session(&nowhere).unwrap_err(), NOT_ACTIVE);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

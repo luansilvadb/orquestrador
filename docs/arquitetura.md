@@ -12,7 +12,7 @@ O front-end (React) fica em `src/` e o backend (Rust, Tauri) em `src-tauri/src/`
 | `src/source-control-icon.tsx` | O ícone do Git na coluna de ícones: o codicon `source-control` do Antigravity/VS Code (de `@vscode/codicons`, CC BY 4.0, licença em `src/assets/codicons/LICENSE`). |
 | `src/git-graph.ts` | O layout do gráfico de commits da barra lateral do Git: faixas, linhas de merge e cores. Testado por `scripts/check-git-graph.mjs`. |
 | `src/bracket-colors.ts` | A cor dos parênteses, colchetes e chaves pelo nível de aninhamento, lida da árvore de sintaxe. |
-| `src/editor-workspace.tsx` | A área central: até dois grupos lado a lado, com abas de arquivo, diff, commit e conflito; a comparação com o disco antes de gravar; e a recuperação por projeto (rascunhos, cursor, rolagem e layout). Recuperações de versões antigas que trazem abas `issues` ou `new-issue` as descartam ao ler. |
+| `src/editor-workspace.tsx` | A área central: até dois grupos lado a lado, com abas de arquivo, diff, commit e conflito; a comparação com o disco antes de gravar; e a recuperação por projeto (rascunhos, cursor, rolagem e layout). |
 | `src/workspace-model.ts` | O modelo puro das abas e dos grupos (prévia, fixadas, fechamento com confirmação, reabertura e carga do estado salvo). Sem React. |
 | `src/workspace-store.ts` | Buffers, rascunhos, conflitos e o texto da recuperação, validado ao ler. Sem React e sem disco. |
 | `src/quick-open.tsx` | O arquivo rápido (Ctrl+P): campo e lista do `backend.quickOpen`, com Enter, Shift+Enter e Ctrl+Enter. |
@@ -21,7 +21,7 @@ O front-end (React) fica em `src/` e o backend (Rust, Tauri) em `src-tauri/src/`
 | `scripts/check-editor-store.mjs` | Checagem pura dos rascunhos, conflitos e recuperação. |
 | `scripts/check-file-tabs.mjs` | Checagem pura de caminhos copiados, de nomes recusados e de “dentro de pasta”. |
 | `scripts/check-explorer.mjs` | Checagem pura da escolha de ícones (os casos do Explorer do Antigravity) e das decorações do Git na árvore. |
-| `scripts/sync-file-icons.mjs` | Copia o tema de ícones Symbols (MIT, com a LICENSE) da pasta `extensions` de uma IDE do VS Code para `src/assets/symbols` e gera o `theme.json`; rode de novo para atualizar os ícones. |
+| `scripts/sync-file-icons.mjs` | Copia o tema de ícones Symbols (MIT, com a LICENSE) da pasta `extensions` de uma IDE do VS Code para `src/assets/symbols`, só os ícones que o app alcança (as chaves que `iconKey` pode devolver), e gera o `theme.json` só com essas chaves; rode de novo para atualizar os ícones. |
 | `src-tauri/icons/` | O ícone do app: `icon.svg` é a fonte; `icon.ico` (o do executável e do instalador) e `icon.png` saem dele. Para regenerar, rode `npx tauri icon src-tauri/icons/icon.svg -o <pasta temporária>` e copie só `icon.ico` e `icon.png` para cá; sem `-o`, o comando cria arquivos que o projeto não usa. |
 | `scripts/editor-ui-harness.mjs` | Loader e helpers dos checks de interface: sobe o Vite na porta `SMOKE_PORT` (padrão 1421), usa o Chromium já instalado, sem instalar nada, e dá a cada cenário um contexto novo (`browser.newContext`) no mesmo Chromium. |
 | `scripts/check-editor-ui.mjs` | Check de interface da área central: abas, grupos, fechamento, recuperação, comparação com o disco e atalhos. |
@@ -45,7 +45,7 @@ O front-end (React) fica em `src/` e o backend (Rust, Tauri) em `src-tauri/src/`
 | `src-tauri/src/hook.rs` | O modo `--hook` do executável (fim de rodada), chamado pelos CLIs dos executores e também pelo orquestrador, no início e no fim de cada rodada. O `--allow` imprime `cli::ALLOW` direto do `main.rs`; o `--mcp`, do orquestrador, está em `mcp.rs`. |
 | `src-tauri/src/session.rs` | A sessão do orquestrador: pasta, `AGENTS.md`, `mcp.json` e `claude-settings.json` do Claude, e a limpeza das sobras, inclusive das regras do Codex que versões antigas deixavam em `CODEX_HOME` (até 2027-02-01). |
 | `src-tauri/src/roles.rs` | Os textos enviados ao orquestrador (no `AGENTS.md` da sessão) e a cada executor, antes da tarefa: a única fonte da regra de cada papel, sem trava no app. O texto do orquestrador é o mesmo para Claude Code e Codex; o protocolo das ferramentas (marcadores e próxima chamada) fica nas saídas delas, em `mcp.rs`, `delegate.rs` e `core.rs`. |
-| `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a fonte do plugin oficial e os testes dos cenários. |
+| `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a rodada pelo plugin oficial do Tauri e os testes do portão. |
 | `scripts/release.mjs` | As regras do fluxo de release: versões iguais nos manifests, notas completas, o `latest.json` que o app lê e a conferência do instalador. Detalhes em [notas de release](releases/README.md). |
 | `.github/workflows/release.yml` | Release por tag: instalador assinado, `latest.json` e conferência, em rascunho. |
 

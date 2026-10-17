@@ -2,12 +2,10 @@
 // Cada linha de mudança aponta para a sua unidade: o bloco do Git (-U3), que é o que as ações agem, ou, sem blocos
 // (commit), cada trecho de mudança. Não há nada visual aqui: quem desenha é o motor de diff.
 
-/** Um lado de uma linha: número da linha no arquivo daquele lado e o texto (sem o sinal). */
-export type CompareSide = { n: number; text: string };
-/** Uma linha do lado a lado. `unit` é -1 no contexto. Numa linha de mudança, um lado pode estar vazio (padding). */
-export type SplitRow = { left: CompareSide | null; right: CompareSide | null; change: boolean; unit: number };
+/** Uma linha do lado a lado: o número da linha no arquivo de cada lado. `unit` é -1 no contexto. Numa linha de mudança, um lado pode estar vazio (padding). */
+export type SplitRow = { left: number | null; right: number | null; unit: number };
 /** Uma linha do unificado: `old`/`new` são os números de cada lado, `null` onde a linha não existe. */
-export type UnifiedRow = { kind: 'ctx' | 'del' | 'add'; old: number | null; new: number | null; text: string; unit: number };
+export type UnifiedRow = { kind: 'ctx' | 'del' | 'add'; old: number | null; new: number | null; unit: number };
 /** Uma unidade de navegação: a primeira linha do arquivo novo dela, as linhas (inclusive) em cada modo e o que ela muda. */
 export type Unit = { line: number; split: [number, number]; unified: [number, number]; kind: 'add' | 'del' | 'mod' };
 export type CompareModel = { split: SplitRow[]; unified: UnifiedRow[]; units: Unit[] };
@@ -33,7 +31,7 @@ export function blockRanges(patch: string): BlockRange[] {
 export function changeKeys(row: SplitRow | UnifiedRow): string[] {
   if (row.unit < 0) return [];
   if ('kind' in row) return [row.kind === 'add' ? `a${row.new}` : `d${row.old}`];
-  return [...(row.change && row.left ? [`d${row.left.n}`] : []), ...(row.change && row.right ? [`a${row.right.n}`] : [])];
+  return [...(row.left !== null ? [`d${row.left}`] : []), ...(row.right !== null ? [`a${row.right}`] : [])];
 }
 
 /**
@@ -41,8 +39,7 @@ export function changeKeys(row: SplitRow | UnifiedRow): string[] {
  * de mudança (linhas seguidas que não são contexto) é uma unidade.
  */
 export function compareOf(full: string, ranges: BlockRange[] | null): CompareModel {
-  type Line = { kind: 'ctx' | 'del' | 'add'; old: number | null; new: number | null; text: string; unit: number };
-  const lines: Line[] = [];
+  const unified: UnifiedRow[] = [];
   let o = 0, n = 0, inside = false;
   for (const raw of full.split('\n')) {
     const h = HUNK.exec(raw);
@@ -50,14 +47,13 @@ export function compareOf(full: string, ranges: BlockRange[] | null): CompareMod
     // Antes do primeiro `@@` é o cabeçalho do arquivo; a última quebra de linha não tem linha.
     if (!inside || raw === '') continue;
     const sign = raw[0];
-    const text = raw.slice(1);
-    if (sign === ' ') lines.push({ kind: 'ctx', old: o++, new: n++, text, unit: -1 });
-    else if (sign === '-') lines.push({ kind: 'del', old: o++, new: null, text, unit: -1 });
-    else if (sign === '+') lines.push({ kind: 'add', old: null, new: n++, text, unit: -1 });
+    if (sign === ' ') unified.push({ kind: 'ctx', old: o++, new: n++, unit: -1 });
+    else if (sign === '-') unified.push({ kind: 'del', old: o++, new: null, unit: -1 });
+    else if (sign === '+') unified.push({ kind: 'add', old: null, new: n++, unit: -1 });
   }
   // A unidade de cada mudança: o bloco que contém a linha; sem blocos, o trecho.
-  let runOf = -1, prev: Line['kind'] = 'ctx';
-  for (const l of lines) {
+  let runOf = -1, prev: UnifiedRow['kind'] = 'ctx';
+  for (const l of unified) {
     if (l.kind === 'ctx') { prev = 'ctx'; continue; }
     if (prev === 'ctx') runOf++;
     prev = l.kind;
@@ -67,29 +63,23 @@ export function compareOf(full: string, ranges: BlockRange[] | null): CompareMod
       : ranges.findIndex((r) => r.newLen > 0 && l.new! >= r.newAt && l.new! < r.newAt + r.newLen);
     l.unit = i;
   }
-  const unified: UnifiedRow[] = lines.map((l) => ({ ...l }));
 
   // Lado a lado: o contexto nos dois lados; cada trecho de mudança alinha as remoções com as inclusões, e sobra vazio.
   const split: SplitRow[] = [];
-  for (let i = 0; i < lines.length;) {
-    const l = lines[i];
+  for (let i = 0; i < unified.length;) {
+    const l = unified[i];
     if (l.kind === 'ctx') {
-      split.push({ left: { n: l.old!, text: l.text }, right: { n: l.new!, text: l.text }, change: false, unit: -1 });
+      split.push({ left: l.old, right: l.new, unit: -1 });
       i++;
       continue;
     }
     let j = i;
-    while (j < lines.length && lines[j].kind !== 'ctx') j++;
-    const dels = lines.slice(i, j).filter((x) => x.kind === 'del');
-    const adds = lines.slice(i, j).filter((x) => x.kind === 'add');
+    while (j < unified.length && unified[j].kind !== 'ctx') j++;
+    const dels = unified.slice(i, j).filter((x) => x.kind === 'del');
+    const adds = unified.slice(i, j).filter((x) => x.kind === 'add');
     for (let k = 0; k < Math.max(dels.length, adds.length); k++) {
       const d = dels[k], a = adds[k];
-      split.push({
-        left: d ? { n: d.old!, text: d.text } : null,
-        right: a ? { n: a.new!, text: a.text } : null,
-        change: true,
-        unit: (d ?? a).unit,
-      });
+      split.push({ left: d ? d.old : null, right: a ? a.new : null, unit: (d ?? a).unit });
     }
     i = j;
   }
@@ -98,11 +88,7 @@ export function compareOf(full: string, ranges: BlockRange[] | null): CompareMod
   const count = ranges ? ranges.length : runOf + 1;
   const units: Unit[] = [];
   // Primeira e última linha de uma unidade num modo; `[-1, -1]` quando a unidade não tem linha (não deveria acontecer).
-  const span = <R extends { unit: number }>(rows: R[], u: number): [number, number] => {
-    const first = rows.findIndex((r) => r.unit === u);
-    if (first < 0) return [-1, -1];
-    return [first, rows.length - 1 - [...rows].reverse().findIndex((r) => r.unit === u)];
-  };
+  const span = <R extends { unit: number }>(rows: R[], u: number): [number, number] => [rows.findIndex((r) => r.unit === u), rows.findLastIndex((r) => r.unit === u)];
   for (let u = 0; u < count; u++) {
     let line: number | null = null, lastNew = 0;
     for (const r of unified) {

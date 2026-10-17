@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, Cloud, CloudDownload, GitBranch, RefreshCw, Tag, Target } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, Cloud, CloudDownload, GitBranch, RefreshCw, Tag, Target } from 'lucide-react';
 import { backend } from './backend';
 import { CommitFileList, copy, note, type OpenCommitTarget, PAGE, useCommitDetail, usePagedList, when } from './git-history';
 import { type GraphLine, type GraphRow, layoutGraph } from './git-graph';
@@ -146,23 +146,13 @@ export function GraphSection({
   // Faixas calculadas sobre todas as linhas carregadas, de cima para baixo (a página nova continua as faixas da anterior).
   const rows = useMemo(() => layoutGraph(commits ?? []), [commits]);
 
-  function reload(key: string) {
-    loaded.current = key;
-    reloadList(null);
-  }
-
   // Só carrega com a tela visível e a seção aberta, e só quando a chave mudou desde a última carga.
   useEffect(() => {
     if (!active || !open || loaded.current === stamp) return;
-    reload(stamp);
-    // `reload` só lê refs e setters: não precisa estar nas dependências.
+    loaded.current = stamp;
+    reloadList(null);
+    // `reloadList` só lê refs e setters: não precisa estar nas dependências.
   }, [active, open, stamp]);
-
-  // Escolher o mesmo commit de novo fecha. Trocar de commit descarta a lista anterior e pede a nova.
-  function toggleCommit(hash: string) {
-    if (openHash === hash) closeCommit();
-    else openCommit(hash);
-  }
 
   // Divisor: arrastar ou setas. O máximo deixa a lista de arquivos no mínimo; o espaço é o da lista (irmã anterior) mais a seção.
   const drag = useRef<{ y: number; start: number; max: number } | null>(null);
@@ -182,9 +172,7 @@ export function GraphSection({
         type="button" onClick={onToggle} aria-expanded={open}
         className="flex h-full min-w-0 flex-1 items-center text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
       >
-        {open
-          ? <ChevronDown className="mx-0.5 size-4 shrink-0" aria-hidden />
-          : <ChevronRight className="mx-0.5 size-4 shrink-0" aria-hidden />}
+        <ChevronRight className={`mx-0.5 size-4 shrink-0 transition-transform${open ? ' rotate-90' : ''}`} aria-hidden />
         <span className="min-w-0 shrink truncate text-[12px] font-medium">Grafo</span>
       </button>
       {remoteButton('fetch', CloudDownload)}
@@ -217,8 +205,9 @@ export function GraphSection({
               <li key={c.hash} data-commit={c.hash} data-head={isHead ? 'true' : undefined}>
                 <ContextMenuTrigger items={menu}>
                   <div>
+                    {/* Escolher o mesmo commit de novo fecha. Trocar de commit descarta a lista anterior e pede a nova. */}
                     <button
-                      type="button" onClick={() => toggleCommit(c.hash)} aria-expanded={isOpen}
+                      type="button" onClick={() => (openHash === c.hash ? closeCommit() : openCommit(c.hash))} aria-expanded={isOpen}
                       title={`${c.short} — ${c.subject || '(sem mensagem)'}. ${c.author}, ${when(c.date, { dateStyle: 'short', timeStyle: 'short' })}.${names ? ` Etiquetas: ${names}.` : ''}`}
                       className={`@container flex h-[22px] w-full min-w-0 items-center gap-1 pr-3 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset${isOpen ? ' bg-muted' : ''}`}
                     >

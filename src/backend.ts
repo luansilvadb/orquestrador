@@ -4,13 +4,13 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
   Batch, Choice, ClipboardSnapshot, Commit, CommitDetail, Conflict, DirEntry, Events, FileContent, GitBranches, GitDiff, GitState, GraphCommit, HunkRef,
-  Moved, Options, Pasted, QuickOpen, ReplaceApplied, ReplacePreview, ReplaceQuery, ReplaceRequest, ReviewDiff, SearchFilter, SearchOptions, SearchResults, Snapshot, UpdateStatus,
+  Moved, Options, QuickOpen, ReplaceApplied, ReplacePreview, ReplaceQuery, ReplaceRequest, ReviewDiff, SearchFilter, SearchOptions, SearchResults, Snapshot, UpdateStatus,
 } from './types';
 
 export interface Transport {
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
   listen<K extends keyof Events>(event: K, handler: (payload: Events[K]) => void): Promise<void>;
-  /** `mayClose` responde se a janela pode fechar; o encerramento do backend é feito dentro dela. */
+  /** `mayClose` responde se a janela pode fechar. */
   onCloseRequested(mayClose: () => Promise<boolean>): Promise<void>;
   minimize(): Promise<void>;
   toggleMaximize(): Promise<void>;
@@ -71,7 +71,6 @@ export const backend = {
   termSnapshot: (id: string) => call<Snapshot>('term_snapshot', { id }),
   stopExecutor: (id: string) => call<void>('stop_executor', { id }),
   hasRunning: () => call<boolean>('has_running'),
-  shutdown: () => call<void>('shutdown'),
   // Caminho relativo à pasta do projeto, com "/"; '' é a raiz.
   listDir: (path: string) => call<DirEntry[]>('list_dir', { path }),
   // Conteúdo de um arquivo, com o mesmo caminho de `listDir`. Erro chega como mensagem em português.
@@ -97,7 +96,7 @@ export const backend = {
   // Clipboard lido na hora da ação. Colar recebe essa mesma lista: a checagem de alterações e a operação usam o que foi lido aqui.
   clipboardSnapshot: () => call<ClipboardSnapshot>('clipboard_snapshot'),
   // Colagem, com o detalhe: `from` absoluto como estava no clipboard, `to` relativo ao projeto; `error` diz o que parou.
-  pasteFilesDetailed: (dest: string, snap: ClipboardSnapshot) => call<Batch<Pasted>>('paste_files_detailed', { dest, snap }),
+  pasteFilesDetailed: (dest: string, snap: ClipboardSnapshot) => call<Batch<Moved>>('paste_files_detailed', { dest, snap }),
   // Painel Git. Caminhos relativos à raiz do projeto, com "/"; lista vazia em stage/unstage vale para tudo.
   // Estado do Git da pasta (ver `GitState`). Erro chega como mensagem em português.
   gitStatus: () => call<GitState>('git_status'),
@@ -123,15 +122,14 @@ export const backend = {
   // Gráfico: HEAD e o upstream da branch atual, mais novo primeiro; `limit` até 200 e `skip` os já mostrados. Sem commit, lista vazia.
   gitGraph: (limit: number, skip: number) => call<GraphCommit[]>('git_graph', { limit, skip }),
   gitCommitDetail: (id: string) => call<CommitDetail>('git_commit_detail', { id }),
-  gitCommitDiff: (id: string, path?: string) => call<GitDiff>('git_commit_diff', { id, path: path ?? null }),
+  gitCommitDiff: (id: string, path: string) => call<GitDiff>('git_commit_diff', { id, path }),
   // Conflito: os lados, o texto atual e a revisão. A gravação da resolução só vale se a pasta ainda está nessa revisão.
   gitConflict: (path: string) => call<Conflict>('git_conflict', { path }),
   gitWriteResolution: (path: string, content: string, revision: string, markResolved: boolean) =>
     call<void>('git_write_resolution', { path, content, revision, markResolved }),
   gitAcceptDeletion: (path: string, revision: string) => call<void>('git_accept_deletion', { path, revision }),
   // Pesquisa de texto nos arquivos do projeto. Regex inválida rejeita com a mensagem em português; consulta vazia devolve lista vazia.
-  // Filtros de caminho são opcionais; sem eles, busca em todos os arquivos.
-  search: (query: string, options: SearchOptions, filter: SearchFilter = { include: [], exclude: [] }) =>
+  search: (query: string, options: SearchOptions, filter: SearchFilter) =>
     call<SearchResults>('search', { query: { text: query, ...options, ...filter } }),
   // Abertura rápida pelo nome ou caminho (termos separados por espaço). Só rastreados e não ignorados.
   quickOpen: (term: string) => call<QuickOpen>('quick_open', { term }),

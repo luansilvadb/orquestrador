@@ -464,19 +464,6 @@ fn saida_do_orquestrador_mata_os_executores_e_limpa_a_sessao() {
     assert_eq!((saved["orchestrator"]["tool"].as_str(), saved["executor"]["tool"].as_str()), (Some("claude"), Some("claude")));
 }
 
-#[test]
-fn pasta_sem_git_abre_com_o_proprio_caminho_e_pasta_inexistente_e_recusada() {
-    let b = bench("fora", "temp", Some(8));
-    let solta = std::env::temp_dir().join(format!("orq-lote-{}-solta", std::process::id()));
-    let _ = std::fs::remove_dir_all(&solta);
-    std::fs::create_dir_all(&solta).unwrap();
-    let opened = b.core.set_project(&solta).unwrap();
-    assert_eq!(opened.project, solta.display().to_string());
-    assert!(!opened.subfolder);
-    assert!(b.core.set_project(&solta.join("nao-existe")).unwrap_err().contains("não existe"));
-    let _ = std::fs::remove_dir_all(&solta);
-}
-
 /// Tarefa longa, com Unicode, aspas e barra no fim, de uns 9000 bytes.
 fn tarefa_longa(n: usize) -> String {
     let mut text = format!("Tarefa longa {n}: ação, coração, \"aspas\" e C:\\Users\\Maria Silva\\\n");
@@ -495,49 +482,6 @@ fn lote_com_mais_de_40_mil_caracteres_chega_inteiro() {
     let chars: usize = tasks.iter().map(|t| t.chars().count()).sum();
     assert!(chars > 40_000, "o lote tem de passar de 40 mil caracteres: {chars}");
     publica_e_confere(&b, &tasks);
-}
-
-/// O protocolo contra o binário de verdade, sem sessão: `initialize` devolve a versão pedida, `tools/list` traz as
-/// duas ferramentas com o esquema, e um método que não existe (o Claude manda `server/discover`) é erro -32601.
-#[test]
-fn protocolo_do_binario_initialize_tools_list_e_metodo_desconhecido() {
-    let dir = std::env::temp_dir().join(format!("orq-proto-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut m = Mcp::spawn(&dir);
-
-    let init = m.request("initialize", json!({ "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "teste", "version": "0" } }));
-    let reply = m.reply(init);
-    assert_eq!(reply["result"]["protocolVersion"], "2024-11-05");
-    assert_eq!(reply["result"]["capabilities"], json!({ "tools": {} }));
-
-    let list = m.request("tools/list", json!({}));
-    let reply = m.reply(list);
-    let tools = reply["result"]["tools"].as_array().unwrap();
-    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["delegar", "aguardar"]);
-    assert_eq!(tools[0]["inputSchema"]["required"], json!(["tarefas"]));
-
-    let unknown = m.request("server/discover", json!({}));
-    let reply = m.reply(unknown);
-    assert_eq!(reply["id"], unknown);
-    assert_eq!(reply["error"]["code"], -32601);
-    drop(m);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn tarefa_invalida_e_falta_de_tarefa_fecham_com_erro_e_nao_publicam() {
-    let b = bench("invalida", "temp", Some(8));
-    b.pronto();
-    let mut m = b.mcp();
-    // Sem lote nenhum, `aguardar` é erro com o texto puro, sem prefixo nem --- FIM ---.
-    let (text, is_error) = m.call("aguardar", json!({}));
-    assert!(is_error && text == "Nenhum lote aguardando entrega.", "{text}");
-    for (tasks, why) in [(vec![""], "Tarefa vazia."), (vec!["  "], "Tarefa vazia."), (vec!["ok", " \n"], "Tarefa vazia."), (vec![], "Nenhuma tarefa")] {
-        let (text, is_error) = m.call("delegar", json!({ "tarefas": tasks }));
-        assert!(is_error && text.starts_with(why) && !text.contains("--- FIM ---") && !text.contains("wrapper_error"), "{why}: {text}");
-    }
-    assert_eq!(b.requests(), 0, "nenhuma tarefa inválida chega a publicar lote");
 }
 
 /// O pedido de confirmação do CLI passa pelo hook `PermissionRequest`, que roda o binário de verdade em `--allow`:

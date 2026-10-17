@@ -88,9 +88,8 @@ pub enum GitLote {
     RepoAbove(String),
 }
 
-/// A saída de um lote terminado (`delegate.rs`, entregue pelo `mcp.rs`) e o código de saída dele: 0 se todas as
-/// tarefas concluíram.
-pub fn format_result(items: &[(String, Outcome)], git: &Result<GitLote, String>) -> (i32, String) {
+/// A saída de um lote terminado (`delegate.rs`, entregue pelo `mcp.rs`).
+pub fn format_result(items: &[(String, Outcome)], git: &Result<GitLote, String>) -> String {
     let mut out = String::new();
     for (i, (title, outcome)) in items.iter().enumerate() {
         out += &format!("--- EXECUTOR {}/{} ---\n{title}\n{}\n", i + 1, items.len(), outcome.text.trim_end());
@@ -108,7 +107,7 @@ pub fn format_result(items: &[(String, Outcome)], git: &Result<GitLote, String>)
         Ok(GitLote::RepoAbove(root)) => format!("(sem Git: a pasta está dentro do repositório {root}, que não é a raiz do projeto)\n"),
     };
     out += "--- FIM ---\n";
-    (if items.iter().all(|(_, o)| o.ok) { 0 } else { 1 }, out)
+    out
 }
 
 /// As linhas do `git status` para o resultado: até `MAX_LINHAS_GIT`, depois a contagem do que ficou de fora.
@@ -185,17 +184,6 @@ struct Inner {
     epoch: u64,
     /// Uma operação do Git (`git_idle`) roda sem o lock: enquanto esta marca estiver ligada, nenhum lote novo é aceito.
     git_exclusive: bool,
-}
-
-impl Inner {
-    /// Recusa enquanto algum executor não terminou (esperando escolha, na fila, rodando ou esperando o
-    /// orquestrador): a branch não muda e os commits não entram no meio de um lote.
-    fn ensure_executors_done(&self) -> Result<(), String> {
-        if self.nodes.iter().any(|n| !n.info.state.is_final()) {
-            return Err("Há executores trabalhando. Espere o lote terminar.".into());
-        }
-        Ok(())
-    }
 }
 
 /// Desmarca `git_exclusive` ao sair de escopo. Vale também quando o comando do Git falha ou entra em pânico.
@@ -288,7 +276,11 @@ impl Core {
     pub fn git_idle<T>(&self, run: impl FnOnce(&Path) -> Result<T, String>) -> Result<T, String> {
         let project = {
             let mut inner = self.inner.lock().unwrap();
-            inner.ensure_executors_done()?;
+            // Recusa enquanto algum executor não terminou (esperando escolha, na fila, rodando ou esperando o
+            // orquestrador): a branch não muda e os commits não entram no meio de um lote.
+            if inner.nodes.iter().any(|n| !n.info.state.is_final()) {
+                return Err("Há executores trabalhando. Espere o lote terminar.".into());
+            }
             if inner.git_exclusive {
                 return Err("Outra operação do Git está em andamento.".into());
             }
@@ -328,7 +320,7 @@ impl Core {
             self.spawn(&mut inner, ORCHESTRATOR, &spawn, Some((cols, rows)))
         });
         if let Err(e) = started {
-            session.remove();
+            session::remove_dir(&session.dir);
             return Err(e);
         }
         inner.session = Some(session);
@@ -463,7 +455,7 @@ impl Core {
         inner.batches.clear();
         inner.seen.clear();
         inner.choice = None;
-        if let Some(warning) = inner.session.take().and_then(|s| s.remove()) {
+        if let Some(warning) = inner.session.take().and_then(|s| session::remove_dir(&s.dir)) {
             eprintln!("{warning}");
         }
     }
@@ -677,7 +669,7 @@ impl Core {
     }
 
     /// Com todas as tarefas do lote em estado final, escreve o resultado que o comando de delegação
-    /// espera: primeira linha o código de saída, depois a saída. Publicado por renomeação.
+    /// espera. Publicado por renomeação.
     fn deliver(&self, inner: &mut Inner, batch: &str) {
         let Some(pos) = inner.batches.iter().position(|b| b.id == batch && b.outcomes.iter().all(Option::is_some)) else { return };
         let done = inner.batches.remove(pos);
@@ -691,15 +683,15 @@ impl Core {
             Ok(git::Modo::RepoAbove(root)) => Ok(GitLote::RepoAbove(root)),
             Err(why) => Err(why),
         };
-        let (code, text) = if items.is_empty() {
-            (4, "wrapper_error: o lote chegou sem tarefas.\n--- FIM ---\n".to_string())
+        let text = if items.is_empty() {
+            "wrapper_error: o lote chegou sem tarefas.\n--- FIM ---\n".to_string()
         } else {
             format_result(&items, &git)
         };
         if let Some(session) = &inner.session {
             let results = session.dir.join("results");
             let tmp = results.join(format!("{batch}.tmp"));
-            if let Err(e) = std::fs::write(&tmp, format!("{code}\n{text}")).and_then(|_| std::fs::rename(&tmp, results.join(format!("{batch}.txt")))) {
+            if let Err(e) = std::fs::write(&tmp, &text).and_then(|_| std::fs::rename(&tmp, results.join(format!("{batch}.txt")))) {
                 eprintln!("Aviso: o resultado do lote {batch} não pôde ser gravado: {e}");
             }
         }
@@ -710,7 +702,7 @@ impl Core {
 mod tests {
     use super::*;
     use crate::git;
-    use crate::testutil::fresh;
+    use crate::testutil::{commit_all, git, identity, write, Tmp};
 
     fn ok(text: &str) -> Outcome {
         Outcome { text: text.into(), exit: "0".into(), ok: true }
@@ -726,8 +718,7 @@ mod tests {
     #[test]
     fn resultado_de_um_lote_concluido() {
         let items = [("Tarefa A".to_string(), ok("Fiz A.\ncódigo 0\n")), ("Tarefa B".to_string(), ok("Fiz B."))];
-        let (code, text) = format_result(&items, &Ok(GitLote::Status(" M a.txt\n?? b.txt\n".into())));
-        assert_eq!(code, 0);
+        let text = format_result(&items, &Ok(GitLote::Status(" M a.txt\n?? b.txt\n".into())));
         assert_eq!(
             text,
             "--- EXECUTOR 1/2 ---\nTarefa A\nFiz A.\ncódigo 0\nexecutor_exit: 0\n\
@@ -744,12 +735,11 @@ mod tests {
             ("B".to_string(), Outcome { text: "interrompido pelo usuário".into(), exit: "interrompido".into(), ok: false }),
             ("C".to_string(), Outcome { text: "O executor terminou sem sinal de fim de rodada (código de saída 3).".into(), exit: "3".into(), ok: false }),
         ];
-        let (code, text) = format_result(&items, &Ok(GitLote::Status("\n".into())));
-        assert_ne!(code, 0);
+        let text = format_result(&items, &Ok(GitLote::Status("\n".into())));
         assert!(text.contains("--- EXECUTOR 2/3 ---\nB\ninterrompido pelo usuário\nexecutor_exit: interrompido (FALHOU)\n"));
         assert!(text.contains("--- EXECUTOR 3/3 ---\nC\nO executor terminou sem sinal de fim de rodada (código de saída 3).\nexecutor_exit: 3 (FALHOU)\n"));
         assert!(text.ends_with("delegação):\n(nada)\n--- FIM ---\n"));
-        let (_, text) = format_result(&items[..1], &Err("código 128".into()));
+        let text = format_result(&items[..1], &Err("código 128".into()));
         assert!(text.ends_with("(git status falhou: código 128)\n--- FIM ---\n"));
     }
 
@@ -765,8 +755,7 @@ mod tests {
             ),
         ];
         for (git, secao) in casos {
-            let (code, text) = format_result(&items, &Ok(git));
-            assert_eq!(code, 0);
+            let text = format_result(&items, &Ok(git));
             assert!(text.ends_with(secao), "{text}");
             assert!(!text.contains("git status"), "sem Git não há a linha do git status: {text}");
         }
@@ -776,10 +765,10 @@ mod tests {
     fn resultado_corta_o_git_status_em_200_linhas_e_conta_o_resto() {
         let items = [("A".to_string(), ok("feito"))];
         let status: String = (1..=203).map(|n| format!(" M arq{n}.txt\n")).collect();
-        let (_, text) = format_result(&items, &Ok(GitLote::Status(status)));
+        let text = format_result(&items, &Ok(GitLote::Status(status)));
         assert!(text.contains(" M arq200.txt\n(… e mais 3 arquivos; rode git status para ver todos)\n--- FIM ---\n"), "{text}");
         assert!(!text.contains("arq201.txt"));
-        let (_, text) = format_result(&items, &Ok(GitLote::Status((1..=200).map(|n| format!(" M a{n}\n")).collect())));
+        let text = format_result(&items, &Ok(GitLote::Status((1..=200).map(|n| format!(" M a{n}\n")).collect())));
         assert!(!text.contains("e mais"), "exatamente 200 linhas não tem contagem: {text}");
     }
 
@@ -804,24 +793,20 @@ mod tests {
     }
 
     /// Um Core com um repositório de teste (branch `main` e `outra`), sem CLI real nem configuração.
-    fn git_core(tag: &str) -> (Core, std::path::PathBuf) {
+    fn git_core(tag: &str) -> (Core, Tmp) {
         git_core_with(tag, Arc::new(|_: &str, _: Value| {}))
     }
 
-    fn git_core_with(tag: &str, emit: Emit) -> (Core, std::path::PathBuf) {
-        let root = fresh("orq-core", tag);
-        let repo = root.join("repo");
+    fn git_core_with(tag: &str, emit: Emit) -> (Core, Tmp) {
+        let root = Tmp::new("orq-core", tag);
+        let repo = root.0.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let git = |args: &[&str]| proc::git_saida(&repo, args).unwrap();
-        git(&["init", "-q", "-b", "main"]);
-        for (key, value) in [("user.name", "teste"), ("user.email", "teste@teste"), ("core.autocrlf", "false")] {
-            git(&["config", key, value]);
-        }
-        std::fs::write(repo.join("a.txt"), "a").unwrap();
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "a"]);
-        git(&["branch", "outra"]);
-        let core = core_vazio(&root, emit);
+        git(&repo, &["init", "-q", "-b", "main"]);
+        identity(&repo);
+        write(&repo, "a.txt", "a");
+        commit_all(&repo, "a");
+        git(&repo, &["branch", "outra"]);
+        let core = core_vazio(&root.0, emit);
         core.set_project(&repo).unwrap();
         (core, root)
     }
@@ -836,19 +821,18 @@ mod tests {
 
     #[test]
     fn pasta_fora_de_repositorio_abre_com_o_proprio_caminho() {
-        let root = fresh("orq-core", "pasta-solta");
+        let root = &Tmp::new("orq-core", "pasta-solta").0;
         let pasta = root.join("solta");
         std::fs::create_dir_all(&pasta).unwrap();
         let core = core_vazio(&root, Arc::new(|_: &str, _: Value| {}));
         let opened = core.set_project(&pasta).unwrap();
         assert_eq!(opened, Opened { project: pasta.display().to_string(), subfolder: false });
         assert_eq!(core.repo().unwrap(), pasta);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn pasta_inexistente_ou_que_nao_e_pasta_e_recusada() {
-        let root = fresh("orq-core", "inexistente");
+        let root = &Tmp::new("orq-core", "inexistente").0;
         let arquivo = root.join("arquivo.txt");
         std::fs::write(&arquivo, "x").unwrap();
         let core = core_vazio(&root, Arc::new(|_: &str, _: Value| {}));
@@ -856,13 +840,12 @@ mod tests {
         assert_eq!(core.set_project(&sumida).unwrap_err(), format!("A pasta {} não existe.", sumida.display()));
         assert!(core.set_project(&arquivo).unwrap_err().ends_with("não é uma pasta."));
         assert!(core.repo().is_err(), "nada foi aberto");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn subpasta_de_repositorio_abre_a_raiz_com_subfolder() {
         let (core, root) = git_core("subpasta");
-        let repo = root.join("repo");
+        let repo = root.0.join("repo");
         let sub = repo.join("sub");
         std::fs::create_dir_all(&sub).unwrap();
         let opened = core.set_project(&sub).unwrap();
@@ -871,17 +854,15 @@ mod tests {
         let opened = core.set_project(&repo).unwrap();
         assert!(!opened.subfolder);
         assert!(proc::mesma_pasta(Path::new(&opened.project), &repo), "raiz: {}", opened.project);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn shell_em_pasta_fora_do_projeto_e_recusado_antes_de_abrir() {
-        let (core, root) = git_core("shell-cwd");
+        let (core, _root) = git_core("shell-cwd");
         for rel in ["..", "a.txt", "nao-existe", ".git"] {
             assert!(core.start_shell_in("shell-1", 80, 24, Some(rel)).is_err(), "{rel} deveria ser recusado");
             assert!(!vivo(&core, "shell-1"), "{rel} não pode deixar shell aberto");
         }
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn set_executor_state(core: &Core, state: NodeState) {
@@ -894,7 +875,7 @@ mod tests {
     #[test]
     fn git_que_muda_o_repositorio_espera_os_executores_e_o_resto_nao() {
         const TRAVA: &str = "Há executores trabalhando. Espere o lote terminar.";
-        let (core, root) = git_core("trava");
+        let (core, _root) = git_core("trava");
         for state in [NodeState::AwaitingChoice, NodeState::Queued, NodeState::Running] {
             set_executor_state(&core, state);
             assert_eq!(core.git_idle(git::pull).unwrap_err(), TRAVA, "{state:?}");
@@ -916,7 +897,6 @@ mod tests {
         }
         assert_eq!(core.git_idle(|dir| git::create_branch(dir, "nova")), Ok(()));
         assert_eq!(git::branches(&core.repo().unwrap()).unwrap().current, "nova");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn git_exclusivo(core: &Core) -> bool {
@@ -926,7 +906,7 @@ mod tests {
     #[test]
     fn com_operacao_do_git_em_curso_outra_recusa_e_a_leitura_responde() {
         const EM_CURSO: &str = "Outra operação do Git está em andamento.";
-        let (core, root) = git_core("em-curso");
+        let (core, _root) = git_core("em-curso");
         core.inner.lock().unwrap().git_exclusive = true;
         assert_eq!(core.git_idle(|dir| git::switch(dir, "outra")).unwrap_err(), EM_CURSO);
         assert_eq!(core.git_idle(|dir| git::create_branch(dir, "nova")).unwrap_err(), EM_CURSO);
@@ -936,18 +916,16 @@ mod tests {
         // A recusa não solta a marca de quem está rodando.
         assert!(git_exclusivo(&core));
         core.inner.lock().unwrap().git_exclusive = false;
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_marca_some_depois_de_sucesso_e_de_falha() {
-        let (core, root) = git_core("marca");
+        let (core, _root) = git_core("marca");
         assert_eq!(core.git_idle(|dir| git::switch(dir, "outra")), Ok(()));
         assert!(!git_exclusivo(&core), "depois de sucesso");
         assert!(core.git_idle(|dir| git::switch(dir, "inexistente")).is_err());
         assert!(!git_exclusivo(&core), "depois de falha");
         assert_eq!(core.git_idle(|dir| git::switch(dir, "main")), Ok(()), "a operação seguinte passa");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Espera `ok` ficar verdadeiro, até 15 segundos.
@@ -977,7 +955,7 @@ mod tests {
     #[test]
     fn shell_abre_recusa_o_mesmo_id_sai_com_exit_e_volta_a_abrir() {
         let (emit, eventos) = gravador();
-        let (core, root) = git_core_with("shell", emit);
+        let (core, _root) = git_core_with("shell", emit);
         let programa = core.start_shell_in("shell-1", 80, 24, None).unwrap();
         assert!(cli::SHELLS.contains(&programa.as_str()), "{programa} não está em cli::SHELLS");
         assert_eq!(core.start_shell_in("shell-1", 80, 24, None).unwrap_err(), "Já há um shell aberto com este id.");
@@ -990,18 +968,16 @@ mod tests {
         assert_eq!(core.term_snapshot("shell-1").seq, 0, "o slot saiu com o processo");
         assert!(core.start_shell_in("shell-1", 80, 24, None).is_ok(), "depois da saída, o mesmo id volta a abrir");
         core.shutdown();
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn dois_shells_abertos_ao_mesmo_tempo() {
-        let (core, root) = git_core("dois-shells");
+        let (core, _root) = git_core("dois-shells");
         core.start_shell_in("shell-1", 80, 24, None).unwrap();
         core.start_shell_in("shell-2", 80, 24, None).unwrap();
         assert!(vivo(&core, "shell-1") && vivo(&core, "shell-2"), "cada id tem o seu processo");
         assert!(!core.has_running(), "shells não fazem o app pedir confirmação");
         core.shutdown();
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// O CLI do shell vem do processo: um `codex.exe` (aqui uma cópia do ping, que sai sozinha) rodando nele conta enquanto
@@ -1009,7 +985,7 @@ mod tests {
     #[test]
     fn cli_do_shell_vem_do_processo_e_some_quando_ele_sai() {
         let (core, root) = git_core("shell-cli");
-        let fake = root.join("codex.exe");
+        let fake = root.0.join("codex.exe");
         std::fs::copy(r"C:\Windows\System32\PING.EXE", &fake).unwrap();
         core.start_shell_in("shell-1", 80, 24, None).unwrap();
         core.start_shell_in("shell-2", 80, 24, None).unwrap();
@@ -1023,22 +999,20 @@ mod tests {
         assert!(espera(|| core.term_cli("shell-1").is_none()), "o CLI saiu e o shell continuou como CLI");
         assert!(vivo(&core, "shell-1"), "o shell segue aberto depois do CLI");
         core.shutdown();
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn id_sem_prefixo_de_shell_e_recusado() {
-        let (core, root) = git_core("id-invalido");
+        let (core, _root) = git_core("id-invalido");
         assert_eq!(core.start_shell_in("exec-1", 80, 24, None).unwrap_err(), "Id de shell inválido.");
         assert_eq!(core.start_shell_in(ORCHESTRATOR, 80, 24, None).unwrap_err(), "Id de shell inválido.");
         assert!(core.inner.lock().unwrap().slots.is_empty(), "a recusa não cria slot");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn exit_de_um_shell_emite_o_id_dele_e_o_outro_segue_vivo() {
         let (emit, eventos) = gravador();
-        let (core, root) = git_core_with("shell-exit-um", emit);
+        let (core, _root) = git_core_with("shell-exit-um", emit);
         core.start_shell_in("shell-1", 80, 24, None).unwrap();
         core.start_shell_in("shell-2", 80, 24, None).unwrap();
         core.term_write("shell-1", "exit\r");
@@ -1049,13 +1023,12 @@ mod tests {
         assert!(!core.inner.lock().unwrap().slots.contains_key("shell-1"), "o slot do que saiu foi removido");
         assert!(vivo(&core, "shell-2"), "o outro shell segue vivo");
         core.shutdown();
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn close_shell_tira_so_aquele_shell_e_nao_emite_exit() {
         let (emit, eventos) = gravador();
-        let (core, root) = git_core_with("close-shell", emit);
+        let (core, _root) = git_core_with("close-shell", emit);
         core.start_shell_in("shell-1", 80, 24, None).unwrap();
         core.start_shell_in("shell-2", 80, 24, None).unwrap();
         core.inner.lock().unwrap().slots.insert("exec-1".into(), Slot::new(0));
@@ -1070,12 +1043,11 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1500));
         assert!(!eventos.lock().unwrap().iter().any(|(ev, _)| ev == "shell-exit"), "close_shell não emite shell-exit");
         core.shutdown();
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn teardown_do_orquestrador_deixa_os_shells_e_o_shutdown_os_leva() {
-        let (core, root) = git_core("shell-teardown");
+        let (core, _root) = git_core("shell-teardown");
         core.start_shell_in("shell-1", 80, 24, None).unwrap();
         core.start_shell_in("shell-2", 80, 24, None).unwrap();
         {
@@ -1092,36 +1064,33 @@ mod tests {
         assert!(vivo(&core, "shell-1") && vivo(&core, "shell-2"), "os shells sobrevivem à saída do orquestrador");
         core.shutdown();
         assert!(core.inner.lock().unwrap().slots.is_empty(), "o shutdown leva todos os shells");
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn a_marca_some_mesmo_com_panico_no_comando() {
-        let (core, root) = git_core("panico");
+        let (core, _root) = git_core("panico");
         let saiu = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| core.git_idle::<()>(|_| panic!("comando git travou"))));
         assert!(saiu.is_err());
         assert!(!git_exclusivo(&core));
         assert_eq!(core.git_idle(|dir| git::switch(dir, "outra")), Ok(()));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn o_lock_do_core_fica_livre_enquanto_o_git_roda() {
         // Com o lock segurado durante o comando, `core.repo()` (que pega o lock) travaria este teste.
-        let (core, root) = git_core("livre");
+        let (core, _root) = git_core("livre");
         let branch = core.git_idle(|_| {
             assert!(git_exclusivo(&core), "marcado enquanto o comando roda");
             git::branches(&core.repo()?).map(|b| b.current)
         });
         assert_eq!(branch, Ok("main".to_string()));
         assert!(!git_exclusivo(&core));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn lote_pedido_durante_a_operacao_do_git_espera_e_entra_uma_vez() {
         let (core, root) = git_core("lote");
-        let session = root.join("sessao");
+        let session = root.0.join("sessao");
         let pedido = session.join("requests").join("lote1");
         std::fs::create_dir_all(&pedido).unwrap();
         std::fs::write(pedido.join("1.txt"), "Tarefa X\n").unwrap();
@@ -1137,6 +1106,5 @@ mod tests {
         core.accept_batches(&mut inner);
         assert_eq!(inner.nodes.len(), 1, "o lote não entra duas vezes");
         drop(inner);
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

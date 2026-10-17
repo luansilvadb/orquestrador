@@ -19,7 +19,7 @@
 //   selectedText(): string                              Texto da seleção principal no arquivo da aba ativa do grupo focado. Sem seleção, a palavra sob o cursor.
 //                                                        Vazio se não há aba de arquivo, se a seleção tem quebra de linha ou se não há palavra. Não mexe no editor.
 // Props: `project` (raiz absoluta, chave da recuperação), `locked` (executores vivos: bloqueia mutações Git), `guard` (trava compartilhada
-// com a barra do Git), `refreshGit` (chamado após mutação), `onActivePath`/`onActiveTarget` (avisos da aba ativa), `layout` (texto opaco do
+// com a barra do Git), `refreshGit` (chamado após mutação), `onActiveTarget` (aviso da aba ativa), `layout` (texto opaco do
 // layout externo, salvo na recuperação), `onRestoreLayout` (chamado uma vez na montagem com o layout salvo), `onReveal` (revelar no Explorer),
 // `onGroupCount` (1 ou 2 grupos), `onSaved()` (chamada depois de cada gravação bem-sucedida no disco pelo editor: Ctrl+S, salvar tudo,
 // comparação, resolução de conflito).
@@ -30,12 +30,13 @@ import {
 import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownMenu, Modal, Text, toast } from '@lobehub/ui/base-ui';
 import { Center, Flexbox, Hotkey, PatchDiff } from '@lobehub/ui';
 import { ArrowRight, ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
+import { EditorView } from '@codemirror/view';
 import { FileIcon } from './file-icon';
 import { Breadcrumbs } from './breadcrumbs';
 import { backend, message } from './backend';
 import { usePolling } from './polling';
-import { CodeEditor, forgetEditorState, liveEditorView, type Reveal, type StartCursor } from './file-view';
-import { MediaView, mediaOf } from './media-view';
+import { CodeEditor, forgetEditorState, type Reveal, type StartCursor } from './file-view';
+import { MediaView, mediaOf, Note } from './media-view';
 import { action, blocked, DIVIDER, fileName, useChord } from './file-tabs';
 import { pathText } from './file-tab-actions';
 import { copy, splitPath } from './git-history';
@@ -45,7 +46,7 @@ import {
 } from './workspace-model';
 import { revealTab, wheelToScroll } from './tab-strip';
 import {
-  blockCount, type Buffer, type Choice, type ConflictDraft, decodeRecovery, dirtyKeys, dropData, encodeRecovery, hasDraftAt,
+  blockCount, type Buffer, type Choice, type ConflictDraft, decodeRecovery, dirtyKeys, encodeRecovery, hasDraftAt,
   hasMarkers, isBufferDirty, isConflictDirty, newlineOf, normalizeNewlines, parseConflict, patchHunks, type PatchHunk, type Recovery,
   remapData, renderConflict, toDiskNewlines, conflictKey, type EditorData, type Cursor, type Scroll,
 } from './workspace-store';
@@ -80,7 +81,6 @@ export type EditorWorkspaceProps = {
   refreshGit: () => void;
   /** Trava compartilhada com a barra do Git: as operações Git desta área e da barra não rodam juntas. */
   guard: GitGuard;
-  onActivePath?: (path: string | null) => void;
   // Alvo da aba ativa no grupo focado (diff, commit, conflito ou arquivo): a sidebar marca o diff que está aberto.
   onActiveTarget?: (target: TabTarget | null) => void;
   layout?: string | null;
@@ -95,7 +95,7 @@ export type EditorWorkspaceProps = {
 type Status = { error?: string; binary?: boolean; large?: boolean };
 // Versão do disco que difere de um rascunho sujo: a tela oferece usar o disco ou salvar sobre ele, nunca troca sozinha.
 type DiskVersion = { text: string; bom: boolean; readOnly: boolean };
-type Ask = { title: string; body: ReactNode; actions: { key: string; label: string; danger?: boolean }[]; cancelLabel?: string };
+type Ask = { title: string; body: ReactNode; actions: { key: string; label: string; danger?: boolean }[] };
 // Comparação antes de gravar sobre o disco (ou de usar o disco): as duas versões são as que a tela tinha quando o usuário pediu.
 type Compare = { docId: string; path: string; mode: 'keep' | 'use'; disk: DiskVersion; draft: string };
 type Common = {
@@ -112,7 +112,7 @@ type Common = {
 const STORAGE = (project: string) => `orquestrador.editor:${project}`;
 const POLL_MS = 2500;
 const DEFAULT_SPLIT = 0.5;
-const newDocId = () => `doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const newDocId = () => `doc-${crypto.randomUUID()}`;
 // Mesmo nome em pastas diferentes: a pasta vira o detalhe da aba, para as duas não ficarem iguais. Sem repetição, não há detalhe.
 function detailsOf(paths: string[]) {
   const count = new Map<string, number>();
@@ -138,7 +138,7 @@ const tabIcon = (target: TabTarget) => <FileIcon path={target.path} className="s
 function emptyData(): EditorData { return { buffers: {}, conflicts: {} }; }
 
 export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(props, handle) {
-  const { project, locked, guard, refreshGit, onActivePath, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
+  const { project, locked, guard, refreshGit, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
   // Ref para que as gravações antigas (ainda em await) avisem com a prop atual.
   const savedRef = useRef(onSaved);
   savedRef.current = onSaved;
@@ -166,7 +166,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     for (const b of decoded.recovery.buffers) {
       if (b.cursor) cursors[b.docId] = b.cursor;
       if (b.scroll) scrolls[b.docId] = b.scroll;
-      if (b.dirty) data.buffers[b.docId] = { docId: b.docId, path: b.path, cursor: b.cursor, ...b.dirty };
+      if (b.dirty) data.buffers[b.docId] = { docId: b.docId, path: b.path, ...b.dirty };
     }
     for (const c of decoded.recovery.conflicts) data.conflicts[conflictKey(c.path)] = c;
     return { ws: ws.state, data, split: decoded.recovery.split ?? DEFAULT_SPLIT, layout: decoded.recovery.layout, notes, cursors, scrolls };
@@ -180,20 +180,18 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const [reveal, setReveal] = useState<(Reveal & { docId: string }) | null>(null);
   const [notice, setNotice] = useState(boot.notes.join(' '));
   const [askState, setAskState] = useState<(Ask & { resolve: (key: string | null) => void }) | null>(null);
-  const [layoutSaved] = useState(boot.layout);
-  // Mudança de cursor não passa pelo estado do workspace; este contador a põe na fila de gravação da recuperação.
-  const [cursorTick, setCursorTick] = useState(0);
   const wsRef = useRef(ws);
   const dataRef = useRef(data);
   const cursors = useRef<Record<string, Cursor>>(boot.cursors);
   // Rolagem por arquivo (docId): a vista que monta de novo (aba movida, app reaberto) volta para o mesmo ponto.
   const scrolls = useRef<Record<string, Scroll>>(boot.scrolls);
-  const scrollTimer = useRef(0);
+  // Cursor e rolagem não passam pelo estado: este atraso os põe na fila de gravação da recuperação sem re-renderizar a área.
+  const persistTimer = useRef(0);
   const [compare, setCompare] = useState<Compare | null>(null);
   const saving = useRef(new Set<string>());
   const askOpen = useRef(false);
   const revealSeq = useRef(0);
-  const layoutRef = useRef(layout ?? layoutSaved);
+  const layoutRef = useRef(layout ?? boot.layout);
   const splitRef = useRef(split);
   const dragId = useRef<string | null>(null);
   const splitDrag = useRef<{ startX: number; start: number; width: number } | null>(null);
@@ -268,7 +266,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const openFile = (path: string, options: OpenOptions = {}) => {
     const docId = docIdFor(path);
     openTarget({ kind: 'file', docId, path }, options);
-    if (options.line !== undefined) setReveal({ docId, path, line: options.line, col: options.col, id: ++revealSeq.current });
+    if (options.line !== undefined) setReveal({ docId, line: options.line, col: options.col, id: ++revealSeq.current });
   };
   // À direita, pela ordem visual: com dois grupos, o segundo (groups[1]), mesmo quando o foco já está nele. Com um só,
   // vai para o outro id, que entra depois do existente (à direita dele).
@@ -463,7 +461,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           ...dataRef.current.buffers,
           [docId]: {
             docId, path, raw: file.text, bom: file.bom, newline: newlineOf(file.text), draft: normalizeNewlines(file.text),
-            readOnly: file.readOnly, cursor: cursors.current[docId] ?? null,
+            readOnly: file.readOnly,
           },
         },
       });
@@ -500,12 +498,11 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   useEffect(() => {
     const group = ws.groups.find((g) => g.id === ws.focus);
     const tab = group?.tabs.find((t) => t.id === group.active);
-    onActivePath?.(tab ? tab.target.path : null);
     onActiveTarget?.(tab ? tab.target : null);
   }, [ws]);
 
   useEffect(() => {
-    if (layoutSaved !== null) onRestoreLayout?.(layoutSaved);
+    if (boot.layout !== null) onRestoreLayout?.(boot.layout);
     // Só na montagem: depois disso o App manda o layout de volta pela prop `layout`.
   }, []);
   layoutRef.current = layout ?? layoutRef.current;
@@ -545,10 +542,14 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   };
   const persistRef = useRef(persist);
   persistRef.current = persist;
+  const persistSoon = () => {
+    window.clearTimeout(persistTimer.current);
+    persistTimer.current = window.setTimeout(() => persistRef.current(), 400);
+  };
   useEffect(() => {
     const timer = window.setTimeout(() => persistRef.current(), 400);
     return () => window.clearTimeout(timer);
-  }, [ws, data, layout, split, cursorTick, project]);
+  }, [ws, data, layout, split, project]);
   useEffect(() => {
     const flush = () => persistRef.current();
     window.addEventListener('pagehide', flush);
@@ -589,7 +590,6 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const ids = allTabs().filter((t) => t.target.kind !== 'commit' && hit(t.target.path)).map((t) => t.id);
     const next = closeTabs(wsRef.current, ids);
     setWs(next);
-    setData(dropData(dataRef.current, paths));
     pruneData(next);
   };
 
@@ -627,51 +627,27 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
     const mod = e.ctrlKey || e.metaKey;
     const focused = focusedTab();
+    // Tecla sem ação (ou sem alvo) não é capturada: segue para o editor, como qualquer outra.
+    let run: (() => void) | null = null;
     if (chordPending.current) {
       // Ctrl+K de novo reinicia o acorde, sem chegar ao editor.
-      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyK') {
-        e.preventDefault();
-        e.stopPropagation();
-        beginChord();
-        return;
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyK') run = beginChord;
+      else {
+        endChord();
+        if (!mod && !e.altKey && !e.shiftKey && e.code === 'KeyW') run = () => void closeFlow({ kind: 'all', group: wsRef.current.focus });
+        else if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyC' && focused) run = () => void copyPath('relative', focused.target);
+        else if (!mod && !e.altKey && e.shiftKey && e.code === 'Enter' && focused) run = () => setWs(togglePin(wsRef.current, focused.id));
       }
-      endChord();
-      // Acorde sem ação (ou sem alvo) não é capturado: a tecla segue para o editor, como qualquer outra.
-      let run: (() => void) | null = null;
-      if (!mod && !e.altKey && !e.shiftKey && e.code === 'KeyW') run = () => void closeFlow({ kind: 'all', group: wsRef.current.focus });
-      else if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyC' && focused) run = () => void copyPath('relative', focused.target);
-      else if (!mod && !e.altKey && e.shiftKey && e.code === 'Enter' && focused) run = () => setWs(togglePin(wsRef.current, focused.id));
-      if (!run) return;
-      e.preventDefault();
-      e.stopPropagation();
-      run();
-      return;
-    }
-    if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyK') {
-      e.preventDefault();
-      e.stopPropagation();
-      beginChord();
-    } else if (mod && !e.shiftKey && !e.altKey && (e.key === 'w' || e.key === 'F4') && focused) {
-      e.preventDefault();
-      e.stopPropagation();
-      void closeFlow({ kind: 'one', tabId: focused.id });
-    } else if (e.altKey && e.shiftKey && !mod && e.code === 'KeyC' && focused) {
-      e.preventDefault();
-      e.stopPropagation();
-      void copyPath('absolute', focused.target);
-    } else if (e.ctrlKey && e.key === 'Tab') {
-      e.preventDefault();
-      e.stopPropagation();
-      setWs(navigate(wsRef.current, e.shiftKey ? -1 : 1));
-    } else if (mod && e.shiftKey && (e.key === 'T' || e.key === 't')) {
-      e.preventDefault();
-      e.stopPropagation();
-      reopen();
-    } else if (mod && e.key === '\\') {
-      e.preventDefault();
-      e.stopPropagation();
-      if (focused) split_(focused.id);
-    }
+    } else if (mod && !e.shiftKey && !e.altKey && e.code === 'KeyK') run = beginChord;
+    else if (mod && !e.shiftKey && !e.altKey && (e.key === 'w' || e.key === 'F4') && focused) run = () => void closeFlow({ kind: 'one', tabId: focused.id });
+    else if (e.altKey && e.shiftKey && !mod && e.code === 'KeyC' && focused) run = () => void copyPath('absolute', focused.target);
+    else if (e.ctrlKey && e.key === 'Tab') run = () => setWs(navigate(wsRef.current, e.shiftKey ? -1 : 1));
+    else if (mod && e.shiftKey && (e.key === 'T' || e.key === 't')) run = reopen;
+    else if (mod && e.key === '\\') run = () => { if (focused) split_(focused.id); };
+    if (!run) return;
+    e.preventDefault();
+    e.stopPropagation();
+    run();
   };
   // Sair da área (foco foi para fora, p. ex. o terminal) cancela o acorde pendente.
   const onKeyLeave = (e: FocusEvent<HTMLDivElement>) => {
@@ -699,7 +675,9 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     selectedText: () => {
       const tab = focusedTab();
       if (!tab || tab.target.kind !== 'file') return '';
-      const view = liveEditorView(tab.target.docId);
+      // A vista sai do corpo da aba (`data-body`, um por aba): o id de aba é único no workspace.
+      const body = document.querySelector<HTMLElement>(`[data-body="${tab.id}"]`);
+      const view = body && EditorView.findFromDOM(body);
       if (!view) return '';
       const { state } = view;
       const main = state.selection.main;
@@ -854,7 +832,6 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (mediaOf(target.path)) return <MediaView path={target.path} shown={shown} />;
     return (
       <FileBody
-        groupActive={groupActive}
         buffer={data.buffers[target.docId]}
         status={status[target.docId]}
         disk={disk[target.docId]}
@@ -873,14 +850,12 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           const prev = cursors.current[target.docId];
           if (prev && prev.line === line && prev.col === col) return;
           cursors.current[target.docId] = { line, col };
-          setCursorTick((n) => n + 1);
+          persistSoon();
         }}
         scroll={scrolls.current[target.docId] ?? null}
         onScroll={(value) => {
           scrolls.current[target.docId] = value;
-          // Rolar não re-renderiza a área: só agenda a gravação da recuperação (o atraso junta as rolagens).
-          window.clearTimeout(scrollTimer.current);
-          scrollTimer.current = window.setTimeout(() => persistRef.current(), 400);
+          persistSoon();
         }}
         onCompare={(mode) => openCompare(target.docId, target.path, mode)}
         onRetry={() => void syncFile(target.docId)}
@@ -1129,7 +1104,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         onCancel={() => { askState?.resolve(null); setAskState(null); }}
         footer={askState && (
           <Flexbox horizontal wrap="wrap" justify="flex-end" gap={8} width="100%">
-            <Button onClick={() => { askState.resolve(null); setAskState(null); }}>{askState.cancelLabel ?? 'Cancelar'}</Button>
+            <Button onClick={() => { askState.resolve(null); setAskState(null); }}>Cancelar</Button>
             {askState.actions.map((item) => (
               <Button key={item.key} type={item.danger ? undefined : 'fill'} danger={item.danger} onClick={() => { askState.resolve(item.key); setAskState(null); }}>
                 {item.label}
@@ -1171,9 +1146,9 @@ function EmptyGroup() {
 
 // ---- Arquivo ----
 
-function FileBody({ groupActive, buffer, status, disk, reveal, cursor, onChange, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
-  groupActive: boolean; buffer: Buffer | undefined; status: Status | undefined; disk: DiskVersion | undefined;
-  reveal: (Reveal & { docId: string }) | null; cursor: StartCursor | null; onChange: (value: string) => void; onSave: () => void;
+function FileBody({ buffer, status, disk, reveal, cursor, onChange, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
+  buffer: Buffer | undefined; status: Status | undefined; disk: DiskVersion | undefined;
+  reveal: Reveal | null; cursor: StartCursor | null; onChange: (value: string) => void; onSave: () => void;
   onCursor: (line: number, col: number) => void; onCompare: (mode: 'keep' | 'use') => void; onRetry: () => void;
   scroll: Scroll | null; onScroll: (scroll: Scroll) => void;
 }) {
@@ -1203,7 +1178,7 @@ function FileBody({ groupActive, buffer, status, disk, reveal, cursor, onChange,
             text={buffer.draft}
             readOnly={buffer.readOnly}
             path={buffer.path}
-            reveal={groupActive && reveal ? { path: buffer.path, line: reveal.line, col: reveal.col, id: reveal.id } : null}
+            reveal={reveal}
             onChange={onChange}
             onSave={onSave}
             onCursor={onCursor}
@@ -1258,15 +1233,6 @@ function CompareView({ path, disk, draft, mode }: { path: string; disk: string; 
           </div>
         </>
       )}
-    </Flexbox>
-  );
-}
-
-function Note({ text, danger, onRetry }: { text: string; danger?: boolean; onRetry?: () => void }) {
-  return (
-    <Flexbox padding={16} gap={8}>
-      <Text as="p" role="status" fontSize={14} type={danger ? 'danger' : 'secondary'}>{text}</Text>
-      {onRetry && <Button size="small" onClick={onRetry} className="self-start">Tentar de novo</Button>}
     </Flexbox>
   );
 }

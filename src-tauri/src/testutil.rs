@@ -56,13 +56,14 @@ pub fn junction(link: &Path, target: &Path) -> bool {
 }
 
 /// Uma pasta de sessão de delegação cujo dono é este processo (vivo) ou um processo que já não existe.
-pub fn session(prefix: &str, tag: &str, alive: bool) -> PathBuf {
-    let dir = fresh(prefix, tag);
+pub fn session(prefix: &str, tag: &str, alive: bool) -> Tmp {
+    let tmp = Tmp::new(prefix, tag);
+    let dir = &tmp.0;
     for sub in ["requests", "results", "exec"] {
         std::fs::create_dir_all(dir.join(sub)).unwrap();
     }
     let me = std::process::id();
     let started = start_time(me).unwrap() + u64::from(!alive);
     std::fs::write(dir.join("owner"), format!("{me} {started} strategist-{tag}")).unwrap();
-    dir
+    tmp
 }

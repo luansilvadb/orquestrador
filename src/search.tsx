@@ -5,14 +5,14 @@
 // lista o que sai riscado e o que entra; a troca por arquivo e o Substituir Tudo gravam com `replace_apply`, só nos arquivos da prévia.
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BookOpen, CaseSensitive, CaseUpper, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Ellipsis, List, ListTree, ListX,
+  BookOpen, CaseSensitive, CaseUpper, ChevronRight, ChevronsDownUp, ChevronsUpDown, Ellipsis, List, ListTree, ListX,
   type LucideIcon, Regex, ReplaceAll, RotateCw, WholeWord, X,
 } from 'lucide-react';
 import { ActionIcon, Button, ContextMenuTrigger, Input, Modal, ScrollArea, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { backend, message } from './backend';
 import { FileIcon } from './file-icon';
-import { copy, splitPath } from './git-history';
+import { copy, join, splitPath } from './git-history';
 import { action, DIVIDER } from './file-tabs';
 import type { ReplacePreview, ReplaceQuery, SearchFile, SearchMatch, SearchOptions, SearchResults, SkipReason } from './types';
 
@@ -204,7 +204,7 @@ function rowsOf(files: { path: string; hits: Hit[] }[], view: 'list' | 'tree', c
   for (const f of files) {
     let node = root;
     for (const part of splitPath(f.path).dir.split('/').filter(Boolean)) {
-      const path = node.path ? `${node.path}/${part}` : part;
+      const path = join(node.path, part);
       if (!node.dirs.has(part)) node.dirs.set(part, { name: part, path, dirs: new Map(), files: [] });
       node = node.dirs.get(part)!;
     }
@@ -245,14 +245,14 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   focusKey: number;
   /** Abre o arquivo na linha e na coluna (UTF-16, a partir de 1). Clique simples pede prévia; duplo clique ou Enter pedem permanente. */
   onOpen: (path: string, line: number, col?: number, options?: { permanent?: boolean }) => void;
-  /** Pedido de pesquisa só nesta pasta (`path` relativo, '' é o projeto): vira `./pasta` no campo de incluir. Um novo `id` a cada pedido. */
-  folder: { path: string; id: number } | null;
-  /** Texto selecionado no editor: vira a consulta e a busca roda na hora. Um novo `id` a cada pedido. */
-  seed: { text: string; id: number } | null;
+  /** Pedido de pesquisa só nesta pasta (`path` relativo, '' é o projeto): vira `./pasta` no campo de incluir. Um objeto novo a cada pedido. */
+  folder: { path: string } | null;
+  /** Texto selecionado no editor: vira a consulta e a busca roda na hora. Um objeto novo a cada pedido. */
+  seed: { text: string } | null;
   /** Sobe a cada gravação no editor: refaz a busca atual. */
   refreshKey: number;
-  /** F4 (`dir` 1) ou Shift+F4 (`dir` -1): anda pelos resultados. Um novo `id` a cada tecla. */
-  step: { dir: 1 | -1; id: number } | null;
+  /** F4 (`dir` 1) ou Shift+F4 (`dir` -1): anda pelos resultados. Um objeto novo a cada tecla. */
+  step: { dir: 1 | -1 } | null;
   /** Diz se o arquivo tem alteração não salva no editor. Consultado ao exibir e de novo ao substituir. */
   hasDraft: (path: string) => boolean;
   /** Caminhos abertos no editor, para "só nos editores abertos". */
@@ -320,8 +320,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     setDetailsOpen(true);
     if (next.query) now(next);
     field()?.focus();
-    // Só o `id` do pedido importa: cada pedido de pasta é novo, mesmo para a mesma pasta.
-  }, [folder?.id]);
+  }, [folder]);
 
   // Texto selecionado no editor: vira a consulta e a busca roda na hora, como Enter. O campo é selecionado depois que o texto novo aparece nele.
   useEffect(() => {
@@ -332,8 +331,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     now(next);
     if (seed.text === form.query) field()?.select();
     else selectAfter.current = seed.text;
-    // Só o `id` do pedido importa: cada pedido é novo, mesmo com o mesmo texto.
-  }, [seed?.id]);
+  }, [seed]);
 
   // Depois do render, seleciona o campo quando o texto do pedido já está nele. Sem pedido pendente, não faz nada.
   useEffect(() => {
@@ -409,12 +407,8 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
 
   // Limpar: como o VS Code, tira a consulta, a substituição, os filtros e os resultados.
   const clear = () => {
-    window.clearTimeout(timer.current);
     setAt(-1);
-    const next = { ...form, query: '', replacement: '', include: '', exclude: '', onlyOpen: false };
-    setForm(next);
-    setReport(null);
-    void run(next);
+    change({ query: '', replacement: '', include: '', exclude: '', onlyOpen: false }, 'now');
     field()?.focus();
   };
 
@@ -556,8 +550,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     const open = new Set([`f:${hit.path}`, ...ancestors(hit.path)]);
     setCollapsed((prev) => prev.filter((k) => !open.has(k)));
     onOpen(hit.path, hit.line, hit.col);
-    // Só o `id` da tecla importa: cada toque é novo, mesmo na mesma direção.
-  }, [step?.id]);
+  }, [step]);
 
   // Mantém o resultado atual à vista. `nearest` não mexe na lista quando ele já está visível.
   useEffect(() => {
@@ -569,7 +562,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     const items = [...(resultsBox.current?.querySelectorAll<HTMLElement>('[data-result]') ?? [])];
     const own = leaving.querySelector('[data-result]');
     const idx = items.indexOf(own as HTMLElement);
-    const next = items.slice(idx + 1).find((el) => !leaving.contains(el)) ?? items.slice(0, Math.max(idx, 0)).reverse().find((el) => !leaving.contains(el));
+    const next = items.slice(idx + 1).find((el) => !leaving.contains(el)) ?? items.slice(0, Math.max(idx, 0)).findLast((el) => !leaving.contains(el));
     if (next) next.focus();
     else field()?.focus();
   };
@@ -672,9 +665,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
       );
     }
     const open = !collapsedSet.has(row.key);
-    const twistie = open
-      ? <ChevronDown className="size-4 shrink-0 text-[var(--ant-color-text-secondary)]" aria-hidden />
-      : <ChevronRight className="size-4 shrink-0 text-[var(--ant-color-text-secondary)]" aria-hidden />;
+    const twistie = <ChevronRight className={`size-4 shrink-0 text-[var(--ant-color-text-secondary)] transition-transform${open ? ' rotate-90' : ''}`} aria-hidden />;
     const count = row.kind === 'dir' ? row.count : row.hits.length;
     const badge = (
       <span className="mr-3 ml-1 shrink-0 rounded-full bg-[var(--ant-color-fill-secondary)] px-[5px] text-[11px] leading-[18px] tabular-nums group-hover/file:hidden group-focus-within/file:hidden">
@@ -765,7 +756,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
             onClick={() => { setReplaceOpen((v) => !v); setReport(null); }}
             className={`absolute top-0 left-0 flex h-full w-4 items-center justify-center rounded-sm text-[var(--ant-color-text-secondary)] outline-none hover:bg-[var(--ant-color-fill-tertiary)] ${FOCUS}`}
           >
-            {replaceOpen ? <ChevronDown className="size-4" aria-hidden /> : <ChevronRight className="size-4" aria-hidden />}
+            <ChevronRight className={`size-4 transition-transform${replaceOpen ? ' rotate-90' : ''}`} aria-hidden />
           </button>
           <Input
             size="small" value={form.query} placeholder="Pesquisar" aria-label="Pesquisar nos arquivos do projeto" style={INPUT_STYLE}

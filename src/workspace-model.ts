@@ -7,7 +7,6 @@
 //   escolhido pelo integrador e nunca trocado. O `path` é só onde o arquivo está agora: `remapPath` o atualiza sem mexer no docId.
 //   Por isso renomear/mover não desmonta o buffer, e duas abas com o mesmo docId (em grupos diferentes) compartilham o buffer.
 // - Diff é identificado por lado + path (`staged`/`unstaged`); histórico, por hash + path; conflito, por path.
-// - Abas `issues` e `new-issue` só vêm de recuperações salvas por versões antigas: `loadWorkspace` as descarta em silêncio, sem invalidar o resto.
 // - Dentro de um grupo, uma identidade aparece no máximo uma vez: abrir de novo só ativa a que já existe.
 // - Ordem do grupo: fixadas primeiro, depois as demais. No máximo uma prévia por grupo. Fixada nunca é prévia.
 // - Cada operação devolve um estado novo; o argumento não muda. Operação inválida (grupo ou aba inexistente) devolve o mesmo estado.
@@ -213,7 +212,7 @@ export function remapPath(state: WorkspaceState, from: string, to: string): Work
   if (!isSafePath(from) || !isSafePath(to)) return state;
   const move = (path: string) => (isWithin(path, from) ? to + path.slice(from.length) : path);
   // Histórico é imutável: o path de um commit é o do próprio commit e não muda. Abrir o arquivo atual sai de outro localizador.
-  const retarget = (target: TabTarget): TabTarget => (target.kind === 'commit' || !('path' in target) ? target : { ...target, path: move(target.path) });
+  const retarget = (target: TabTarget): TabTarget => (target.kind === 'commit' ? target : { ...target, path: move(target.path) });
   return tidy({
     ...state,
     groups: state.groups.map((g) => ({ ...g, tabs: g.tabs.map((t) => ({ ...t, target: retarget(t.target) })) })),
@@ -242,32 +241,18 @@ export function loadWorkspace(text: string): Loaded {
     }
     groupIds.add(group.id);
     const tabs: EditorTab[] = [];
-    // Se a ativa era uma aba antiga (recuperação de versão antiga), a ativa passa para a vizinha da direita (a próxima que ficar) ou, sem ela, a da esquerda.
-    let activeId = typeof group.active === 'string' ? group.active : null;
-    let inheritActive = false;
     for (const tab of asArray(group.tabs)) {
-      // Abas antigas de `issues` e `new-issue` (só de recuperações de versões antigas): saem sem aviso.
-      if (isLegacyIssueTab(tab)) {
-        if (isRecord(tab) && tab.id === activeId) inheritActive = true;
-        continue;
-      }
       if (!isRecord(tab) || typeof tab.id !== 'string' || tab.id === '' || tab.id.length > 64 || tabIds.has(tab.id) || !isSafeTarget(tab.target)) {
         notes.push('Aba inválida descartada.');
         continue;
       }
       tabIds.add(tab.id);
       tabs.push({ id: tab.id, target: tab.target, pinned: tab.pinned === true, preview: tab.preview === true });
-      if (inheritActive) {
-        activeId = tab.id;
-        inheritActive = false;
-      }
     }
-    if (inheritActive) activeId = tabs[tabs.length - 1]?.id ?? null;
-    groups.push({ id: group.id, tabs, active: activeId });
+    groups.push({ id: group.id, tabs, active: typeof group.active === 'string' ? group.active : null });
   }
   const closed: ClosedTab[] = [];
   for (const entry of asArray(raw.closed)) {
-    if (isRecord(entry) && isLegacyIssueTarget(entry.target)) continue;
     if (isRecord(entry) && isGroupId(entry.group) && isSafeTarget(entry.target)) closed.push({ group: entry.group, target: entry.target });
     else notes.push('Aba fechada inválida descartada.');
   }
@@ -340,7 +325,7 @@ function neighborAfter(tabs: readonly EditorTab[], tabId: string, closing: Reado
   const at = tabs.findIndex((t) => t.id === tabId);
   const right = tabs.slice(at + 1).find((t) => !closing.has(t.id));
   if (right) return right.id;
-  return tabs.slice(0, Math.max(at, 0)).reverse().find((t) => !closing.has(t.id))?.id ?? null;
+  return tabs.slice(0, Math.max(at, 0)).findLast((t) => !closing.has(t.id))?.id ?? null;
 }
 
 /** Conserta o estado: grupos únicos (até 2), uma identidade por grupo, uma prévia por grupo, fixadas no começo, ativa válida. */
@@ -410,9 +395,6 @@ export function isWithin(path: string, base: string): boolean {
   const b = base.toLowerCase();
   return p === b || p.startsWith(`${b}/`);
 }
-
-const isLegacyIssueTarget = (target: unknown) => isRecord(target) && (target.kind === 'issues' || target.kind === 'new-issue');
-const isLegacyIssueTab = (tab: unknown) => isRecord(tab) && isLegacyIssueTarget(tab.target);
 
 // Sujo: buffer de arquivo com draft (`docId`) ou rascunho de resolução de conflito (`conflict:<path>`, sem diferença de caixa).
 export const isDirty = (target: TabTarget, dirty: ReadonlySet<string>) =>
