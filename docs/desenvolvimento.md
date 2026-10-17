@@ -18,10 +18,12 @@ npm run tauri build    # gera o instalador assinado em src-tauri\target\release\
 
 `npm run dev` sobe só o front-end (Vite), com um backend simulado em `src/backend/mock.ts`, fora do Tauri. Os modos sem Git ficam nas URLs `?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1`.
 
+Para acrescentar um comando: escreva a função `#[tauri::command]` em `lib.rs`, registre-a no `generate_handler!`, adicione a entrada em `Commands` (`types.ts`), o método em `backend.ts` e o handler no mock; `npm run check` aponta a divergência entre o Rust e `Commands`, e o `tsc` aponta o handler que falta no mock.
+
 ## Testes
 
 ```powershell
-npm run check       # 7 checagens puras (Node, sem dependências)
+npm run check       # 8 checagens puras (Node, sem dependências)
 npm run check:ui    # 6 checks de interface, em sequência (Chrome headless)
 ```
 

@@ -26,7 +26,7 @@ import type { Transport } from './backend';
 import { fileNameError } from '../shared/file-tab-actions';
 import { splitPath } from '../shared/paths';
 import {
-  type Batch, type Choice, type ClipboardSnapshot, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
+  type Batch, type Choice, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
   type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
   type SearchResults, type SkipReason,
@@ -895,7 +895,8 @@ function wavSilence(seconds: number): ArrayBuffer {
   return buf;
 }
 
-const commands: Record<string, (args: any) => unknown> = {
+// Um handler por comando de `Commands`: falta um, sobra um ou tipo errado de argumento ou resultado é erro do `tsc`.
+const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]['result'] } = {
   read_media: ({ path }: { path: string }) => mockBytes(path),
   update_status: () => ({ phase: 'ready' }),
   retry_update: () => ({ phase: 'ready' }),
@@ -1046,7 +1047,7 @@ export const mock: Transport = {
     const log = cmd.startsWith('git_') ? { cmd, args: structuredClone(args), result: null as unknown, error: null as string | null } : null;
     if (log) debug.calls.push(log);
     try {
-      const result = commands[cmd](args);
+      const result = (commands as Record<string, (a: unknown) => unknown>)[cmd](args);
       if (log) log.result = structuredClone(result ?? null);
       if (cmd === 'term_snapshot') setTimeout(() => resolve(result), 100);
       else resolve(result);

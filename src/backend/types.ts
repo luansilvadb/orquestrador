@@ -122,4 +122,68 @@ export type Events = {
   'update-status': UpdateStatus;
 };
 
+// Contrato dos comandos do Tauri. A chave é o nome que vai ao `invoke` (snake_case); `args` são as chaves como o front-end envia
+// (`Option` do Rust vira `| null`, ou opcional quando o front-end pode omitir) e `result` é o retorno (`void` quando não há).
+// Comando sem argumento tem `args: NoArgs`. `backend.ts` e `mock.ts` são tipados por este mapa; `scripts/check-commands.mjs` confere as chaves com `lib.rs`.
+export type NoArgs = Record<string, never>;
+export type Commands = {
+  choose_project: { args: NoArgs; result: { project: string; subfolder: boolean } | null };
+  get_options: { args: NoArgs; result: Options };
+  list_dir: { args: { path: string }; result: DirEntry[] };
+  read_file: { args: { path: string }; result: FileContent };
+  read_media: { args: { path: string }; result: ArrayBuffer };
+  write_file_checked: { args: { path: string; text: string; base: string; bom: boolean }; result: void };
+  rename_file: { args: { path: string; name: string }; result: string };
+  delete_files: { args: { paths: string[] }; result: Batch<string> };
+  move_files: { args: { paths: string[]; dest: string }; result: Batch<Moved> };
+  copy_files: { args: { paths: string[]; cut: boolean }; result: void };
+  reveal_file: { args: { path: string }; result: void };
+  reveal_dir: { args: { path: string }; result: void };
+  open_with: { args: { path: string }; result: void };
+  create_file: { args: { dir: string; name: string }; result: string };
+  create_dir: { args: { dir: string; name: string }; result: string };
+  clipboard_snapshot: { args: NoArgs; result: ClipboardSnapshot };
+  paste_files_detailed: { args: { dest: string; snap: ClipboardSnapshot }; result: Batch<Moved> };
+  search: { args: { query: SearchOptions & SearchFilter & { text: string } }; result: SearchResults };
+  quick_open: { args: { term: string }; result: QuickOpen };
+  replace_preview: { args: { query: ReplaceQuery; replacement: string }; result: ReplacePreview };
+  replace_apply: { args: { request: ReplaceRequest }; result: ReplaceApplied };
+  git_status: { args: NoArgs; result: GitState };
+  git_init: { args: NoArgs; result: void };
+  git_stage: { args: { paths: string[] }; result: void };
+  git_unstage: { args: { paths: string[] }; result: void };
+  git_commit: { args: { message: string }; result: void };
+  git_fetch: { args: NoArgs; result: string };
+  git_pull: { args: NoArgs; result: string };
+  git_push: { args: NoArgs; result: string };
+  git_branches: { args: NoArgs; result: GitBranches };
+  git_switch: { args: { name: string }; result: void };
+  git_create_branch: { args: { name: string }; result: void };
+  git_review_diff: { args: { path: string; staged: boolean }; result: ReviewDiff };
+  git_stage_hunk: { args: { hunk: HunkRef }; result: void };
+  git_unstage_hunk: { args: { hunk: HunkRef }; result: void };
+  git_discard_hunk: { args: { hunk: HunkRef }; result: void };
+  git_discard_file: { args: { path: string; revision: string }; result: void };
+  git_history: { args: { limit: number; skip: number; path: string | null }; result: Commit[] };
+  git_graph: { args: { limit: number; skip: number }; result: GraphCommit[] };
+  git_commit_detail: { args: { id: string }; result: CommitDetail };
+  git_commit_diff: { args: { id: string; path: string }; result: GitDiff };
+  git_conflict: { args: { path: string }; result: Conflict };
+  git_write_resolution: { args: { path: string; content: string; revision: string; markResolved: boolean }; result: void };
+  git_accept_deletion: { args: { path: string; revision: string }; result: void };
+  start_orchestrator: { args: { choice: Choice; cols: number; rows: number }; result: void };
+  start_shell: { args: { id: string; cols: number; rows: number; cwd?: string }; result: string };
+  close_shell: { args: { id: string }; result: void };
+  set_executor_choice: { args: { choice: Choice }; result: void };
+  term_write: { args: { id: string; data: string }; result: void };
+  term_cli: { args: { id: string }; result: 'claude' | 'codex' | null };
+  term_resize: { args: { id: string; cols: number; rows: number }; result: void };
+  term_snapshot: { args: { id: string }; result: Snapshot };
+  stop_executor: { args: { id: string }; result: void };
+  has_running: { args: NoArgs; result: boolean };
+  update_status: { args: NoArgs; result: UpdateStatus };
+  retry_update: { args: NoArgs; result: UpdateStatus };
+};
+export type CommandName = keyof Commands;
+
 export const ORCHESTRATOR = 'orchestrator';

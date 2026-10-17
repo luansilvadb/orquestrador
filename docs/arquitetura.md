@@ -23,7 +23,7 @@ Arquivos não óbvios:
 
 - `src/backend/backend.ts`: o único ponto de contato com o Tauri, pela interface `Transport`. Fora do app (no navegador, em desenvolvimento), entra o simulado.
 - `src/backend/mock.ts` e `mock-fixtures.ts`: o backend simulado, só em `npm run dev` fora do Tauri. Ele simula os modos sem Git pela URL (`?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1`, ver [desenvolvimento](desenvolvimento.md)).
-- `src/backend/types.ts`: os tipos do contrato com o Rust.
+- `src/backend/types.ts`: os tipos do contrato com o Rust e o mapa `Commands`, com cada comando do Tauri, seus argumentos e o resultado. `backend.ts` e `mock.ts` são tipados por ele, e `scripts/check-commands.mjs` confere as chaves com `generate_handler!` em `lib.rs`.
 - `src/editor/editor-workspace.tsx`: até dois grupos lado a lado, com abas de arquivo, diff, commit e conflito; a comparação com o disco antes de gravar; e a recuperação por projeto (rascunhos, cursor, rolagem e layout).
 - `src/editor/workspace-model.ts` e `workspace-store.ts`: modelos puros, sem React. O modelo cuida das abas e dos grupos (prévia, fixadas, fechamento com confirmação, reabertura e carga do estado salvo); o store cuida de buffers, rascunhos, conflitos e do texto da recuperação, validado ao ler, sem disco.
 - `src/editor/file-view.tsx`: o editor de texto (CodeMirror com as cores do app e as medidas do Monaco, guias de recuo e minimap). Não lê nem grava o disco; guarda o estado do CodeMirror por arquivo e reporta cursor e rolagem.
@@ -76,7 +76,7 @@ Plano: cada módulo é uma unidade.
 
 Agrupados por tipo.
 
-**Checagens puras** (`npm run check`): Node, sem dependências, com `node:test`. Os 7 arquivos rodam um de cada vez.
+**Checagens puras** (`npm run check`): Node, sem dependências, com `node:test`. Os 8 arquivos rodam um de cada vez.
 
 - `scripts/check-workspace.mjs`: o modelo de abas.
 - `scripts/check-editor-store.mjs`: rascunhos, conflitos e recuperação.
@@ -85,6 +85,7 @@ Agrupados por tipo.
 - `scripts/check-git-graph.mjs`: o layout do gráfico de commits.
 - `scripts/check-paste.mjs`: a colagem de arquivo e imagem no terminal. O efeito real nos CLIs fica no teste ignorado `src-tauri/tests/colagem.rs`.
 - `scripts/check-release.mjs`: as regras do fluxo de release.
+- `scripts/check-commands.mjs`: o contrato dos comandos, com as chaves de `Commands` (`types.ts`) iguais às de `generate_handler!` (`lib.rs`).
 
 **Checks de interface** (`npm run check:ui`): Chrome headless contra o app simulado (`src/backend/mock.ts`, só no `vite` de desenvolvimento). Todos sobem o Vite na mesma porta (1421, `SMOKE_PORT`), então rodam em sequência. Saem com 0 se todos os cenários passam.
 
