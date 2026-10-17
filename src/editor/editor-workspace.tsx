@@ -24,7 +24,7 @@
 // layout externo, salvo na recuperação), `onRestoreLayout` (chamado uma vez na montagem com o layout salvo), `onReveal` (revelar no Explorer),
 // `onGroupCount` (1 ou 2 grupos), `onSaved()` (chamada depois de cada gravação bem-sucedida no disco pelo editor: Ctrl+S, salvar tudo,
 // comparação, resolução de conflito).
-// Rascunho ("Sem título-N"): duplo clique na faixa vazia ou Ctrl+N (dentro da área) abrem um buffer em memória, sem caminho. Salvar
+// Rascunho ("Sem título-N"): duplo clique na faixa vazia, na área do grupo sem abas ou Ctrl+N (dentro da área) abrem um buffer em memória, sem caminho. Salvar
 // (Ctrl+S, Salvar, Salvar Tudo, fechar com alterações) abre o "Salvar como" com a raiz do projeto; só grava dentro dele. Cancelar não
 // muda nada. Rascunho não é restaurado ao reabrir a janela (a janela pergunta antes de fechar) e não entra em Reabrir Fechada.
 // Recuperação: localStorage por projeto (`orquestrador.editor:<project>`), validada ao ler; nunca grava no disco.
@@ -1152,7 +1152,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         {/* Breadcrumbs só nas abas de arquivo: diff, commit e conflito já têm a faixa própria com o caminho. */}
         {current?.target.kind === 'file' && <Breadcrumbs path={current.target.path} onOpen={(path) => openFile(path)} />}
         <Flexbox flex={1} className="min-h-0 relative">
-          {!current && <EmptyGroup />}
+          {!current && <EmptyGroup onNewDraft={() => newDraft(groupId)} />}
           {group.tabs.map((tab) => (
             <div key={tab.id} className="absolute inset-0 flex flex-col min-h-0" style={{ display: tab.id === current?.id ? 'flex' : 'none' }} data-body={tab.id}>
               {bodyOf(tab, tab.id === current?.id && ws.focus === groupId, tab.id === current?.id)}
@@ -1241,14 +1241,16 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
 
 // Como a marca d'água do editor vazio do VS Code: só atalhos que já existem no app, sem clique (é texto comum).
 const EMPTY_HINTS = [
+  ['Novo arquivo', 'Ctrl+N'],
   ['Abrir arquivo', 'Ctrl+P'],
   ['Pesquisar nos arquivos', 'Ctrl+Shift+F'],
   ['Alternar o terminal', 'Ctrl+`'],
 ] as const;
 
-function EmptyGroup() {
+// Duplo clique em qualquer ponto da área (também sobre as dicas) abre um rascunho, como no VS Code. `select-none`: o duplo clique não seleciona o texto das dicas.
+function EmptyGroup({ onNewDraft }: { onNewDraft: () => void }) {
   return (
-    <Center flex={1} className="min-h-0 overflow-hidden">
+    <Center flex={1} className="min-h-0 overflow-hidden select-none" onDoubleClick={onNewDraft}>
       <dl className="m-0 grid grid-cols-[auto_auto] items-center gap-x-4 gap-y-3">
         {EMPTY_HINTS.map(([label, keys]) => (
           <Fragment key={keys}>

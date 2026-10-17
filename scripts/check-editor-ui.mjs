@@ -457,3 +457,37 @@ scenario('rascunho: Ctrl+N com o foco no editor cria um rascunho novo', async ({
   assert.ok((await tabTitles(page)).some((t) => t.startsWith('Sem título-1')), 'Ctrl+N criou Sem título-1');
   assert.ok((await page.locator('[data-group="A"] [role="tab"][aria-selected="true"]').textContent()).startsWith('Sem título-1'), 'o rascunho do Ctrl+N ficou ativo');
 });
+
+// Grupo sem abas: fecha a única aba e espera a área vazia (EmptyGroup) aparecer no painel do grupo.
+async function emptyGroup(page, group = 'A') {
+  await expand(page, ['src']);
+  await treeItem(page, 'App.tsx').dblclick();
+  await tabs(page).filter({ hasText: 'App.tsx' }).getByRole('button', { name: /^Fechar/ }).click();
+  await page.locator(`[data-pane="${group}"] dl`).waitFor();
+  return page.locator(`[data-pane="${group}"] dl`).locator('..');
+}
+
+scenario('rascunho: grupo sem abas, duplo clique no centro da área vazia cria "Sem título-1" ativa', async ({ page }) => {
+  const area = await emptyGroup(page);
+  const b = await area.boundingBox();
+  await page.mouse.dblclick(b.x + b.width / 2, b.y + b.height / 2);
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-group="A"] [role="tab"]')].some((t) => t.textContent.startsWith('Sem título-1')));
+  assert.ok((await page.locator('[data-group="A"] [role="tab"][aria-selected="true"]').textContent()).startsWith('Sem título-1'), 'rascunho criado no grupo vazio ficou ativo');
+  assert.equal(await tabs(page).count(), 1, 'uma aba só (o rascunho)');
+});
+
+scenario('rascunho: grupo sem abas, duplo clique na barra superior vazia cria "Sem título-1"; nos botões da barra não cria', async ({ page }) => {
+  await emptyGroup(page);
+  const point = await emptyStripPoint(page);
+  await page.mouse.dblclick(point.x, point.y);
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-group="A"] [role="tab"]')].some((t) => t.textContent.startsWith('Sem título-1')));
+  assert.ok((await tabTitles(page)).some((t) => t.startsWith('Sem título-1')), 'duplo clique na barra vazia criou Sem título-1');
+});
+
+scenario('rascunho: grupo sem abas, duplo clique nos botões da barra não cria rascunho', async ({ page }) => {
+  await emptyGroup(page);
+  const dividir = page.locator('[data-group="A"] [role="toolbar"] button').first();
+  await dividir.dblclick({ force: true });
+  await page.waitForTimeout(150);
+  assert.equal(await tabs(page).count(), 0, 'duplo clique no botão da barra não criou aba');
+});
