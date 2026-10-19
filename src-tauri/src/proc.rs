@@ -92,6 +92,11 @@ pub fn git_entrada(dir: &Path, args: &[&str], entrada: &[u8]) -> Result<(), Stri
     run(dir, args, Some(entrada)).map(drop).map_err(String::from)
 }
 
+/// O `git_entrada` que devolve a saída (stdout), como o hash do `git hash-object --stdin`. Na falha, o erro é o de `run`.
+pub fn git_entrada_saida(dir: &Path, args: &[&str], entrada: &[u8]) -> Result<String, String> {
+    run(dir, args, Some(entrada)).map(|(out, _)| String::from_utf8_lossy(&out).into_owned()).map_err(String::from)
+}
+
 /// Dos caminhos dados (relativos a `dir`, com "/"), os que o `.gitignore` ignora, num `git check-ignore` só. O Git sai
 /// com 1 quando nenhum é ignorado: isso não é falha. Fora de um repositório, o erro é o do Git.
 pub fn git_ignorados(dir: &Path, paths: &[String]) -> Result<HashSet<String>, String> {

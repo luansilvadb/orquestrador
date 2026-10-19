@@ -1069,13 +1069,19 @@ pub fn file_base(dir: &Path, rel: &str) -> Result<Option<FileBase>, String> {
     Ok(Some(FileBase { head, index }))
 }
 
-/// `rel` está no índice no estágio 0 como arquivo (não submódulo). Registro de `ls-files -s`: `modo SP hash SP estágio TAB caminho`.
+/// `rel` está no índice no estágio 0 como arquivo (não submódulo).
 fn index_blob(dir: &Path, rel: &str) -> Result<bool, String> {
+    Ok(index_mode(dir, rel)?.is_some_and(|modo| modo != "160000"))
+}
+
+/// O modo de `rel` no índice no estágio 0 (`100644`, `100755`, `120000`, `160000`), ou `None` quando não há esse estágio.
+/// Registro de `ls-files -s`: `modo SP hash SP estágio TAB caminho`.
+fn index_mode(dir: &Path, rel: &str) -> Result<Option<String>, String> {
     let raw = proc::git_bytes(dir, &["ls-files", "-s", "-z", "--", rel])?;
-    Ok(raw.split(|b| *b == 0).any(|record| {
-        let Some(tab) = record.iter().position(|&b| b == b'\t') else { return false };
+    Ok(raw.split(|b| *b == 0).find_map(|record| {
+        let tab = record.iter().position(|&b| b == b'\t')?;
         let campos: Vec<&[u8]> = record[..tab].split(|&b| b == b' ').collect();
-        &record[tab + 1..] == rel.as_bytes() && campos.len() == 3 && campos[0] != b"160000" && campos[2] == b"0"
+        (&record[tab + 1..] == rel.as_bytes() && campos.len() == 3 && campos[2] == b"0").then(|| String::from_utf8_lossy(campos[0]).into_owned())
     }))
 }
 
@@ -1100,6 +1106,68 @@ fn texto_base(dir: &Path, objeto: &str) -> Result<Option<String>, String> {
         return Ok(None);
     }
     Ok(Some(String::from_utf8_lossy(sem_bom_bytes(&bytes)).into_owned()))
+}
+
+/// O texto na forma que o editor compara: todo `\r\n` e `\r` vira `\n`.
+fn so_lf(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+/// Grava `text` (com `\n` e sem BOM) como o conteúdo de `rel` no índice, para preparar ou tirar do preparo um trecho pelo
+/// editor. `expected` é o texto do índice que a tela viu, na forma de `file_base` com `so_lf`: se o índice mudou desde
+/// então, nada é gravado. O texto volta à forma do arquivo antes de gravar: `\r\n` quando o checkout do índice usa `\r\n`
+/// e o BOM quando o blob do índice o tem. O `hash-object --path` aplica os filtros de limpeza e o `core.autocrlf`, como
+/// um `git add`, e o `update-index --cacheinfo` mantém o modo do índice. Só o índice muda: a pasta de trabalho não.
+pub fn write_index(dir: &Path, rel: &str, text: &str, expected: &str) -> Result<(), String> {
+    if modo(dir)? != Modo::Repo {
+        return Err("O projeto não é a raiz de um repositório Git.".into());
+    }
+    let rel = spec(rel)?;
+    guarded(dir, rel)?;
+    if is_folder(dir, rel)? {
+        return Err(format!("{rel} é uma pasta, não um arquivo."));
+    }
+    let perm = match index_mode(dir, rel)?.as_deref() {
+        Some(m @ ("100644" | "100755")) => m.to_string(),
+        Some(_) => return Err(format!("{rel} não é um arquivo comum no índice (link ou submódulo).")),
+        None => return Err(format!("{rel} não está no índice (não rastreado, em conflito ou removido do índice): prepare o arquivo inteiro.")),
+    };
+    let indice = format!(":{rel}");
+    let Some(atual) = texto_base(dir, &indice)? else {
+        return Err(format!("{rel} é binário ou grande demais no índice para preparar por trecho."));
+    };
+    if so_lf(&atual) != expected {
+        return Err(format!("O índice de {rel} mudou desde que o editor o leu. Tente de novo."));
+    }
+    let mut novo = if atual.contains("\r\n") { text.replace("\r\n", "\n").replace('\n', "\r\n") } else { text.to_string() };
+    let blob = proc::git_bytes(dir, &["cat-file", "blob", &indice])?;
+    if blob.starts_with(&files::BOM) {
+        novo.insert(0, '\u{feff}');
+    }
+    let caminho = format!("--path={rel}");
+    let mut args = vec!["hash-object", "-w", "--stdin", caminho.as_str()];
+    // O `git add` não converte o fim de linha quando a conversão é automática e o blob no índice já tem `\r`; o
+    // `hash-object --stdin` não lê o índice e converteria o arquivo inteiro. Sem os atributos, desligar o `core.autocrlf`
+    // basta; o `text=auto` não se desliga por configuração, então aí o blob vai sem filtro.
+    if blob.contains(&b'\r') {
+        match atributos_eol(dir, rel)? {
+            (text, _) if text == "auto" => args[3] = "--no-filters",
+            (text, eol) if text == "unspecified" && eol == "unspecified" => args.splice(0..0, ["-c", "core.autocrlf=false"]).for_each(drop),
+            _ => {}
+        }
+    }
+    let hash = proc::git_entrada_saida(dir, &args, novo.as_bytes())?;
+    let info = format!("{perm},{},{rel}", hash.trim());
+    proc::git_saida(dir, &["update-index", "--cacheinfo", &info]).map(drop)
+}
+
+/// Os atributos `text` e `eol` de `rel` (`set`, `unset`, `unspecified` ou o valor). Registro de `check-attr -z`:
+/// `caminho NUL atributo NUL valor NUL`.
+fn atributos_eol(dir: &Path, rel: &str) -> Result<(String, String), String> {
+    let out = proc::git_saida(dir, &["check-attr", "-z", "text", "eol", "--", rel])?;
+    let campos: Vec<&str> = out.split('\0').collect();
+    let valor = |nome: &str| campos.chunks(3).find(|c| c.len() == 3 && c[1] == nome).map_or("unspecified", |c| c[2]).to_string();
+    Ok((valor("text"), valor("eol")))
 }
 
 #[cfg(test)]
@@ -2410,5 +2478,137 @@ mod tests {
         let pasta = files::read(&dir, "a.txt").unwrap().text;
         assert_eq!(pasta, "um\r\ndois\r\n");
         assert_eq!(file_base(&dir, "a.txt").unwrap(), base(Some(&pasta), Some(&pasta)));
+    }
+
+    /// O texto do índice como o editor o vê: `file_base` com `\n`. É o `expected` de `write_index`.
+    fn visto(dir: &Path, rel: &str) -> String {
+        so_lf(&file_base(dir, rel).unwrap().unwrap().index.unwrap())
+    }
+
+    /// Os bytes do blob de `rel` no índice, sem filtro.
+    fn blob(dir: &Path, rel: &str) -> Vec<u8> {
+        proc::git_bytes(dir, &["cat-file", "blob", &format!(":{rel}")]).unwrap()
+    }
+
+    #[test]
+    fn grava_no_indice_so_o_trecho_preparado() {
+        let tmp = Tmp::new("orq-git", "indice-parte");
+        let dir = repo(&tmp, "r");
+        write(&dir, "a.txt", texto(8));
+        commit_all(&dir, "base");
+        let pasta = texto(8).replace("linha 2\n", "dois\n").replace("linha 7\n", "sete\n");
+        write(&dir, "a.txt", &pasta);
+
+        write_index(&dir, "a.txt", &texto(8).replace("linha 2\n", "dois\n"), &visto(&dir, "a.txt")).unwrap();
+        let preparado = git(&dir, &["diff", "--cached", "--", "a.txt"]);
+        assert!(preparado.contains("+dois") && !preparado.contains("sete"), "{preparado}");
+        let solto = git(&dir, &["diff", "--", "a.txt"]);
+        assert!(solto.contains("+sete") && !solto.contains("dois"), "{solto}");
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), pasta, "a pasta de trabalho não muda");
+        assert_eq!(visto(&dir, "a.txt"), texto(8).replace("linha 2\n", "dois\n"));
+    }
+
+    #[test]
+    fn texto_igual_ao_head_tira_tudo_do_preparo() {
+        let tmp = Tmp::new("orq-git", "indice-tira");
+        let dir = repo(&tmp, "r");
+        write(&dir, "a.txt", texto(4));
+        commit_all(&dir, "base");
+        let pasta = texto(4).replace("linha 1\n", "um\n").replace("linha 4\n", "quatro\n");
+        write(&dir, "a.txt", &pasta);
+        git(&dir, &["add", "a.txt"]);
+
+        write_index(&dir, "a.txt", &texto(4), &visto(&dir, "a.txt")).unwrap();
+        assert_eq!(git(&dir, &["diff", "--cached", "--name-only"]), "", "nada preparado");
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), pasta, "a pasta de trabalho não muda");
+    }
+
+    #[test]
+    fn indice_mudado_desde_a_leitura_recusa_sem_gravar() {
+        let tmp = Tmp::new("orq-git", "indice-velho");
+        let dir = repo(&tmp, "r");
+        write(&dir, "a.txt", texto(3));
+        commit_all(&dir, "base");
+        let antes = git(&dir, &["ls-files", "-s"]);
+        let why = write_index(&dir, "a.txt", "outro\n", &texto(2)).unwrap_err();
+        assert_eq!(why, "O índice de a.txt mudou desde que o editor o leu. Tente de novo.");
+        assert_eq!(git(&dir, &["ls-files", "-s"]), antes, "o índice fica igual");
+    }
+
+    #[test]
+    fn crlf_guardado_no_blob_continua_em_todas_as_linhas() {
+        let tmp = Tmp::new("orq-git", "indice-crlf");
+        let dir = repo(&tmp, "r");
+        write(&dir, "a.txt", "um\r\ndois\r\ntres\r\n");
+        commit_all(&dir, "base");
+        assert_eq!(visto(&dir, "a.txt"), "um\ndois\ntres\n");
+
+        write_index(&dir, "a.txt", "um\nDOIS\ntres\n", &visto(&dir, "a.txt")).unwrap();
+        assert_eq!(blob(&dir, "a.txt"), b"um\r\nDOIS\r\ntres\r\n");
+        assert_eq!(git(&dir, &["diff", "--cached", "--numstat"]), "1\t1\ta.txt\n", "só a linha mudada");
+
+        // Como no `git add`, a conversão automática não mexe no blob que já tem CRLF: nem `core.autocrlf=true`...
+        git(&dir, &["config", "core.autocrlf", "true"]);
+        write_index(&dir, "a.txt", "um\nDOIS\nTRES\n", &visto(&dir, "a.txt")).unwrap();
+        assert_eq!(blob(&dir, "a.txt"), b"um\r\nDOIS\r\nTRES\r\n");
+        // ...nem `text=auto`.
+        write(&dir, ".gitattributes", "* text=auto\n");
+        write_index(&dir, "a.txt", "UM\nDOIS\nTRES\n", &visto(&dir, "a.txt")).unwrap();
+        assert_eq!(blob(&dir, "a.txt"), b"UM\r\nDOIS\r\nTRES\r\n");
+        assert_eq!(git(&dir, &["diff", "--cached", "--numstat", "--", "a.txt"]), "3\t3\ta.txt\n", "só as três linhas mudadas");
+    }
+
+    #[test]
+    fn autocrlf_com_blob_em_lf_grava_em_lf() {
+        let tmp = Tmp::new("orq-git", "indice-autocrlf");
+        let dir = repo(&tmp, "r");
+        git(&dir, &["config", "core.autocrlf", "true"]);
+        write(&dir, "a.txt", "um\r\ndois\r\ntres\r\n");
+        commit_all(&dir, "base");
+        assert_eq!(blob(&dir, "a.txt"), b"um\ndois\ntres\n", "o commit guardou LF");
+
+        write_index(&dir, "a.txt", "um\nDOIS\ntres\n", &visto(&dir, "a.txt")).unwrap();
+        assert_eq!(blob(&dir, "a.txt"), b"um\nDOIS\ntres\n");
+        assert_eq!(git(&dir, &["diff", "--cached", "--numstat"]), "1\t1\ta.txt\n", "só a linha mudada");
+    }
+
+    #[test]
+    fn bom_do_blob_e_modo_executavel_continuam() {
+        let tmp = Tmp::new("orq-git", "indice-bom");
+        let dir = repo(&tmp, "r");
+        write(&dir, "a.sh", "\u{feff}um\ndois\n");
+        git(&dir, &["add", "a.sh"]);
+        git(&dir, &["update-index", "--chmod=+x", "a.sh"]);
+        git(&dir, &["commit", "-q", "-m", "base"]);
+        assert_eq!(visto(&dir, "a.sh"), "um\ndois\n", "o editor não vê o BOM");
+
+        write_index(&dir, "a.sh", "um\nDOIS\n", &visto(&dir, "a.sh")).unwrap();
+        assert_eq!(blob(&dir, "a.sh"), "\u{feff}um\nDOIS\n".as_bytes());
+        assert!(git(&dir, &["ls-files", "-s", "a.sh"]).starts_with("100755 "), "o modo executável fica");
+        assert_eq!(git(&dir, &["diff", "--cached", "--numstat"]), "1\t1\ta.sh\n");
+    }
+
+    #[test]
+    fn gravar_no_indice_recusa_fora_do_estagio_zero_e_do_projeto() {
+        let tmp = Tmp::new("orq-git", "indice-recusa");
+        let dir = repo(&tmp, "r");
+        write(&dir, "src/a.txt", "um\n");
+        write(&dir, "dado.bin", [0u8, 1, 2, 0, 255]);
+        write(&dir, "tirado.txt", "t\n");
+        commit_all(&dir, "base");
+        write(&dir, "solto.txt", "solto\n");
+        git(&dir, &["rm", "-q", "--cached", "tirado.txt"]);
+        let antes = git(&dir, &["ls-files", "-s"]);
+
+        assert!(write_index(&dir, "solto.txt", "x\n", "solto\n").unwrap_err().contains("não está no índice"), "não rastreado");
+        assert!(write_index(&dir, "tirado.txt", "x\n", "t\n").unwrap_err().contains("não está no índice"), "removido do índice");
+        assert!(write_index(&dir, "src", "x\n", "").unwrap_err().contains("pasta"));
+        assert!(write_index(&dir, "dado.bin", "x\n", "").unwrap_err().contains("binário"));
+        assert!(write_index(&dir, "../x", "x\n", "").is_err());
+        assert!(write_index(&dir, ".git/config", "x\n", "").is_err());
+        assert_eq!(git(&dir, &["ls-files", "-s"]), antes, "nada foi gravado");
+
+        let dir = conflito(&tmp, "c", "base\n", "nosso\n", "deles\n");
+        assert!(write_index(&dir, "x.txt", "x\n", "nosso\n").unwrap_err().contains("não está no índice"), "em conflito");
     }
 }

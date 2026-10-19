@@ -175,6 +175,7 @@ export type Commands = {
   git_write_resolution: { args: { path: string; content: string; revision: string; markResolved: boolean }; result: void };
   git_accept_deletion: { args: { path: string; revision: string }; result: void };
   git_file_base: { args: { path: string }; result: FileBase | null };
+  git_write_index: { args: { path: string; text: string; expected: string }; result: void };
   start_orchestrator: { args: { choice: Choice; cols: number; rows: number }; result: void };
   start_shell: { args: { id: string; cols: number; rows: number; cwd?: string }; result: string };
   close_shell: { args: { id: string }; result: void };

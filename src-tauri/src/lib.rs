@@ -157,6 +157,13 @@ fn git_file_base(core: State<Core>, path: String) -> Result<Option<git::FileBase
     git::file_base(&core.repo()?, &path)
 }
 
+/// Grava no índice o texto de um arquivo, para preparar ou tirar do preparo um trecho pelo editor. `expected` é o texto
+/// do índice que o editor viu. Recusado enquanto houver executor trabalhando.
+#[tauri::command(async)]
+fn git_write_index(core: State<Core>, path: String, text: String, expected: String) -> Result<(), String> {
+    core.git_idle(|dir| git::write_index(dir, &path, &text, &expected))
+}
+
 /// Prepara um bloco da pasta de trabalho. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
 fn git_stage_hunk(core: State<Core>, hunk: git::HunkRef) -> Result<(), String> {
@@ -446,6 +453,7 @@ pub fn run(context: tauri::Context) {
             git_create_branch,
             git_review_diff,
             git_file_base,
+            git_write_index,
             git_stage_hunk,
             git_unstage_hunk,
             git_discard_hunk,

@@ -23,7 +23,7 @@ Para acrescentar um comando: escreva a função `#[tauri::command]` em `lib.rs`,
 ## Testes
 
 ```powershell
-npm run check       # 8 checagens puras (Node, sem dependências)
+npm run check       # 9 checagens puras (Node, sem dependências)
 npm run check:ui    # 7 checks de interface, em sequência (Chrome headless)
 ```
 

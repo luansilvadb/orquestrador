@@ -1269,8 +1269,9 @@ function EmptyGroup({ onNewDraft }: { onNewDraft: () => void }) {
 // Texto-base do Git do arquivo aberto, para os marcadores de mudança do editor: lido ao montar, logo depois de salvar (o `raw` do buffer
 // muda) e a cada consulta com a aba visível (pega commit, stage e checkout feitos pelo painel Git, terminais e executores). Sem caminho
 // (rascunho), `null` ou erro: sem marcadores e sem aviso. Os textos chegam com o fim de linha do checkout e o editor trabalha com `\n`,
-// então a base passa pela mesma normalização. O estado só muda quando a base de fato mudou; `undefined` é "ainda não lida".
-function useGitBase(path: string, raw: string, shown: boolean): FileBase | null | undefined {
+// então a base passa pela mesma normalização. O estado só muda quando a base de fato mudou; `undefined` é "ainda não lida". `reload` lê
+// na hora (depois de preparar um bloco no editor, o marcador fica vazado sem esperar a consulta).
+function useGitBase(path: string, raw: string, shown: boolean): { base: FileBase | null | undefined; reload: () => Promise<void> } {
   const [base, setBase] = useState<FileBase | null | undefined>(undefined);
   const pathRef = useRef(path);
   pathRef.current = path;
@@ -1292,7 +1293,7 @@ function useGitBase(path: string, raw: string, shown: boolean): FileBase | null 
     seenRaw.current = raw;
     if (path !== '') void load();
   }, [raw]);
-  return path === '' ? null : base;
+  return { base: path === '' ? null : base, reload: load };
 }
 
 function FileBody({ buffer, shown, status, disk, reveal, autoFocus, cursor, onChange, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
@@ -1301,7 +1302,7 @@ function FileBody({ buffer, shown, status, disk, reveal, autoFocus, cursor, onCh
   onCursor: (line: number, col: number) => void; onCompare: (mode: 'keep' | 'use') => void; onRetry: () => void;
   scroll: Scroll | null; onScroll: (scroll: Scroll) => void;
 }) {
-  const gitBase = useGitBase(buffer?.path ?? '', buffer?.raw ?? '', shown);
+  const git = useGitBase(buffer?.path ?? '', buffer?.raw ?? '', shown);
   if (status?.binary) return <Note text="Arquivo binário: não há texto para mostrar aqui." />;
   if (status?.large) return <Note text="Arquivo grande demais para mostrar aqui." />;
   if (!buffer) return <Note text={status?.error ?? 'Lendo o arquivo…'} danger={!!status?.error} onRetry={status?.error ? onRetry : undefined} />;
@@ -1337,7 +1338,11 @@ function FileBody({ buffer, shown, status, disk, reveal, autoFocus, cursor, onCh
             scroll={scroll}
             cacheKey={buffer.docId}
             start={cursor}
-            gitBase={gitBase}
+            gitBase={git.base}
+            onWriteIndex={async (text, expected) => {
+              await backend.gitWriteIndex(buffer.path, text, expected);
+              await git.reload();
+            }}
           />
         </Flexbox>
       </Flexbox>

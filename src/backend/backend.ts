@@ -132,6 +132,9 @@ export const backend = {
   gitAcceptDeletion: (path: string, revision: string) => call('git_accept_deletion', { path, revision }),
   // Texto do arquivo no HEAD e no índice, base dos marcadores de mudança do editor. `null` sem marcadores (fora de repositório, não rastreado, binário ou acima de 1 MiB).
   gitFileBase: (path: string) => call('git_file_base', { path }),
+  // Grava `text` (com `\n`) como o arquivo no índice: preparar e tirar do preparo um bloco no editor. `expected` é o índice que a tela
+  // viu (normalizado); se mudou, ou se há executores trabalhando, rejeita com a mensagem em português.
+  gitWriteIndex: (path: string, text: string, expected: string) => call('git_write_index', { path, text, expected }),
   // Pesquisa de texto nos arquivos do projeto. Regex inválida rejeita com a mensagem em português; consulta vazia devolve lista vazia.
   search: (query: string, options: SearchOptions, filter: SearchFilter) =>
     call('search', { query: { text: query, ...options, ...filter } }),

@@ -2,12 +2,15 @@
 // O mock entra só na fronteira de I/O: `git_file_base` devolve o HEAD e o índice de `src/marcadores.ts` (fixture em mock-fixtures.ts: um bloco
 // modificado em stage na linha 3; fora do índice, duas linhas acrescentadas em 8–9, a `v12` apagada antes da linha 15 e a linha 22 modificada).
 // Confere pela DOM o gutter (tipo, linha, cheia × vazada), a geometria do texto, as marcas na barra de rolagem, a faixa do minimap, a digitação
-// ao vivo com Desfazer, a nova leitura da base depois de salvar, e a ausência de marcadores em arquivo não rastreado e em rascunho.
+// ao vivo com Desfazer, a nova leitura da base depois de salvar, e a ausência de marcadores em arquivo não rastreado e em rascunho. O bloco
+// aberto (src/editor/git-hunk.ts): clicar no marcador mostra as linhas antigas e destaca as novas, Esc e o X fecham, Restaurar com Desfazer,
+// Preparar e Tirar do preparo (o índice que o mock recebeu em `git_write_index`), as setas, Alt+F5 e o menu de contexto.
 // Uso: node scripts/check-git-gutter-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 // Capturas em .playwright-mcp/git-gutter-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { OUT, uiSuite, expand, treeItem, columnPoint } from './editor-ui-harness.mjs';
+import { MARCADORES_HEAD, MARCADORES_INDEX } from '../src/backend/mock-fixtures.ts';
 
 // Cores do VS Code Dark Modern: editorGutter.addedBackground, modifiedBackground e deletedBackground.
 const RGB = { added: 'rgb(46, 160, 67)', modified: 'rgb(0, 120, 212)', deleted: 'rgb(248, 81, 73)' };
@@ -226,4 +229,220 @@ scenario('sem marcadores: arquivo não rastreado e rascunho "Sem título"; a geo
   assert.equal((await geometry(page)).text, 76, 'rascunho com o texto no mesmo x');
   assert.equal(await page.locator('.cm-gitOverview-mark').count(), 0, 'rascunho sem marcas na barra de rolagem');
   await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'git-gutter-rascunho.png') });
+  // Sem alterações, os itens de navegação do menu ficam bloqueados, com o motivo; Alt+F5 não abre nada.
+  await page.keyboard.press('Alt+F5');
+  assert.equal(await page.locator('.cm-gitHunk').count(), 0, 'Alt+F5 sem alterações não abre bloco');
+  await page.locator('.cm-content:visible').first().click({ button: 'right' });
+  const next = page.getByRole('menuitem', { name: /Próxima Alteração/ });
+  await next.waitFor();
+  assert.equal(await next.getAttribute('aria-disabled'), 'true', 'Próxima Alteração bloqueada sem alterações');
+  assert.match(await next.textContent(), /Sem alterações em relação ao Git/, 'motivo do bloqueio');
+  await page.keyboard.press('Escape');
+});
+
+// ---- Bloco aberto (src/editor/git-hunk.ts) ----
+
+// Cores do diff do VS Code (diffEditor.removedLineBackground e insertedLineBackground, tema escuro).
+const REMOVED = 'rgba(255, 0, 0, 0.2)';
+const INSERTED = 'rgba(155, 185, 85, 0.2)';
+// O índice depois de preparar as duas linhas acrescentadas (8–9): o índice da fixture com elas depois da `v6`.
+const INDEX_WITH_EXTRA = MARCADORES_INDEX.replace('export const v6 = 6;\n', 'export const v6 = 6;\nexport const extra1 = 1;\nexport const extra2 = 2;\n');
+
+// Clica no marcador da linha (no meio do gutter do Git, na altura dela).
+async function clickMarker(page, line) {
+  const mark = (await gutterMarks(page)).find((m) => m.line === line);
+  assert.ok(mark, `marcador na linha ${line}`);
+  const box = await page.locator('.cm-gitGutter:visible').first().boundingBox();
+  await page.mouse.click(box.x + box.width / 2, (mark.top + mark.bottom) / 2);
+}
+
+// Bloco aberto: título, botões, linhas antigas (texto, fundo, cores de sintaxe, fonte), linhas novas destacadas (pelo número na mesma
+// altura) e números de linha dentro da altura do widget (devem ser zero). `null` sem bloco aberto.
+function openBlock(page) {
+  return page.evaluate(() => {
+    const editor = [...document.querySelectorAll('.cm-editor')].find((e) => e.offsetParent !== null);
+    const w = editor.querySelector('.cm-gitHunk');
+    if (!w) return null;
+    const numbers = [...editor.querySelectorAll('.cm-lineNumbers .cm-gutterElement')]
+      .map((el) => ({ top: Math.round(el.getBoundingClientRect().top), n: Number(el.textContent) })).filter((x) => x.n > 0);
+    const lineOf = (el) => numbers.find((x) => Math.abs(x.top - Math.round(el.getBoundingClientRect().top)) <= 1)?.n ?? null;
+    const style = (el) => { const s = getComputedStyle(el); return { font: s.fontFamily, size: s.fontSize, height: s.lineHeight }; };
+    const box = w.getBoundingClientRect();
+    const old = w.querySelector('.cm-gitHunk-old');
+    const first = w.querySelector('.cm-gitHunk-old .cm-gitHunk-line');
+    const bar = w.querySelector('.cm-gitHunk-bar').getBoundingClientRect();
+    const minimap = editor.querySelector('.cm-minimap-gutter')?.getBoundingClientRect();
+    const lastButton = [...w.querySelectorAll('.cm-gitHunk-button')].pop()?.getBoundingClientRect();
+    return {
+      title: w.querySelector('.cm-gitHunk-title').textContent,
+      buttons: [...w.querySelectorAll('.cm-gitHunk-button')].map((b) => b.getAttribute('aria-label')),
+      old: [...w.querySelectorAll('.cm-gitHunk-old .cm-gitHunk-line')].map((l) => l.textContent),
+      oldBackground: old ? getComputedStyle(old).backgroundColor : null,
+      oldColors: first ? [...first.querySelectorAll('span')].map((s) => getComputedStyle(s).color) : [],
+      oldStyle: first ? style(first) : null,
+      oldHeight: first ? first.getBoundingClientRect().height : null,
+      lineStyle: style(editor.querySelector('.cm-content .cm-line')),
+      newLines: [...editor.querySelectorAll('.cm-content .cm-line.cm-gitHunk-new')]
+        .map((l) => ({ line: lineOf(l), text: l.textContent, background: getComputedStyle(l).backgroundColor })),
+      numbersInside: numbers.filter((x) => x.top >= Math.round(box.top) && x.top < Math.round(box.bottom) - 1).length,
+      bottom: Math.round(box.bottom),
+      barRight: bar.right, closeRight: lastButton?.right ?? null, minimapLeft: minimap?.left ?? null,
+    };
+  });
+}
+
+// Linha do cursor (pelo número destacado no gutter) e as linhas do documento (todas desenhadas: o arquivo tem 81 linhas).
+const cursorLine = (page) => page.evaluate(() => {
+  const editor = [...document.querySelectorAll('.cm-editor')].find((e) => e.offsetParent !== null);
+  return Number(editor.querySelector('.cm-lineNumbers .cm-activeLineGutter')?.textContent);
+});
+const docLines = (page) => page.evaluate(() => {
+  const editor = [...document.querySelectorAll('.cm-editor')].find((e) => e.offsetParent !== null);
+  return [...editor.querySelectorAll('.cm-content .cm-line')].map((l) => l.textContent);
+});
+const writeCalls = (page) => page.evaluate(() => window.__mock.calls.filter((c) => c.cmd === 'git_write_index'));
+const blockButton = (page, name) => page.locator('.cm-gitHunk-bar').getByRole('button', { name, exact: true });
+
+scenario('bloco aberto: clicar no marcador mostra as linhas antigas e destaca as novas; clicar de novo e Esc fecham; fechado, nada muda', async ({ page }) => {
+  await openFile(page, 'src', 'marcadores.ts');
+  await eventually(async () => assert.deepEqual(simplify(await gutterMarks(page)), EXPECTED));
+  const geoBefore = await geometry(page);
+  const at30 = await columnPoint(page, 30, 5);
+
+  await clickMarker(page, 22);
+  const block = await eventually(async () => {
+    const found = await openBlock(page);
+    assert.ok(found, 'bloco aberto');
+    // A cor de sintaxe chega com a linguagem (assíncrona): `export` em rosa (#C586C0), como no texto do arquivo.
+    assert.ok(found.oldColors.includes('rgb(197, 134, 192)'), `linha antiga colorida (${found.oldColors.join(' ')})`);
+    return found;
+  });
+  assert.equal(block.title, 'Alteração 4 de 4');
+  assert.deepEqual(block.buttons, ['Preparar', 'Restaurar', 'Alteração anterior', 'Próxima alteração', 'Fechar']);
+  assert.deepEqual(block.old, ['export const v20 = 20;'], 'linha antiga do HEAD');
+  assert.equal(block.oldBackground, REMOVED, 'linhas antigas em vermelho translúcido');
+  assert.deepEqual(block.oldStyle, block.lineStyle, 'linhas antigas com a fonte, o tamanho e a altura de linha do editor');
+  assert.equal(block.oldHeight, 19, 'linha antiga com 19 px');
+  assert.deepEqual(block.newLines, [{ line: 22, text: 'export const v20 = 200;', background: INSERTED }], 'linha nova em verde translúcido');
+  assert.equal(block.numbersInside, 0, 'as linhas antigas não ganham número');
+  const line22 = await columnPoint(page, 22, 1);
+  assert.equal(block.bottom, Math.round(line22.top), 'o widget fica logo acima da primeira linha do bloco');
+  // A barra fica na área visível do texto, à esquerda do minimap (que fica por cima do conteúdo), com o X encostado à direita.
+  assert.ok(block.minimapLeft !== null && block.barRight <= block.minimapLeft + 0.5, `barra até o minimap (${block.barRight} × ${block.minimapLeft})`);
+  assert.ok(block.closeRight <= block.barRight && block.barRight - block.closeRight <= 10, 'botões alinhados à direita da barra');
+  assert.equal(await page.locator('.cm-gitGutter .cm-git').first().evaluate((el) => getComputedStyle(el).cursor), 'pointer', 'cursor de mão no marcador');
+  await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'git-gutter-bloco-aberto.png') });
+
+  // Clicar de novo fecha; Esc com o foco no editor também.
+  await clickMarker(page, 22);
+  assert.equal(await openBlock(page), null, 'segundo clique fecha');
+  await clickMarker(page, 15);
+  const deleted = await openBlock(page);
+  assert.deepEqual(deleted.old, ['export const v12 = 12;'], 'apagado mostra a linha que sumiu');
+  assert.deepEqual(deleted.newLines, [], 'apagado não destaca linha nova');
+  assert.equal(deleted.bottom, Math.round((await columnPoint(page, 15, 1)).top), 'apagado: o widget fica na fronteira, acima da linha 15');
+  await page.keyboard.press('Escape');
+  assert.equal(await openBlock(page), null, 'Esc fecha');
+
+  // Fechado: a geometria e a posição do texto são as de antes.
+  assert.deepEqual(await geometry(page), geoBefore, 'geometria igual com o bloco fechado');
+  assert.deepEqual(await columnPoint(page, 30, 5), at30, 'texto no mesmo lugar com o bloco fechado');
+});
+
+scenario('bloco aberto: digitar dentro mantém aberto; Restaurar volta o HEAD, fecha e Ctrl+Z desfaz', async ({ page }) => {
+  await openFile(page, 'src', 'marcadores.ts');
+  await eventually(async () => assert.deepEqual(simplify(await gutterMarks(page)), EXPECTED));
+  await clickMarker(page, 22);
+  await eventually(async () => assert.ok(await openBlock(page)));
+  // Digitar no fim da linha 22 (dentro do bloco): o bloco continua aberto e a linha nova acompanha.
+  const p = await columnPoint(page, 22, 1);
+  await page.mouse.click(p.x + 1, (p.top + p.bottom) / 2);
+  await page.keyboard.press('End');
+  await page.keyboard.type(' // x');
+  await eventually(async () => assert.deepEqual((await openBlock(page))?.newLines.map((l) => l.text), ['export const v20 = 200; // x']));
+
+  await blockButton(page, 'Restaurar').click();
+  await eventually(async () => assert.equal((await docLines(page))[21], 'export const v20 = 20;', 'linha 22 com o texto do HEAD'));
+  assert.equal(await openBlock(page), null, 'o bloco restaurado some e fecha');
+  await eventually(async () => assert.deepEqual(simplify(await gutterMarks(page)), EXPECTED.filter((m) => m.line !== 22)));
+  assert.equal((await writeCalls(page)).length, 0, 'Restaurar não grava o índice');
+  assert.equal(await page.evaluate(() => window.__mock.disk('src/marcadores.ts')).then((t) => t.includes('v20 = 200;')), true, 'nem o disco');
+  await page.keyboard.press('Control+z');
+  await eventually(async () => assert.equal((await docLines(page))[21], 'export const v20 = 200; // x', 'Ctrl+Z desfaz o Restaurar'));
+  await eventually(async () => assert.ok(simplify(await gutterMarks(page)).some((m) => m.line === 22), 'marcador de volta'));
+});
+
+scenario('bloco aberto: Preparar deixa vazado e grava o índice certo; Tirar do preparo volta a cheio', async ({ page }) => {
+  await openFile(page, 'src', 'marcadores.ts');
+  await eventually(async () => assert.deepEqual(simplify(await gutterMarks(page)), EXPECTED));
+  await clickMarker(page, 8);
+  await eventually(async () => assert.equal((await openBlock(page))?.title, 'Alteração 2 de 4'));
+
+  const t0 = Date.now();
+  await blockButton(page, 'Preparar').click();
+  await eventually(async () => {
+    const marks = simplify(await gutterMarks(page));
+    assert.deepEqual(marks.filter((m) => m.line === 8 || m.line === 9).map((m) => m.staged), [true, true], 'linhas 8–9 vazadas');
+  });
+  assert.ok(Date.now() - t0 < 2000, `releu a base na hora, sem esperar a consulta de 2,5 s (${Date.now() - t0} ms)`);
+  const [stage] = await writeCalls(page);
+  assert.equal(stage.args.path, 'src/marcadores.ts');
+  assert.equal(stage.args.expected, MARCADORES_INDEX, 'expected é o índice que a tela viu');
+  assert.equal(stage.args.text, INDEX_WITH_EXTRA, 'índice novo: só as duas linhas acrescentadas entram');
+  assert.equal(stage.error, null);
+  const staged = await openBlock(page);
+  assert.ok(staged, 'o bloco continua aberto');
+  assert.equal(staged.title, 'Alteração 2 de 4 · preparada');
+  assert.equal(staged.buttons[0], 'Tirar do preparo');
+  await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'git-gutter-bloco-preparado.png') });
+
+  await blockButton(page, 'Tirar do preparo').click();
+  await eventually(async () => assert.deepEqual(simplify(await gutterMarks(page)), EXPECTED, 'linhas 8–9 cheias de novo'));
+  const unstage = (await writeCalls(page))[1];
+  assert.equal(unstage.args.expected, INDEX_WITH_EXTRA);
+  assert.equal(unstage.args.text, MARCADORES_INDEX, 'o índice volta ao de antes');
+
+  // O bloco que já vinha preparado (linha 3): Tirar do preparo deixa o índice igual ao HEAD.
+  await clickMarker(page, 3);
+  await eventually(async () => assert.equal((await openBlock(page))?.buttons[0], 'Tirar do preparo'));
+  await blockButton(page, 'Tirar do preparo').click();
+  await eventually(async () => assert.equal(simplify(await gutterMarks(page)).find((m) => m.line === 3)?.staged, false, 'linha 3 cheia'));
+  assert.equal((await writeCalls(page))[2].args.text, MARCADORES_HEAD);
+});
+
+scenario('navegação: setas, Alt+F5 e Shift+Alt+F5 vão entre as alterações com o bloco aberto e dão a volta; menu de contexto também', async ({ page }) => {
+  await openFile(page, 'src', 'marcadores.ts');
+  await eventually(async () => assert.deepEqual(simplify(await gutterMarks(page)), EXPECTED));
+  const p = await columnPoint(page, 1, 1);
+  await page.mouse.click(p.x + 1, (p.top + p.bottom) / 2);
+  // O título sem o " · preparada" do bloco 1 (o da fixture que já vem no índice).
+  const state = async () => ({ title: (await openBlock(page))?.title.replace(' · preparada', '') ?? null, line: await cursorLine(page) });
+  await page.keyboard.press('Alt+F5');
+  assert.deepEqual(await state(), { title: 'Alteração 1 de 4', line: 3 });
+  await page.keyboard.press('Alt+F5');
+  assert.deepEqual(await state(), { title: 'Alteração 2 de 4', line: 8 });
+  await page.keyboard.press('Alt+F5');
+  assert.deepEqual(await state(), { title: 'Alteração 3 de 4', line: 15 });
+  await page.keyboard.press('Alt+F5');
+  assert.deepEqual(await state(), { title: 'Alteração 4 de 4', line: 22 });
+  await page.keyboard.press('Alt+F5');
+  assert.deepEqual(await state(), { title: 'Alteração 1 de 4', line: 3 }, 'Alt+F5 no último volta ao primeiro');
+  await page.keyboard.press('Shift+Alt+F5');
+  assert.deepEqual(await state(), { title: 'Alteração 4 de 4', line: 22 }, 'Shift+Alt+F5 no primeiro vai ao último');
+  await blockButton(page, 'Próxima alteração').click();
+  assert.deepEqual(await state(), { title: 'Alteração 1 de 4', line: 3 }, 'seta para baixo dá a volta');
+  await blockButton(page, 'Alteração anterior').click();
+  assert.deepEqual(await state(), { title: 'Alteração 4 de 4', line: 22 }, 'seta para cima dá a volta');
+  assert.equal(await page.locator('.cm-gitHunk').count(), 1, 'um bloco aberto por vez');
+  await blockButton(page, 'Fechar').click();
+  assert.equal(await openBlock(page), null, 'o X fecha');
+
+  // Menu de contexto: "Próxima Alteração" com o atalho, a partir do cursor (linha 22): dá a volta para a primeira.
+  await page.locator('.cm-content:visible').first().click({ button: 'right', position: { x: 200, y: 5 } });
+  const next = page.getByRole('menuitem', { name: /Próxima Alteração/ });
+  await next.waitFor();
+  assert.match(await next.textContent(), /Alt\+F5/);
+  assert.match(await page.getByRole('menuitem', { name: /Alteração Anterior/ }).textContent(), /Shift\+Alt\+F5/);
+  await next.click();
+  await eventually(async () => assert.equal((await state()).title, 'Alteração 1 de 4'));
 });

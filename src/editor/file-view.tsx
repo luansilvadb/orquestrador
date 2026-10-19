@@ -12,7 +12,8 @@ import { tags } from '@lezer/highlight';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
 import { showMinimap, type MinimapConfig } from '@replit/codemirror-minimap';
 import { bracketColors } from './bracket-colors';
-import { gitChanges, gitField, minimapGutter, sameGitBase, setGitBase } from './git-gutter';
+import { gitChanges, gitField, gitHunks, minimapGutter, sameGitBase, setGitBase } from './git-gutter';
+import { gitHunkView, gitIndexWriter, gotoGitHunk } from './git-hunk';
 import { message } from '../backend/backend';
 import { action, blocked, DIVIDER } from '../shared/file-tabs';
 import type { Scroll } from './workspace-store';
@@ -134,6 +135,8 @@ const basicExtensions = [
   bracketColors,
   // Marcadores de mudança do Git (gutter, barra de rolagem e minimap). Sem base (rascunho, conflito), o gutter fica vazio, com a mesma largura.
   gitChanges(COLOR_LIMIT),
+  // Bloco aberto do marcador (clique no gutter, Alt+F5): linhas antigas, Preparar, Restaurar e navegação. Fechado, não desenha nada.
+  gitHunkView,
   // Guias de recuo de 1 px; a do bloco do cursor fica mais forte.
   indentationMarkers({
     thickness: 1,
@@ -185,7 +188,7 @@ export function parseGoto(value: string, lines: number, lineLength: (line: numbe
 }
 
 // Editor do arquivo (CodeMirror com o tema do app). Exportado para o editor central (src/editor/editor-workspace.tsx) reutilizar.
-export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll, autoFocus, gitBase }: {
+export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll, autoFocus, gitBase, onWriteIndex }: {
   text: string; readOnly: boolean; path: string; reveal: Reveal | null; onChange: (text: string) => void; onSave: () => void;
   onCursor: (line: number, col: number) => void; onScroll?: (scroll: Scroll) => void; cacheKey?: string; start?: StartCursor | null;
   /** Rolagem a restaurar ao montar (ex.: a vista foi movida de grupo ou o app foi reaberto). */
@@ -194,6 +197,11 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
   autoFocus?: boolean;
   /** Texto-base do Git (com `\n`) para os marcadores de mudança. `null` tira os marcadores; ausente não mexe no que o estado já tem. */
   gitBase?: FileBase | null;
+  /**
+   * Grava `text` como o arquivo no índice (Preparar/Tirar do preparo do bloco aberto) e relê a base; `expected` é o índice que a tela
+   * viu. Rejeita com a mensagem do backend. Ausente, o bloco aberto não tem Preparar (lido só na montagem).
+   */
+  onWriteIndex?: (text: string, expected: string) => Promise<void>;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -205,8 +213,8 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
   // Textos que este editor já mandou para cima (um por digitação, em ordem). O pai devolve o texto com atraso: uma renderização
   // com um texto antigo não pode reverter o documento, senão cada volta gera outra edição e o React estoura o limite de atualizações.
   const echoes = useRef<string[]>([]);
-  const latest = useRef({ onChange, onSave, onCursor, onScroll });
-  latest.current = { onChange, onSave, onCursor, onScroll };
+  const latest = useRef({ onChange, onSave, onCursor, onScroll, onWriteIndex });
+  latest.current = { onChange, onSave, onCursor, onScroll, onWriteIndex };
   const [gotoOpen, setGotoOpen] = useState(false);
   const [gotoText, setGotoText] = useState('');
   const [gotoError, setGotoError] = useState('');
@@ -274,6 +282,13 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
       action('find', 'Localizar', () => run(openSearchPanel), 'Ctrl+F'),
       edit('Substituir', 'replace', () => run(openSearchPanel), 'Ctrl+H'),
       action('goto', 'Ir para a Linha', () => setGotoOpen(true), 'Ctrl+G'),
+      DIVIDER,
+      ...(!current || gitHunks(current.state).length === 0
+        ? [blocked('next-change', 'Próxima Alteração', 'Sem alterações em relação ao Git.'), blocked('prev-change', 'Alteração Anterior', 'Sem alterações em relação ao Git.')]
+        : [
+          action('next-change', 'Próxima Alteração', () => run((v) => gotoGitHunk(v, 1)), 'Alt+F5'),
+          action('prev-change', 'Alteração Anterior', () => run((v) => gotoGitHunk(v, -1)), 'Shift+Alt+F5'),
+        ]),
     ];
   };
 
@@ -302,6 +317,14 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
       editable.current.of(readOnlyExt(readOnly)),
       language.current.of([]),
       mini.current.of(minimap()),
+      // Preparar do bloco aberto: erro do backend (índice mudou, executores trabalhando) vira aviso, como o resto do editor.
+      onWriteIndex ? gitIndexWriter.of(async (value, expected) => {
+        try {
+          await latest.current.onWriteIndex?.(value, expected);
+        } catch (e) {
+          toast.error({ title: message(e), duration: 5000 });
+        }
+      }) : [],
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           const value = update.state.doc.toString();

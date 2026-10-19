@@ -30,6 +30,9 @@ Arquivos não óbvios:
 - `src/editor/media-view.tsx`: a aba de mídia, com imagem (Ajustar e Tamanho real) e áudio (controles nativos). Os bytes vêm de `read_media` e entram num blob local; não lê texto e não grava.
 - `src/editor/breadcrumbs.tsx`: os breadcrumbs embaixo das abas de arquivo, com pastas e arquivo, e o seletor do conteúdo da pasta.
 - `src/editor/compare-rows.ts`: o modelo do comparador contínuo, em lado a lado e unificado.
+- `src/editor/git-gutter.ts`: os marcadores de mudança do Git no editor (gutter, barra de rolagem e minimap), pelo diff do buffer, mesmo não salvo, com o HEAD e o índice que `git_file_base` devolve.
+- `src/editor/git-hunk.ts`: o bloco aberto de um marcador, com as linhas antigas do HEAD, Preparar ou Tirar do preparo, Restaurar (edição no buffer) e a navegação entre alterações.
+- `src/editor/git-stage.ts`: o cálculo puro do texto novo do índice para preparar ou tirar do preparo um bloco, que `git_write_index` grava; testado por `scripts/check-git-stage.mjs`.
 - `src/editor/bracket-colors.ts`: a cor dos parênteses, colchetes e chaves pelo nível de aninhamento, lida da árvore de sintaxe.
 - `src/editor/quick-open.tsx`: o arquivo rápido (Ctrl+P), com Enter, Shift+Enter e Ctrl+Enter.
 - `src/explorer/explorer.tsx`: a coluna de ícones, a árvore de pastas (pasta abre e fecha; arquivo abre na área central; menu com renomear, excluir, criar, copiar, recortar, colar e mover, inclusive em lote; barra com as ações da view e seção do projeto) e a barra de status com a branch, o Sincronizar e o botão Terminal.
@@ -61,7 +64,7 @@ Plano: cada módulo é uma unidade.
 | --- | --- |
 | `src-tauri/src/files.rs` | Os comandos de arquivos: `list_dir`, que lista uma pasta do projeto (com `ignored` por entrada, num `git check-ignore` por pasta), e `read_file`, que lê o arquivo (binário e acima de 1 MiB voltam sem texto), `read_media`, que devolve os bytes de imagem ou áudio para a aba de mídia (só as extensões de `MEDIA_EXTS`, sem SVG nem HTML, e até 32 MiB), e `write_file_checked`, que só grava se o arquivo não mudou desde a leitura. |
 | `src-tauri/src/search.rs` | O comando da pesquisa, `search`: os candidatos vêm de `git ls-files` (rastreados e não ignorados, sem `.git`) quando há repositório; sem repositório, vêm da pasta percorrida com a crate `ignore` (respeita `.gitignore` e `.ignore` da pasta e das subpastas, não os de pastas acima; inclui ocultos; não segue links; pula `.git` e `node_modules`), e o texto é casado em Rust pelo motor `regex`, o mesmo da prévia e da substituição. |
-| `src-tauri/src/git.rs` | Os comandos do painel Git: status, diff, preparar, commit, fetch, pull, push e branches. Também o modo do projeto (com repositório, sem Git, sem repositório ou repositório acima) e o `git init` do botão Inicializar repositório. |
+| `src-tauri/src/git.rs` | Os comandos do painel Git: status, diff, preparar, commit, fetch, pull, push e branches. Também os do editor: `git_file_base`, o texto do arquivo no HEAD e no índice para os marcadores de mudança, e `git_write_index`, que grava no índice o texto de um arquivo para preparar ou tirar do preparo um bloco. E o modo do projeto (com repositório, sem Git, sem repositório ou repositório acima) e o `git init` do botão Inicializar repositório. |
 | `src-tauri/src/core.rs` | O núcleo da sessão: PTYs, lotes, executores e a fila. Ver [delegação](delegacao.md). |
 | `src-tauri/src/platform/` | O único lugar das chamadas ao sistema operacional: Job Objects, consulta de processo, COM e a Lixeira, o Explorer, o clipboard de arquivos, a memória física, as pastas do usuário e os nomes dos shells. `windows.rs` implementa; `other.rs` (macOS e Linux) responde "Ainda não suportado neste sistema." ou devolve `None`, conforme o chamador já trata a ausência. Fora daqui não há `windows_sys` nem `std::os::windows`. |
 | `src-tauri/src/capacity.rs` | A política automática de simultâneos: teto pela CPU e pela memória física (`platform::memoria`), com a reserva de 2 GiB e 1 GiB por executor. |
@@ -77,10 +80,11 @@ Plano: cada módulo é uma unidade.
 
 Agrupados por tipo.
 
-**Checagens puras** (`npm run check`): Node, sem dependências, com `node:test`. Os 8 arquivos rodam um de cada vez.
+**Checagens puras** (`npm run check`): Node, sem dependências, com `node:test`. Os 9 arquivos rodam um de cada vez.
 
 - `scripts/check-workspace.mjs`: o modelo de abas.
 - `scripts/check-editor-store.mjs`: rascunhos, conflitos e recuperação.
+- `scripts/check-git-stage.mjs`: o cálculo do texto novo do índice para preparar ou tirar do preparo um bloco do editor (`src/editor/git-stage.ts`), com o índice já diferente do HEAD em outro bloco, linhas apagadas e fim de arquivo sem quebra final.
 - `scripts/check-file-tabs.mjs`: caminhos copiados, nomes recusados e “dentro de pasta”.
 - `scripts/check-explorer.mjs`: a escolha de ícones (os casos do Explorer do Antigravity) e as decorações do Git na árvore.
 - `scripts/check-git-graph.mjs`: o layout do gráfico de commits.
@@ -97,6 +101,7 @@ Agrupados por tipo.
 - `scripts/check-media-ui.mjs`: a aba de mídia: imagem (Ajustar e Tamanho real) e áudio, com o app simulado em `read_media` (um PNG e um WAV de teste).
 - `scripts/check-titlebar-ui.mjs`: os controles da janela na barra de título.
 - `scripts/check-editor-style.mjs`: a paridade visual do editor central com o Antigravity (Dark Modern), por estilos computados e geometria, não por pixel. Os valores esperados vêm dos arquivos do Antigravity (ver [interface](interface.md), “Cores e fontes do editor”).
+- `scripts/check-git-gutter-ui.mjs`: os marcadores de mudança do Git no editor (tipo, linha, cheio × vazado, geometria, barra de rolagem, minimap, digitação com Desfazer, leitura depois de salvar e a ausência em arquivo não rastreado e em rascunho) e o bloco aberto: linhas antigas, fechar, Restaurar com Ctrl+Z, Preparar e Tirar do preparo (o índice que o app simulado recebeu em `git_write_index`) e a navegação com as setas, Alt+F5 e o menu de contexto.
 
 **Release**
 

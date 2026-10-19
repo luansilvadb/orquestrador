@@ -5,20 +5,23 @@
 // O diff é o `Chunk` do @codemirror/merge: `Chunk.build` quando a base chega e `Chunk.updateB` (incremental) a cada digitação, então
 // os marcadores acompanham o buffer, inclusive não salvo. A base chega pelo efeito `setGitBase`, que não mexe no documento.
 // Cores do VS Code Dark Modern (editorGutter.*Background; overview ruler e minimap com as mesmas, ver docs/interface.md).
-import { Chunk, type DiffConfig } from '@codemirror/merge';
+// Clicar no marcador abre o bloco (`gitOpenField`, a posição no buffer do bloco aberto); o trecho aberto é desenhado por git-hunk.ts.
+import { Chunk } from '@codemirror/merge';
 import { Facet, StateEffect, StateField, Text, type ChangeDesc, type EditorState } from '@codemirror/state';
 import { EditorView, GutterMarker, gutter, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import type { FileBase } from '../backend/types';
+import { DIFF, textOf, touches } from './git-stage';
 
 export type Kind = 'added' | 'modified' | 'deleted';
-/** Um bloco buffer × HEAD, em linhas do buffer (1-based). O apagado tem `from === to`: a linha onde fica a marca. */
-export type Hunk = { kind: Kind; staged: boolean; from: number; to: number; end: boolean };
+/**
+ * Um bloco buffer × HEAD, em linhas do buffer (1-based). O apagado tem `from === to`: a linha onde fica a marca. `chunk` é o trecho do
+ * @codemirror/merge (A = HEAD, B = buffer), em posições.
+ */
+export type Hunk = { kind: Kind; staged: boolean; from: number; to: number; end: boolean; chunk: Chunk };
 
 const COLOR: Record<Kind, string> = { added: '#2EA043', modified: '#0078D4', deleted: '#F85149' };
 // editorOverviewRuler.*Foreground: a cor do gutter com 60% de opacidade (0x99).
 const RULER: Record<Kind, string> = { added: '#2EA04399', modified: '#0078D499', deleted: '#F8514999' };
-// Mesmo padrão do MergeView: acima de 500 caracteres mudados num trecho, ou de 200 ms, o diff cai no modo rápido em vez de travar.
-const DIFF: DiffConfig = { scanLimit: 500, timeout: 200 };
 // Altura mínima de uma marca na barra de rolagem, e a largura da barra vertical do tema (file-view.tsx).
 const MIN_MARK = 3;
 const SCROLLBAR = 14;
@@ -40,14 +43,6 @@ export const setGitBase = StateEffect.define<FileBase | null>();
 // Tamanho máximo do documento com marcadores (o mesmo limite de cor do editor). O menor valor vence.
 const gitLimit = Facet.define<number, number>({ combine: (values) => (values.length ? Math.min(...values) : Infinity) });
 
-const textOf = (text: string) => Text.of(text.split('\n'));
-
-// Intervalos no buffer que se tocam. Um bloco vazio no buffer (linhas apagadas) toca o vizinho encostado; dois blocos com linhas, só se
-// dividem alguma linha.
-const touches = (a: Chunk, b: Chunk) => (a.fromB === a.toB || b.fromB === b.toB
-  ? a.fromB <= b.toB && b.fromB <= a.toB
-  : a.fromB < b.toB && b.fromB < a.toB);
-
 function hunksOf(vsHead: readonly Chunk[], vsIndex: readonly Chunk[], doc: Text): Hunk[] {
   const out: Hunk[] = [];
   let i = 0;
@@ -61,7 +56,7 @@ function hunksOf(vsHead: readonly Chunk[], vsIndex: readonly Chunk[], doc: Text)
     const end = c.fromB > doc.length;
     const from = doc.lineAt(Math.min(c.fromB, doc.length)).number;
     const to = kind === 'deleted' ? from : doc.lineAt(Math.min(c.endB, doc.length)).number;
-    out.push({ kind, staged, from, to, end });
+    out.push({ kind, staged, from, to, end, chunk: c });
   }
   return out;
 }
@@ -120,6 +115,33 @@ export function sameGitBase(state: EditorState, base: FileBase | null) {
 /** Blocos atuais (para a tela e o QA). */
 export const gitHunks = (state: EditorState): readonly Hunk[] => state.field(gitField, false)?.hunks ?? [];
 
+/** Base atual com os textos do HEAD e do índice (o bloco aberto lê daqui), ou `null` sem marcadores. */
+export const gitDiff = (state: EditorState) => state.field(gitField, false) ?? null;
+
+/** Abre o bloco que contém esta posição do buffer (`null` fecha). Um bloco aberto por vez. */
+export const openGitHunk = StateEffect.define<number | null>();
+
+/** Bloco que contém a posição, inclusive nas pontas (o apagado tem `fromB === toB`). */
+export const hunkAtPos = (hunks: readonly Hunk[], pos: number) => hunks.find((h) => h.chunk.fromB <= pos && pos <= h.chunk.toB) ?? null;
+
+// Bloco aberto, guardado como o começo dele no buffer. A posição segue as edições (digitar dentro do bloco mantém aberto) e volta para o
+// começo do bloco que a contém; se nenhum bloco a contém mais (restaurado, base nova), fecha.
+const gitOpenField = StateField.define<number | null>({
+  create: () => null,
+  update(pos, tr) {
+    let next = pos === null ? null : tr.changes.mapPos(pos, -1);
+    for (const e of tr.effects) if (e.is(openGitHunk)) next = e.value;
+    if (next === null) return null;
+    return hunkAtPos(gitHunks(tr.state), next)?.chunk.fromB ?? null;
+  },
+});
+
+/** O bloco aberto agora, ou `null`. */
+export const openHunk = (state: EditorState) => {
+  const pos = state.field(gitOpenField, false);
+  return pos === null || pos === undefined ? null : hunkAtPos(gitHunks(state), pos);
+};
+
 const EMPTY: Record<number, string> = {};
 /** Faixa de git do minimap (`gutters` do @replit/codemirror-minimap): objeto estável enquanto os marcadores não mudam. */
 export const minimapGutter = (state: EditorState) => state.field(gitField, false)?.minimap ?? EMPTY;
@@ -167,6 +189,18 @@ const gitGutter = gutter({
     return h ? markerOf(h, line) : null;
   },
   lineMarkerChange: (u) => u.startState.field(gitField, false) !== u.state.field(gitField, false),
+  // Clicar no marcador abre o bloco; clicar de novo fecha. O foco vai para o texto, para o Esc fechar.
+  domEventHandlers: {
+    mousedown: (view, block, event) => {
+      if ((event as MouseEvent).button !== 0) return false;
+      const h = hunkAt(gitHunks(view.state), view.state.doc.lineAt(block.from).number);
+      if (!h) return false;
+      const open = view.state.field(gitOpenField, false);
+      view.dispatch({ effects: openGitHunk.of(open === h.chunk.fromB ? null : h.chunk.fromB) });
+      view.focus();
+      return true;
+    },
+  },
 });
 
 // Marcas na faixa da barra de rolagem vertical do `.cm-scroller` (por cima dela, sem receber o ponteiro). A posição é a do bloco da
@@ -239,6 +273,7 @@ const theme = EditorView.theme({
   '.cm-gitGutter': { order: '1', width: '6px' },
   '.cm-foldGutter': { order: '2' },
   '.cm-gitGutter .cm-gutterElement': { position: 'relative' },
+  '.cm-gitGutter .cm-git': { cursor: 'pointer' },
   '.cm-git-added': { '--git': COLOR.added },
   '.cm-git-modified': { '--git': COLOR.modified },
   '.cm-git-added::before, .cm-git-modified::before': {
@@ -261,4 +296,4 @@ const theme = EditorView.theme({
 });
 
 /** Extensão completa: o estado, o gutter, as marcas na barra de rolagem e o tema. Documento acima de `limit` caracteres fica sem marcadores. */
-export const gitChanges = (limit: number) => [gitLimit.of(limit), gitField, gitGutter, overview, theme];
+export const gitChanges = (limit: number) => [gitLimit.of(limit), gitField, gitOpenField, gitGutter, overview, theme];

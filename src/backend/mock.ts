@@ -687,6 +687,21 @@ function fileBase(path: string): FileBase | null {
   return { head: textOf(path), index: textOf(path) };
 }
 
+// Grava o texto do arquivo no índice (preparar e tirar do preparo um bloco no editor), como o backend: recusa se o índice não é mais o
+// que a tela viu. A linha de `files` acompanha, para o painel Git simulado mostrar o preparado; arquivo novo no índice continua `added`.
+function writeIndex(path: string, text: string, expected: string) {
+  const base = fileBase(path);
+  if (!base || base.index === null) throw 'O arquivo não está no índice: nada foi preparado.';
+  // Os textos do simulado já são com `\n`, a forma que o editor manda.
+  if (base.index !== expected) throw 'O preparado deste arquivo mudou desde a última leitura. Nada foi feito; tente de novo.';
+  if (!GIT_TEXT[path]) GIT_TEXT[path] = { head: base.head ?? '', index: base.index };
+  GIT_TEXT[path].index = text;
+  const found = files.find((f) => f.path === path);
+  if (found?.staged === 'added') return;
+  if (!found) files.push(entry(path, null, null));
+  syncEntry(path);
+}
+
 // ---------- Pesquisa, abertura rápida e substituição simuladas ----------
 
 // Mesmo limite do backend: até 2000 linhas casadas; mais que isso marca `truncated`. A prévia mostra até 100 arquivos com texto.
@@ -1049,6 +1064,7 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   },
   git_accept_deletion: ({ path, revision }: { path: string; revision: string }) => { acceptDeletion(path, revision); return null; },
   git_file_base: ({ path }: { path: string }) => fileBase(path),
+  git_write_index: ({ path, text, expected }: { path: string; text: string; expected: string }) => { writeIndex(path, text, expected); return null; },
   search: ({ query }: { query: ReplaceQuery }): SearchResults => searchText(query),
   term_resize: () => undefined,
   term_snapshot: ({ id }: { id: string }) => {
