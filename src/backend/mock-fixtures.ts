@@ -202,3 +202,14 @@ export const EDITOR_HEAD_LINES: string[] = [
   "  };",
   "  const setData = (next: EditorData) => {",
 ];
+
+// Fixture dos marcadores de mudança do editor (`src/marcadores.ts`, só o simulado): 80 constantes depois de um comentário. O preparado
+// muda a linha 3 (bloco já no índice, barra vazada); a pasta, além disso, acrescenta duas linhas depois da 7, apaga a `v12` e muda a
+// `v20` (três blocos fora do índice: acrescentado, apagado e modificado, barra cheia).
+const MARCADORES_HEAD_LINES = ['// Marcadores de mudança do editor.', ...Array.from({ length: 80 }, (_, i) => `export const v${i + 1} = ${i + 1};`)];
+export const MARCADORES_HEAD = MARCADORES_HEAD_LINES.join('\n') + '\n';
+export const MARCADORES_INDEX = MARCADORES_HEAD.replace('export const v2 = 2;', 'export const v2 = 20;');
+export const MARCADORES_WORKTREE = MARCADORES_INDEX
+  .replace('export const v6 = 6;\n', 'export const v6 = 6;\nexport const extra1 = 1;\nexport const extra2 = 2;\n')
+  .replace('export const v12 = 12;\n', '')
+  .replace('export const v20 = 20;', 'export const v20 = 200;');

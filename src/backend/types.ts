@@ -72,6 +72,9 @@ export type GraphCommit = Commit & { parents: string[]; refs: GitRef[] };
 // Conflito de merge: `ours` e `theirs` são os lados (`null` se o lado apagou o arquivo); `worktree` é o texto atual, sem BOM e com `\n`.
 // `revision` é a da pasta: a gravação da resolução manda de volta a que a tela leu.
 export type Conflict = { ours: string | null; theirs: string | null; worktree: string | null; binary: boolean; revision: string };
+// Texto-base do Git de um arquivo, para os marcadores de mudança do editor. `head` é o texto no HEAD (`null` se não está lá) e `index` o do
+// índice, estágio 0 (`null` se não está lá, ex. em conflito). Vêm com o fim de linha do checkout e sem BOM, comparáveis com o `text` de `read_file`.
+export type FileBase = { head: string | null; index: string | null };
 
 // Pesquisa de texto (contrato do backend, JSON em camelCase). `path` é relativo à raiz, com "/"; uma entrada por linha que casa.
 // `col` é a coluna da primeira ocorrência, em unidades UTF-16 (como o CodeMirror) e a partir de 1; emoji ocupa 2. `skipped` lista os arquivos que ficaram de fora e por quê
@@ -171,6 +174,7 @@ export type Commands = {
   git_conflict: { args: { path: string }; result: Conflict };
   git_write_resolution: { args: { path: string; content: string; revision: string; markResolved: boolean }; result: void };
   git_accept_deletion: { args: { path: string; revision: string }; result: void };
+  git_file_base: { args: { path: string }; result: FileBase | null };
   start_orchestrator: { args: { choice: Choice; cols: number; rows: number }; result: void };
   start_shell: { args: { id: string; cols: number; rows: number; cwd?: string }; result: string };
   close_shell: { args: { id: string }; result: void };

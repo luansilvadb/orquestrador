@@ -3,18 +3,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { ContextMenuTrigger, type ContextMenuItem, toast } from '@lobehub/ui/base-ui';
 import { basicSetup } from 'codemirror';
-import { Compartment, EditorSelection, EditorState, Prec, StateEffect, Text } from '@codemirror/state';
+import { Compartment, EditorSelection, EditorState, Prec, StateEffect, Text, Transaction } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { copyLineDown, deleteLine, indentWithTab, moveLineDown, moveLineUp, redo, selectAll, toggleComment, undo } from '@codemirror/commands';
 import { openSearchPanel, selectNextOccurrence } from '@codemirror/search';
 import { LanguageDescription, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
-import { showMinimap } from '@replit/codemirror-minimap';
+import { showMinimap, type MinimapConfig } from '@replit/codemirror-minimap';
 import { bracketColors } from './bracket-colors';
+import { gitChanges, gitField, minimapGutter, sameGitBase, setGitBase } from './git-gutter';
 import { message } from '../backend/backend';
 import { action, blocked, DIVIDER } from '../shared/file-tabs';
 import type { Scroll } from './workspace-store';
+import type { FileBase } from '../backend/types';
 
 // ponytail: acima de 200 mil caracteres, carregar parser e colorir custa mais que a leitura simples.
 const COLOR_LIMIT = 200_000;
@@ -22,7 +24,8 @@ const COLOR_LIMIT = 200_000;
 const ECHO_LIMIT = 64;
 // Medidas e cores do editor do Antigravity (Monaco), tema Dark Modern: texto de 14 px em linhas de 19 px, Consolas no Windows, sem
 // ligaduras (editor.fontLigatures é false por padrão); à esquerda, 19 px da margem de ícones, 31 px dos números (alinhados à direita)
-// e 26 px da dobra, que só aparece com o ponteiro na medianiz; a linha do cursor tem só uma borda, sem fundo. As cores são fixas (hex),
+// e 26 px da dobra, que só aparece com o ponteiro na medianiz (os 6 px da esquerda dela são o gutter do Git, `git-gutter.ts`, e a dobra
+// fica com 20 px, sem o recuo: o ícone e o texto ficam onde estavam); a linha do cursor tem só uma borda, sem fundo. As cores são fixas (hex),
 // de dark_modern.json, dark_vs.json e do bundle do workbench (ver docs/interface.md, "Cores e fontes do editor"): não herdam os tokens
 // do antd, que mudam com o tema da interface. As barras de rolagem têm 14 px (vertical) e 12 px (horizontal), quadradas.
 const darkTheme = EditorView.theme({
@@ -55,7 +58,7 @@ const darkTheme = EditorView.theme({
     border: 'none',
   },
   '.cm-lineNumbers .cm-gutterElement': { padding: '0 0 0 19px', minWidth: '50px', textAlign: 'right' },
-  '.cm-foldGutter .cm-gutterElement': { width: '26px', paddingLeft: '6px', opacity: '0', transition: 'opacity 0.1s' },
+  '.cm-foldGutter .cm-gutterElement': { width: '20px', opacity: '0', transition: 'opacity 0.1s' },
   '.cm-gutters:hover .cm-foldGutter .cm-gutterElement': { opacity: '1' },
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: '#CCCCCC' },
   '.cm-activeLine': { backgroundColor: 'transparent', boxShadow: 'inset 0 0 0 2px #282828' },
@@ -74,11 +77,21 @@ const darkTheme = EditorView.theme({
 // Minimap à direita, como o do Antigravity: 120 px, com os caracteres desenhados e a janela visível só com o ponteiro. Arquivo
 // acima do limite de cor fica sem ele (desenhar tudo custa como colorir). O objeto é fixo para o facet não recriar o minimap a cada tecla.
 // O minimap só redesenha quando o texto ou a configuração dele mudam; por isso, quando a linguagem chega (depois, assíncrona), ele
-// recebe uma configuração nova (`minimap()` outra vez), e assim passa a desenhar com as cores da sintaxe.
+// recebe uma configuração nova (`minimap()` outra vez), e assim passa a desenhar com as cores da sintaxe. A faixa de git (`gutters`) vem
+// dos marcadores de mudança, e a configuração só é trocada quando ela muda (`minimapGutter` devolve o mesmo objeto enquanto isso).
 const MINIMAP = { create: () => ({ dom: document.createElement('div') }), displayText: 'characters' as const, showOverlay: 'mouse-over' as const };
 const minimap = () => {
-  const config = { ...MINIMAP };
-  return showMinimap.compute(['doc'], (state) => (state.doc.length > COLOR_LIMIT ? null : config));
+  let gutter: Record<number, string> | null = null;
+  let config: MinimapConfig = { ...MINIMAP };
+  return showMinimap.compute(['doc', gitField], (state) => {
+    if (state.doc.length > COLOR_LIMIT) return null;
+    const next = minimapGutter(state);
+    if (next !== gutter) {
+      gutter = next;
+      config = { ...MINIMAP, gutters: [next] };
+    }
+    return config;
+  });
 };
 
 // Cores de sintaxe do tema padrão do Antigravity (Dark Modern, que herda as do Dark+), lidas do editor dele: controle de fluxo e
@@ -119,6 +132,8 @@ const basicExtensions = [
   darkTheme,
   syntaxHighlighting(darkHighlight),
   bracketColors,
+  // Marcadores de mudança do Git (gutter, barra de rolagem e minimap). Sem base (rascunho, conflito), o gutter fica vazio, com a mesma largura.
+  gitChanges(COLOR_LIMIT),
   // Guias de recuo de 1 px; a do bloco do cursor fica mais forte.
   indentationMarkers({
     thickness: 1,
@@ -170,13 +185,15 @@ export function parseGoto(value: string, lines: number, lineLength: (line: numbe
 }
 
 // Editor do arquivo (CodeMirror com o tema do app). Exportado para o editor central (src/editor/editor-workspace.tsx) reutilizar.
-export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll, autoFocus }: {
+export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll, autoFocus, gitBase }: {
   text: string; readOnly: boolean; path: string; reveal: Reveal | null; onChange: (text: string) => void; onSave: () => void;
   onCursor: (line: number, col: number) => void; onScroll?: (scroll: Scroll) => void; cacheKey?: string; start?: StartCursor | null;
   /** Rolagem a restaurar ao montar (ex.: a vista foi movida de grupo ou o app foi reaberto). */
   scroll?: Scroll | null;
   /** Foca o texto ao montar (rascunho novo). Só vale na montagem. */
   autoFocus?: boolean;
+  /** Texto-base do Git (com `\n`) para os marcadores de mudança. `null` tira os marcadores; ausente não mexe no que o estado já tem. */
+  gitBase?: FileBase | null;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -387,6 +404,13 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
       current.dispatch({ effects: editable.current.reconfigure(readOnlyExt(readOnly)) });
     }
   }, [readOnly]);
+
+  // Base nova do Git: só despacha quando os textos mudaram. Não altera o documento nem entra no histórico de Desfazer.
+  useEffect(() => {
+    const current = view.current;
+    if (!current || gitBase === undefined || sameGitBase(current.state, gitBase)) return;
+    current.dispatch({ effects: setGitBase.of(gitBase), annotations: Transaction.addToHistory.of(false) });
+  }, [gitBase]);
 
   const submitGoto = () => {
     const current = view.current;

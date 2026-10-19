@@ -150,6 +150,13 @@ fn git_review_diff(core: State<Core>, path: String, staged: bool) -> Result<git:
     git::review_diff(&core.repo()?, &path, staged)
 }
 
+/// O texto de um arquivo no HEAD e no índice, para os marcadores de mudança do editor. `path` é relativo ao projeto.
+/// `None` quando não há marcadores a mostrar (sem repositório, não rastreado, binário ou grande).
+#[tauri::command(async)]
+fn git_file_base(core: State<Core>, path: String) -> Result<Option<git::FileBase>, String> {
+    git::file_base(&core.repo()?, &path)
+}
+
 /// Prepara um bloco da pasta de trabalho. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
 fn git_stage_hunk(core: State<Core>, hunk: git::HunkRef) -> Result<(), String> {
@@ -438,6 +445,7 @@ pub fn run(context: tauri::Context) {
             git_switch,
             git_create_branch,
             git_review_diff,
+            git_file_base,
             git_stage_hunk,
             git_unstage_hunk,
             git_discard_hunk,

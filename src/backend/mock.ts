@@ -20,14 +20,14 @@
 // e `repo-above` (pasta dentro de outro repositório, raiz `C:\projetos`). Fora de `repo`, `git_status` devolve só o `kind` (e a raiz, em `repo-above`).
 // `?subfolder=1` faz `choose_project` devolver `subfolder: true`. Em execução, `__mock.gitMode = 'no-repo'` e `__mock.subfolder = true` trocam isso
 // (por exemplo, um `git init` feito pelo terminal, que o painel vê na consulta seguinte).
-import { EDITOR_HEAD_LINES } from './mock-fixtures';
+import { EDITOR_HEAD_LINES, MARCADORES_HEAD, MARCADORES_INDEX, MARCADORES_WORKTREE } from './mock-fixtures';
 import { parseDiffFromFile } from '@pierre/diffs';
 import type { Transport } from './backend';
 import { fileNameError } from '../shared/file-tab-actions';
 import { splitPath } from '../shared/paths';
 import {
   type Batch, type Choice, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
-  type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
+  type FileBase, type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
   type SearchResults, type SkipReason,
 } from './types';
@@ -78,6 +78,7 @@ const tree = folder({
   docs: folder({ 'design-system.md': file(), 'rascunho-painel.md': file(), 'apagado.md': file(), 'visual-comparador.md': file() }),
   src: folder({
     'App.tsx': file(), 'editor-workspace.tsx': file(), 'index.css': file(), 'longo.ts': file(), 'main.tsx': file(), 'conflito.ts': file(), 'sem-quebra.ts': file(),
+    'marcadores.ts': file(),
     components: folder({ ui: folder({ 'button.tsx': file(), 'card.tsx': file() }) }),
     lib: folder({ 'utils.ts': file() }),
   }),
@@ -98,6 +99,7 @@ const files: GitFile[] = [
   entry('src/App.tsx', 'modified', 'modified'),
   entry('src/editor-workspace.tsx', 'modified', 'modified'),
   entry('src/sem-quebra.ts', null, 'modified'),
+  entry('src/marcadores.ts', 'modified', 'modified'),
   entry('dados/exportacao.json', null, 'modified'),
   entry('assets/logo.png', null, 'modified'),
   // Conflitos de merge: só o lado das alterações (como o Git e o backend), sem nada preparado. Texto em `TEXTS`, lados em `conflicts`.
@@ -160,6 +162,7 @@ const TEXTS: Record<string, string> = {
   'docs/apagado.md': '# Rascunho\n\nAjuste.\n',
   'src/sem-quebra.ts': SEM_QUEBRA_WORK,
   'docs/visual-comparador.md': COMPARADOR_WORK.join('\n') + '\n',
+  'src/marcadores.ts': MARCADORES_WORKTREE,
 };
 
 /** Pasta pelo caminho relativo com "/" ('' é a raiz); arquivo ou caminho inexistente dá undefined. */
@@ -359,6 +362,8 @@ const GIT_TEXT: Record<string, { head: string; index: string }> = {
   'src/editor-workspace.tsx': { head: EDITOR_HEAD, index: EDITOR_INDEX },
   'src/sem-quebra.ts': { head: SEM_QUEBRA_HEAD.join('\n') + '\n', index: SEM_QUEBRA_HEAD.join('\n') + '\n' },
   'docs/visual-comparador.md': { head: COMPARADOR_HEAD.join('\n') + '\n', index: COMPARADOR_HEAD.join('\n') + '\n' },
+  // Marcadores do editor: um bloco preparado e três só na pasta (ver mock-fixtures.ts).
+  'src/marcadores.ts': { head: MARCADORES_HEAD, index: MARCADORES_INDEX },
 };
 type Hunk = { header: string; body: string[]; oldAt: number; oldLen: number; newAt: number; newLen: number; oldLines: string[]; newLines: string[] };
 const textLines = (text: string) => (text === '' ? [] : text.replace(/\n$/, '').split('\n'));
@@ -667,6 +672,19 @@ function acceptDeletion(path: string, revision: string) {
   delete TEXTS[path];
   conflicts.delete(path);
   files[files.findIndex((f) => f.path === path)] = { path, origPath: null, staged: 'deleted', unstaged: null };
+}
+
+// Texto-base dos marcadores do editor, como o backend: `null` fora do modo `repo`, em binário, acima do limite, em ignorado e em não
+// rastreado. Com texto do Git, o HEAD e o preparado dele; em conflito, o lado `ours` como HEAD e nada no índice; novo no índice, só o
+// índice; os demais arquivos rastreados estão iguais ao HEAD.
+function fileBase(path: string): FileBase | null {
+  if (debug.gitMode !== 'repo' || !isFile(path) || path.endsWith('.png') || path === 'dados/exportacao.json' || ignoredPath(path)) return null;
+  const entry = files.find((f) => f.path === path);
+  if (entry?.unstaged === 'untracked') return null;
+  if (GIT_TEXT[path]) return { head: GIT_TEXT[path].head, index: GIT_TEXT[path].index };
+  if (entry?.unstaged === 'conflicted') return { head: conflicts.get(path)?.ours ?? null, index: null };
+  if (entry?.staged === 'added') return { head: null, index: textOf(path) };
+  return { head: textOf(path), index: textOf(path) };
 }
 
 // ---------- Pesquisa, abertura rápida e substituição simuladas ----------
@@ -1030,6 +1048,7 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
     return null;
   },
   git_accept_deletion: ({ path, revision }: { path: string; revision: string }) => { acceptDeletion(path, revision); return null; },
+  git_file_base: ({ path }: { path: string }) => fileBase(path),
   search: ({ query }: { query: ReplaceQuery }): SearchResults => searchText(query),
   term_resize: () => undefined,
   term_snapshot: ({ id }: { id: string }) => {

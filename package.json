@@ -7,13 +7,14 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "check": "node --test --test-concurrency=1 scripts/check-workspace.mjs scripts/check-editor-store.mjs scripts/check-file-tabs.mjs scripts/check-explorer.mjs scripts/check-git-graph.mjs scripts/check-paste.mjs scripts/check-release.mjs scripts/check-commands.mjs",
-    "check:ui": "node --test --test-concurrency=1 scripts/check-editor-ui.mjs scripts/check-files-search-ui.mjs scripts/check-git-ui.mjs scripts/check-media-ui.mjs scripts/check-titlebar-ui.mjs scripts/check-editor-style.mjs",
+    "check:ui": "node --test --test-concurrency=1 scripts/check-editor-ui.mjs scripts/check-files-search-ui.mjs scripts/check-git-ui.mjs scripts/check-media-ui.mjs scripts/check-titlebar-ui.mjs scripts/check-editor-style.mjs scripts/check-git-gutter-ui.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
     "@codemirror/language": "^6.13.1",
     "@codemirror/language-data": "^6.5.2",
+    "@codemirror/merge": "^6.12.2",
     "@codemirror/search": "^6.7.2",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.14",

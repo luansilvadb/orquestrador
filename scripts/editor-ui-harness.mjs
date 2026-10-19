@@ -60,10 +60,10 @@ export async function waitForServer() {
   throw new Error(`Vite não respondeu em ${BASE}`);
 }
 
-/** Browser headless do Chromium local; quem chama fecha. */
-export async function launchBrowser() {
+/** Browser headless do Chromium local; quem chama fecha. `options` vai junto para o `launch` do Playwright. */
+export async function launchBrowser(options = {}) {
   const { chromium } = await import(pathToFileURL(findPlaywright()).href);
-  return chromium.launch({ headless: true, executablePath: findChrome() });
+  return chromium.launch({ headless: true, executablePath: findChrome(), ...options });
 }
 
 /** Contexto novo (sem nada da sessão anterior), com o app já escolhido e a árvore pronta. */
@@ -136,11 +136,12 @@ export const primaryCursor = (page) => page.evaluate(() => {
 /**
  * Cenários de um check de interface em `node:test`: o `before` sobe o Vite e o Chromium, o `after` fecha os dois, e cada cenário roda num
  * contexto novo. `prefix` nomeia as capturas de falha (`<prefix>-falha-N.png`, N = posição do cenário). `diagnose(page)`, opcional,
- * devolve linhas extras que saem, com o caminho da captura, como diagnóstico da falha. Devolve `scenario(name, fn)`.
+ * devolve linhas extras que saem, com o caminho da captura, como diagnóstico da falha. `launch`, opcional, vai para o `launchBrowser`.
+ * Devolve `scenario(name, fn)`.
  */
-export function uiSuite(prefix, { diagnose } = {}) {
+export function uiSuite(prefix, { diagnose, launch } = {}) {
   let vite, browser, count = 0;
-  before(async () => { vite = startVite(); await waitForServer(); browser = await launchBrowser(); });
+  before(async () => { vite = startVite(); await waitForServer(); browser = await launchBrowser(launch); });
   after(async () => { await browser?.close(); vite?.stop(); });
   return (name, fn) => {
     const index = ++count;

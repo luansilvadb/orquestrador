@@ -24,7 +24,7 @@ Para acrescentar um comando: escreva a função `#[tauri::command]` em `lib.rs`,
 
 ```powershell
 npm run check       # 8 checagens puras (Node, sem dependências)
-npm run check:ui    # 6 checks de interface, em sequência (Chrome headless)
+npm run check:ui    # 7 checks de interface, em sequência (Chrome headless)
 ```
 
 `npm run check` roda os arquivos listados em `package.json`; `npm run check:ui` roda os checks de interface um de cada vez, porque todos sobem o Vite na mesma porta (1421, `SMOKE_PORT`). Os dois saem com código diferente de 0 se algum teste falhou, e mostram o resultado de todos os arquivos.

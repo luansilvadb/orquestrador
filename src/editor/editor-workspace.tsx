@@ -56,7 +56,7 @@ import {
   remapData, renderConflict, toDiskNewlines, conflictKey, type EditorData, type Cursor, type Scroll,
 } from './workspace-store';
 import type { GitGuard } from '../git/git-guard';
-import type { Conflict, FileContent, GitDiff, HunkRef, ReviewDiff } from '../backend/types';
+import type { Conflict, FileBase, FileContent, GitDiff, HunkRef, ReviewDiff } from '../backend/types';
 import { blockRanges, changeKeys, compareOf, type CompareModel } from './compare-rows';
 
 export type OpenOptions = { permanent?: boolean; line?: number; col?: number; side?: GroupId };
@@ -944,6 +944,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     return (
       <FileBody
         buffer={data.buffers[target.docId]}
+        shown={shown}
         status={status[target.docId]}
         disk={disk[target.docId]}
         reveal={reveal && reveal.docId === target.docId && groupActive ? reveal : null}
@@ -1265,12 +1266,42 @@ function EmptyGroup({ onNewDraft }: { onNewDraft: () => void }) {
 
 // ---- Arquivo ----
 
-function FileBody({ buffer, status, disk, reveal, autoFocus, cursor, onChange, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
-  buffer: Buffer | undefined; status: Status | undefined; disk: DiskVersion | undefined;
+// Texto-base do Git do arquivo aberto, para os marcadores de mudança do editor: lido ao montar, logo depois de salvar (o `raw` do buffer
+// muda) e a cada consulta com a aba visível (pega commit, stage e checkout feitos pelo painel Git, terminais e executores). Sem caminho
+// (rascunho), `null` ou erro: sem marcadores e sem aviso. Os textos chegam com o fim de linha do checkout e o editor trabalha com `\n`,
+// então a base passa pela mesma normalização. O estado só muda quando a base de fato mudou; `undefined` é "ainda não lida".
+function useGitBase(path: string, raw: string, shown: boolean): FileBase | null | undefined {
+  const [base, setBase] = useState<FileBase | null | undefined>(undefined);
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  const load = async () => {
+    let next: FileBase | null = null;
+    try {
+      const found = await backend.gitFileBase(path);
+      if (found) next = { head: found.head === null ? null : normalizeNewlines(found.head), index: found.index === null ? null : normalizeNewlines(found.index) };
+    } catch {
+      // Erro de Git não interrompe a edição: só tira os marcadores.
+    }
+    if (pathRef.current !== path) return;
+    setBase((prev) => (prev === next || (prev && next && prev.head === next.head && prev.index === next.index) ? prev : next));
+  };
+  usePolling(load, POLL_MS, shown && path !== '' && path);
+  const seenRaw = useRef(raw);
+  useEffect(() => {
+    if (seenRaw.current === raw) return;
+    seenRaw.current = raw;
+    if (path !== '') void load();
+  }, [raw]);
+  return path === '' ? null : base;
+}
+
+function FileBody({ buffer, shown, status, disk, reveal, autoFocus, cursor, onChange, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
+  buffer: Buffer | undefined; shown: boolean; status: Status | undefined; disk: DiskVersion | undefined;
   reveal: Reveal | null; autoFocus: boolean; cursor: StartCursor | null; onChange: (value: string) => void; onSave: () => void;
   onCursor: (line: number, col: number) => void; onCompare: (mode: 'keep' | 'use') => void; onRetry: () => void;
   scroll: Scroll | null; onScroll: (scroll: Scroll) => void;
 }) {
+  const gitBase = useGitBase(buffer?.path ?? '', buffer?.raw ?? '', shown);
   if (status?.binary) return <Note text="Arquivo binário: não há texto para mostrar aqui." />;
   if (status?.large) return <Note text="Arquivo grande demais para mostrar aqui." />;
   if (!buffer) return <Note text={status?.error ?? 'Lendo o arquivo…'} danger={!!status?.error} onRetry={status?.error ? onRetry : undefined} />;
@@ -1306,6 +1337,7 @@ function FileBody({ buffer, status, disk, reveal, autoFocus, cursor, onChange, o
             scroll={scroll}
             cacheKey={buffer.docId}
             start={cursor}
+            gitBase={gitBase}
           />
         </Flexbox>
       </Flexbox>

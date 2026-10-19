@@ -1030,6 +1030,78 @@ pub fn accept_deletion(dir: &Path, rel: &str, revision: &str) -> Result<(), Stri
     })
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Texto-base do editor: o arquivo no HEAD e no índice, para os marcadores de mudança no gutter.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// O texto de `rel` no HEAD e no índice (estágio 0), comparável linha a linha com o que `files::read` devolve: com os
+/// filtros e o fim de linha do checkout e sem o BOM. Cada lado é `None` quando o arquivo não está nele.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileBase {
+    pub head: Option<String>,
+    pub index: Option<String>,
+}
+
+/// O texto-base de `rel` para o editor. `None` fora do modo repositório, em pasta, em arquivo que não está nem no HEAD
+/// nem no índice e quando um dos lados é binário ou maior que `files::MAX_FILE`: aí o editor não mostra marcadores.
+/// Só lê o repositório. A presença de cada lado vem de `ls-files -s` e `ls-tree`, então objeto ausente não vira erro.
+pub fn file_base(dir: &Path, rel: &str) -> Result<Option<FileBase>, String> {
+    if modo(dir)? != Modo::Repo {
+        return Ok(None);
+    }
+    let rel = spec(rel)?;
+    guarded(dir, rel)?;
+    if is_folder(dir, rel)? {
+        return Ok(None);
+    }
+    let no_indice = index_blob(dir, rel)?;
+    let no_head = has_head(dir) && head_blob(dir, rel)?;
+    if !no_indice && !no_head {
+        return Ok(None);
+    }
+    let head = if no_head { texto_base(dir, &format!("HEAD:{rel}"))? } else { None };
+    let index = if no_indice { texto_base(dir, &format!(":{rel}"))? } else { None };
+    // Lado presente que volta sem texto é binário ou grande demais.
+    if (no_head && head.is_none()) || (no_indice && index.is_none()) {
+        return Ok(None);
+    }
+    Ok(Some(FileBase { head, index }))
+}
+
+/// `rel` está no índice no estágio 0 como arquivo (não submódulo). Registro de `ls-files -s`: `modo SP hash SP estágio TAB caminho`.
+fn index_blob(dir: &Path, rel: &str) -> Result<bool, String> {
+    let raw = proc::git_bytes(dir, &["ls-files", "-s", "-z", "--", rel])?;
+    Ok(raw.split(|b| *b == 0).any(|record| {
+        let Some(tab) = record.iter().position(|&b| b == b'\t') else { return false };
+        let campos: Vec<&[u8]> = record[..tab].split(|&b| b == b' ').collect();
+        &record[tab + 1..] == rel.as_bytes() && campos.len() == 3 && campos[0] != b"160000" && campos[2] == b"0"
+    }))
+}
+
+/// `rel` está no HEAD como blob. Registro de `ls-tree`: `modo SP tipo SP hash TAB caminho`.
+fn head_blob(dir: &Path, rel: &str) -> Result<bool, String> {
+    let raw = proc::git_bytes(dir, &["ls-tree", "-z", "HEAD", "--", rel])?;
+    Ok(raw.split(|b| *b == 0).any(|record| {
+        let Some(tab) = record.iter().position(|&b| b == b'\t') else { return false };
+        &record[tab + 1..] == rel.as_bytes() && record[..tab].split(|&b| b == b' ').nth(1) == Some(b"blob")
+    }))
+}
+
+/// O texto de `objeto` (`HEAD:<rel>` ou `:<rel>`, que já se sabe existir) como o checkout o escreveria, sem o BOM.
+/// `None` quando é binário ou maior que `files::MAX_FILE`, antes ou depois dos filtros.
+fn texto_base(dir: &Path, objeto: &str) -> Result<Option<String>, String> {
+    let size: u64 = proc::git_saida(dir, &["cat-file", "-s", objeto])?.trim().parse().unwrap_or(u64::MAX);
+    if size > files::MAX_FILE {
+        return Ok(None);
+    }
+    let bytes = proc::git_bytes(dir, &["cat-file", "--filters", objeto])?;
+    if bytes.len() as u64 > files::MAX_FILE || files::is_binary(&bytes) {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(sem_bom_bytes(&bytes)).into_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2247,5 +2319,96 @@ mod tests {
         let json = serde_json::to_value(estado(&dir).unwrap()).unwrap();
         assert_eq!(json["kind"], "repo");
         assert_eq!(json["status"]["branch"], "main");
+    }
+
+    fn base(head: Option<&str>, index: Option<&str>) -> Option<FileBase> {
+        Some(FileBase { head: head.map(String::from), index: index.map(String::from) })
+    }
+
+    #[test]
+    fn texto_base_de_modificado_preparado_e_novo_no_indice() {
+        let tmp = Tmp::new("orq-git", "base");
+        let dir = repo(&tmp, "r");
+        write(&dir, "a.txt", "um\n");
+        write(&dir, "src/b.txt", "dois\n");
+        commit_all(&dir, "base");
+
+        write(&dir, "a.txt", "um mudado\n");
+        assert_eq!(file_base(&dir, "a.txt").unwrap(), base(Some("um\n"), Some("um\n")), "modificado só na pasta");
+
+        write(&dir, "src/b.txt", "dois preparado\n");
+        git(&dir, &["add", "src/b.txt"]);
+        write(&dir, "src/b.txt", "dois na pasta\n");
+        assert_eq!(file_base(&dir, "src/b.txt").unwrap(), base(Some("dois\n"), Some("dois preparado\n")), "mudança no índice");
+
+        write(&dir, "novo.txt", "novo\n");
+        git(&dir, &["add", "novo.txt"]);
+        assert_eq!(file_base(&dir, "novo.txt").unwrap(), base(None, Some("novo\n")), "novo só no índice");
+
+        git(&dir, &["rm", "-q", "--cached", "a.txt"]);
+        assert_eq!(file_base(&dir, "a.txt").unwrap(), base(Some("um\n"), None), "tirado do índice com rm --cached");
+    }
+
+    #[test]
+    fn texto_base_sem_commit_e_em_conflito() {
+        let tmp = Tmp::new("orq-git", "base-sem-commit");
+        let dir = repo(&tmp, "r");
+        write(&dir, "a.txt", "um\n");
+        git(&dir, &["add", "a.txt"]);
+        assert_eq!(file_base(&dir, "a.txt").unwrap(), base(None, Some("um\n")));
+
+        let dir = conflito(&tmp, "c", "base\n", "nosso\n", "deles\n");
+        assert_eq!(file_base(&dir, "x.txt").unwrap(), base(Some("nosso\n"), None), "em conflito não há estágio 0");
+    }
+
+    #[test]
+    fn texto_base_vazio_para_nao_rastreado_pasta_binario_e_grande() {
+        let tmp = Tmp::new("orq-git", "base-vazio");
+        let dir = repo(&tmp, "r");
+        write(&dir, "src/a.txt", "um\n");
+        write(&dir, "dado.bin", [0u8, 1, 2, 0, 255]);
+        write(&dir, "grande.txt", "a\n".repeat(600_000));
+        commit_all(&dir, "base");
+        write(&dir, "solto.txt", "solto\n");
+
+        assert_eq!(file_base(&dir, "solto.txt").unwrap(), None, "não rastreado");
+        assert_eq!(file_base(&dir, "nao-existe.txt").unwrap(), None, "não existe");
+        assert_eq!(file_base(&dir, "src").unwrap(), None, "pasta");
+        assert_eq!(file_base(&dir, "dado.bin").unwrap(), None, "binário");
+        assert_eq!(file_base(&dir, "grande.txt").unwrap(), None, "maior que MAX_FILE");
+
+        write(&dir, "src/a.txt", [0u8, 9]);
+        git(&dir, &["add", "src/a.txt"]);
+        assert_eq!(file_base(&dir, "src/a.txt").unwrap(), None, "o índice binário anula o HEAD de texto");
+
+        assert!(file_base(&dir, "../fora.txt").is_err());
+        assert!(file_base(&dir, ".git/config").is_err());
+    }
+
+    #[test]
+    fn texto_base_vazio_fora_do_modo_repositorio() {
+        let tmp = Tmp::new("orq-git", "base-modo");
+        let fora = tmp.0.join("fora");
+        write(&fora, "a.txt", "um\n");
+        assert_eq!(file_base(&fora, "a.txt").unwrap(), None, "sem repositório");
+
+        let dir = repo(&tmp, "r");
+        write(&dir, "sub/a.txt", "um\n");
+        commit_all(&dir, "base");
+        assert_eq!(file_base(&dir.join("sub"), "a.txt").unwrap(), None, "repositório acima");
+    }
+
+    #[test]
+    fn texto_base_segue_o_crlf_do_checkout_e_tira_o_bom() {
+        let tmp = Tmp::new("orq-git", "base-crlf");
+        let dir = repo(&tmp, "r");
+        git(&dir, &["config", "core.autocrlf", "true"]);
+        write(&dir, "a.txt", "\u{feff}um\r\ndois\r\n");
+        commit_all(&dir, "base");
+        assert_eq!(git(&dir, &["cat-file", "blob", "HEAD:a.txt"]), "\u{feff}um\ndois\n", "o commit guardou LF");
+
+        let pasta = files::read(&dir, "a.txt").unwrap().text;
+        assert_eq!(pasta, "um\r\ndois\r\n");
+        assert_eq!(file_base(&dir, "a.txt").unwrap(), base(Some(&pasta), Some(&pasta)));
     }
 }

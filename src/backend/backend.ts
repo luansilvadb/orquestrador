@@ -130,6 +130,8 @@ export const backend = {
   gitWriteResolution: (path: string, content: string, revision: string, markResolved: boolean) =>
     call('git_write_resolution', { path, content, revision, markResolved }),
   gitAcceptDeletion: (path: string, revision: string) => call('git_accept_deletion', { path, revision }),
+  // Texto do arquivo no HEAD e no índice, base dos marcadores de mudança do editor. `null` sem marcadores (fora de repositório, não rastreado, binário ou acima de 1 MiB).
+  gitFileBase: (path: string) => call('git_file_base', { path }),
   // Pesquisa de texto nos arquivos do projeto. Regex inválida rejeita com a mensagem em português; consulta vazia devolve lista vazia.
   search: (query: string, options: SearchOptions, filter: SearchFilter) =>
     call('search', { query: { text: query, ...options, ...filter } }),
