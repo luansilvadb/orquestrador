@@ -21,8 +21,6 @@ pub struct Places {
     /// Onde versões antigas punham a regra do Codex da sessão. A sessão não escreve mais nada aqui; só
     /// `recover_orphans` olha, para tirar o que sobrou.
     pub codex_rules: PathBuf,
-    /// Pastas globais do usuário que têm `skills` (`.agents`, `.claude`), nessa ordem.
-    pub global_dirs: Vec<PathBuf>,
 }
 
 impl Places {
@@ -32,14 +30,12 @@ impl Places {
         Places {
             temp: std::env::temp_dir(),
             codex_rules: codex_home.unwrap_or_else(|| home.join(".codex")).join("rules"),
-            global_dirs: [".agents", ".claude"].iter().map(|d| home.join(d)).filter(|d| d.join("skills").is_dir()).collect(),
         }
     }
 }
 
 pub struct Session {
     pub dir: PathBuf,
-    pub global_dirs: Vec<PathBuf>,
 }
 
 /// Uma regra `prefix_rule` do Codex para um único token, como a forma antiga a escrevia. Só `is_legacy_rule` a
@@ -66,7 +62,7 @@ impl Session {
     pub fn create(places: &Places, app: &str, project: &str, cfg: &Config) -> (Session, Result<(), String>) {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         let name = format!("strategist-{nanos:032x}");
-        let session = Session { global_dirs: places.global_dirs.clone(), dir: places.temp.join(&name) };
+        let session = Session { dir: places.temp.join(&name) };
         let result = session
             .fill(&name, app, project, cfg)
             .map_err(|e| format!("Não foi possível criar a sessão em {}: {e}", session.dir.display()));
@@ -81,7 +77,7 @@ impl Session {
         }
         let pid = std::process::id();
         std::fs::write(d.join("owner"), format!("{pid} {} {name}", start_time(pid).unwrap_or(0)))?;
-        std::fs::write(d.join("AGENTS.md"), roles::ORCHESTRATOR.replace("{{PROJECT}}", project))?;
+        std::fs::write(d.join("AGENTS.md"), roles::orchestrator(project))?;
         // O Codex não leva nada além disso: o servidor dele vai na linha de comando, em `cli.rs`, e sem sandbox não
         // há regra de comando a escrever (a regra é global em CODEX_HOME e liberaria o mesmo a qualquer codex).
         if cfg.orchestrator.tool != "codex" {
@@ -199,9 +195,8 @@ pub mod tests {
     pub fn places(tag: &str) -> (Tmp, Places) {
         let tmp = Tmp::new("orq-ses", tag);
         let root = &tmp.0;
-        std::fs::create_dir_all(root.join("home").join(".agents").join("skills").join("exemplo")).unwrap();
         std::fs::create_dir_all(root.join("temp")).unwrap();
-        let p = Places { temp: root.join("temp"), codex_rules: root.join("codex").join("rules"), global_dirs: vec![root.join("home").join(".agents")] };
+        let p = Places { temp: root.join("temp"), codex_rules: root.join("codex").join("rules") };
         (tmp, p)
     }
 

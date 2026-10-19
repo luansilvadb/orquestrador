@@ -315,7 +315,7 @@ impl Core {
         session::recover_orphans(&inner.places);
         let (session, created) = Session::create(&inner.places, &inner.exes.app, &project, &cfg);
         let started = created.and_then(|_| {
-            let spawn = cli::orchestrator(&inner.exes, &choice, &session);
+            let spawn = cli::orchestrator(&inner.exes, &choice, &project, &session);
             inner.slots.remove(ORCHESTRATOR);
             self.spawn(&mut inner, ORCHESTRATOR, &spawn, Some((cols, rows)))
         });
@@ -815,7 +815,7 @@ mod tests {
     fn core_vazio(root: &Path, emit: Emit) -> Core {
         let fake = String::from("fake");
         let exes = Exes { claude: fake.clone(), codex: fake.clone(), app: fake };
-        let places = session::Places { temp: root.join("temp"), codex_rules: root.join("rules"), global_dirs: vec![] };
+        let places = session::Places { temp: root.join("temp"), codex_rules: root.join("rules") };
         Core::new(exes, places, root.join("config.json"), emit)
     }
 
@@ -1098,7 +1098,7 @@ mod tests {
         std::fs::create_dir_all(&pedido).unwrap();
         std::fs::write(pedido.join("1.txt"), "Tarefa X\n").unwrap();
         let mut inner = core.inner.lock().unwrap();
-        inner.session = Some(Session { dir: session.clone(), global_dirs: vec![] });
+        inner.session = Some(Session { dir: session.clone() });
         inner.git_exclusive = true;
         core.accept_batches(&mut inner);
         assert!(inner.nodes.is_empty(), "com o git em curso, o lote não é aceito");

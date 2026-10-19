@@ -37,6 +37,11 @@ Cenário: problema de executor
   Então resolva dentro da sua alçada, corrigindo, delegando de novo ou mudando a abordagem; ao usuário chega a entrega
 "#;
 
+/// O texto do orquestrador para o projeto em `project`.
+pub fn orchestrator(project: &str) -> String {
+    ORCHESTRATOR.replace("{{PROJECT}}", project)
+}
+
 /// O executor: o início do prompt que cada um recebe, antes da tarefa.
 pub const EXECUTOR: &str = r#"Entregue exatamente o escopo da tarefa abaixo.
 Sua alçada é a tarefa abaixo.

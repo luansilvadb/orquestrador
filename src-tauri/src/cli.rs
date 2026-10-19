@@ -2,7 +2,7 @@
 //! Nenhum agente tem comando barrado pelo app (sem sandbox, lista de ferramentas, `deny` ou hook `PreToolUse`); o
 //! que cada papel faz vem só dos textos de `roles.rs`.
 use crate::config::Choice;
-use crate::roles::EXECUTOR;
+use crate::roles::{self, EXECUTOR};
 use crate::session::Session;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -103,20 +103,21 @@ fn codex_mcp(app: &str, dir: &str) -> Vec<String> {
 }
 
 /// O orquestrador: o CLI interativo com a mesma permissão dos executores, mais o servidor MCP do próprio app
-/// (`delegar` e `aguardar`). Em qualquer CLI, inicia na pasta da sessão para não carregar automaticamente o contexto do
-/// projeto; ainda pode ler o projeto e rodar Git nele.
-pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session) -> Spawn {
+/// (`delegar` e `aguardar`). Em qualquer CLI, inicia na pasta do projeto, como os executores, e carrega o contexto
+/// dele pelo próprio CLI (instruções, skills, settings, MCPs e hooks); a pasta da sessão guarda só o funcionamento
+/// interno, e o papel vai pela linha de comando.
+pub fn orchestrator(exes: &Exes, choice: &Choice, project: &str, session: &Session) -> Spawn {
     let dir = session.dir.to_string_lossy().to_string();
     let (program, mut args, env) = if choice.tool == "codex" {
-        let mut args = codex_base(&dir);
+        let mut args = codex_base(project);
         args.extend(codex_mcp(&exes.app, &dir));
+        // O AGENTS.md lido é o do projeto; o papel entra como instrução de desenvolvedor, chave de topo do config.
+        args.extend(["-c".to_string(), format!("developer_instructions={}", toml(&roles::orchestrator(project)))]);
         (exes.codex.clone(), args, vec![])
     } else {
-        // Sem --restricted e sem --strict-mcp-config, o Claude mantém os MCPs e os hooks do usuário. Como o cwd é a
-        // pasta da sessão, não carrega automaticamente o contexto do projeto; o --mcp-config soma o servidor do
-        // orquestrador. (Medido no 2.1.300: com --restricted, nenhum MCP de usuário ou de projeto conecta, e com
-        // --setting-sources também não.) As skills globais continuam vindo como plugin de .agents (medido: as skills
-        // carregam como ".agents:nome").
+        // Sem --restricted e sem --strict-mcp-config, o Claude mantém os MCPs e os hooks do usuário e do projeto; o
+        // --mcp-config soma o servidor do orquestrador. (Medido no 2.1.300: com --restricted, nenhum MCP de usuário ou
+        // de projeto conecta, e com --setting-sources também não.)
         let mut args = strs(&["--mcp-config"]);
         args.push(session.dir.join("mcp.json").to_string_lossy().to_string());
         args.push("--settings".to_string());
@@ -124,14 +125,10 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, session: &Session) -> Spawn {
         args.extend(strs(&CLAUDE_BYPASS));
         args.push("--append-system-prompt-file".to_string());
         args.push(session.dir.join("AGENTS.md").to_string_lossy().to_string());
-        if let Some(first) = session.global_dirs.first() {
-            args.extend(["--plugin-dir".to_string(), first.to_string_lossy().to_string(), "--add-dir".to_string()]);
-            args.extend(session.global_dirs.iter().map(|d| d.to_string_lossy().to_string()));
-        }
         (exes.claude.clone(), args, claude_env())
     };
     args.extend(choice.cli_args());
-    Spawn { program, args, cwd: dir, env }
+    Spawn { program, args, cwd: project.to_string(), env }
 }
 
 /// O shell do usuário: um PowerShell interativo na pasta do projeto, sem env.
@@ -197,32 +194,34 @@ mod tests {
     fn orquestrador_codex() {
         let (s, _tmp) = session("cli-codex", "codex");
         let dir = s.dir.to_string_lossy().to_string();
-        let got = orchestrator(&exes(), &Choice::new("codex", "gpt-5.5", "high"), &s);
+        let got = orchestrator(&exes(), &Choice::new("codex", "gpt-5.5", "high"), r"C:\proj", &s);
         assert_eq!(got.program, "codex");
-        assert_eq!(got.cwd, dir);
-        let trust = format!("projects={{{}={{trust_level=\"trusted\"}}}}", serde_json::to_string(&dir).unwrap());
+        assert_eq!(got.cwd, r"C:\proj");
         let mcp_args = format!("mcp_servers.orquestrador.args=[\"--mcp\",{}]", serde_json::to_string(&dir).unwrap());
+        let role = std::fs::read_to_string(s.dir.join("AGENTS.md")).unwrap();
+        let instructions = format!("developer_instructions={}", serde_json::to_string(&role).unwrap());
         assert_eq!(
             got.args,
             [
-                "--no-daemon", "-C", &dir, "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust",
-                "-c", &trust,
+                "--no-daemon", "-C", r"C:\proj", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust",
+                "-c", r#"projects={"C:\\proj"={trust_level="trusted"}}"#,
                 "-c", r#"mcp_servers.orquestrador.command="C:\\Program Files\\Orq\\o'rq.exe""#,
                 "-c", &mcp_args,
                 "-c", r#"mcp_servers.orquestrador.default_tools_approval_mode="approve""#,
                 "-c", "mcp_servers.orquestrador.tool_timeout_sec=900",
+                "-c", &instructions,
                 "-m", "gpt-5.5", "-c", "model_reasoning_effort=high",
             ]
         );
+        assert!(role.contains(r"C:\proj") && role.contains("`delegar`"), "o papel é o mesmo texto do AGENTS.md da sessão");
     }
 
     #[test]
     fn orquestrador_claude() {
         let (s, _tmp) = session("cli-claude", "claude");
-        let got = orchestrator(&exes(), &Choice::new("claude", "opus", ""), &s);
-        let agents = s.global_dirs[0].to_string_lossy().to_string();
+        let got = orchestrator(&exes(), &Choice::new("claude", "opus", ""), r"C:\proj", &s);
         assert_eq!(got.program, "claude");
-        assert_eq!(got.cwd, s.dir.to_string_lossy().to_string());
+        assert_eq!(got.cwd, r"C:\proj");
         assert_eq!(got.env, [("CLAUDE_CODE_SANDBOXED".to_string(), "1".to_string())]);
         assert_eq!(
             got.args,
@@ -231,30 +230,36 @@ mod tests {
                 "--settings", &s.dir.join("claude-settings.json").to_string_lossy(),
                 "--permission-mode", "bypassPermissions",
                 "--append-system-prompt-file", &s.dir.join("AGENTS.md").to_string_lossy(),
-                "--plugin-dir", &agents, "--add-dir", &agents,
                 "--model", "opus",
             ]
         );
+        assert!(!got.args.iter().any(|a| a == "--plugin-dir" || a == "--add-dir"), "as skills vêm do carregamento nativo");
     }
 
-    /// Caminho do app e da sessão com espaço, acento e apóstrofo: cada um entra como um argumento só, e no
-    /// `-c` do Codex vai como texto TOML.
+    /// Caminho do app, do projeto e da sessão com espaço, acento e apóstrofo: cada um entra como um argumento só, e
+    /// no `-c` do Codex vai como texto TOML.
     #[test]
     fn caminhos_com_espaco_acento_e_apostrofo_passam_inteiros() {
         let (_tmp, mut p) = places("cli-odd");
         p.temp = p.temp.parent().unwrap().join("temp com espaço, açaí e it's");
         std::fs::create_dir_all(&p.temp).unwrap();
         let app = r"C:\Users\Maria Silva\it's\ação\orquestrador.exe";
+        let project = r"C:\Users\Maria Silva\projeto d'água";
         let cfg = Config { orchestrator: Choice::new("codex", "", ""), ..Config::default() };
-        let (s, r) = Session::create(&p, app, r"C:\proj", &cfg);
+        let (s, r) = Session::create(&p, app, project, &cfg);
         r.unwrap();
         let dir = s.dir.to_string_lossy().to_string();
         let exes = Exes { claude: "claude".into(), codex: "codex".into(), app: app.into() };
-        let got = orchestrator(&exes, &Choice::new("codex", "", ""), &s);
+        let got = orchestrator(&exes, &Choice::new("codex", "", ""), project, &s);
+        assert_eq!(got.cwd, project);
+        assert_eq!(got.args[2], project);
+        assert!(got.args.contains(&format!("projects={{{}={{trust_level=\"trusted\"}}}}", toml(project))));
         assert!(got.args.contains(&format!("mcp_servers.orquestrador.command={}", toml(app))));
         assert!(got.args.contains(&format!("mcp_servers.orquestrador.args=[{},{}]", toml("--mcp"), toml(&dir))));
+        assert!(got.args.contains(&format!("developer_instructions={}", toml(&roles::orchestrator(project)))));
         assert!(dir.contains("temp com espaço, açaí e it's"));
-        let claude = orchestrator(&exes, &Choice::new("claude", "", ""), &s);
+        let claude = orchestrator(&exes, &Choice::new("claude", "", ""), project, &s);
+        assert_eq!(claude.cwd, project);
         assert_eq!(claude.args[0], "--mcp-config");
         assert_eq!(claude.args[1], s.dir.join("mcp.json").to_string_lossy());
         assert!(claude.args[1].contains("it's"));
