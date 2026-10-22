@@ -53,7 +53,7 @@ import { revealTab, wheelToScroll } from '../shared/tab-strip';
 import {
   blockCount, type Buffer, type Choice, type ConflictDraft, decodeRecovery, dirtyKeys, encodeRecovery, hasDraftAt,
   hasMarkers, isBufferDirty, isConflictDirty, newlineOf, normalizeNewlines, parseConflict, patchHunks, type PatchHunk, type Recovery,
-  remapData, renderConflict, toDiskNewlines, conflictKey, type EditorData, type Cursor, type Scroll,
+  remapData, renderConflict, toDiskNewlines, conflictKey, type EditorData, type Cursor, type Newline, type Scroll,
 } from './workspace-store';
 import type { GitGuard } from '../git/git-guard';
 import type { Conflict, FileBase, FileContent, GitDiff, HunkRef, ReviewDiff } from '../backend/types';
@@ -150,6 +150,11 @@ function relativeToProject(project: string, picked: string): string | null {
   const full = picked.replace(/\\/g, '/');
   if (full.slice(0, root.length + 1).toLowerCase() !== `${root}/`.toLowerCase()) return null;
   return full.slice(root.length + 1);
+}
+
+function absoluteFilePath(project: string, path: string): string {
+  if (!path || /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path)) return path;
+  return project.replace(/[\\/]+$/, '') + '\\' + path.replace(/\//g, '\\');
 }
 
 // Grava `text` em `path` (relativo, dentro do projeto). Arquivo novo é criado; se já existe (o diálogo confirmou a sobrescrita), o texto
@@ -943,6 +948,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (target.kind === 'file' && mediaOf(target.path)) return <MediaView path={target.path} shown={shown} />;
     return (
       <FileBody
+        project={project}
         buffer={data.buffers[target.docId]}
         shown={shown}
         status={status[target.docId]}
@@ -951,13 +957,14 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         autoFocus={target.kind === 'draft' && freshDraft.current === target.docId}
         cursor={cursors.current[target.docId] ?? null}
         onChange={(value) => {
-          patchBuffer(target.docId, (b) => ({ ...b, draft: value }));
+          patchBuffer(target.docId, (b) => ({ ...b, draft: value, newline: value === normalizeNewlines(b.raw) ? newlineOf(b.raw) : b.newline }));
           // Editar torna a aba permanente (a prévia vira aba de verdade). Só as abas com este docId são tocadas.
           const current = wsRef.current;
           let next = current;
           for (const g of current.groups) for (const t of g.tabs) if (t.target.kind === 'file' && t.target.docId === target.docId && t.preview) next = markEdited(next, t.id);
           if (next !== current) setWs(next);
         }}
+        onFormatEol={(newline) => patchBuffer(target.docId, (b) => ({ ...b, newline }))}
         onSave={() => void (target.kind === 'draft' ? saveDraft(target.docId) : saveBuffer(target.docId))}
         onCursor={(line, col) => {
           const prev = cursors.current[target.docId];
@@ -1296,9 +1303,11 @@ function useGitBase(path: string, raw: string, shown: boolean): { base: FileBase
   return { base: path === '' ? null : base, reload: load };
 }
 
-function FileBody({ buffer, shown, status, disk, reveal, autoFocus, cursor, onChange, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
+function FileBody({ project, buffer, shown, status, disk, reveal, autoFocus, cursor, onChange, onFormatEol, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
+  project: string;
   buffer: Buffer | undefined; shown: boolean; status: Status | undefined; disk: DiskVersion | undefined;
   reveal: Reveal | null; autoFocus: boolean; cursor: StartCursor | null; onChange: (value: string) => void; onSave: () => void;
+  onFormatEol: (newline: Newline) => void;
   onCursor: (line: number, col: number) => void; onCompare: (mode: 'keep' | 'use') => void; onRetry: () => void;
   scroll: Scroll | null; onScroll: (scroll: Scroll) => void;
 }) {
@@ -1329,9 +1338,10 @@ function FileBody({ buffer, shown, status, disk, reveal, autoFocus, cursor, onCh
             text={buffer.draft}
             readOnly={buffer.readOnly}
             autoFocus={autoFocus}
-            path={buffer.path}
+            path={absoluteFilePath(project, buffer.path)}
             reveal={reveal}
             onChange={onChange}
+            onFormatEol={onFormatEol}
             onSave={onSave}
             onCursor={onCursor}
             onScroll={onScroll}

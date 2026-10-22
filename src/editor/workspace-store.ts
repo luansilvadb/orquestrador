@@ -11,7 +11,7 @@ export const MAX_DRAFT_CHARS = 2_000_000;
 export const MAX_RECOVERY_CHARS = 4_000_000;
 const MAX_BUFFERS = 50;
 
-export type Newline = '\n' | '\r\n';
+export type Newline = '\n' | '\r\n' | '\r';
 export type Cursor = { line: number; col: number };
 // Rolagem do editor (pixels, como o scrollTop/scrollLeft do DOM). Guardada junto do cursor, por arquivo.
 export type Scroll = { top: number; left: number };
@@ -24,7 +24,7 @@ export type ConflictDraft = { path: string; origin: string; draft: string; revis
 export type EditorData = { buffers: Record<string, Buffer>; conflicts: Record<string, ConflictDraft> };
 
 export const normalizeNewlines = (text: string) => text.replace(/\r\n|\r/g, '\n');
-export const newlineOf = (text: string): Newline => (text.includes('\r\n') ? '\r\n' : '\n');
+export const newlineOf = (text: string): Newline => (text.includes('\r\n') ? '\r\n' : text.includes('\r') ? '\r' : '\n');
 export const toDiskNewlines = (text: string, newline: Newline) => (newline === '\n' ? text : text.replace(/\n/g, newline));
 export const conflictKey = (path: string) => `conflict:${path.toLowerCase()}`;
 export const isBufferDirty = (buffer: Buffer) => buffer.draft !== normalizeNewlines(buffer.raw);
@@ -164,7 +164,7 @@ function parseDirty(value: unknown): RecoveryBuffer['dirty'] {
   if (!isRecord(value)) return null;
   if (typeof value.raw !== 'string' || typeof value.draft !== 'string' || typeof value.bom !== 'boolean' || typeof value.readOnly !== 'boolean') return null;
   if (value.raw.length > MAX_DRAFT_CHARS || value.draft.length > MAX_DRAFT_CHARS) return null;
-  if (value.newline !== '\n' && value.newline !== '\r\n') return null;
+  if (value.newline !== '\n' && value.newline !== '\r\n' && value.newline !== '\r') return null;
   return { raw: value.raw, bom: value.bom, newline: value.newline, draft: value.draft, readOnly: value.readOnly };
 }
 

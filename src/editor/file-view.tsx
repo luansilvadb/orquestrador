@@ -14,10 +14,12 @@ import { showMinimap, type MinimapConfig } from '@replit/codemirror-minimap';
 import { bracketColors } from './bracket-colors';
 import { gitChanges, gitField, gitHunks, minimapGutter, sameGitBase, setGitBase } from './git-gutter';
 import { gitHunkView, gitIndexWriter, gotoGitHunk } from './git-hunk';
-import { message } from '../backend/backend';
+import { backend, message } from '../backend/backend';
+import type { FormatterInfo } from '../backend/types';
 import { action, blocked, DIVIDER } from '../shared/file-tabs';
-import type { Scroll } from './workspace-store';
+import type { Newline, Scroll } from './workspace-store';
 import type { FileBase } from '../backend/types';
+import { formatPrettier } from './format';
 
 // ponytail: acima de 200 mil caracteres, carregar parser e colorir custa mais que a leitura simples.
 const COLOR_LIMIT = 200_000;
@@ -176,6 +178,21 @@ const posOf = (doc: Text, line: number, col = 1) => {
   return l.from + Math.min(Math.max(col - 1, 0), l.length);
 };
 
+function mapPosition(before: string, after: string, position: number) {
+  let prefix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix++;
+  let suffix = 0;
+  while (suffix < before.length - prefix && suffix < after.length - prefix
+    && before[before.length - suffix - 1] === after[after.length - suffix - 1]) suffix++;
+  if (position <= prefix) return position;
+  if (position >= before.length - suffix) return after.length - (before.length - position);
+  return Math.min(position, after.length - suffix);
+}
+
+function newlineOfText(text: string): Newline {
+  return text.includes('\r\n') ? '\r\n' : text.includes('\r') ? '\r' : '\n';
+}
+
 // Ir para linha:coluna, com validação (linha dentro do documento e coluna não negativa).
 export function parseGoto(value: string, lines: number, lineLength: (line: number) => number): { line: number; col: number } | string {
   const match = /^\s*(\d+)(?:\s*:\s*(\d+))?\s*$/.exec(value);
@@ -188,7 +205,7 @@ export function parseGoto(value: string, lines: number, lineLength: (line: numbe
 }
 
 // Editor do arquivo (CodeMirror com o tema do app). Exportado para o editor central (src/editor/editor-workspace.tsx) reutilizar.
-export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll, autoFocus, gitBase, onWriteIndex }: {
+export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll, autoFocus, gitBase, onWriteIndex, onFormatEol }: {
   text: string; readOnly: boolean; path: string; reveal: Reveal | null; onChange: (text: string) => void; onSave: () => void;
   onCursor: (line: number, col: number) => void; onScroll?: (scroll: Scroll) => void; cacheKey?: string; start?: StartCursor | null;
   /** Rolagem a restaurar ao montar (ex.: a vista foi movida de grupo ou o app foi reaberto). */
@@ -202,6 +219,7 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
    * viu. Rejeita com a mensagem do backend. Ausente, o bloco aberto não tem Preparar (lido só na montagem).
    */
   onWriteIndex?: (text: string, expected: string) => Promise<void>;
+  onFormatEol?: (newline: Newline) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -213,11 +231,17 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
   // Textos que este editor já mandou para cima (um por digitação, em ordem). O pai devolve o texto com atraso: uma renderização
   // com um texto antigo não pode reverter o documento, senão cada volta gera outra edição e o React estoura o limite de atualizações.
   const echoes = useRef<string[]>([]);
-  const latest = useRef({ onChange, onSave, onCursor, onScroll, onWriteIndex });
-  latest.current = { onChange, onSave, onCursor, onScroll, onWriteIndex };
+  const latest = useRef({ onChange, onSave, onCursor, onScroll, onWriteIndex, onFormatEol });
+  latest.current = { onChange, onSave, onCursor, onScroll, onWriteIndex, onFormatEol };
   const [gotoOpen, setGotoOpen] = useState(false);
   const [gotoText, setGotoText] = useState('');
   const [gotoError, setGotoError] = useState('');
+  const [formatterInfo, setFormatterInfo] = useState<FormatterInfo | null>(null);
+  const formatterRef = useRef<FormatterInfo | null>(null);
+  const formatterRequest = useRef<Promise<FormatterInfo> | null>(null);
+  const formatPath = useRef(path);
+  formatPath.current = path;
+  const formatDocumentRef = useRef<(view: EditorView) => Promise<void>>(async () => {});
   // Linha e coluna (1-based) do cursor, para o caminho de navegação da aba. Só informa; não mexe no editor.
   const reportCursor = (state: EditorState) => {
     const head = state.selection.main.head;
@@ -256,6 +280,79 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
       toast.error({ title: message(e), duration: 5000 });
     }
   };
+  const requestFormatterInfo = () => {
+    if (!path) return Promise.resolve<FormatterInfo>({ kind: 'unavailable', reason: 'Salve o arquivo para formatar.' });
+    if (readOnly) return Promise.resolve<FormatterInfo>({ kind: 'unavailable', reason: 'O arquivo é somente leitura.' });
+    if (formatterRef.current) return Promise.resolve(formatterRef.current);
+    if (formatterRequest.current) return formatterRequest.current;
+    const target = path;
+    const pending = backend.formatterInfo(target).catch((e): FormatterInfo => ({ kind: 'unavailable', reason: message(e) }));
+    formatterRequest.current = pending;
+    void pending.then((info) => {
+      if (formatPath.current === target) {
+        formatterRef.current = info;
+        setFormatterInfo(info);
+      }
+      if (formatterRequest.current === pending) formatterRequest.current = null;
+    });
+    return pending;
+  };
+  const formatDocument = async (current: EditorView) => {
+    if (!path || readOnly) {
+      toast.info({ title: !path ? 'Salve o arquivo para formatar.' : 'O arquivo é somente leitura.' });
+      return;
+    }
+    const source = current.state.doc.toString();
+    const initialSelection = current.state.selection;
+    try {
+      const info = await requestFormatterInfo();
+      if (info.kind === 'unavailable') {
+        toast.info({ title: info.reason });
+        return;
+      }
+      const result = info.kind === 'prettier'
+        ? await formatPrettier(source, path, info, initialSelection.main.head)
+        : { text: await backend.formatCli(path, source), cursorOffset: -1, endOfLine: undefined };
+      const outputNewline = info.kind === 'prettier' && result.endOfLine === 'auto' ? undefined : newlineOfText(result.text);
+      const formatted = result.text.replace(/\r\n|\r/g, '\n');
+      if (current !== view.current || current.state.doc.toString() !== source) return;
+      if (formatted === source) return;
+      const selection = current.state.selection;
+      const head = result.cursorOffset >= 0 && result.cursorOffset <= formatted.length
+        && selection.main.head === initialSelection.main.head
+        ? result.cursorOffset
+        : mapPosition(source, formatted, selection.main.head);
+      const ranges = selection.ranges.map((range, index) => {
+        const mappedHead = index === selection.mainIndex ? head : mapPosition(source, formatted, range.head);
+        const anchor = range.empty ? mappedHead : mapPosition(source, formatted, range.anchor);
+        return EditorSelection.range(anchor, mappedHead);
+      });
+      current.dispatch({
+        changes: { from: 0, to: current.state.doc.length, insert: formatted },
+        selection: EditorSelection.create(ranges, selection.mainIndex),
+      });
+      if (outputNewline) latest.current.onFormatEol?.(outputNewline);
+      current.focus();
+    } catch (e) {
+      toast.error({ title: message(e), duration: 7000 });
+    }
+  };
+  formatDocumentRef.current = formatDocument;
+  useEffect(() => {
+    formatterRef.current = null;
+    formatterRequest.current = null;
+    setFormatterInfo(null);
+    if (path && !readOnly) void requestFormatterInfo();
+  }, [path, readOnly]);
+  const formatCurrent = () => {
+    if (view.current) void formatDocumentRef.current(view.current);
+  };
+  const formatBlocked = (reason: string): ContextMenuItem => ({
+    key: 'format',
+    disabled: true,
+    label: <span title={reason}>Formatar Documento<span className="sr-only">. {reason}</span></span>,
+    extra: <span>Shift+Alt+F</span>,
+  });
   const editItems = (): ContextMenuItem[] => {
     const current = view.current;
     const hasSelection = !!current && !current.state.selection.main.empty;
@@ -278,6 +375,11 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
       edit('Mover Linha para Baixo', 'move-down', () => run(moveLineDown), 'Alt+↓'),
       edit('Duplicar Linha', 'duplicate', () => run(copyLineDown), 'Shift+Alt+↓'),
       edit('Excluir Linha', 'delete-line', () => run(deleteLine), 'Ctrl+Shift+K'),
+      !path ? formatBlocked('Salve o arquivo para formatar.')
+        : readOnly ? formatBlocked('O arquivo é somente leitura.')
+          : !formatterInfo ? formatBlocked('Verificando formatador…')
+            : formatterInfo.kind === 'unavailable' ? formatBlocked(formatterInfo.reason)
+              : action('format', 'Formatar Documento', formatCurrent, 'Shift+Alt+F'),
       DIVIDER,
       action('find', 'Localizar', () => run(openSearchPanel), 'Ctrl+F'),
       edit('Substituir', 'replace', () => run(openSearchPanel), 'Ctrl+H'),
@@ -313,6 +415,12 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
       }, {
         key: 'Mod-h',
         run: (v) => openSearchPanel(v),
+      }, {
+        key: 'Shift-Alt-f',
+        run: (v) => {
+          void formatDocumentRef.current(v);
+          return true;
+        },
       }])),
       editable.current.of(readOnlyExt(readOnly)),
       language.current.of([]),

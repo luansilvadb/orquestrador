@@ -55,6 +55,24 @@ async function emptyStripPoint(page, group = 'A') {
 
 const scenario = uiSuite('editor-ui');
 
+scenario('formatar JSON pelo menu cria uma edição só e Shift+Alt+F formata o editor', async ({ page }) => {
+  const source = '{"z":1,"a":[1,2]}';
+  await page.evaluate((text) => window.__mock.addFile('format.json', text), source);
+  await treeItem(page, 'format.json').dblclick();
+  await focusEditor(page);
+  const before = await editorText(page);
+  await page.locator('.cm-content:visible').first().click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /Formatar Documento/ }).click();
+  await page.waitForFunction((old) => document.querySelector('.cm-content')?.textContent !== old, before);
+  const formatted = await page.locator('.cm-content:visible').first().evaluate((el) => el.innerText);
+  assert.ok(formatted.includes('"z": 1') && formatted.includes('"a": ['), 'JSON formatado pelo menu: ' + formatted);
+
+  await page.keyboard.press('Control+z');
+  await page.waitForFunction((old) => document.querySelector('.cm-content')?.textContent === old, before);
+  await page.keyboard.press('Shift+Alt+f');
+  await page.waitForFunction((old) => document.querySelector('.cm-content')?.textContent !== old, before);
+});
+
 scenario('faixa de abas em 1040px: aba ativa visível com 1 e 2 grupos, nomes repetidos e longos, X e contador sem sobreposição', async ({ page }) => {
   await page.evaluate(() => {
     window.__mock.addFile('src/lib/index.ts', 'export {};\n');

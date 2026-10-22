@@ -26,7 +26,7 @@ import type { Transport } from './backend';
 import { fileNameError } from '../shared/file-tab-actions';
 import { splitPath } from '../shared/paths';
 import {
-  type Batch, type Choice, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
+  type Batch, type Choice, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events, type FormatterInfo,
   type FileBase, type GitCommitHoverDetail, type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
   type SearchResults, type SkipReason,
@@ -915,6 +915,19 @@ const mockBytes = (path: string): ArrayBuffer => {
   if (ext === 'wav') return wavSilence(2);
   throw `Tipo de arquivo não aberto como mídia: ${path}`;
 };
+function formatInfo(path: string): FormatterInfo {
+  const rel = relOf(path);
+  requireFile(rel);
+  const ext = rel.split('.').pop()?.toLowerCase();
+  if (['js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts', 'cts', 'css', 'scss', 'less', 'html', 'htm', 'vue',
+    'json', 'jsonc', 'json5', 'md', 'markdown', 'yaml', 'yml'].includes(ext ?? '')) {
+    return { kind: 'prettier', config: null, configKind: 'json', options: {} };
+  }
+  if (ext === 'py') return { kind: 'cli', formatter: 'ruff' };
+  if (ext === 'rs') return { kind: 'cli', formatter: 'rustfmt' };
+  if (ext === 'go') return { kind: 'cli', formatter: 'gofmt' };
+  return { kind: 'unavailable', reason: 'Nenhum formatador para .' + (ext ?? '') };
+}
 // WAV PCM 8 bits mono a 8 kHz, em silêncio (128 é o zero do formato): cabeçalho de 44 bytes.
 function wavSilence(seconds: number): ArrayBuffer {
   const rate = 8000, n = seconds * rate;
@@ -931,6 +944,12 @@ function wavSilence(seconds: number): ArrayBuffer {
 // Um handler por comando de `Commands`: falta um, sobra um ou tipo errado de argumento ou resultado é erro do `tsc`.
 const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]['result'] } = {
   read_media: ({ path }: { path: string }) => mockBytes(path),
+  formatter_info: ({ path }: { path: string }) => formatInfo(path),
+  format_cli: ({ path, text }: { path: string; text: string }) => {
+    const info = formatInfo(path);
+    if (info.kind !== 'cli') throw info.kind === 'unavailable' ? info.reason : 'O simulado não executa formatadores de linha de comando.';
+    return text.trimEnd() + '\n';
+  },
   update_status: () => ({ phase: 'ready' }),
   retry_update: () => ({ phase: 'ready' }),
   choose_project: () => ({ project: 'C:\\projetos\\exemplo', subfolder: debug.subfolder }),

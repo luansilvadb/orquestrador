@@ -84,6 +84,10 @@ export type Conflict = { ours: string | null; theirs: string | null; worktree: s
 // Texto-base do Git de um arquivo, para os marcadores de mudança do editor. `head` é o texto no HEAD (`null` se não está lá) e `index` o do
 // índice, estágio 0 (`null` se não está lá, ex. em conflito). Vêm com o fim de linha do checkout e sem BOM, comparáveis com o `text` de `read_file`.
 export type FileBase = { head: string | null; index: string | null };
+export type FormatterInfo =
+  | { kind: 'prettier'; config: string | null; configKind: 'json' | 'yaml' | 'auto'; options: Record<string, unknown> }
+  | { kind: 'cli'; formatter: 'ruff' | 'black' | 'rustfmt' | 'gofmt' }
+  | { kind: 'unavailable'; reason: string };
 
 // Pesquisa de texto (contrato do backend, JSON em camelCase). `path` é relativo à raiz, com "/"; uma entrada por linha que casa.
 // `col` é a coluna da primeira ocorrência, em unidades UTF-16 (como o CodeMirror) e a partir de 1; emoji ocupa 2. `skipped` lista os arquivos que ficaram de fora e por quê
@@ -144,6 +148,8 @@ export type Commands = {
   list_dir: { args: { path: string }; result: DirEntry[] };
   read_file: { args: { path: string }; result: FileContent };
   read_media: { args: { path: string }; result: ArrayBuffer };
+  formatter_info: { args: { path: string }; result: FormatterInfo };
+  format_cli: { args: { path: string; text: string }; result: string };
   write_file_checked: { args: { path: string; text: string; base: string; bom: boolean }; result: void };
   rename_file: { args: { path: string; name: string }; result: string };
   delete_files: { args: { paths: string[] }; result: Batch<string> };

@@ -34,8 +34,10 @@
     "codemirror": "^6.0.2",
     "lucide-react": "^1.55.0",
     "motion": "^12.43.0",
+    "prettier": "3.9.10",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

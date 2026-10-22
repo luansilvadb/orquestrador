@@ -20,7 +20,7 @@ Uma linha por pasta; os arquivos não óbvios de cada uma vêm logo abaixo da ta
 | `src/shared/` | O que é usado por três ou mais áreas sem dono óbvio: caminhos, atualização periódica, faixa de abas, abas de arquivo e ícones de arquivo. |
 
 Arquivos não óbvios:
-
+- src/editor/format.ts: carrega Prettier e os plugins oficiais sob demanda; combina as opções devolvidas pelo backend e formata com posição do cursor.
 - `src/backend/backend.ts`: o único ponto de contato com o Tauri, pela interface `Transport`. Fora do app (no navegador, em desenvolvimento), entra o simulado.
 - `src/backend/mock.ts` e `mock-fixtures.ts`: o backend simulado, só em `npm run dev` fora do Tauri. Ele simula os modos sem Git pela URL (`?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1`, ver [desenvolvimento](desenvolvimento.md)).
 - `src/backend/types.ts`: os tipos do contrato com o Rust e o mapa `Commands`, com cada comando do Tauri, seus argumentos e o resultado. `backend.ts` e `mock.ts` são tipados por ele, e `scripts/check-commands.mjs` confere as chaves com `generate_handler!` em `lib.rs`.
@@ -76,6 +76,8 @@ Plano: cada módulo é uma unidade.
 | `src-tauri/src/session.rs` | A sessão do orquestrador: a pasta do funcionamento interno (o orquestrador trabalha na pasta do projeto), `AGENTS.md` com o papel, `mcp.json` e `claude-settings.json` do Claude, e a limpeza das sobras, inclusive das regras do Codex que versões antigas deixavam em `CODEX_HOME` (até 2027-02-01). |
 | `src-tauri/src/roles.rs` | Os textos enviados ao orquestrador (no Claude, pelo `AGENTS.md` da sessão com `--append-system-prompt-file`; no Codex, por `developer_instructions`) e a cada executor, antes da tarefa: a única fonte da regra de cada papel, sem trava no app. O texto do orquestrador é o mesmo para Claude Code e Codex; o protocolo das ferramentas (marcadores e próxima chamada) fica nas saídas delas, em `mcp.rs`, `delegate.rs` e `core.rs`. |
 | `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a rodada pelo plugin oficial do Tauri e os testes do portão. |
+
+O módulo src-tauri/src/format.rs escolhe o motor pela extensão, procura as configurações pelo caminho absoluto e executa os formatadores externos com timeout. Os comandos formatter_info e format_cli são registrados em lib.rs e tipados em src/backend/types.ts.
 
 ## Scripts
 

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import {
   blockCount, conflictKey, decodeRecovery, dirtyKeys, encodeRecovery, hasDraftAt, hasMarkers, isBufferDirty, MAX_DRAFT_CHARS,
-  MAX_RECOVERY_CHARS, parseConflict, patchHunks, remapData, renderConflict, toDiskNewlines,
+  MAX_RECOVERY_CHARS, newlineOf, parseConflict, patchHunks, remapData, renderConflict, toDiskNewlines,
 } from '../src/editor/workspace-store.ts';
 
 const buffer = (over = {}) => ({
@@ -19,6 +19,11 @@ check('Buffer limpo não é sujo; editar o rascunho torna sujo', () => {
 });
 check('CRLF no disco e LF no editor não contam como alteração', () => {
   assert.equal(isBufferDirty(buffer({ raw: 'a\r\nb', draft: 'a\nb', newline: '\r\n' })), false);
+});
+check('CR isolado volta ao disco como CR', () => {
+  assert.equal(newlineOf('a\rb'), '\r');
+  assert.equal(newlineOf('a\r\nb'), '\r\n');
+  assert.equal(toDiskNewlines('a\nb', '\r'), 'a\rb');
 });
 check('Salvamento atrasado: texto digitado durante o save continua sujo', () => {
   // O save manda o rascunho de antes (`sent`); quem digitou depois tem um draft novo, que ainda difere do que foi gravado.

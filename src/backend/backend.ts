@@ -79,6 +79,8 @@ export const backend = {
   readFile: (path: string) => call('read_file', { path }),
   // Bytes de uma imagem ou áudio (extensão na lista de `files.rs`), como `ArrayBuffer`. Erro chega como mensagem em português; limite de 32 MiB.
   readMedia: (path: string) => call('read_media', { path }),
+  formatterInfo: (path: string) => call('formatter_info', { path }),
+  formatCli: (path: string, text: string) => call('format_cli', { path, text }),
   // Grava só se o arquivo ainda é `base` (o texto lido, sem BOM) e ainda tem o BOM `bom`; senão rejeita sem gravar.
   writeFileChecked: (path: string, text: string, base: string, bom: boolean) => call('write_file_checked', { path, text, base, bom }),
   // Ações de um arquivo da árvore, com o caminho relativo ao projeto. Erro vem como mensagem em português.

@@ -6,6 +6,7 @@ pub mod config;
 pub mod core;
 pub mod delegate;
 pub mod files;
+pub mod format;
 pub mod git;
 pub mod hook;
 pub mod mcp;
@@ -74,6 +75,18 @@ fn read_file(core: State<Core>, path: String) -> Result<files::Content, String> 
 #[tauri::command(async)]
 fn read_media(core: State<Core>, path: String) -> Result<tauri::ipc::Response, String> {
     files::read_media(&core.repo()?, &path).map(tauri::ipc::Response::new)
+}
+
+/// Diz qual formatador serve ao caminho absoluto e devolve as opções locais do Prettier.
+#[tauri::command(async)]
+fn formatter_info(path: String) -> Result<format::Info, String> {
+    format::info(std::path::Path::new(&path))
+}
+
+/// Formata o texto recebido pela entrada padrão do CLI, no diretório do arquivo.
+#[tauri::command(async)]
+fn format_cli(path: String, text: String) -> Result<String, String> {
+    format::format_cli(std::path::Path::new(&path), &text)
 }
 
 /// Grava `text` só se o arquivo ainda é `base` (o texto lido, sem BOM) e ainda tem o BOM `bom`. Recusa sem gravar
@@ -439,6 +452,8 @@ pub fn run(context: tauri::Context) {
             list_dir,
             read_file,
             read_media,
+            formatter_info,
+            format_cli,
             write_file_checked,
             rename_file,
             delete_files,
