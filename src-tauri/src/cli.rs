@@ -43,9 +43,11 @@ pub(crate) fn toml(s: &str) -> String {
 /// O Codex nos dois papéis: sem sandbox e sem aprovações, com a pasta confiada. `--no-daemon`: o agente roda neste
 /// processo, então matar o processo mata o agente. A confiança, medida no Codex 0.162: sem ela o CLI interativo
 /// abre "Trust this folder?" e fica parado; a forma `projects.'caminho'.trust_level=...` não é aceita por `-c`, a
-/// tabela inteira é, vale só para este processo e nada é gravado no config.toml do usuário.
+/// tabela inteira é, vale só para este processo e nada é gravado no config.toml do usuário. Medido no Codex 0.163:
+/// sem `--no-alt-screen`, o Codex ativa a tela alternativa e a captura do mouse, impedindo a roda de rolar o histórico.
 fn codex_base(dir: &str) -> Vec<String> {
-    let mut args = strs(&["--no-daemon", "-C", dir, "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"]);
+    let mut args = strs(&["--no-daemon", "--no-alt-screen", "-C", dir,
+        "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust"]);
     args.extend(["-c".to_string(), format!("projects={{{}={{trust_level=\"trusted\"}}}}", toml(dir))]);
     args
 }
@@ -203,7 +205,8 @@ mod tests {
         assert_eq!(
             got.args,
             [
-                "--no-daemon", "-C", r"C:\proj", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust",
+                "--no-daemon", "--no-alt-screen", "-C", r"C:\proj",
+                "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust",
                 "-c", r#"projects={"C:\\proj"={trust_level="trusted"}}"#,
                 "-c", r#"mcp_servers.orquestrador.command="C:\\Program Files\\Orq\\o'rq.exe""#,
                 "-c", &mcp_args,
@@ -252,7 +255,7 @@ mod tests {
         let exes = Exes { claude: "claude".into(), codex: "codex".into(), app: app.into() };
         let got = orchestrator(&exes, &Choice::new("codex", "", ""), project, &s);
         assert_eq!(got.cwd, project);
-        assert_eq!(got.args[2], project);
+        assert_eq!(got.args[3], project);
         assert!(got.args.contains(&format!("projects={{{}={{trust_level=\"trusted\"}}}}", toml(project))));
         assert!(got.args.contains(&format!("mcp_servers.orquestrador.command={}", toml(app))));
         assert!(got.args.contains(&format!("mcp_servers.orquestrador.args=[{},{}]", toml("--mcp"), toml(&dir))));
@@ -298,7 +301,8 @@ mod tests {
         assert_eq!(
             got.args,
             [
-                "--no-daemon", "-C", r"C:\proj", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust",
+                "--no-daemon", "--no-alt-screen", "-C", r"C:\proj",
+                "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust",
                 "-c", r#"projects={"C:\\proj"={trust_level="trusted"}}"#,
                 "-c", r#"notify=["C:\\Program Files\\Orq\\o'rq.exe","--hook","C:\\tmp\\s\\exec\\exec-2\\hook"]"#,
                 "-c", "model_reasoning_effort=xhigh",
