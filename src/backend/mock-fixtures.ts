@@ -1,3 +1,10 @@
+export const COMMIT_HOVER_FIXTURE = {
+  message: 'Prepara v0.1.7 com notas completas e publicação validada\n\nConsolida as notas e valida o instalador.\n\nCo-Authored-By: Ana Exemplo <ana@example.com>',
+  filesChanged: 2,
+  insertions: 14,
+  deletions: 3,
+};
+
 // Primeiras 200 linhas de `src/editor-workspace.tsx` no HEAD (`git show HEAD:src/editor-workspace.tsx`). Só o simulado (`mock.ts`,
 // modo de desenvolvimento) usa: é o arquivo longo do comparador, com linhas de contexto antes, entre e depois das mudanças.
 export const EDITOR_HEAD_LINES: string[] = [

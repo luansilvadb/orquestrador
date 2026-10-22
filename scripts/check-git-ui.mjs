@@ -836,6 +836,40 @@ scenario('gráfico: os 4 commits do simulado na ordem, com as etiquetas (main at
   assert.ok((await graphCommit(page, H9F).innerText()).includes('Prepara v0.1.7 com notas completas e publicação validada'), 'assunto na linha');
 });
 
+scenario('gráfico: hover busca detalhes uma vez, mantém o popover interativo e abre o commit no GitHub', async ({ page }) => {
+  await openGit(page);
+  await graphRows(page).first().waitFor();
+  const trigger = graphCommit(page, H9F).locator('button').first();
+  assert.equal((await calls(page, 'git_commit_hover')).length, 0, 'detalhes não são pedidos ao carregar o gráfico');
+  await trigger.hover();
+  await waitCount(page, 'git_commit_hover', 1);
+
+  const hover = page.locator(`[data-commit-hover="${H9F}"]`);
+  await hover.waitFor();
+  const text = await hover.innerText();
+  assert.match(text, /Luan/);
+  assert.match(text, /há /);
+  assert.match(text, /10 de outubro de 2026/);
+  assert.match(text, /Ana Exemplo \(coautor\)/);
+  assert.match(text, /Consolida as notas e valida o instalador\./);
+  assert.match(text, /2 arquivos alterados, 14 inserções\(\+\), 3 remoções\(-\)/);
+  assert.equal(await hover.locator('span[title="main (branch atual)"]').count(), 1, 'a branch aparece como etiqueta');
+  assert.equal(await hover.locator('span[title="v0.1.7 (tag)"]').count(), 1, 'a tag aparece como etiqueta');
+  assert.equal(await hover.getByRole('button', { name: 'Copiar hash', exact: true }).count(), 1, 'há botão para copiar o hash curto');
+
+  const github = hover.getByRole('button', { name: 'Abrir no GitHub', exact: true });
+  await github.hover();
+  await github.click();
+  await waitCount(page, 'open_url', 1);
+  assert.deepEqual((await calls(page, 'open_url')).at(-1).args, { url: `https://github.com/luansilvadb/orquestrador/commit/${H9F}` });
+
+  await page.mouse.move(0, 0);
+  await hover.waitFor({ state: 'hidden' });
+  await trigger.hover();
+  await page.waitForTimeout(700);
+  assert.equal((await calls(page, 'git_commit_hover')).length, 1, 'reabrir o mesmo hover usa o cache por hash');
+});
+
 scenario('gráfico: o commit de merge desenha duas faixas (SVG mais largo que o de um commit linear)', async ({ page }) => {
   await openGit(page);
   await graphRows(page).first().waitFor();

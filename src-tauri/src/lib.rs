@@ -206,6 +206,12 @@ fn git_commit_detail(core: State<Core>, id: String) -> Result<git::CommitDetail,
     git::commit_detail(&core.repo()?, &id)
 }
 
+/// Detalhes do hover de um commit; só a chamada da interface ao abrir o hover executa esta leitura.
+#[tauri::command(async)]
+fn git_commit_hover(core: State<Core>, hash: String) -> Result<git::CommitHoverDetail, String> {
+    git::commit_hover(&core.repo()?, &hash)
+}
+
 /// O diff de um commit, ou só de um caminho dele.
 #[tauri::command(async)]
 fn git_commit_diff(core: State<Core>, id: String, path: Option<String>) -> Result<git::Diff, String> {
@@ -305,6 +311,15 @@ fn reveal_file(core: State<Core>, path: String) -> Result<(), String> {
 #[tauri::command(async)]
 fn open_with(core: State<Core>, path: String) -> Result<(), String> {
     files::open_with(&core.repo()?, &path)
+}
+
+/// Abre no navegador somente URLs HTTPS do GitHub.
+#[tauri::command(async)]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://github.com/") {
+        return Err("Só é permitido abrir links do GitHub.".into());
+    }
+    platform::open_url(&url).map_err(|e| e.to_string())
 }
 
 /// Cria o arquivo `name` dentro da pasta `dir` do projeto (vazio é a raiz). Devolve o caminho relativo. Nunca sobrescreve.
@@ -432,6 +447,7 @@ pub fn run(context: tauri::Context) {
             reveal_file,
             reveal_dir,
             open_with,
+            open_url,
             create_file,
             create_dir,
             clipboard_snapshot,
@@ -461,6 +477,7 @@ pub fn run(context: tauri::Context) {
             git_history,
             git_graph,
             git_commit_detail,
+            git_commit_hover,
             git_commit_diff,
             git_conflict,
             git_write_resolution,

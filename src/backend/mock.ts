@@ -20,14 +20,14 @@
 // e `repo-above` (pasta dentro de outro repositório, raiz `C:\projetos`). Fora de `repo`, `git_status` devolve só o `kind` (e a raiz, em `repo-above`).
 // `?subfolder=1` faz `choose_project` devolver `subfolder: true`. Em execução, `__mock.gitMode = 'no-repo'` e `__mock.subfolder = true` trocam isso
 // (por exemplo, um `git init` feito pelo terminal, que o painel vê na consulta seguinte).
-import { EDITOR_HEAD_LINES, MARCADORES_HEAD, MARCADORES_INDEX, MARCADORES_WORKTREE } from './mock-fixtures';
+import { COMMIT_HOVER_FIXTURE, EDITOR_HEAD_LINES, MARCADORES_HEAD, MARCADORES_INDEX, MARCADORES_WORKTREE } from './mock-fixtures';
 import { parseDiffFromFile } from '@pierre/diffs';
 import type { Transport } from './backend';
 import { fileNameError } from '../shared/file-tab-actions';
 import { splitPath } from '../shared/paths';
 import {
   type Batch, type Choice, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events,
-  type FileBase, type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
+  type FileBase, type GitCommitHoverDetail, type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
   type SearchResults, type SkipReason,
 } from './types';
@@ -966,6 +966,10 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   },
   reveal_file: ({ path }: { path: string }) => void requireFile(path),
   open_with: ({ path }: { path: string }) => void requireFile(path),
+  open_url: ({ url }: { url: string }) => {
+    if (!url.startsWith('https://github.com/')) throw 'Só é permitido abrir links do GitHub.';
+    return null;
+  },
   // Área vazia da raiz: cria de verdade na árvore (e a lista relê). Pasta que não existe é recusada antes.
   create_file: ({ dir, name }: { dir: string; name: string }) => create(dir, name, false),
   create_dir: ({ dir, name }: { dir: string; name: string }) => create(dir, name, true),
@@ -1056,6 +1060,19 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
     const c = commitById(id);
     return { commit: plain(c), files: c.files };
   },
+  git_commit_hover: ({ hash }: { hash: string }): GitCommitHoverDetail => {
+    const c = commitById(hash);
+    const fixture = c.short === '9f3a1c2' ? COMMIT_HOVER_FIXTURE : null;
+    return {
+      author: c.author,
+      date: c.date,
+      message: fixture?.message ?? c.subject,
+      filesChanged: fixture?.filesChanged ?? c.files.length,
+      insertions: fixture?.insertions ?? c.files.length * 3,
+      deletions: fixture?.deletions ?? c.files.filter((f) => f.kind !== 'added').length,
+      githubUrl: `https://github.com/luansilvadb/orquestrador/commit/${c.hash}`,
+    };
+  },
   git_commit_diff: ({ id, path }: { id: string; path: string | null }): GitDiff => commitDiff(id, path),
   git_conflict: ({ path }: { path: string }): Conflict => conflictState(path),
   git_write_resolution: ({ path, content, revision, markResolved }: { path: string; content: string; revision: string; markResolved: boolean }) => {
@@ -1079,7 +1096,7 @@ export const mock: Transport = {
   // O retrato é tirado aos 100 ms e entregue aos 200 ms: chegam eventos já contidos nele (a descartar)
   // e eventos posteriores a ele (a guardar) enquanto a resposta está a caminho.
   invoke: (cmd, args) => new Promise((resolve, reject) => setTimeout(() => {
-    const log = cmd.startsWith('git_') ? { cmd, args: structuredClone(args), result: null as unknown, error: null as string | null } : null;
+    const log = cmd.startsWith('git_') || cmd === 'open_url' ? { cmd, args: structuredClone(args), result: null as unknown, error: null as string | null } : null;
     if (log) debug.calls.push(log);
     try {
       const result = (commands as Record<string, (a: unknown) => unknown>)[cmd](args);

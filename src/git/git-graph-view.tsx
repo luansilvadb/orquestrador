@@ -1,16 +1,16 @@
 // Seção "Grafo" do controle de versão: os commits do HEAD e do upstream da branch atual, no estilo do Source Control do VS Code.
 // Cada linha tem as faixas desenhadas à esquerda (layoutGraph), o assunto, as etiquetas das refs e o autor. Clique num commit abre
 // os arquivos dele ali mesmo, e clique num arquivo abre a alteração daquele commit. Só consulta com a tela Git visível e a seção aberta.
-import { useEffect, useMemo, useRef } from 'react';
-import { ActionIcon, Button, ContextMenuTrigger, Text } from '@lobehub/ui/base-ui';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActionIcon, Button, ContextMenuTrigger, Popover, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, Cloud, CloudDownload, GitBranch, RefreshCw, Tag, Target } from 'lucide-react';
-import { backend } from '../backend/backend';
+import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, Cloud, CloudDownload, Copy, ExternalLink, GitBranch, RefreshCw, Tag, Target } from 'lucide-react';
+import { backend, message } from '../backend/backend';
 import { CommitFileList, note, type OpenCommitTarget, PAGE, useCommitDetail, usePagedList, when } from './git-history';
 import { copy } from '../shared/paths';
 import { type GraphLine, type GraphRow, layoutGraph } from './git-graph';
 import type { TabTarget } from '../editor/workspace-model';
-import type { GitRef } from '../backend/types';
+import type { GitCommitHoverDetail, GitRef, GraphCommit } from '../backend/types';
 
 // Medidas em px, as do grafo do Antigravity/VS Code: faixas de 11 px (a primeira começa em 11, então uma faixa ocupa 22), linha de
 // commit de 22 px e linha de arquivo (a mesma do painel).
@@ -120,6 +120,84 @@ function RefBadge({ item }: { item: GitRef }) {
   );
 }
 
+type CommitHoverState = { kind: 'loading' } | { kind: 'ready'; detail: GitCommitHoverDetail } | { kind: 'error'; text: string };
+
+const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ['year', 31_536_000], ['month', 2_592_000], ['week', 604_800], ['day', 86_400], ['hour', 3_600], ['minute', 60], ['second', 1],
+];
+function relativeDate(iso: string) {
+  const timestamp = Date.parse(iso);
+  if (!Number.isFinite(timestamp)) return iso;
+  const seconds = (timestamp - Date.now()) / 1_000;
+  const [unit, amount] = RELATIVE_UNITS.find(([, size]) => Math.abs(seconds) >= size) ?? ['second', 1];
+  return new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' }).format(Math.round(seconds / amount), unit);
+}
+
+function coAuthors(messageText: string) {
+  const lines = messageText.replace(/\r\n/g, '\n').split('\n');
+  let end = lines.length;
+  while (end > 0 && !lines[end - 1].trim()) end--;
+  let start = end;
+  while (start > 0 && /^[A-Za-z0-9-]+:\s*\S/.test(lines[start - 1])) start--;
+  if (start === end || start === 0 || lines[start - 1].trim()) return [];
+  return lines.slice(start, end).flatMap((line) => {
+    const trailer = line.match(/^Co-Authored-By:\s*(.*)$/i);
+    if (!trailer) return [];
+    const name = trailer[1].trim().replace(/\s*<[^<>]*>\s*$/, '').trim();
+    return name ? [name] : [];
+  });
+}
+
+function CommitHoverCard({ commit, state }: { commit: GraphCommit; state?: CommitHoverState }) {
+  const detail = state?.kind === 'ready' ? state.detail : null;
+  const coauthors = detail ? coAuthors(detail.message) : [];
+  const refs = commit.refs.filter((ref) => ref.kind !== 'head');
+  return (
+    <div
+      data-commit-hover={commit.hash}
+      role="group"
+      aria-label={`Detalhes do commit ${commit.short}`}
+      className="space-y-2 p-3"
+      style={{ width: 384, maxWidth: 'calc(100vw - 2rem)', maxHeight: 'min(70vh, 32rem)', overflowY: 'auto' }}
+    >
+      <Flexbox horizontal align="baseline" gap={2}>
+        <Text as="span" fontSize={13} weight={600}>{commit.author}</Text>
+        <Text as="span" type="secondary" fontSize={12}>
+          {relativeDate(commit.date)} · {when(commit.date, { dateStyle: 'long', timeStyle: 'short' })}
+        </Text>
+      </Flexbox>
+      {state?.kind === 'loading' && <Text as="p" type="secondary" fontSize={12}>Lendo detalhes…</Text>}
+      {state?.kind === 'error' && <Text as="p" type="danger" fontSize={12}>{state.text}</Text>}
+      {detail && (
+        <>
+          {coauthors.map((name, index) => <Text key={`${name}:${index}`} as="p" fontSize={12}>{name} (coautor)</Text>)}
+          <Text as="p" fontSize={13} className="whitespace-pre-wrap break-words">{detail.message}</Text>
+          <Text as="p" fontSize={12}>
+            {detail.filesChanged} {detail.filesChanged === 1 ? 'arquivo alterado' : 'arquivos alterados'},{' '}
+            <span style={{ color: 'var(--ant-color-success)' }}>{detail.insertions} {detail.insertions === 1 ? 'inserção(+)' : 'inserções(+)'}</span>,{' '}
+            <span style={{ color: 'var(--ant-color-error)' }}>{detail.deletions} {detail.deletions === 1 ? 'remoção(-)' : 'remoções(-)'}</span>
+          </Text>
+          {refs.length > 0 && <div className="flex flex-wrap gap-1">{refs.map((ref) => <RefBadge key={`${ref.kind}:${ref.name}`} item={ref} />)}</div>}
+          <Flexbox horizontal align="center" gap={2}>
+            <Text as="code" fontSize={12}>{commit.short}</Text>
+            <Button size="small" onClick={() => void copy(commit.hash, 'Hash copiado')}>
+              <Copy className="size-3.5" aria-hidden /> Copiar hash
+            </Button>
+            {detail.githubUrl && (
+              <Button
+                size="small"
+                onClick={() => void backend.openUrl(detail.githubUrl!).catch((e: unknown) => toast.error({ title: message(e), duration: 5_000 }))}
+              >
+                <ExternalLink className="size-3.5" aria-hidden /> Abrir no GitHub
+              </Button>
+            )}
+          </Flexbox>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Nota no lugar dos arquivos de um commit aberto (lendo, vazio ou erro), com as faixas que seguem. */
 function DetailNote({ row, text, danger = false }: { row: GraphRow; text: string; danger?: boolean }) {
   return (
@@ -142,10 +220,25 @@ export function GraphSection({
   // Lista paginada (a anterior fica na tela até a nova chegar) e detalhe do commit aberto: os mesmos hooks do histórico.
   const { items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList(graphPage, false);
   const { openHash, detail, detailError, open: openCommit, close: closeCommit } = useCommitDetail();
+  const [hoverDetails, setHoverDetails] = useState<Record<string, CommitHoverState>>({});
+  const requestedHover = useRef(new Set<string>());
   // Chave da última carga: enquanto ela não muda, voltar à seção ou à tela não recarrega.
   const loaded = useRef<string | null>(null);
   // Faixas calculadas sobre todas as linhas carregadas, de cima para baixo (a página nova continua as faixas da anterior).
   const rows = useMemo(() => layoutGraph(commits ?? []), [commits]);
+
+  function loadHover(hash: string) {
+    if (requestedHover.current.has(hash)) return;
+    requestedHover.current.add(hash);
+    setHoverDetails((current) => ({ ...current, [hash]: { kind: 'loading' } }));
+    backend.gitCommitHover(hash).then(
+      (loaded) => setHoverDetails((current) => ({ ...current, [hash]: { kind: 'ready', detail: loaded } })),
+      (e: unknown) => {
+        requestedHover.current.delete(hash);
+        setHoverDetails((current) => ({ ...current, [hash]: { kind: 'error', text: message(e) } }));
+      },
+    );
+  }
 
   // Só carrega com a tela visível e a seção aberta, e só quando a chave mudou desde a última carga.
   useEffect(() => {
@@ -197,7 +290,6 @@ export function GraphSection({
             const row = rows[i];
             const isHead = c.hash === head;
             const isOpen = openHash === c.hash;
-            const names = c.refs.map((r) => (r.current ? `${r.name} (atual)` : r.name)).join(', ');
             const menu = [
               { key: 'hash', label: 'Copiar hash', onClick: () => void copy(c.hash, 'Hash copiado') },
               { key: 'subject', label: 'Copiar assunto', onClick: () => void copy(c.subject, 'Assunto copiado') },
@@ -207,17 +299,24 @@ export function GraphSection({
                 <ContextMenuTrigger items={menu}>
                   <div>
                     {/* Escolher o mesmo commit de novo fecha. Trocar de commit descarta a lista anterior e pede a nova. */}
-                    <button
-                      type="button" onClick={() => (openHash === c.hash ? closeCommit() : openCommit(c.hash))} aria-expanded={isOpen}
-                      title={`${c.short} — ${c.subject || '(sem mensagem)'}. ${c.author}, ${when(c.date, { dateStyle: 'short', timeStyle: 'short' })}.${names ? ` Etiquetas: ${names}.` : ''}`}
-                      className={`@container flex h-[22px] w-full min-w-0 items-center gap-1 pr-3 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset${isOpen ? ' bg-muted' : ''}`}
+                    <Popover
+                      trigger="hover" placement="right" openDelay={500} closeDelay={250}
+                      triggerProps={{ 'aria-expanded': isOpen }}
+                      onOpenChange={(shown) => { if (shown) loadHover(c.hash); }}
+                      content={<CommitHoverCard commit={c} state={hoverDetails[c.hash]} />}
                     >
-                      <CommitLanes row={row} head={isHead} />
-                      {/* O assunto tem prioridade: base zero (só cresce) e piso de 6rem. Etiquetas e autor encolhem antes dele. */}
-                      <Text as="span" ellipsis fontSize={13} weight={isHead ? 600 : 400} className="min-w-[6rem] flex-1">{c.subject || '(sem mensagem)'}</Text>
-                      {c.refs.map((r) => <RefBadge key={`${r.kind}:${r.name}`} item={r} />)}
-                      <span className="hidden min-w-0 max-w-[30%] shrink truncate text-[0.9em] opacity-70 @[24rem]:inline">{c.author}</span>
-                    </button>
+                      <button
+                        type="button" onClick={() => (openHash === c.hash ? closeCommit() : openCommit(c.hash))} aria-expanded={isOpen}
+                        aria-label={`${c.short}: ${c.subject || '(sem mensagem)'}`}
+                        className={`@container flex h-[22px] w-full min-w-0 items-center gap-1 pr-3 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset${isOpen ? ' bg-muted' : ''}`}
+                      >
+                        <CommitLanes row={row} head={isHead} />
+                        {/* O assunto tem prioridade: base zero (só cresce) e piso de 6rem. Etiquetas e autor encolhem antes dele. */}
+                        <Text as="span" ellipsis fontSize={13} weight={isHead ? 600 : 400} className="min-w-[6rem] flex-1">{c.subject || '(sem mensagem)'}</Text>
+                        {c.refs.map((r) => <RefBadge key={`${r.kind}:${r.name}`} item={r} />)}
+                        <span className="hidden min-w-0 max-w-[30%] shrink truncate text-[0.9em] opacity-70 @[24rem]:inline">{c.author}</span>
+                      </button>
+                    </Popover>
                   </div>
                 </ContextMenuTrigger>
                 {isOpen && (detail && detail.commit.hash === c.hash

@@ -65,6 +65,15 @@ export type ReviewDiff = { diff: GitDiff; display: GitDiff; revision: string; un
 export type Commit = { hash: string; short: string; author: string; date: string; subject: string };
 export type CommitFile = { path: string; origPath: string | null; kind: GitKind };
 export type CommitDetail = { commit: Commit; files: CommitFile[] };
+export type GitCommitHoverDetail = {
+  author: string;
+  date: string;
+  message: string;
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+  githubUrl: string | null;
+};
 // Gráfico: HEAD e o upstream da branch atual. `parents` são hashes completos (vazio na raiz); `refs` são as que apontam para o commit.
 // `current` só na branch em uso (ou no HEAD destacado); ordem: current, branches, remotes, tags.
 export type GitRef = { name: string; kind: 'branch' | 'remote' | 'tag' | 'head'; current: boolean };
@@ -143,6 +152,7 @@ export type Commands = {
   reveal_file: { args: { path: string }; result: void };
   reveal_dir: { args: { path: string }; result: void };
   open_with: { args: { path: string }; result: void };
+  open_url: { args: { url: string }; result: void };
   create_file: { args: { dir: string; name: string }; result: string };
   create_dir: { args: { dir: string; name: string }; result: string };
   clipboard_snapshot: { args: NoArgs; result: ClipboardSnapshot };
@@ -170,6 +180,7 @@ export type Commands = {
   git_history: { args: { limit: number; skip: number; path: string | null }; result: Commit[] };
   git_graph: { args: { limit: number; skip: number }; result: GraphCommit[] };
   git_commit_detail: { args: { id: string }; result: CommitDetail };
+  git_commit_hover: { args: { hash: string }; result: GitCommitHoverDetail };
   git_commit_diff: { args: { id: string; path: string }; result: GitDiff };
   git_conflict: { args: { path: string }; result: Conflict };
   git_write_resolution: { args: { path: string; content: string; revision: string; markResolved: boolean }; result: void };

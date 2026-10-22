@@ -462,6 +462,18 @@ pub struct CommitDetail {
     pub files: Vec<CommitFile>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitHoverDetail {
+    pub author: String,
+    pub date: String,
+    pub message: String,
+    pub files_changed: usize,
+    pub insertions: usize,
+    pub deletions: usize,
+    pub github_url: Option<String>,
+}
+
 /// Um arquivo em conflito. `ours` e `theirs` são os estágios 2 e 3 do índice; `None` quando o lado não existe (ex.: o
 /// outro lado apagou o arquivo). `worktree` é o texto atual da pasta, sem BOM e com `\n`. `binary`
 /// vale também para o texto que não é UTF-8 válido: nesse caso `worktree` vem `None` e a tela não o edita. `revision` é a
@@ -744,6 +756,85 @@ pub fn commit_detail(dir: &Path, id: &str) -> Result<CommitDetail, String> {
         .ok_or_else(|| format!("Commit não encontrado: {id}"))?
         .commit;
     Ok(CommitDetail { commit, files: commit_files(dir, &hash)? })
+}
+
+/// Detalhes carregados só quando o usuário abre o hover do gráfico.
+pub fn commit_hover(dir: &Path, id: &str) -> Result<CommitHoverDetail, String> {
+    let hash = resolve_commit(dir, id)?;
+    let commit = parse_graph(&proc::git_saida(dir, &["show", "-s", GRAPH_FORMAT, &hash])?)
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("Commit não encontrado: {id}"))?
+        .commit;
+    let message = proc::git_saida(dir, &["show", "-s", "--format=%B", &hash])?;
+    let stats = proc::git_saida(
+        dir,
+        &["show", "--shortstat", "--format=", "--diff-merges=first-parent", &hash],
+    )?;
+    let (files_changed, insertions, deletions) = parse_shortstat(&stats);
+    let github_url = proc::git_saida(dir, &["remote", "get-url", "origin"])
+        .ok()
+        .and_then(|remote| github_commit_url_from_remote(remote.trim(), &hash));
+    Ok(CommitHoverDetail {
+        author: commit.author,
+        date: commit.date,
+        message,
+        files_changed,
+        insertions,
+        deletions,
+        github_url,
+    })
+}
+
+fn parse_shortstat(out: &str) -> (usize, usize, usize) {
+    let mut files = 0;
+    let mut insertions = 0;
+    let mut deletions = 0;
+    if let Some(line) = out.lines().find(|line| line.contains(" changed")) {
+        for part in line.split(',') {
+            let mut words = part.split_whitespace();
+            let Some(count) = words.next().and_then(|n| n.parse::<usize>().ok()) else {
+                continue;
+            };
+            match words.next().unwrap_or("") {
+                "file" | "files" => files = count,
+                "insertion(+)" | "insertions(+)" => insertions = count,
+                "deletion(-)" | "deletions(-)" => deletions = count,
+                _ => {}
+            }
+        }
+    }
+    (files, insertions, deletions)
+}
+
+fn github_commit_url_from_remote(remote: &str, hash: &str) -> Option<String> {
+    if hash.is_empty() || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let path = if let Some(rest) = remote.strip_prefix("https://") {
+        let (authority, path) = rest.split_once('/')?;
+        authority.rsplit('@').next()?.eq_ignore_ascii_case("github.com").then_some(path)?
+    } else if let Some(rest) = remote.strip_prefix("ssh://") {
+        let (authority, path) = rest.split_once('/')?;
+        let host = authority.rsplit('@').next()?.split(':').next()?;
+        host.eq_ignore_ascii_case("github.com").then_some(path)?
+    } else {
+        let (_, rest) = remote.split_once('@')?;
+        let (host, path) = rest.split_once(':')?;
+        host.eq_ignore_ascii_case("github.com").then_some(path)?
+    };
+    let mut parts = path.trim_end_matches('/').split('/');
+    let owner = parts.next()?;
+    let raw_repo = parts.next()?;
+    let repo = raw_repo.strip_suffix(".git").unwrap_or(raw_repo);
+    let valid_part = |part: &str| {
+        !part.is_empty() && part != "." && part != ".."
+            && part.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    };
+    if parts.next().is_some() || !valid_part(owner) || !valid_part(repo) || !valid_part(hash) {
+        return None;
+    }
+    Some(format!("https://github.com/{owner}/{repo}/commit/{hash}"))
 }
 
 /// Arquivos de um commit. `-M` mostra renomeação; merge é comparado com o primeiro pai.
@@ -1996,6 +2087,50 @@ mod tests {
         assert_eq!(todos[0].refs, [GitRef { name: "origin/main".into(), kind: RefKind::Remote, current: false }]);
         assert_eq!(todos[1].refs, [GitRef { name: "main".into(), kind: RefKind::Branch, current: true }]);
         assert!(todos.iter().flat_map(|c| &c.refs).all(|r| r.name != "origin/HEAD"));
+    }
+
+    #[test]
+    fn github_commit_url_aceita_remotos_https_e_ssh() {
+        let hash = "a1b2c3d4";
+        let expected = "https://github.com/dona/repo/commit/a1b2c3d4";
+        for remote in [
+            "https://github.com/dona/repo.git",
+            "https://token@github.com/dona/repo",
+            "ssh://git@github.com/dona/repo.git",
+            "git@github.com:dona/repo.git",
+        ] {
+            assert_eq!(github_commit_url_from_remote(remote, hash).as_deref(), Some(expected), "{remote}");
+        }
+        assert_eq!(github_commit_url_from_remote("https://example.com/dona/repo.git", hash), None);
+        assert_eq!(github_commit_url_from_remote("git@github.com:dona/../repo", hash), None);
+    }
+
+    #[test]
+    fn commit_hover_devolve_mensagem_estatisticas_e_url_no_repo_temporario() {
+        let tmp = Tmp::new("orq-git", "commit-hover");
+        let dir = repo(&tmp, "r");
+        write(&dir, "edit.txt", "antes\n");
+        write(&dir, "removed.txt", "remover\n");
+        commit_all(&dir, "base");
+
+        write(&dir, "edit.txt", "depois\nextra\n");
+        fs::remove_file(dir.join("removed.txt")).unwrap();
+        write(&dir, "added.txt", "novo\narquivo\n");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-q", "-m", "Assunto completo", "-m",
+            "Corpo com detalhes.\n\nCo-Authored-By: Ana Exemplo <ana@example.com>"]);
+        git(&dir, &["remote", "add", "origin", "https://github.com/dona/repo.git"]);
+
+        let hash = git(&dir, &["rev-parse", "HEAD"]).trim().to_string();
+        let detail = commit_hover(&dir, &hash).unwrap();
+        assert!(!detail.author.is_empty());
+        assert!(detail.date.contains('T'));
+        assert!(detail.message.starts_with("Assunto completo\n\nCorpo com detalhes."));
+        assert!(detail.message.contains("Co-Authored-By: Ana Exemplo <ana@example.com>"));
+        assert_eq!((detail.files_changed, detail.insertions, detail.deletions), (3, 4, 2));
+        let expected_url = format!("https://github.com/dona/repo/commit/{hash}");
+        assert_eq!(detail.github_url.as_deref(), Some(expected_url.as_str()));
+        assert!(commit_hover(&dir, "HEAD").unwrap_err().contains("Commit inválido"));
     }
 
     #[test]

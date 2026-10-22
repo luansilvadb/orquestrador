@@ -231,6 +231,13 @@ pub fn abrir_pasta_no_explorador(path: &Path) -> io::Result<()> {
     abrir_cru("explorer.exe", &format!("\"{}\"", path.display()))
 }
 
+/// Abre a URL no navegador padrão pelo Explorer do Windows.
+pub fn open_url(url: &str) -> io::Result<()> {
+    let mut cmd = Command::new("explorer.exe");
+    sem_janela(&mut cmd);
+    cmd.arg(url).spawn().map(drop)
+}
+
 /// Abre o diálogo "Como você quer abrir este arquivo?" do Windows, o mesmo do Abrir com... do Explorer.
 pub fn dialogo_abrir_com(path: &Path) -> io::Result<()> {
     abrir_cru("rundll32.exe", &format!("shell32.dll,OpenAs_RunDLL \"{}\"", path.display()))

@@ -90,6 +90,7 @@ export const backend = {
   copyFiles: (paths: string[], cut: boolean) => call('copy_files', { paths, cut }),
   revealFile: (path: string) => call('reveal_file', { path }),
   openWith: (path: string) => call('open_with', { path }),
+  openUrl: (url: string) => call('open_url', { url }),
   // Criação na pasta `dir` (relativa, '' é a raiz). Devolve o caminho relativo criado; nunca sobrescreve (nome que existe rejeita com a mensagem).
   createFile: (dir: string, name: string) => call('create_file', { dir, name }),
   createDir: (dir: string, name: string) => call('create_dir', { dir, name }),
@@ -124,6 +125,7 @@ export const backend = {
   // Gráfico: HEAD e o upstream da branch atual, mais novo primeiro; `limit` até 200 e `skip` os já mostrados. Sem commit, lista vazia.
   gitGraph: (limit: number, skip: number) => call('git_graph', { limit, skip }),
   gitCommitDetail: (id: string) => call('git_commit_detail', { id }),
+  gitCommitHover: (hash: string) => call('git_commit_hover', { hash }),
   gitCommitDiff: (id: string, path: string) => call('git_commit_diff', { id, path }),
   // Conflito: os lados, o texto atual e a revisão. A gravação da resolução só vale se a pasta ainda está nessa revisão.
   gitConflict: (path: string) => call('git_conflict', { path }),
