@@ -107,6 +107,7 @@ Agrupados por tipo.
 - `scripts/check-titlebar-ui.mjs`: os controles da janela na barra de título.
 - `scripts/check-editor-style.mjs`: a paridade visual do editor central com o Antigravity (Dark Modern), por estilos computados e geometria, não por pixel. Os valores esperados vêm dos arquivos do Antigravity (ver [interface](interface.md), “Cores e fontes do editor”).
 - `scripts/check-git-gutter-ui.mjs`: os marcadores de mudança do Git no editor (tipo, linha, cheio × vazado, geometria, barra de rolagem, minimap, digitação com Desfazer, leitura depois de salvar e a ausência em arquivo não rastreado e em rascunho) e o bloco aberto: linhas antigas, fechar, Restaurar com Ctrl+Z, Preparar e Tirar do preparo (o índice que o app simulado recebeu em `git_write_index`) e a navegação com as setas, Alt+F5 e o menu de contexto.
+- `scripts/check-shell-tabs-ui.mjs`: o arrasto das abas do painel Terminal: clique sem mover, nova ordem na faixa, na lista e na vizinha ao fechar, Esc e X sem reordenar, e a faixa rolando com a aba na borda.
 
 **Release**
 

@@ -1,6 +1,6 @@
 // O painel Terminal, embaixo da área do arquivo na coluna central da tela principal: uma aba por shell do usuário, redimensionável pela borda de cima.
 // Fica montado depois da primeira abertura; fechar só esconde (os shells seguem vivos no backend). Todos os TermHost ficam montados; só o da aba ativa aparece.
-import { type KeyboardEvent, useLayoutEffect, useRef, useState } from 'react';
+import { type KeyboardEvent, type PointerEvent, useLayoutEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, List, Plus, SquareTerminal, X } from 'lucide-react';
 import { ActionIcon, Button, DraggablePanel, Popover, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
@@ -14,6 +14,9 @@ export const SHELL_MIN = 120;
 // Abaixo dessa largura do painel, a faixa de abas vira um seletor do terminal ativo. Com as setas, a faixa fica ~186 px menor que o cabeçalho;
 // a aba com o rótulo no máximo (número, programa de até 128 px e o X) precisa de ~274 px, então o normal só começa aqui.
 const COMPACT_WIDTH = 460;
+// Arrasto de aba: começa depois de DRAG_START px, para o clique seguir só selecionando; a menos de EDGE px da borda da faixa, ela rola sozinha.
+const DRAG_START = 4;
+const EDGE = 24;
 // Objeto constante: o DraggablePanel recalcula o tamanho quando `defaultSize` muda de identidade.
 const DEFAULT_SIZE = { height: SHELL_HEIGHT };
 
@@ -33,7 +36,7 @@ function shellLabel(tab: ShellTab) {
 }
 
 /** Escondido com `hidden` (display none): sai do layout e a área do arquivo cresce. Os TermHost ficam montados. */
-export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, active, onSelect, onAdd, onHide, onClose, onReady }: {
+export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, active, onSelect, onMove, onAdd, onHide, onClose, onReady }: {
   open: boolean;
   maxHeight: number;
   /** Altura que o usuário deu ao painel (o App guarda e restaura). Só controla o tamanho: não mexe nos shells. */
@@ -42,6 +45,8 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
   tabs: ShellTab[];
   active: string;
   onSelect: (id: string) => void;
+  /** Leva a aba para `index`, contado entre as outras abas. */
+  onMove: (id: string, index: number) => void;
   onAdd: () => void;
   onHide: () => void;
   onClose: (id: string) => void;
@@ -57,6 +62,9 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
   // Se as abas cabem sem as setas: elas só aparecem quando a faixa, sem elas, não comporta tudo.
   const [overflow, setOverflow] = useState(false);
   const current = tabs.find((tab) => tab.id === active);
+  // Aba sendo arrastada: desloca `dx` px da posição original; `target` é onde ela entra entre as outras; `width` é o espaço que as vizinhas abrem.
+  const [drag, setDrag] = useState<{ id: string; dx: number; target: number; width: number } | null>(null);
+  const dragFrom = drag ? tabs.findIndex((tab) => tab.id === drag.id) : -1;
 
   function measure() {
     const box = strip.current;
@@ -123,6 +131,80 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
   function page(direction: 1 | -1) {
     const box = strip.current;
     if (box) box.scrollBy({ left: direction * box.clientWidth * 0.8, behavior: 'smooth' });
+  }
+
+  // Segurar a aba e arrastar para os lados: ela segue o ponteiro, as vizinhas abrem espaço e, ao soltar, a ordem muda. Esc ou perda do ponteiro cancelam.
+  function dragTab(e: PointerEvent<HTMLDivElement>, id: string) {
+    const box = strip.current;
+    // Só pela aba: o X não arrasta.
+    if (e.button !== 0 || !box || !(e.target as HTMLElement).closest('[role="tab"]')) return;
+    const nodes = [...box.querySelectorAll<HTMLElement>('[data-shell]')];
+    const from = nodes.findIndex((node) => node.dataset.shell === id);
+    // Posições de antes do arrasto (offset ignora as transformações): o destino é medido contra elas.
+    const slots = nodes.map((node) => ({ left: node.offsetLeft, width: node.offsetWidth }));
+    const self = slots[from];
+    const last = slots[slots.length - 1];
+    const min = slots[0].left - self.left;
+    const max = last.left + last.width - self.left - self.width;
+    const startX = e.clientX;
+    const startScroll = box.scrollLeft;
+    const pointer = e.pointerId;
+    let x = startX;
+    let moving = false;
+    let target = from;
+    let frame = 0;
+
+    const update = () => {
+      // A rolagem da faixa conta no deslocamento: a aba fica sob o ponteiro enquanto a faixa anda.
+      const dx = Math.min(max, Math.max(min, x - startX + box.scrollLeft - startScroll));
+      // Passa uma vizinha quando a borda da frente cruza o meio dela: com a aba travada no fim da faixa, ainda alcança a primeira e a última posição.
+      const left = self.left + dx;
+      target = slots.filter((slot, i) => i !== from && slot.left + slot.width / 2 < (i < from ? left : left + self.width)).length;
+      setDrag({ id, dx, target, width: self.width });
+    };
+    const edgeScroll = () => {
+      const rect = box.getBoundingClientRect();
+      const before = box.scrollLeft;
+      box.scrollLeft += x < rect.left + EDGE ? -8 : x > rect.right - EDGE ? 8 : 0;
+      if (box.scrollLeft !== before) update();
+      frame = requestAnimationFrame(edgeScroll);
+    };
+    const move = (ev: WindowEventMap['pointermove']) => {
+      if (ev.pointerId !== pointer) return;
+      x = ev.clientX;
+      if (!moving) {
+        if (Math.abs(x - startX) < DRAG_START) return;
+        moving = true;
+        onSelect(id);
+        frame = requestAnimationFrame(edgeScroll);
+      }
+      update();
+    };
+    const finish = (commit: boolean) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      window.removeEventListener('blur', cancel);
+      window.removeEventListener('keydown', escape, true);
+      cancelAnimationFrame(frame);
+      if (!moving) return;
+      if (commit && target !== from) onMove(id, target);
+      setDrag(null);
+    };
+    const up = (ev: WindowEventMap['pointerup']) => { if (ev.pointerId === pointer) finish(true); };
+    const cancel = () => finish(false);
+    // Em captura, para o Esc não chegar ao shell.
+    const escape = (ev: WindowEventMap['keydown']) => {
+      if (ev.key !== 'Escape' || !moving) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      finish(false);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('blur', cancel);
+    window.addEventListener('keydown', escape, true);
   }
 
   // Lista aberta: as setas do teclado andam entre os itens (sem passar pelos X); Escape fecha (o Popover cuida disso) e devolve o foco ao gatilho.
@@ -223,23 +305,35 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
                   {/* Variant square, como no Orquestrador: a faixa tem 36 px e o indicador de 2 px fica colado no divisor. `overflow-clip` recorta o indicador sem criar uma área de rolagem (o `overflow-y-hidden` fazia o X virar `auto` e aparecer uma barra). A sombra zerada e o gap 0 tiram a borda e o espaço do variant. */}
                   <TabsRoot variant="square" value={active} onValueChange={(key: string) => onSelect(key)} className="gap-0">
                     <TabsList className="h-full flex-nowrap justify-start overflow-clip" style={{ gap: 0, boxShadow: 'none' }}>
-                      <TabsIndicator />
-                      {tabs.map((tab) => (
+                      {/* No arrasto, a aba ativa é a arrastada: o indicador anda junto, sem a transição, e fica por cima do fundo dela. */}
+                      <TabsIndicator style={drag ? { transform: `translateX(${drag.dx}px)`, transition: 'none', zIndex: 30 } : undefined} />
+                      {tabs.map((tab, index) => {
+                        // Vizinhas entre a origem e o destino abrem o espaço da arrastada, com transição; ao soltar, tudo volta a 0 junto com a ordem nova.
+                        const shift = !drag ? 0 : tab.id === drag.id ? drag.dx
+                          : dragFrom < index && index <= drag.target ? -drag.width
+                          : drag.target <= index && index < dragFrom ? drag.width : 0;
                         // Aba e X são irmãos: o X fica por cima da aba, na parte direita, e não aninha um button no outro. Os dois ocupam a altura da faixa; o X centraliza na vertical.
-                        <div key={tab.id} data-shell={tab.id} className="relative h-full flex-none">
-                          <TabsTab value={tab.id} title={tab.title} className="h-full flex-none gap-1.5 pr-7! pl-3">
-                            <SquareTerminal className="size-3.5 shrink-0 text-muted-foreground" />
-                            <Text as="span" className="shrink-0">{shellNumber(tab)}</Text>
-                            {tab.program && <Text as="span" ellipsis type="secondary" className="max-w-32">· {tab.program}</Text>}
-                          </TabsTab>
-                          <ActionIcon
-                            variant="borderless" size="small" icon={X}
-                            aria-label={`Fechar o ${shellLabel(tab)}`} title={`Fechar o terminal ${tab.title}`}
-                            className="absolute! z-10 top-1/2 right-1 -translate-y-1/2!"
-                            onClick={() => onClose(tab.id)}
-                          />
-                        </div>
-                      ))}
+                        return (
+                          <div
+                            key={tab.id} data-shell={tab.id}
+                            className={`relative h-full flex-none${drag?.id === tab.id ? ' z-20 bg-card' : drag ? ' transition-transform duration-150 motion-reduce:transition-none' : ''}`}
+                            style={shift ? { transform: `translateX(${shift}px)` } : undefined}
+                            onPointerDown={(e) => dragTab(e, tab.id)}
+                          >
+                            <TabsTab value={tab.id} title={tab.title} className="h-full flex-none gap-1.5 pr-7! pl-3">
+                              <SquareTerminal className="size-3.5 shrink-0 text-muted-foreground" />
+                              <Text as="span" className="shrink-0">{shellNumber(tab)}</Text>
+                              {tab.program && <Text as="span" ellipsis type="secondary" className="max-w-32">· {tab.program}</Text>}
+                            </TabsTab>
+                            <ActionIcon
+                              variant="borderless" size="small" icon={X}
+                              aria-label={`Fechar o ${shellLabel(tab)}`} title={`Fechar o terminal ${tab.title}`}
+                              className="absolute! z-10 top-1/2 right-1 -translate-y-1/2!"
+                              onClick={() => onClose(tab.id)}
+                            />
+                          </div>
+                        );
+                      })}
                     </TabsList>
                   </TabsRoot>
                 </Flexbox>

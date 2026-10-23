@@ -103,6 +103,7 @@ type Action =
   | { type: 'shellProgram'; id: string; program: string }
   | { type: 'shellRemove'; id: string }
   | { type: 'shellSelect'; id: string }
+  | { type: 'shellMove'; id: string; index: number }
   | { type: 'shellOpen'; open: boolean };
 
 const initial: State = {
@@ -162,6 +163,14 @@ function reducer(state: State, action: Action): State {
     }
     case 'shellSelect':
       return { ...state, shellActive: action.id };
+    case 'shellMove': {
+      // `index` é a posição entre as outras abas, já sem a que se move.
+      const shell = state.shells.find((s) => s.id === action.id);
+      if (!shell) return state;
+      const shells = state.shells.filter((s) => s.id !== action.id);
+      shells.splice(action.index, 0, shell);
+      return { ...state, shells };
+    }
     case 'shellOpen':
       return { ...state, shellOpen: action.open };
   }
@@ -978,7 +987,7 @@ export function App() {
                 open={state.shellOpen} maxHeight={centerHeight - FILE_MIN_HEIGHT}
                 height={shellHeight} onHeightChange={setShellHeight}
                 tabs={shellTabs} active={state.shellActive}
-                onSelect={(id) => dispatch({ type: 'shellSelect', id })} onAdd={addShell}
+                onSelect={(id) => dispatch({ type: 'shellSelect', id })} onMove={(id, index) => dispatch({ type: 'shellMove', id, index })} onAdd={addShell}
                 onHide={() => dispatch({ type: 'shellOpen', open: false })} onClose={closeShell} onReady={startShell}
               />
             </Flexbox>
