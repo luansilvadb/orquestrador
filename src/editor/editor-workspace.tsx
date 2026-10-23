@@ -39,7 +39,7 @@ import { AppMark } from '../window/app-mark';
 import { Breadcrumbs } from './breadcrumbs';
 import { backend, message } from '../backend/backend';
 import { usePolling } from '../shared/polling';
-import { CodeEditor, forgetEditorState, type Reveal, type StartCursor } from './file-view';
+import { CodeEditor, forgetEditorState, type EditorRestore, type Reveal } from './file-view';
 import { MediaView, mediaOf, Note } from './media-view';
 import { action, blocked, DIVIDER, fileName, useChord } from '../shared/file-tabs';
 import { pathText } from '../shared/file-tab-actions';
@@ -206,7 +206,9 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const storageProject = project || NO_PROJECT;
   // Ref para que as gravações antigas (ainda em await) avisem com a prop atual.
   const savedRef = useRef(onSaved);
-  savedRef.current = onSaved;
+  useLayoutEffect(() => {
+    savedRef.current = onSaved;
+  });
   const notifySaved = () => savedRef.current?.();
 
   // Restaura a recuperação uma vez, na montagem (lê o localStorage de forma síncrona e valida tudo).
@@ -268,7 +270,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const [tabDrag, setTabDrag] = useState<({ id: string; group: GroupId; from: number; into: GroupId | null } & TabDrag) | null>(null);
   const splitDrag = useRef<{ startX: number; start: number; width: number } | null>(null);
   // Sujos: rascunhos de arquivo e de conflito.
-  const dirtyNow = (d: EditorData = dataRef.current) => dirtyKeys(d);
+  const dirtyNow = (d?: EditorData) => dirtyKeys(d ?? dataRef.current);
 
   const setWs = (next: WorkspaceState) => {
     wsRef.current = next;
@@ -284,11 +286,14 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     setData({ ...dataRef.current, buffers: { ...dataRef.current.buffers, [docId]: change(current) } });
   };
   const putConflict = (draft: ConflictDraft) => {
-    setData({ ...dataRef.current, conflicts: { ...dataRef.current.conflicts, [conflictKey(draft.path)]: draft } });
+    const conflicts = { ...dataRef.current.conflicts };
+    conflicts[conflictKey(draft.path)] = draft;
+    setData({ ...dataRef.current, conflicts });
   };
   const dropConflict = (path: string) => {
-    const { [conflictKey(path)]: _gone, ...rest } = dataRef.current.conflicts;
-    setData({ ...dataRef.current, conflicts: rest });
+    const conflicts = { ...dataRef.current.conflicts };
+    delete conflicts[conflictKey(path)];
+    setData({ ...dataRef.current, conflicts });
   };
   const allTabs = () => wsRef.current.groups.flatMap((g) => g.tabs);
   // Só troca quando o estado muda: o polling chama isto a cada 2,5 s e não pode re-renderizar a área à toa.
@@ -299,7 +304,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   });
   const clearDisk = (docId: string) => setDisk((d) => {
     if (!(docId in d)) return d;
-    const { [docId]: _gone, ...rest } = d;
+    const rest = { ...d };
+    delete rest[docId];
     return rest;
   });
 
@@ -431,32 +437,34 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (buffer.readOnly || saving.current.has(docId)) return false;
     saving.current.add(docId);
     const sent = toDiskNewlines(buffer.draft, buffer.newline);
-    try {
-      // Grava só se o disco ainda é o `raw` lido (base crua, sem normalizar). Conflito é tratado abaixo, não há força silenciosa.
-      await backend.writeFileChecked(buffer.path, sent, buffer.raw, buffer.bom);
-      patchBuffer(docId, (b) => ({ ...b, raw: sent }));
-      clearDisk(docId);
-      setStatusOf(docId, {});
-      refreshGit();
-      notifySaved();
-      return true;
-    } catch (e) {
-      const reason = message(e);
-      try {
-        const file = await backend.readFile(buffer.path);
-        if (normalizeNewlines(file.text) !== normalizeNewlines(buffer.raw) || file.bom !== buffer.bom) {
-          setDisk((d) => ({ ...d, [docId]: { text: file.text, bom: file.bom, readOnly: file.readOnly } }));
-          setStatusOf(docId, {});
-        } else {
-          setStatusOf(docId, { error: reason });
-        }
-      } catch (readError) {
-        setStatusOf(docId, { error: `${reason} ${message(readError)}` });
-      }
-      return false;
-    } finally {
-      saving.current.delete(docId);
-    }
+    // Grava só se o disco ainda é o `raw` lido (base crua, sem normalizar). Conflito é tratado abaixo, não há força silenciosa.
+    return backend.writeFileChecked(buffer.path, sent, buffer.raw, buffer.bom)
+      .then(() => {
+        patchBuffer(docId, (b) => ({ ...b, raw: sent }));
+        clearDisk(docId);
+        setStatusOf(docId, {});
+        refreshGit();
+        notifySaved();
+        return true;
+      })
+      .catch((e: unknown) => {
+        const reason = message(e);
+        return backend.readFile(buffer.path)
+          .then((file) => {
+            if (normalizeNewlines(file.text) !== normalizeNewlines(buffer.raw) || file.bom !== buffer.bom) {
+              setDisk((d) => ({ ...d, [docId]: { text: file.text, bom: file.bom, readOnly: file.readOnly } }));
+              setStatusOf(docId, {});
+            } else {
+              setStatusOf(docId, { error: reason });
+            }
+          }, (readError: unknown) => {
+            setStatusOf(docId, { error: `${reason} ${message(readError)}` });
+          })
+          .then(() => false);
+      })
+      .finally(() => {
+        saving.current.delete(docId);
+      });
   };
 
   // Grava a resolução. Com `markResolved` o Git já tirou o conflito (o arquivo vai para o stage): não relê o conflito, solta o
@@ -479,29 +487,31 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (!guard.enter()) return false;
     conflictSaving.current.add(key);
     const sent = current.draft;
-    try {
-      await backend.gitWriteResolution(path, sent, current.revision, markResolved);
-      notifySaved();
-      if (markResolved) {
-        dropConflict(path);
+    return backend.gitWriteResolution(path, sent, current.revision, markResolved)
+      .then(async () => {
+        notifySaved();
+        if (markResolved) {
+          dropConflict(path);
+          refreshGit();
+          const found = allTabs().find((t) => t.target.kind === 'conflict' && t.target.path.toLowerCase() === path.toLowerCase());
+          if (found) void closeFlow({ kind: 'one', tabId: found.id });
+          return true;
+        }
+        const fresh = await backend.gitConflict(path);
+        // Quem chama pode ter digitado durante o await: lê o rascunho atual e só troca a base e a revisão.
+        const now = dataRef.current.conflicts[key];
+        if (now) putConflict({ ...now, origin: sent, revision: fresh.revision });
         refreshGit();
-        const found = allTabs().find((t) => t.target.kind === 'conflict' && t.target.path.toLowerCase() === path.toLowerCase());
-        if (found) void closeFlow({ kind: 'one', tabId: found.id });
         return true;
-      }
-      const fresh = await backend.gitConflict(path);
-      // Quem chama pode ter digitado durante o await: lê o rascunho atual e só troca a base e a revisão.
-      const now = dataRef.current.conflicts[key];
-      if (now) putConflict({ ...now, origin: sent, revision: fresh.revision });
-      refreshGit();
-      return true;
-    } catch (e) {
-      toast.error({ title: message(e), duration: 7000 });
-      return false;
-    } finally {
-      conflictSaving.current.delete(key);
-      guard.leave();
-    }
+      })
+      .catch((e: unknown) => {
+        toast.error({ title: message(e), duration: 7000 });
+        return false;
+      })
+      .finally(() => {
+        conflictSaving.current.delete(key);
+        guard.leave();
+      });
   };
 
   // Rascunho sem caminho: o diálogo começa na pasta do projeto quando há uma; fora dela, o caminho segue absoluto.
@@ -510,8 +520,9 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const buffer = dataRef.current.buffers[docId];
     if (!tab || tab.target.kind !== 'draft' || !buffer || saving.current.has(docId)) return false;
     saving.current.add(docId);
-    try {
-      const picked = await backend.pickSavePath(project || null, draftName(tab.target.num));
+    const name = draftName(tab.target.num);
+    const attempt = async (): Promise<boolean> => {
+      const picked = await backend.pickSavePath(project || null, name);
       if (picked === null) return false;
       const absolute = picked.replace(/\\/g, '/');
       const path = relativeToProject(project, absolute) ?? absolute;
@@ -538,12 +549,15 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       refreshGit();
       notifySaved();
       return true;
-    } catch (e) {
-      toast.error({ title: message(e), duration: 7000 });
-      return false;
-    } finally {
-      saving.current.delete(docId);
-    }
+    };
+    return attempt()
+      .catch((e: unknown) => {
+        toast.error({ title: message(e), duration: 7000 });
+        return false;
+      })
+      .finally(() => {
+        saving.current.delete(docId);
+      });
   };
 
   const saveTab = (target: TabTarget): Promise<boolean> => {
@@ -564,37 +578,39 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (!buffer) return false;
     const slash = buffer.path.lastIndexOf('/');
     const directory = project || (isAbsoluteFilePath(buffer.path) && slash > 0 ? buffer.path.slice(0, slash) : null);
-    try {
-      const picked = await backend.pickSavePath(directory, fileName(buffer.path));
+    const docId = target.docId;
+    const attempt = async (current: Buffer): Promise<boolean> => {
+      const picked = await backend.pickSavePath(directory, fileName(current.path));
       if (!picked) return false;
       const absolute = picked.replace(/\\/g, '/');
       const path = relativeToProject(project, absolute) ?? absolute;
-      if (path.toLowerCase() === buffer.path.toLowerCase()) return saveBuffer(target.docId);
+      if (path.toLowerCase() === current.path.toLowerCase()) return saveBuffer(docId);
       const existing = allTabs().find((t) => t.target.kind === 'file' && t.target.path.toLowerCase() === path.toLowerCase());
       const existingBuffer = existing?.target.kind === 'file' ? dataRef.current.buffers[existing.target.docId] : undefined;
       if (existingBuffer && isBufferDirty(existingBuffer)) {
         toast.error({ title: `Salve ou descarte a edição aberta de ${fileName(path)} antes de salvar por cima dele.`, duration: 7000 });
         return false;
       }
-      await writeNewFile(path, toDiskNewlines(buffer.draft, buffer.newline));
+      await writeNewFile(path, toDiskNewlines(current.draft, current.newline));
       const saved = await backend.readFile(path);
       if (existing) {
-        const source = allTabs().filter((t) => t.target.kind === 'file' && t.target.docId === target.docId).map((t) => t.id);
+        const source = allTabs().filter((t) => t.target.kind === 'file' && t.target.docId === docId).map((t) => t.id);
         const next = activate(closeTabs(wsRef.current, source), existing.id);
         setWs(next);
         pruneData(next);
         void syncFile(existing.target.kind === 'file' ? existing.target.docId : '');
       } else {
-        remap(buffer.path, path);
-        patchBuffer(target.docId, (b) => ({ ...b, path, raw: saved.text, bom: saved.bom, newline: newlineOf(saved.text) }));
+        remap(current.path, path);
+        patchBuffer(docId, (b) => ({ ...b, path, raw: saved.text, bom: saved.bom, newline: newlineOf(saved.text) }));
       }
       refreshGit();
       notifySaved();
       return true;
-    } catch (e) {
+    };
+    return attempt(buffer).catch((e: unknown) => {
       toast.error({ title: message(e), duration: 7000 });
       return false;
-    }
+    });
   };
 
   const saveActive = () => {
@@ -693,8 +709,10 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (boot.layout !== null) onRestoreLayout?.(boot.layout);
     // Só na montagem: depois disso o App manda o layout de volta pela prop `layout`.
   }, []);
-  layoutRef.current = layout ?? layoutRef.current;
-  splitRef.current = split;
+  useLayoutEffect(() => {
+    layoutRef.current = layout ?? layoutRef.current;
+    splitRef.current = split;
+  });
 
   // Grava a recuperação: com atraso (edição rápida não escreve a cada tecla) e de imediato ao sair da página ou desmontar.
   // Falha de quota vira aviso e não derruba a edição. Layout e divisor ficam mesmo sem abas; só some quando não há nada.
@@ -736,7 +754,9 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     }
   };
   const persistRef = useRef(persist);
-  persistRef.current = persist;
+  useLayoutEffect(() => {
+    persistRef.current = persist;
+  });
   const persistSoon = () => {
     window.clearTimeout(persistTimer.current);
     persistTimer.current = window.setTimeout(() => persistRef.current(), 400);
@@ -966,20 +986,20 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (saving.current.has(choice.docId)) return;
     saving.current.add(choice.docId);
     const sent = toDiskNewlines(choice.draft, newlineOf(choice.disk.text));
-    let failed: unknown = null;
-    try {
-      await backend.writeFileChecked(buffer.path, sent, choice.disk.text, choice.disk.bom);
-      // Quem digitou durante o await continua sujo: o `raw` vira o texto gravado, e o `draft` atual fica como está.
-      patchBuffer(choice.docId, (b) => ({ ...b, raw: sent, bom: choice.disk.bom, newline: newlineOf(choice.disk.text) }));
-      clearDisk(choice.docId);
-      setStatusOf(choice.docId, {});
-      refreshGit();
-      notifySaved();
-    } catch (e) {
-      failed = e;
-    } finally {
-      saving.current.delete(choice.docId);
-    }
+    const failed = await backend.writeFileChecked(buffer.path, sent, choice.disk.text, choice.disk.bom)
+      .then(() => {
+        // Quem digitou durante o await continua sujo: o `raw` vira o texto gravado, e o `draft` atual fica como está.
+        patchBuffer(choice.docId, (b) => ({ ...b, raw: sent, bom: choice.disk.bom, newline: newlineOf(choice.disk.text) }));
+        clearDisk(choice.docId);
+        setStatusOf(choice.docId, {});
+        refreshGit();
+        notifySaved();
+        return null;
+      })
+      .catch((e: unknown) => e)
+      .finally(() => {
+        saving.current.delete(choice.docId);
+      });
     if (failed) {
       toast.error({ title: message(failed), duration: 7000 });
       // Refaz a versão do disco: a próxima comparação mostra o que mudou, não a versão antiga.
@@ -1084,8 +1104,11 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         status={status[target.docId]}
         disk={disk[target.docId]}
         reveal={reveal && reveal.docId === target.docId && groupActive ? reveal : null}
-        autoFocus={target.kind === 'draft' && freshDraft.current === target.docId}
-        cursor={cursors.current[target.docId] ?? null}
+        restore={() => ({
+          cursor: cursors.current[target.docId] ?? null,
+          scroll: scrolls.current[target.docId] ?? null,
+          focus: target.kind === 'draft' && freshDraft.current === target.docId,
+        })}
         onChange={(value) => {
           patchBuffer(target.docId, (b) => ({ ...b, draft: value, newline: value === normalizeNewlines(b.raw) ? newlineOf(b.raw) : b.newline }));
           // Editar torna a aba permanente (a prévia vira aba de verdade). Só as abas com este docId são tocadas.
@@ -1102,7 +1125,6 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           cursors.current[target.docId] = { line, col };
           persistSoon();
         }}
-        scroll={scrolls.current[target.docId] ?? null}
         onScroll={(value) => {
           scrolls.current[target.docId] = value;
           persistSoon();
@@ -1114,7 +1136,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   };
 
   // ---- Grupos ----
-  const dirty = dirtyNow(data);
+  const dirty = dirtyKeys(data);
   const activeTabOf = (g: { active: string | null; tabs: EditorTab[] }) => g.tabs.find((t) => t.id === g.active) ?? null;
   const titleOf = (target: TabTarget) => {
     if (target.kind === 'draft') return draftName(target.num);
@@ -1139,20 +1161,21 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     revealKey.current.set(groupId, key);
     revealTab(strip.el, [...strip.el.querySelectorAll<HTMLElement>('[data-tab]')].find((el) => el.dataset.tab === active.id));
   };
+  // O observer roda fora do render: chama a versão atual de `revealActive` (ela lê `dirty` e o estado).
+  const revealLatest = useRef(revealActive);
+  useLayoutEffect(() => {
+    revealLatest.current = revealActive;
+  });
   const stripRef = (groupId: GroupId) => (el: HTMLDivElement | null) => {
     strips.current.get(groupId)?.observer.disconnect();
     strips.current.delete(groupId);
     if (!el) return;
-    const observer = new ResizeObserver(() => revealActive(groupId, true));
+    const observer = new ResizeObserver(() => revealLatest.current(groupId, true));
     observer.observe(el);
     strips.current.set(groupId, { el, observer });
   };
-  const stripRefs = useRef(new Map<GroupId, (el: HTMLDivElement | null) => void>());
-  const stripRefFor = (groupId: GroupId) => {
-    let fn = stripRefs.current.get(groupId);
-    if (!fn) stripRefs.current.set(groupId, fn = stripRef(groupId));
-    return fn;
-  };
+  // Um ref de callback por grupo, criado uma vez: a identidade fica estável e o observer não é refeito a cada render.
+  const [stripRefs] = useState(() => ({ A: stripRef('A'), B: stripRef('B') }));
   useLayoutEffect(() => {
     for (const group of ws.groups) revealActive(group.id);
   });
@@ -1204,7 +1227,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       >
         <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-border" />
         <div
-          ref={stripRefFor(groupId)} role="tablist" aria-label={`Abas do grupo ${groupId}`}
+          ref={stripRefs[groupId]} role="tablist" aria-label={`Abas do grupo ${groupId}`}
           className="@container relative flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none]!"
           onWheel={wheelToScroll}
           // Duplo clique na faixa, fora das abas: rascunho novo neste grupo (como no VS Code). Em cima de uma aba, não faz nada.
@@ -1437,13 +1460,13 @@ function useGitBase(path: string, raw: string, shown: boolean, active: boolean):
   return { base: path === '' || isAbsoluteFilePath(path) ? null : base, reload: load };
 }
 
-function FileBody({ project, active, buffer, shown, status, disk, reveal, autoFocus, cursor, onChange, onFormatEol, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
+function FileBody({ project, active, buffer, shown, status, disk, reveal, restore, onChange, onFormatEol, onSave, onCursor, onCompare, onRetry, onScroll }: {
   project: string; active: boolean;
   buffer: Buffer | undefined; shown: boolean; status: Status | undefined; disk: DiskVersion | undefined;
-  reveal: Reveal | null; autoFocus: boolean; cursor: StartCursor | null; onChange: (value: string) => void; onSave: () => void;
+  reveal: Reveal | null; restore: () => EditorRestore; onChange: (value: string) => void; onSave: () => void;
   onFormatEol: (newline: Newline) => void;
   onCursor: (line: number, col: number) => void; onCompare: (mode: 'keep' | 'use') => void; onRetry: () => void;
-  scroll: Scroll | null; onScroll: (scroll: Scroll) => void;
+  onScroll: (scroll: Scroll) => void;
 }) {
   const git = useGitBase(buffer?.path ?? '', buffer?.raw ?? '', shown, active);
   if (status?.binary) return <Note text="Arquivo binário: não há texto para mostrar aqui." />;
@@ -1471,7 +1494,6 @@ function FileBody({ project, active, buffer, shown, status, disk, reveal, autoFo
           <CodeEditor
             text={buffer.draft}
             readOnly={buffer.readOnly}
-            autoFocus={autoFocus}
             path={absoluteFilePath(project, buffer.path)}
             reveal={reveal}
             onChange={onChange}
@@ -1479,9 +1501,8 @@ function FileBody({ project, active, buffer, shown, status, disk, reveal, autoFo
             onSave={onSave}
             onCursor={onCursor}
             onScroll={onScroll}
-            scroll={scroll}
+            restore={restore}
             cacheKey={buffer.docId}
-            start={cursor}
             gitBase={git.base}
             onWriteIndex={async (text, expected) => {
               if (isAbsoluteFilePath(buffer.path)) return;

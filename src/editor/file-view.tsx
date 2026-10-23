@@ -173,6 +173,8 @@ export function forgetEditorState(cacheKey: string) {
 
 // Pedido de cursor inicial (1-based), usado quando o buffer ainda não tem estado guardado (ex.: restaurado da recuperação).
 export type StartCursor = { line: number; col: number };
+// Ponto inicial de uma vista montada: cursor, rolagem e foco. Lido na montagem, em quem monta (não no render).
+export type EditorRestore = { cursor: StartCursor | null; scroll: Scroll | null; focus: boolean };
 
 const readOnlyExt = (readOnly: boolean) => [EditorView.editable.of(!readOnly), EditorState.readOnly.of(readOnly)];
 
@@ -215,13 +217,15 @@ export function parseGoto(value: string, lines: number, lineLength: (line: numbe
 }
 
 // Editor do arquivo (CodeMirror com o tema do app). Exportado para o editor central (src/editor/editor-workspace.tsx) reutilizar.
-export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll, autoFocus, gitBase, onWriteIndex, onFormatEol }: {
+export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll, autoFocus, restore, gitBase, onWriteIndex, onFormatEol }: {
   text: string; readOnly: boolean; path: string; reveal: Reveal | null; onChange: (text: string) => void; onSave: () => void;
   onCursor: (line: number, col: number) => void; onScroll?: (scroll: Scroll) => void; cacheKey?: string; start?: StartCursor | null;
   /** Rolagem a restaurar ao montar (ex.: a vista foi movida de grupo ou o app foi reaberto). */
   scroll?: Scroll | null;
   /** Foca o texto ao montar (rascunho novo). Só vale na montagem. */
   autoFocus?: boolean;
+  /** Lê cursor, rolagem e foco ao montar, no lugar de `start`, `scroll` e `autoFocus` (que então são ignorados). */
+  restore?: () => EditorRestore;
   /** Texto-base do Git (com `\n`) para os marcadores de mudança. `null` tira os marcadores; ausente não mexe no que o estado já tem. */
   gitBase?: FileBase | null;
   /**
@@ -411,6 +415,7 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
   useEffect(() => {
     if (!host.current) return;
     const cached = cacheKey ? savedStates.get(cacheKey) : undefined;
+    const initial: EditorRestore = restore ? restore() : { cursor: start ?? null, scroll: scroll ?? null, focus: !!autoFocus };
     // Extensões são sempre as atuais (listeners apontam para este componente). Estado guardado mantém o histórico de Desfazer.
     const extensions = [
       ...basicExtensions,
@@ -465,20 +470,21 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
       state = cached.update({ effects: StateEffect.reconfigure.of(extensions) }).state;
     } else {
       const doc = Text.of(text.split('\n'));
-      state = EditorState.create({ doc, selection: EditorSelection.cursor(start ? posOf(doc, start.line, start.col) : 0), extensions });
+      const at = initial.cursor;
+      state = EditorState.create({ doc, selection: EditorSelection.cursor(at ? posOf(doc, at.line, at.col) : 0), extensions });
     }
     view.current = new EditorView({ state, parent: host.current });
     reportCursor(view.current.state);
     // Rascunho recém-criado: o foco já vai para o texto, pronto para digitar.
-    if (autoFocus) view.current.focus();
+    if (initial.focus) view.current.focus();
     const dom = view.current.scrollDOM;
     // A rolagem só é aplicada depois da medição: antes, o CodeMirror ainda não sabe a altura do documento e prende o valor.
-    const restore = scroll;
+    const restoreScroll = initial.scroll;
     let frame = 0;
-    if (restore) {
+    if (restoreScroll) {
       frame = requestAnimationFrame(() => {
-        dom.scrollTop = restore.top;
-        dom.scrollLeft = restore.left;
+        dom.scrollTop = restoreScroll.top;
+        dom.scrollLeft = restoreScroll.left;
       });
     }
     const onDomScroll = () => latest.current.onScroll?.({ top: dom.scrollTop, left: dom.scrollLeft });
