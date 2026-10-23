@@ -914,6 +914,9 @@ scenario('gráfico: o divisor muda a altura (arrastar e setas) e para no mínimo
   await openGit(page);
   await graphRows(page).first().waitFor();
   const h0 = await graphHeight(page);
+  // Sem mexer no divisor, a seção e a lista de arquivos (irmã antes do divisor) dividem o espaço ao meio.
+  const files = await divider(page).evaluate((el) => el.previousElementSibling.getBoundingClientRect().height);
+  assert.ok(Math.abs(h0 - files) <= 2, `metade para cada: grafo ${h0}, arquivos ${files}`);
   // Arrastar 40 px para cima: a seção cresce o mesmo tanto.
   const box = await divider(page).boundingBox();
   const x = box.x + box.width / 2, y = box.y + box.height / 2;

@@ -8,7 +8,7 @@ import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, GitBran
 import { backend, message } from '../backend/backend';
 import { FileIcon } from '../shared/file-icon';
 import { KIND_COLOR } from '../explorer/explorer-decorations';
-import { GRAPH_DEFAULT, GraphSection, type GraphRemote } from './git-graph-view';
+import { GraphSection, type GraphRemote } from './git-graph-view';
 import { HistoryPanel, type HistoryRequest, KIND, type OpenCommitTarget } from './git-history';
 import { splitPath } from '../shared/paths';
 import { usePolling } from '../shared/polling';
@@ -141,7 +141,7 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
   // Recolhido fica aqui, no painel, e não na seção: a seção some quando a lista esvazia, e o estado não pode sumir junto.
   const [collapsed, setCollapsed] = useState({ staged: false, unstaged: false, graph: false });
   // Altura que o divisor deu à seção Gráfico, e o contador de pedidos de recarregar o gráfico (cada ação soma 1).
-  const [graphHeight, setGraphHeight] = useState(GRAPH_DEFAULT);
+  const [graphHeight, setGraphHeight] = useState<number | null>(null);
   const [graphTick, setGraphTick] = useState(0);
   // Linhas marcadas com Ctrl+clique. Preparar ou tirar age sobre elas quando a linha escolhida está marcada.
   const [marked, setMarked] = useState<Set<string>>(new Set());

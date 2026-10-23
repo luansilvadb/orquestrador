@@ -18,7 +18,6 @@ const LANE = 11;
 const ROW = 22;
 const FILE_ROW = 22;
 // Altura da seção aberta. O gráfico e a lista de arquivos não descem do mínimo ao arrastar o divisor; setas andam de 16 em 16.
-export const GRAPH_DEFAULT = 260;
 export const GRAPH_MIN = 96;
 export const FILES_MIN = 96;
 const KEY_STEP = 16;
@@ -37,8 +36,8 @@ export type GraphRemote = 'fetch' | 'pull' | 'push';
 export type GraphSectionProps = {
   open: boolean;
   onToggle: () => void;
-  /** Altura dada pelo divisor (só vale com a seção aberta). O painel guarda o valor. */
-  height: number;
+  /** Altura dada pelo divisor (só vale com a seção aberta). O painel guarda o valor; null, antes de mexer no divisor, divide o espaço ao meio com a lista de arquivos. */
+  height: number | null;
   onHeight: (height: number) => void;
   /** HEAD atual (hash completo, '' sem commit): a linha dele é o anel vazado. */
   head: string;
@@ -248,9 +247,11 @@ export function GraphSection({
     // `reloadList` só lê refs e setters: não precisa estar nas dependências.
   }, [active, open, stamp]);
 
-  // Divisor: arrastar ou setas. O máximo deixa a lista de arquivos no mínimo; o espaço é o da lista (irmã anterior) mais a seção.
+  // Divisor: arrastar ou setas. O máximo deixa a lista de arquivos no mínimo; o espaço é o da lista (irmã anterior) mais a seção (irmã seguinte).
+  // Sem altura dada, parte da altura que a divisão ao meio rendeu.
   const drag = useRef<{ y: number; start: number; max: number } | null>(null);
-  const maxFor = (divider: HTMLElement) => ((divider.previousElementSibling as HTMLElement | null)?.clientHeight ?? 0) + height - FILES_MIN;
+  const sizeOf = (divider: HTMLElement) => height ?? (divider.nextElementSibling as HTMLElement).clientHeight;
+  const maxFor = (divider: HTMLElement) => ((divider.previousElementSibling as HTMLElement | null)?.clientHeight ?? 0) + sizeOf(divider) - FILES_MIN;
   const clamp = (n: number, max: number) => Math.max(GRAPH_MIN, Math.min(n, max));
 
   const remoteButton = (kind: GraphRemote, icon: typeof CloudDownload) => (
@@ -342,12 +343,12 @@ export function GraphSection({
     <>
       {open && (
         <div
-          role="separator" tabIndex={0} aria-orientation="horizontal" aria-label="Divisor do gráfico" aria-valuemin={GRAPH_MIN} aria-valuenow={height}
+          role="separator" tabIndex={0} aria-orientation="horizontal" aria-label="Divisor do gráfico" aria-valuemin={GRAPH_MIN} aria-valuenow={height ?? undefined}
           title="Arrastar para redimensionar (setas do teclado também)"
           className="h-1 shrink-0 cursor-row-resize bg-transparent outline-none hover:bg-border focus-visible:bg-ring"
           onPointerDown={(e) => {
             e.currentTarget.setPointerCapture(e.pointerId);
-            drag.current = { y: e.clientY, start: height, max: maxFor(e.currentTarget) };
+            drag.current = { y: e.clientY, start: sizeOf(e.currentTarget), max: maxFor(e.currentTarget) };
           }}
           onPointerMove={(e) => {
             const d = drag.current;
@@ -358,11 +359,11 @@ export function GraphSection({
             const step = e.key === 'ArrowUp' ? KEY_STEP : e.key === 'ArrowDown' ? -KEY_STEP : 0;
             if (!step) return;
             e.preventDefault();
-            onHeight(clamp(height + step, maxFor(e.currentTarget)));
+            onHeight(clamp(sizeOf(e.currentTarget) + step, maxFor(e.currentTarget)));
           }}
         />
       )}
-      <section className="flex shrink-0 flex-col" style={open ? { height } : undefined}>
+      <section className="flex shrink-0 flex-col" style={!open ? undefined : height === null ? { flex: '1 1 0', minHeight: GRAPH_MIN } : { height }}>
         {header}
         {open && (
           <Flexbox className="min-h-0 overflow-y-auto overflow-x-hidden" flex={1}>
