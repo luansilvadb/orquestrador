@@ -28,16 +28,9 @@ impl From<Falha> for String {
     }
 }
 
-/// Roda o Git sem nada que espere digitação: sem pedido de credencial, sem editor. `entrada` vai pela entrada
-/// padrão; sem ela, a entrada é nula. Sucesso devolve os bytes de (stdout, stderr); falha devolve o que o Git
-/// escreveu (stderr e stdout, aparados e em UTF-8 com troca de byte inválido), ou o código de saída quando ele não
-/// escreveu nada. Os caminhos são pathspec literal e o nome sai em UTF-8 sem aspas.
-fn run(dir: &Path, args: &[&str], entrada: Option<&[u8]>) -> Result<(Vec<u8>, Vec<u8>), Falha> {
-    run_as(dir, &["--literal-pathspecs"], args, entrada)
-}
-
-/// O `run` com as opções globais `globais` no lugar do `--literal-pathspecs`, que o `check-ignore` recusa.
-fn run_as(dir: &Path, globais: &[&str], args: &[&str], entrada: Option<&[u8]>) -> Result<(Vec<u8>, Vec<u8>), Falha> {
+/// O comando do Git em `dir` com as opções globais `globais`, o nome em UTF-8 sem aspas e o ambiente sem espera de
+/// digitação. A entrada e a saída ficam com quem chama.
+fn comando(dir: &Path, globais: &[&str], args: &[&str]) -> Command {
     let mut cmd = quiet("git");
     cmd.arg("-C")
         .arg(dir)
@@ -48,9 +41,22 @@ fn run_as(dir: &Path, globais: &[&str], args: &[&str], entrada: Option<&[u8]>) -
         // O status periódico não regrava o índice: sem isso, ele segura o `index.lock` e o `git commit` de um agente falha.
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_EDITOR", ":")
-        .env("GIT_MERGE_AUTOEDIT", "no")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .env("GIT_MERGE_AUTOEDIT", "no");
+    cmd
+}
+
+/// Roda o Git sem nada que espere digitação: sem pedido de credencial, sem editor. `entrada` vai pela entrada
+/// padrão; sem ela, a entrada é nula. Sucesso devolve os bytes de (stdout, stderr); falha devolve o que o Git
+/// escreveu (stderr e stdout, aparados e em UTF-8 com troca de byte inválido), ou o código de saída quando ele não
+/// escreveu nada. Os caminhos são pathspec literal e o nome sai em UTF-8 sem aspas.
+fn run(dir: &Path, args: &[&str], entrada: Option<&[u8]>) -> Result<(Vec<u8>, Vec<u8>), Falha> {
+    run_as(dir, &["--literal-pathspecs"], args, entrada)
+}
+
+/// O `run` com as opções globais `globais` no lugar do `--literal-pathspecs`, que o `check-ignore` recusa.
+fn run_as(dir: &Path, globais: &[&str], args: &[&str], entrada: Option<&[u8]>) -> Result<(Vec<u8>, Vec<u8>), Falha> {
+    let mut cmd = comando(dir, globais, args);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let out = match entrada {
         None => cmd.stdin(Stdio::null()).output(),
         Some(bytes) => cmd.stdin(Stdio::piped()).spawn().and_then(|mut child| {
@@ -98,20 +104,10 @@ pub fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 }
 
 /// O `git_bytes` que lê no máximo `limite` bytes da saída: com `limite` bytes lidos, o Git é encerrado e volta só esse
-/// começo. Mede uma saída grande sem guardá-la inteira. O ambiente é o de `run_as`.
+/// começo. Mede uma saída grande sem guardá-la inteira. O comando é o de `run`.
 pub fn git_bytes_ate(dir: &Path, args: &[&str], limite: usize) -> Result<Vec<u8>, String> {
-    let mut cmd = quiet("git");
-    cmd.arg("-C")
-        .arg(dir)
-        .args(["--literal-pathspecs", "-c", "core.quotepath=false"])
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_EDITOR", ":")
-        .env("GIT_MERGE_AUTOEDIT", "no")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let mut cmd = comando(dir, &["--literal-pathspecs"], args);
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let ausente = |e: std::io::Error| format!("git não pôde ser executado: {e}");
     let mut child = cmd.spawn().map_err(ausente)?;
     // O stderr é lido em outra thread: cheio, ele pararia o Git antes de a saída chegar ao limite.

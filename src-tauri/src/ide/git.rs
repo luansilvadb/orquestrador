@@ -652,6 +652,8 @@ fn discard_patch(dir: &Path, rel: &str, revision_seen: &str) -> Result<Option<Ve
         return Err(format!("{rel} não está rastreado: o Git não o descarta. Mande-o para a Lixeira pela tela."));
     }
     // O patch inteiro: o `git apply -R` precisa dele, mesmo quando a tela só mostrou o aviso de diff grande.
+    // shortcut: a revisão confere só os primeiros `MAX_DIFF + 1` bytes (1 MiB). Num diff acima de 1 MiB, uma gravação
+    // depois do primeiro MiB entre a leitura da tela e o descarte não é detectada e sai junto no `git apply -R`.
     let raw = proc::git_bytes(dir, &diff_args(rel, false, CONTEXTO_BLOCO))?;
     if revisao(&raw) != revision_seen {
         return Err(stale(rel));
