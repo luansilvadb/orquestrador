@@ -12,7 +12,7 @@ App para Windows (Tauri) que põe CLIs de IA para trabalhar sobre a pasta de um 
 Requisitos:
 
 - Windows com WebView2.
-- Os CLIs `claude` e/ou `codex` no `PATH`, instalados e **já autenticados**. Só os que você for usar.
+- Os CLIs `claude.exe` e/ou `codex.exe` (binários nativos; o atalho do npm não serve) no `PATH`, instalados e **já autenticados**. Só os que você for usar.
 - Git (recomendado). Sem ele, o app abre a pasta, mas sem os recursos de Git.
 
 ## Usar

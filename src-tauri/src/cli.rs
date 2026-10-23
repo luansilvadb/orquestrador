@@ -17,9 +17,11 @@ pub struct Exes {
 }
 
 impl Exes {
+    /// Os binários nativos: o atalho do npm (`codex` sem extensão, `codex.cmd`) não abre num PTY, e o `.cmd` passaria o
+    /// prompt pelo `cmd.exe`.
     pub fn real() -> Exes {
         let me = std::env::current_exe().unwrap_or_default();
-        Exes { claude: "claude".into(), codex: "codex".into(), app: me.to_string_lossy().to_string() }
+        Exes { claude: "claude.exe".into(), codex: "codex.exe".into(), app: me.to_string_lossy().to_string() }
     }
 }
 
@@ -182,6 +184,13 @@ mod tests {
 
     fn exes() -> Exes {
         Exes { claude: "claude".into(), codex: "codex".into(), app: r"C:\Program Files\Orq\o'rq.exe".into() }
+    }
+
+    /// Medido com o portable-pty 0.9: `codex` acha antes o atalho do npm sem extensão e falha com `os error 193`.
+    #[test]
+    fn clis_reais_sao_os_binarios_nativos() {
+        let real = Exes::real();
+        assert_eq!((real.claude.as_str(), real.codex.as_str()), ("claude.exe", "codex.exe"));
     }
 
     fn session(tag: &str, tool: &str) -> (Session, Tmp) {

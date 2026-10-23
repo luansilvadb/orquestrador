@@ -45,7 +45,7 @@ impl Term {
         for (key, value) in &cmd.env {
             builder.env(key, value);
         }
-        let mut child = pair.slave.spawn_command(builder).map_err(|e| fail(e.to_string()))?;
+        let mut child = pair.slave.spawn_command(builder).map_err(|e| fail(format!("{e}. Confira se `{}` está instalado e no PATH", cmd.program)))?;
         drop(pair.slave);
         let job = child.process_id().and_then(Job::adopt);
         let killer = child.clone_killer();
