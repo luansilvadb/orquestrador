@@ -1415,15 +1415,15 @@ function EmptyMark() {
 function useGitBase(path: string, raw: string, shown: boolean, active: boolean): { base: FileBase | null | undefined; reload: () => Promise<void> } {
   const [base, setBase] = useState<FileBase | null | undefined>(undefined);
   const pathRef = useRef(path);
-  pathRef.current = path;
+  useLayoutEffect(() => {
+    pathRef.current = path;
+  });
   const load = async () => {
-    let next: FileBase | null = null;
-    try {
-      const found = await backend.gitFileBase(path);
-      if (found) next = { head: found.head === null ? null : normalizeNewlines(found.head), index: found.index === null ? null : normalizeNewlines(found.index) };
-    } catch {
-      // Erro de Git não interrompe a edição: só tira os marcadores.
-    }
+    // Erro de Git não interrompe a edição: só tira os marcadores.
+    const found = await backend.gitFileBase(path).catch(() => null);
+    const next: FileBase | null = found
+      ? { head: found.head === null ? null : normalizeNewlines(found.head), index: found.index === null ? null : normalizeNewlines(found.index) }
+      : null;
     if (pathRef.current !== path) return;
     setBase((prev) => (prev === next || (prev && next && prev.head === next.head && prev.index === next.index) ? prev : next));
   };
@@ -1637,7 +1637,9 @@ function Continuous({ patch, compare, mode: asked, current, unitName, onPick, ce
   // O motor chama `onPostRender` e `onLineClick` fora do render: eles leem o estado atual por esta referência. As opções do motor
   // ficam estáveis, então um diff igual não é refeito.
   const latest = useRef({ patch, compare, mode, onPick, unitOfKey });
-  latest.current = { patch, compare, mode, onPick, unitOfKey };
+  useLayoutEffect(() => {
+    latest.current = { patch, compare, mode, onPick, unitOfKey };
+  });
 
   // Mede as linhas de mudança e as unidades no DOM do motor (o shadow DOM do diff). O modo é o que o motor desenhou (a `pre`), que pode
   // ainda ser o anterior logo depois da troca. Só troca o estado quando a geometria muda.
@@ -1834,18 +1836,19 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
     if (!common.guard.enter()) return;
     busyRef.current = true;
     setBusy(true);
-    try {
+    const attempt = async () => {
       await work();
       await load();
       common.refreshGit();
-    } catch (e) {
+    };
+    await attempt().catch(async (e: unknown) => {
       toast.error({ title: message(e), duration: 7000 });
       await load();
-    } finally {
+    }).finally(() => {
       busyRef.current = false;
       setBusy(false);
       common.guard.leave();
-    }
+    });
   };
 
   // Não rastreado: o Git não separa em blocos. O comparador mostra o arquivo novo inteiro e a ação é preparar o arquivo.
@@ -2033,19 +2036,19 @@ function ConflictTab({ path, common, shown, draft, putConflict, dropConflict, sa
   const [busy, setBusy] = useState(false);
   // `reset` troca o rascunho pelo texto atual da pasta; só é chamado depois da confirmação. Sem ele, respeita o rascunho.
   const load = async (reset = false) => {
-    try {
-      const fresh = await backend.gitConflict(path);
-      setConflict(fresh);
-      setError('');
-      if (!draft || reset) {
-        const text = fresh.worktree ?? '';
-        putConflict({ path, origin: text, draft: text, revision: fresh.revision });
-        setStale(false);
-      } else {
-        setStale(draft.revision !== fresh.revision);
-      }
-    } catch (e) {
+    const fresh = await backend.gitConflict(path).catch((e: unknown) => {
       setError(message(e));
+      return null;
+    });
+    if (!fresh) return;
+    setConflict(fresh);
+    setError('');
+    if (!draft || reset) {
+      const text = fresh.worktree ?? '';
+      putConflict({ path, origin: text, draft: text, revision: fresh.revision });
+      setStale(false);
+    } else {
+      setStale(draft.revision !== fresh.revision);
     }
   };
   // Aba escondida não relê: ao voltar a ser a atual, relê a pasta (a revisão do rascunho pode ter ficado velha).
@@ -2074,10 +2077,9 @@ function ConflictTab({ path, common, shown, draft, putConflict, dropConflict, sa
       await work();
     } catch (e) {
       toast.error({ title: message(e), duration: 7000 });
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
     }
+    busyRef.current = false;
+    setBusy(false);
   };
 
   // Escolhe o lado de um trecho do rascunho atual; os demais trechos ficam com marcadores.

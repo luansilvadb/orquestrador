@@ -97,9 +97,8 @@ function ChoiceFields({ hint, options, initial, confirmLabel, onConfirm, onCance
       await onConfirm(choice);
     } catch (e) {
       setError(message(e));
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
   }
 
   return (

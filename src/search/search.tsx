@@ -323,6 +323,46 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     field()?.select();
   }, [active, focusKey]);
 
+  // Uma busca. Consulta vazia limpa sem chamar o backend. `quiet` é a atualização depois de gravar: não entra no histórico e mantém recolhidos e dispensados.
+  async function run(f: Form, quiet = false) {
+    const id = ++latest.current;
+    setError('');
+    if (!f.query) {
+      setResults(null);
+      setPending(false);
+      return;
+    }
+    // A consulta entra no histórico no topo, sem repetição.
+    if (!quiet && !skipHistory.current) setHistory((prev) => [f.query, ...prev.filter((q) => q !== f.query)].slice(0, HISTORY_MAX));
+    setPending(true);
+    try {
+      const found = await backend.search(f.query, f.options, filtersOf(f));
+      if (id !== latest.current) return;
+      setPending(false);
+      setResults(found);
+      setShown({ query: f.query, options: f.options });
+      if (quiet) {
+        // Recolhido só sai da lista se o arquivo sumiu da busca.
+        setCollapsed((prev) => prev.filter((k) => !k.startsWith('f:') || found.files.some((x) => `f:${x.path}` === k)));
+      } else {
+        setCollapsed([]);
+        setDismissedFiles([]);
+        setDismissedHits([]);
+      }
+    } catch (e) {
+      if (id !== latest.current) return;
+      setPending(false);
+      setResults(null);
+      setError(message(e));
+    }
+  }
+
+  // Digitar espera um pouco; Enter, o botão Atualizar e as opções buscam na hora.
+  function now(next: Form) {
+    window.clearTimeout(timer.current);
+    void run(next);
+  }
+
   // Localizar na pasta: a pasta vai para o campo de incluir (como o VS Code faz), os detalhes abrem e a busca refaz, se há consulta.
   useEffect(() => {
     if (!folder) return;
@@ -361,45 +401,6 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   useEffect(() => store(HISTORY_KEY, JSON.stringify(history)), [history]);
   useEffect(() => store(VIEW_KEY, view), [view]);
 
-  // Uma busca. Consulta vazia limpa sem chamar o backend. `quiet` é a atualização depois de gravar: não entra no histórico e mantém recolhidos e dispensados.
-  async function run(f: Form, quiet = false) {
-    const id = ++latest.current;
-    setError('');
-    if (!f.query) {
-      setResults(null);
-      setPending(false);
-      return;
-    }
-    // A consulta entra no histórico no topo, sem repetição.
-    if (!quiet && !skipHistory.current) setHistory((prev) => [f.query, ...prev.filter((q) => q !== f.query)].slice(0, HISTORY_MAX));
-    setPending(true);
-    try {
-      const found = await backend.search(f.query, f.options, filtersOf(f));
-      if (id !== latest.current) return;
-      setResults(found);
-      setShown({ query: f.query, options: f.options });
-      if (quiet) {
-        // Recolhido só sai da lista se o arquivo sumiu da busca.
-        setCollapsed((prev) => prev.filter((k) => !k.startsWith('f:') || found.files.some((x) => `f:${x.path}` === k)));
-      } else {
-        setCollapsed([]);
-        setDismissedFiles([]);
-        setDismissedHits([]);
-      }
-    } catch (e) {
-      if (id !== latest.current) return;
-      setResults(null);
-      setError(message(e));
-    } finally {
-      if (id === latest.current) setPending(false);
-    }
-  }
-
-  // Digitar espera um pouco; Enter, o botão Atualizar e as opções buscam na hora.
-  function now(next: Form) {
-    window.clearTimeout(timer.current);
-    void run(next);
-  }
   const later = (next: Form) => {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => void run(next), DELAY_MS);
@@ -485,7 +486,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
       out.set(f.path, lines);
     }
     return out;
-  }, [livePreview, shown]);
+  }, [livePreview, pattern]);
   // O que entra no lugar da ocorrência, ou null quando a prévia não diz (arquivo fora dela ou linha ambígua).
   const replacementOf = (h: Hit) => (h.start < 0 ? null : replacements.get(h.path)?.get(h.line)?.get(h.offset + h.start) ?? null);
 
@@ -524,9 +525,8 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
       await run(form, true);
     } catch (e) {
       setReport({ replaced: 0, files: 0, replacement: prev.replacement, errors: [{ path: '', error: message(e) }], left });
-    } finally {
-      setApplying(false);
     }
+    setApplying(false);
   }
 
   // ---------- resultados ----------
@@ -802,7 +802,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     >
       {renderRow}
     </Virtualizer>
-  ), [rows, showReplace, replacements, current, collapsedSet, applying, hasDraft, focusedIndex]);
+  ), [rows, renderRow, focusedIndex]);
 
   const confirmFiles = confirming ? confirming.data.files.filter((f) => files.some((x) => x.path === f.path)) : [];
   const confirmCount = confirmFiles.reduce((n, f) => n + f.count, 0);

@@ -66,6 +66,7 @@ const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 }
 // Revelar no Explorer do Windows: a pasta (a raiz, '') abre nela; o arquivo abre a pasta dele com ele marcado.
 const revealPath = (path: string, folder: boolean) => void (folder ? backend.revealDir(path) : backend.revealFile(path)).catch(report);
 // Copiar e recortar põem os itens no clipboard do Windows: colar é no Explorer. Recortar não move nada agora.
+const pasted = (moved: number, place: string) => moved ? `Itens movidos ${place}` : `Itens colados ${place}`;
 const copyMany = (paths: string[], cut: boolean) => void backend.copyFiles(paths, cut).then(
   () => toast.success({ title: cut ? `${paths.length} itens recortados. Cole no Explorer para mover.` : `${paths.length} itens copiados. Cole no Explorer.`, duration: 4000 }),
   report,
@@ -253,10 +254,12 @@ function NewItemInput({ kind, label, selectBase = false, name, busy, error, onCh
   // O motivo vai fora da linha (ela corta o que passa dela), preso embaixo do campo, no painel (onde valem as cores do tema);
   // acompanha a rolagem e o tamanho.
   const field = useRef<HTMLInputElement>(null);
-  const [at, setAt] = useState<DOMRect | null>(null);
+  const [at, setAt] = useState<{ rect: DOMRect; host: Element } | null>(null);
   useLayoutEffect(() => {
     if (!error) return setAt(null);
-    const place = () => field.current && setAt(field.current.getBoundingClientRect());
+    const place = () => {
+      if (field.current) setAt({ rect: field.current.getBoundingClientRect(), host: field.current.closest('.explorer-tree') ?? document.body });
+    };
     place();
     window.addEventListener('scroll', place, true);
     window.addEventListener('resize', place);
@@ -309,12 +312,12 @@ function NewItemInput({ kind, label, selectBase = false, name, busy, error, onCh
       />
       {error && at && createPortal(
         <span
-          role="alert" style={{ left: at.left, top: at.bottom, width: at.width }}
+          role="alert" style={{ left: at.rect.left, top: at.rect.bottom, width: at.rect.width }}
           className="fixed z-[1000] rounded-b-[4px] border border-t-0 border-[var(--ant-color-error)] bg-[color-mix(in_srgb,var(--ant-color-error)_25%,var(--ant-color-bg-elevated))] px-1.5 py-1 text-[12px] leading-[17px] text-[var(--ant-color-text)]"
         >
           {error}
         </span>,
-        field.current?.closest('.explorer-tree') ?? document.body,
+        at.host,
       )}
     </span>
   );
@@ -397,12 +400,6 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     });
   });
 
-  async function toggle(path: string, isOpen: boolean) {
-    // Fechar só tira a pasta (e as de dentro) da lista de abertas: o conteúdo fica até a animação terminar.
-    if (isOpen) return setTree((prev) => ({ ...prev, expanded: prev.expanded.filter((p) => !under(path, p)) }));
-    await openDir(path);
-  }
-
   async function openDir(path: string) {
     // A lista chega antes da pasta abrir, para o painel medir a altura já com o conteúdo.
     try {
@@ -416,6 +413,13 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
       setTree((prev) => drop(prev, path));
     }
   }
+
+  async function toggle(path: string, isOpen: boolean) {
+    // Fechar só tira a pasta (e as de dentro) da lista de abertas: o conteúdo fica até a animação terminar.
+    if (isOpen) return setTree((prev) => ({ ...prev, expanded: prev.expanded.filter((p) => !under(path, p)) }));
+    await openDir(path);
+  }
+
 
   // Relê uma pasta depois de uma ação dela (renomear, excluir, criar), sem abrir a pasta se ela estava fechada.
   async function reloadFolder(dir: string) {
@@ -484,6 +488,22 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     setCreating({ kind, dir, name: '', error: '', busy: false });
     if (dir && !tree.expanded.includes(dir)) void openDir(dir);
   };
+
+  // Colar em `dir`: a árvore relê depois do sucesso; erro vira toast. Recorte tira o item da árvore de onde estava, então a seleção sai se era dele.
+  async function pasteInto(dir: string) {
+    const place = dir ? `em “${dir}”` : 'na raiz do projeto';
+    try {
+      const moved = await actions.paste(dir);
+      setSelection((prev) => prev.filter((p) => !moved.some((m) => under(m, p))));
+      await reloadAll();
+      if (dir) await openDir(dir);
+      toast.success({ title: pasted(moved.length, place), duration: 3000 });
+    } catch (e) {
+      // Um recorte que falhou no meio pode ter movido alguns itens: a árvore relê mesmo assim.
+      await reloadAll();
+      toast.error({ title: message(e), duration: 7000 });
+    }
+  }
 
   // Item (ou seleção) da árvore: uma ação real por item de menu. Vários itens: as que só servem a um ficam desabilitadas com o motivo.
   const itemMenu = (paths: string[], hasFiles: boolean): ContextMenuItem[] => {
@@ -565,21 +585,6 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
   const openRootMenu = async () => showContextMenu(rootMenu(await clipboardHasFiles()));
   const openItemMenu = async (paths: string[]) => showContextMenu(itemMenu(paths, await clipboardHasFiles()));
 
-  // Colar em `dir`: a árvore relê depois do sucesso; erro vira toast. Recorte tira o item da árvore de onde estava, então a seleção sai se era dele.
-  async function pasteInto(dir: string) {
-    const place = dir ? `em “${dir}”` : 'na raiz do projeto';
-    try {
-      const moved = await actions.paste(dir);
-      setSelection((prev) => prev.filter((p) => !moved.some((m) => under(m, p))));
-      await reloadAll();
-      if (dir) await openDir(dir);
-      toast.success({ title: moved.length ? `Itens movidos ${place}` : `Itens colados ${place}`, duration: 3000 });
-    } catch (e) {
-      // Um recorte que falhou no meio pode ter movido alguns itens: a árvore relê mesmo assim.
-      await reloadAll();
-      toast.error({ title: message(e), duration: 7000 });
-    }
-  }
 
   // Mover (arrastar ou soltar): só o que passou na checagem vai ao App. Parada no meio mostra o erro e reconcilia com o que foi feito.
   async function moveInto(paths: string[], dest: string) {
@@ -604,15 +609,18 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     const problem = fileNameError(name);
     if (problem) return setCreating({ ...creating, error: problem });
     setCreating({ ...creating, error: '', busy: true });
+    const request = kind === 'file' ? backend.createFile(dir, name) : backend.createDir(dir, name);
+    const title = kind === 'file' ? 'Arquivo criado' : 'Pasta criada';
     try {
-      const created = kind === 'file' ? await backend.createFile(dir, name) : await backend.createDir(dir, name);
+      const created = await request;
       setCreating(null);
       if (dir) await openDir(dir);
       else await reloadFolder('');
       if (kind === 'file') onOpen(created, { permanent: true });
-      toast.success({ title: kind === 'file' ? 'Arquivo criado' : 'Pasta criada', duration: 3000 });
+      toast.success({ title, duration: 3000 });
     } catch (e) {
-      setCreating((prev) => prev && { ...prev, busy: false, error: message(e) });
+      const error = message(e);
+      setCreating((prev) => prev && { ...prev, busy: false, error });
     }
   }
 
@@ -775,20 +783,22 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     renamingNow.current = true;
     setRenaming({ ...renaming, error: '', busy: true });
     const folder = !isFile(path);
-    const wasOpen = tree.expanded.includes(path);
+    const reopen = folder && tree.expanded.includes(path);
+    const dirs = folder ? [path] : [];
+    const title = folder ? 'Pasta renomeada' : 'Arquivo renomeado';
     try {
       const next = await actions.rename(path, name);
       setRenaming(null);
-      settle([splitPath(path).dir], folder ? [path] : [], [{ from: path, to: next }]);
+      settle([splitPath(path).dir], dirs, [{ from: path, to: next }]);
       setSelection([next]);
       if (!leaving) requestAnimationFrame(() => focusRow(next));
-      if (folder && wasOpen) await openDir(next);
-      toast.success({ title: folder ? 'Pasta renomeada' : 'Arquivo renomeado', duration: 3000 });
+      if (reopen) await openDir(next);
+      toast.success({ title, duration: 3000 });
     } catch (e) {
-      setRenaming((prev) => prev && { ...prev, busy: false, error: message(e) });
-    } finally {
-      renamingNow.current = false;
+      const error = message(e);
+      setRenaming((prev) => prev && { ...prev, busy: false, error });
     }
+    renamingNow.current = false;
   }
 
   // Excluir: vai para a Lixeira. Uma parada no meio mantém o diálogo com o que sobrou e o erro; o que foi feito sai da árvore mesmo assim.

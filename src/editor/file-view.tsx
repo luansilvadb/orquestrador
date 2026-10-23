@@ -1,6 +1,6 @@
 // Editor de texto (CodeMirror com o tema do app), usado pelo editor central (src/editor/editor-workspace.tsx). Não lê nem grava o disco:
 // o texto, o cursor e a rolagem vêm de fora, e o estado do CodeMirror fica guardado por `cacheKey` (o docId).
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ContextMenuTrigger, type ContextMenuItem, toast } from '@lobehub/ui/base-ui';
 import { basicSetup } from 'codemirror';
 import { Compartment, EditorSelection, EditorState, Prec, StateEffect, Text, Transaction } from '@codemirror/state';
@@ -23,6 +23,14 @@ import { formatPrettier } from './format';
 
 // ponytail: acima de 200 mil caracteres, carregar parser e colorir custa mais que a leitura simples.
 const COLOR_LIMIT = 200_000;
+// Linguagem pelo nome do arquivo; o pacote de linguagens só carrega quando um arquivo é colorido.
+const loadLanguage = (path: string) => import('@codemirror/language-data')
+  .then(({ languages }) => LanguageDescription.matchFilename(languages, path)?.load() ?? null);
+// Sem a API (contexto inseguro), a ação vira toast como qualquer outra falha.
+const clipboard = () => {
+  if (!navigator.clipboard) throw new Error('A área de transferência não está disponível aqui.');
+  return navigator.clipboard;
+};
 // Quantos ecos de digitação guardar: a renderização atrasada nunca passa de algumas teclas.
 const ECHO_LIMIT = 64;
 // Medidas e cores do editor do Antigravity (Monaco), tema Dark Modern: texto de 14 px em linhas de 19 px, Consolas no Windows, sem
@@ -234,7 +242,9 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
   // com um texto antigo não pode reverter o documento, senão cada volta gera outra edição e o React estoura o limite de atualizações.
   const echoes = useRef<string[]>([]);
   const latest = useRef({ onChange, onSave, onCursor, onScroll, onWriteIndex, onFormatEol });
-  latest.current = { onChange, onSave, onCursor, onScroll, onWriteIndex, onFormatEol };
+  useLayoutEffect(() => {
+    latest.current = { onChange, onSave, onCursor, onScroll, onWriteIndex, onFormatEol };
+  });
   const [gotoOpen, setGotoOpen] = useState(false);
   const [gotoText, setGotoText] = useState('');
   const [gotoError, setGotoError] = useState('');
@@ -242,7 +252,9 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
   const formatterRef = useRef<FormatterInfo | null>(null);
   const formatterRequest = useRef<Promise<FormatterInfo> | null>(null);
   const formatPath = useRef(path);
-  formatPath.current = path;
+  useLayoutEffect(() => {
+    formatPath.current = path;
+  });
   const formatDocumentRef = useRef<(view: EditorView) => Promise<void>>(async () => {});
   // Linha e coluna (1-based) do cursor, para o caminho de navegação da aba. Só informa; não mexe no editor.
   const reportCursor = (state: EditorState) => {
@@ -261,11 +273,11 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
     if (!current) return;
     const { from, to } = current.state.selection.main;
     if (from === to) return;
+    const cutting = cut && !readOnly;
     try {
-      if (!navigator.clipboard) throw new Error('A área de transferência não está disponível aqui.');
-      await navigator.clipboard.writeText(current.state.sliceDoc(from, to));
+      await clipboard().writeText(current.state.sliceDoc(from, to));
       // Só corta depois que o texto foi para a área de transferência: falha no clipboard não apaga nada.
-      if (cut && !readOnly) current.dispatch({ changes: { from, to }, selection: { anchor: from } });
+      if (cutting) current.dispatch({ changes: { from, to }, selection: { anchor: from } });
     } catch (e) {
       toast.error({ title: message(e), duration: 5000 });
     }
@@ -274,8 +286,7 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
     const current = view.current;
     if (!current || readOnly) return;
     try {
-      if (!navigator.clipboard) throw new Error('A área de transferência não está disponível aqui.');
-      const text = await navigator.clipboard.readText();
+      const text = await clipboard().readText();
       current.dispatch(current.state.replaceSelection(text));
       current.focus();
     } catch (e) {
@@ -299,47 +310,48 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
     });
     return pending;
   };
-  const formatDocument = async (current: EditorView) => {
+  const reformat = async (current: EditorView) => {
     if (!path || readOnly) {
       toast.info({ title: !path ? 'Salve o arquivo para formatar.' : 'O arquivo é somente leitura.' });
       return;
     }
     const source = current.state.doc.toString();
     const initialSelection = current.state.selection;
-    try {
-      const info = await requestFormatterInfo();
-      if (info.kind === 'unavailable') {
-        toast.info({ title: info.reason });
-        return;
-      }
-      const result = info.kind === 'prettier'
-        ? await formatPrettier(source, path, info, initialSelection.main.head)
-        : { text: await backend.formatCli(path, source), cursorOffset: -1, endOfLine: undefined };
-      const outputNewline = info.kind === 'prettier' && result.endOfLine === 'auto' ? undefined : newlineOfText(result.text);
-      const formatted = result.text.replace(/\r\n|\r/g, '\n');
-      if (current !== view.current || current.state.doc.toString() !== source) return;
-      if (formatted === source) return;
-      const selection = current.state.selection;
-      const head = result.cursorOffset >= 0 && result.cursorOffset <= formatted.length
-        && selection.main.head === initialSelection.main.head
-        ? result.cursorOffset
-        : mapPosition(source, formatted, selection.main.head);
-      const ranges = selection.ranges.map((range, index) => {
-        const mappedHead = index === selection.mainIndex ? head : mapPosition(source, formatted, range.head);
-        const anchor = range.empty ? mappedHead : mapPosition(source, formatted, range.anchor);
-        return EditorSelection.range(anchor, mappedHead);
-      });
-      current.dispatch({
-        changes: { from: 0, to: current.state.doc.length, insert: formatted },
-        selection: EditorSelection.create(ranges, selection.mainIndex),
-      });
-      if (outputNewline) latest.current.onFormatEol?.(outputNewline);
-      current.focus();
-    } catch (e) {
-      toast.error({ title: message(e), duration: 7000 });
+    const info = await requestFormatterInfo();
+    if (info.kind === 'unavailable') {
+      toast.info({ title: info.reason });
+      return;
     }
+    const result = info.kind === 'prettier'
+      ? await formatPrettier(source, path, info, initialSelection.main.head)
+      : { text: await backend.formatCli(path, source), cursorOffset: -1, endOfLine: undefined };
+    const outputNewline = info.kind === 'prettier' && result.endOfLine === 'auto' ? undefined : newlineOfText(result.text);
+    const formatted = result.text.replace(/\r\n|\r/g, '\n');
+    if (current !== view.current || current.state.doc.toString() !== source) return;
+    if (formatted === source) return;
+    const selection = current.state.selection;
+    const head = result.cursorOffset >= 0 && result.cursorOffset <= formatted.length
+      && selection.main.head === initialSelection.main.head
+      ? result.cursorOffset
+      : mapPosition(source, formatted, selection.main.head);
+    const ranges = selection.ranges.map((range, index) => {
+      const mappedHead = index === selection.mainIndex ? head : mapPosition(source, formatted, range.head);
+      const anchor = range.empty ? mappedHead : mapPosition(source, formatted, range.anchor);
+      return EditorSelection.range(anchor, mappedHead);
+    });
+    current.dispatch({
+      changes: { from: 0, to: current.state.doc.length, insert: formatted },
+      selection: EditorSelection.create(ranges, selection.mainIndex),
+    });
+    if (outputNewline) latest.current.onFormatEol?.(outputNewline);
+    current.focus();
   };
-  formatDocumentRef.current = formatDocument;
+  const formatDocument = (current: EditorView) => reformat(current).catch((e: unknown) => {
+    toast.error({ title: message(e), duration: 7000 });
+  });
+  useLayoutEffect(() => {
+    formatDocumentRef.current = formatDocument;
+  });
   useEffect(() => {
     formatterRef.current = null;
     formatterRequest.current = null;
@@ -429,8 +441,10 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
       mini.current.of(minimap()),
       // Preparar do bloco aberto: erro do backend (índice mudou, executores trabalhando) vira aviso, como o resto do editor.
       onWriteIndex ? gitIndexWriter.of(async (value, expected) => {
+        const write = latest.current.onWriteIndex;
+        if (!write) return;
         try {
-          await latest.current.onWriteIndex?.(value, expected);
+          await write(value, expected);
         } catch (e) {
           toast.error({ title: message(e), duration: 5000 });
         }
@@ -481,12 +495,7 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
   useEffect(() => {
     const current = view.current;
     if (!current) return;
-    const source = text.length <= COLOR_LIMIT
-      ? import('@codemirror/language-data').then(({ languages }) => {
-        const description = LanguageDescription.matchFilename(languages, path);
-        return description?.load() ?? null;
-      })
-      : Promise.resolve(null);
+    const source = text.length <= COLOR_LIMIT ? loadLanguage(path) : Promise.resolve(null);
     let live = true;
     void source.then((support) => {
       if (live && view.current === current) {

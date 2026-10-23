@@ -187,13 +187,11 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
     if (!guard.enter()) return undefined;
     busyRef.current = true;
     setBusy(kind);
-    try {
-      return await task();
-    } finally {
+    return task().finally(() => {
       busyRef.current = false;
       setBusy(null);
       guard.leave();
-    }
+    });
   };
 
   const remote = (kind: GraphRemote) => withBusy(kind, () => run(async () => {

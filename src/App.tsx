@@ -275,6 +275,12 @@ function readOpenProjects(): string[] {
   } catch { return []; }
 }
 
+function readActiveProject(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_PROJECT_KEY) ?? localStorage.getItem(LAST_PROJECT_KEY);
+  } catch { /* Sem preferência ativa, usa a primeira pasta. */ return null; }
+}
+
 export function App() {
   const [projects, setProjects] = useState<ManagedProject[]>([]);
   const [active, setActive] = useState<string | null>(null);
@@ -285,18 +291,20 @@ export function App() {
   // Etapa da abertura, mostrada até os projetos salvos voltarem.
   const [stage, setStage] = useState('Conectando ao backend…');
   const projectsRef = useRef(projects);
-  projectsRef.current = projects;
   const activeRef = useRef(active);
-  activeRef.current = active;
+  useLayoutEffect(() => {
+    projectsRef.current = projects;
+    activeRef.current = active;
+  });
 
   const persist = (next: ManagedProject[], activeId: string | null) => {
     setProjects(next);
     setActive(activeId);
     setProjectId(activeId);
     if (activeId) setMounted((ids) => ids.includes(activeId) ? ids : [...ids, activeId]);
+    const activePath = next.find((item) => item.id === activeId)?.project;
     try {
       localStorage.setItem(OPEN_PROJECTS_KEY, JSON.stringify(next.map((item) => item.project)));
-      const activePath = next.find((item) => item.id === activeId)?.project;
       if (activePath) {
         localStorage.setItem(ACTIVE_PROJECT_KEY, activePath);
         localStorage.setItem(LAST_PROJECT_KEY, activePath);
@@ -306,41 +314,39 @@ export function App() {
       }
     } catch { /* A preferência local não impede abrir a pasta. */ }
   };
-  const addProject = async (path?: string) => {
+  const openNewProject = async (path?: string) => {
+    await connect();
+    const opened = path ? await backend.openProject(path) : await backend.chooseProject();
+    if (!opened) return;
+    const current = projectsRef.current;
+    const found = current.find((item) => item.id === opened.id);
+    const next = found ? current : [...current, { id: opened.id, project: opened.project }];
+    const recents = [opened.project, ...readRecentProjects().filter((item) => item.toLowerCase() !== opened.project.toLowerCase())].slice(0, 10);
     try {
-      await connect();
-      const opened = path ? await backend.openProject(path) : await backend.chooseProject();
-      if (!opened) return;
-      const current = projectsRef.current;
-      const found = current.find((item) => item.id === opened.id);
-      const next = found ? current : [...current, { id: opened.id, project: opened.project }];
-      const recents = [opened.project, ...readRecentProjects().filter((item) => item.toLowerCase() !== opened.project.toLowerCase())].slice(0, 10);
-      try {
-        localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(recents));
-        localStorage.setItem(LAST_PROJECT_KEY, opened.project);
-      } catch { /* A preferência local não impede abrir a pasta. */ }
-      setRecentProjects(recents);
-      persist(next, opened.id);
-      if (opened.subfolder) toast.info({ title: `Esta pasta está dentro do repositório ${opened.project}. O projeto aberto é a raiz dele.`, duration: 6000 });
-    } catch (e) {
-      if (path && /não existe|não é uma pasta/i.test(message(e))) {
-        const next = readRecentProjects().filter((item) => item.toLowerCase() !== path.toLowerCase());
-        try { localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next)); } catch { /* A preferência local é opcional. */ }
-        setRecentProjects(next);
-        toast.warning({ title: `Projeto removido dos recentes: ${path}`, duration: 6000 });
-      } else report(e);
-    }
+      localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(recents));
+      localStorage.setItem(LAST_PROJECT_KEY, opened.project);
+    } catch { /* A preferência local não impede abrir a pasta. */ }
+    setRecentProjects(recents);
+    persist(next, opened.id);
+    if (opened.subfolder) toast.info({ title: `Esta pasta está dentro do repositório ${opened.project}. O projeto aberto é a raiz dele.`, duration: 6000 });
   };
-  const closeManagedProject = async (id: string) => {
-    try {
-      await backend.closeProject(id);
-      const next = projectsRef.current.filter((item) => item.id !== id);
-      setMounted((ids) => ids.filter((item) => item !== id));
-      const nextActive = activeRef.current === id ? next[Math.max(0, projectsRef.current.findIndex((item) => item.id === id) - 1)]?.id ?? next[0]?.id ?? null : activeRef.current;
-      persist(next, nextActive);
-      setBusyByProject((items) => { const rest = { ...items }; delete rest[id]; return rest; });
-    } catch (e) { report(e); }
+  const addProject = (path?: string) => openNewProject(path).catch((e: unknown) => {
+    if (path && /não existe|não é uma pasta/i.test(message(e))) {
+      const next = readRecentProjects().filter((item) => item.toLowerCase() !== path.toLowerCase());
+      try { localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next)); } catch { /* A preferência local é opcional. */ }
+      setRecentProjects(next);
+      toast.warning({ title: `Projeto removido dos recentes: ${path}`, duration: 6000 });
+    } else report(e);
+  });
+  const dropManagedProject = async (id: string) => {
+    await backend.closeProject(id);
+    const next = projectsRef.current.filter((item) => item.id !== id);
+    setMounted((ids) => ids.filter((item) => item !== id));
+    const nextActive = activeRef.current === id ? next[Math.max(0, projectsRef.current.findIndex((item) => item.id === id) - 1)]?.id ?? next[0]?.id ?? null : activeRef.current;
+    persist(next, nextActive);
+    setBusyByProject((items) => { const rest = { ...items }; delete rest[id]; return rest; });
   };
+  const closeManagedProject = (id: string) => dropManagedProject(id).catch(report);
   const moveProject = (id: string, target: number) => {
     const next = [...projectsRef.current];
     const from = next.findIndex((item) => item.id === id);
@@ -351,9 +357,9 @@ export function App() {
   };
   const selectProject = (id: string) => persist(projectsRef.current, id);
 
-  openAbsolutePath = async (path: string) => {
-    try {
-      const opened = await backend.openProject(path);
+  async function openAbsolute(path: string) {
+    const opened = await backend.openProject(path).catch(() => null);
+    if (opened) {
       const current = projectsRef.current;
       const next = current.some((item) => item.id === opened.id) ? current : [...current, { id: opened.id, project: opened.project }];
       const recents = [opened.project, ...readRecentProjects().filter((item) => item.toLowerCase() !== opened.project.toLowerCase())].slice(0, 10);
@@ -364,7 +370,8 @@ export function App() {
       setRecentProjects(recents);
       persist(next, opened.id);
       return;
-    } catch { /* Arquivo: procurar primeiro uma pasta já aberta. */ }
+    }
+    // Arquivo: procurar primeiro uma pasta já aberta.
     const containing = projectsRef.current.find((item) => relativeTo(item.project, path.replace(/\\/g, '/')) !== null);
     const target = containing ?? projectsRef.current.find((item) => item.id === activeRef.current);
     if (!target) { looseFileOpener?.(path); return; }
@@ -372,7 +379,10 @@ export function App() {
     const open = projectOpeners.get(target.id);
     if (open) open(path);
     else pendingProjectFiles.set(target.id, [...(pendingProjectFiles.get(target.id) ?? []), path]);
-  };
+  }
+  useLayoutEffect(() => {
+    openAbsolutePath = openAbsolute;
+  });
 
   useEffect(() => {
     let live = true;
@@ -392,8 +402,7 @@ export function App() {
           if (!restored.some((item) => item.id === opened.id)) restored.push({ id: opened.id, project: opened.project });
         } catch { /* Pastas removidas não são reabertas. */ }
       }
-      let selectedPath: string | null = null;
-      try { selectedPath = localStorage.getItem(ACTIVE_PROJECT_KEY) ?? localStorage.getItem(LAST_PROJECT_KEY); } catch { /* Sem preferência ativa, usa a primeira pasta. */ }
+      const selectedPath = readActiveProject();
       const selected = restored.find((item) => item.project.toLowerCase() === selectedPath?.toLowerCase()) ?? restored[0];
       if (live) { persist(restored, selected?.id ?? null); setReady(true); }
     })().catch((e) => { report(e); if (live) setReady(true); });
@@ -1463,7 +1472,7 @@ let bootStart: number | undefined;
 /** A marca animada do `index.html`. `--t` é o tempo desde o início dela: a animação continua da mesma fase, inclusive entre telas. */
 function BootMark({ still }: { still?: boolean }) {
   const [t] = useState(() => {
-    bootStart ??= Number(document.querySelector('.boot-mark .hub')?.getAnimations()[0]?.startTime ?? performance.now());
+    if (bootStart === undefined) bootStart = Number(document.querySelector('.boot-mark .hub')?.getAnimations()[0]?.startTime ?? performance.now());
     return `${performance.now() - bootStart}ms`;
   });
   return (
