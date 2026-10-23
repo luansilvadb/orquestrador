@@ -179,8 +179,8 @@ pub fn write_checked_at(path: &Path, text: &str, base: &str, base_bom: bool) -> 
     write_held(file, text, base, base_bom)
 }
 
+/// `text` vai com o fim de linha que o editor escolheu (o do disco, ou o que o formatador definiu): nada é convertido.
 fn write_held(mut file: File, text: &str, base: &str, base_bom: bool) -> Result<(), String> {
-    let text = restore_eol(text, base);
     if text.len() as u64 > MAX_FILE {
         return Err("O arquivo ficaria grande demais para abrir aqui.".into());
     }
@@ -255,18 +255,6 @@ fn open_err(e: std::io::Error) -> String {
         "O arquivo não existe mais. Nada foi gravado.".into()
     } else {
         format!("Não foi possível abrir o arquivo para gravar: {e}")
-    }
-}
-
-/// Se `base` tem só CRLF (toda quebra é `\r\n`) e `text` não tem nenhum `\r`, cada `\n` de `text` vira `\r\n`. É o caso do
-/// textarea, que devolve só LF. Qualquer outro texto volta igual.
-fn restore_eol(text: &str, base: &str) -> String {
-    let lf = base.matches('\n').count();
-    let crlf = base.matches("\r\n").count();
-    if crlf > 0 && crlf == lf && !text.contains('\r') {
-        text.replace('\n', "\r\n")
-    } else {
-        text.to_string()
     }
 }
 
@@ -1489,9 +1477,14 @@ src/gerado/
         let root = &fixture("verifica-bom").0;
         std::fs::write(root.join("A.txt"), b"\xEF\xBB\xBFa\r\nb\r\n").unwrap();
         let lido = read(&root, "A.txt").unwrap();
-        // O textarea devolve só LF: o CRLF do arquivo volta, e o BOM continua.
-        write_checked(&root, "A.txt", "c\nd\n", &lido.text, lido.bom).unwrap();
+        // O BOM continua e o fim de linha é o do texto mandado: o editor já manda o do disco.
+        write_checked(&root, "A.txt", "c\r\nd\r\n", &lido.text, lido.bom).unwrap();
         assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), b"\xEF\xBB\xBFc\r\nd\r\n");
+        // Depois do Formatar Documento com LF, o LF vai ao disco, e a gravação seguinte parte dele sem acusar alteração.
+        let lido = read(&root, "A.txt").unwrap();
+        write_checked(&root, "A.txt", "e\nf\n", &lido.text, lido.bom).unwrap();
+        assert_eq!(std::fs::read(root.join("A.txt")).unwrap(), b"\xEF\xBB\xBFe\nf\n");
+        write_checked(&root, "A.txt", "g\n", "e\nf\n", true).unwrap();
         // Arquivo sem BOM e com LF continua assim.
         std::fs::write(root.join("b.txt"), "x\ny\n").unwrap();
         let lido = read(&root, "b.txt").unwrap();
@@ -1511,7 +1504,7 @@ src/gerado/
         let lido = read_at(&file).unwrap();
         assert!(lido.bom);
         assert_eq!(lido.text, "antes\r\nlinha\r\n");
-        write_checked_at(&file, "depois\nfim\n", &lido.text, lido.bom).unwrap();
+        write_checked_at(&file, "depois\r\nfim\r\n", &lido.text, lido.bom).unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), b"\xEF\xBB\xBFdepois\r\nfim\r\n");
 
         let lido = read_at(&file).unwrap();

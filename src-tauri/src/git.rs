@@ -1059,6 +1059,9 @@ pub fn write_resolution(dir: &Path, rel: &str, content: &str, revision: &str, ma
     let worktree = snap.worktree.as_deref();
     let lados = snap.sides(dir, rel)?;
     let refs: Vec<&str> = lados.iter().flatten().map(String::as_str).collect();
+    if refs.iter().any(|t| misto(t)) {
+        return Err(format!("{rel} mistura CRLF e LF: resolva este conflito fora do app."));
+    }
     let (bom, crlf) = estilo(worktree, &refs);
     let body = layout(content, crlf);
     match worktree {
@@ -1199,6 +1202,12 @@ fn texto_base(dir: &Path, objeto: &str) -> Result<Option<String>, String> {
     Ok(Some(String::from_utf8_lossy(sem_bom_bytes(&bytes)).into_owned()))
 }
 
+/// Texto com `\r\n` e `\n` solto ao mesmo tempo: a gravação não sabe que fim de linha cada linha nova leva.
+fn misto(text: &str) -> bool {
+    let crlf = text.matches("\r\n").count();
+    crlf > 0 && crlf != text.matches('\n').count()
+}
+
 /// O texto na forma que o editor compara: todo `\r\n` e `\r` vira `\n`.
 fn so_lf(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
@@ -1229,6 +1238,9 @@ pub fn write_index(dir: &Path, rel: &str, text: &str, expected: &str) -> Result<
     };
     if so_lf(&atual) != expected {
         return Err(format!("O índice de {rel} mudou desde que o editor o leu. Tente de novo."));
+    }
+    if misto(&atual) {
+        return Err(format!("{rel} mistura CRLF e LF no índice: prepare o arquivo inteiro."));
     }
     let mut novo = if atual.contains("\r\n") { text.replace("\r\n", "\n").replace('\n', "\r\n") } else { text.to_string() };
     let blob = proc::git_bytes(dir, &["cat-file", "blob", &indice])?;
@@ -2691,6 +2703,26 @@ mod tests {
         write_index(&dir, "a.txt", "UM\nDOIS\nTRES\n", &visto(&dir, "a.txt")).unwrap();
         assert_eq!(blob(&dir, "a.txt"), b"UM\r\nDOIS\r\nTRES\r\n");
         assert_eq!(git(&dir, &["diff", "--cached", "--numstat", "--", "a.txt"]), "3\t3\ta.txt\n", "só as três linhas mudadas");
+    }
+
+    #[test]
+    fn fins_de_linha_mistos_recusam_sem_converter_o_arquivo() {
+        let tmp = Tmp::new("orq-git", "indice-misto");
+        let dir = repo(&tmp, "r");
+        write(&dir, "a.txt", "a\nb\r\nc\n");
+        commit_all(&dir, "base");
+        let antes = git(&dir, &["ls-files", "-s"]);
+        let why = write_index(&dir, "a.txt", "A\nb\nc\n", &visto(&dir, "a.txt")).unwrap_err();
+        assert!(why.contains("mistura CRLF e LF"), "{why}");
+        assert_eq!(git(&dir, &["ls-files", "-s"]), antes, "o índice fica igual");
+
+        let tmp = Tmp::new("orq-git", "conflito-misto");
+        let dir = conflito(&tmp, "r", b"base\n".to_vec(), b"main\r\nx\n".to_vec(), b"outra\n".to_vec());
+        let c = conflict(&dir, "x.txt").unwrap();
+        let antes = fs::read(dir.join("x.txt")).unwrap();
+        let why = write_resolution(&dir, "x.txt", "um\ndois\n", &c.revision, true).unwrap_err();
+        assert!(why.contains("mistura CRLF e LF"), "{why}");
+        assert_eq!(fs::read(dir.join("x.txt")).unwrap(), antes, "a pasta fica igual");
     }
 
     #[test]
