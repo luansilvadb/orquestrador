@@ -1,7 +1,7 @@
 // Backend simulado, só para desenvolvimento no navegador (nunca entra no build de produção).
 // No painel Terminal (Ctrl+`), cada aba é um shell simulado: ecoa o que se digita, com a própria linha em edição. `exit` encerra só aquela aba (código 0);
-// o `+` abre outra, e o X fecha a aba sem evento. O programa simulado é sempre `pwsh.exe`.
-// No console: `__mock.close()` simula fechar a janela.
+// o `+` abre outra, e o X fecha a aba sem evento. O programa simulado é sempre `pwsh.exe`. Como no backend, `start_shell` recusa id já vivo no mesmo projeto, e `close_shell` o libera.
+// No console: `__mock.close()` simula fechar a janela. `__mock.failCloseProject = true` faz `close_project` falhar sem fechar nada.
 // `__mock.openPath(path)` simula um pedido de abertura vindo do Explorer ou de outra instância.
 // `__mock.addNode(node)` simula o orquestrador delegando: um executor chega ao projeto ativo (o orquestrador precisa estar aberto).
 // `__mock.nodeState(event)` simula a troca de estado de um executor (`done`, `stopped` ou `failed` fecham a aba).
@@ -59,10 +59,12 @@ const emit = <K extends keyof Events>(event: K, payload: Events[K]) =>
   handlers.get(event)?.forEach((h) => (h as (p: Events[K]) => void)(payload));
 
 const base64 = (text: string) => new TextEncoder().encode(text).toBase64();
+// Terminais e shells por `(projeto, id)`: os ids são locais a cada projeto, como no backend.
+const termKey = (id: string, project: string | null) => `${project ?? ''}\0${id}`;
 const terms = new Map<string, { seq: number; text: string; project: string | null }>();
 function out(id: string, text: string, project: string | null = null) {
-  const term = terms.get(id) ?? { seq: 0, text: '', project };
-  terms.set(id, term);
+  const term = terms.get(termKey(id, project)) ?? { seq: 0, text: '', project };
+  terms.set(termKey(id, project), term);
   term.text += text;
   emit('term-data', { project: term.project, id, seq: ++term.seq, data: base64(text) });
 }
@@ -290,7 +292,7 @@ function requireFile(path: string) {
 let closeHandler: (() => Promise<boolean>) | null = null;
 // Shells do painel Terminal: só `exit` ou `close_shell` os encerram.
 // Cada um guarda a própria linha em edição.
-const shells = new Map<string, { line: string; prompt: string; project: string | null }>();
+const shells = new Map<string, { id: string; line: string; prompt: string; project: string | null }>();
 let pendingOpenPaths: string[] = [];
 const debug = { close: async () => {
   const closed = closeHandler ? await closeHandler() : true;
@@ -330,7 +332,8 @@ const debug = { close: async () => {
   // `choose_project` devolve a pasta como dentro de um repositório (o projeto aberto é a raiz dele).
   subfolder: params.get('subfolder') === '1',
   // Chamadas de Git que chegaram ao simulado, com argumento, resultado e erro (só para o check conferir o payload).
-  calls: [] as { cmd: string; args: unknown; project: string | null; result: unknown; error: string | null; startedAt: number; completedAt: number | null }[] };
+  calls: [] as { cmd: string; args: unknown; project: string | null; result: unknown; error: string | null; startedAt: number; completedAt: number | null }[],
+  failCloseProject: false };
 (window as unknown as { __mock: typeof debug }).__mock = debug;
 
 function openMockProject(project: string, subfolder: boolean) {
@@ -349,26 +352,27 @@ function openMockProject(project: string, subfolder: boolean) {
 }
 
 const SHELL_PROMPT = 'PS C:\\projetos\\exemplo> ';
-function shellTyped(id: string, data: string) {
-  const shell = shells.get(id)!;
+function shellTyped(key: string, data: string) {
+  const shell = shells.get(key)!;
+  const { id, project } = shell;
   for (const char of data) {
     if (char === '\r') {
       const command = shell.line.trim();
       shell.line = '';
-      out(id, '\r\n');
+      out(id, '\r\n', project);
       if (command === 'exit') {
-        shells.delete(id);
-        terms.delete(id);
-        emit('shell-exit', { project: shell.project, id, code: 0 });
+        shells.delete(key);
+        terms.delete(key);
+        emit('shell-exit', { project, id, code: 0 });
         return;
       }
-      if (command) out(id, `eco: ${command}\r\n`);
-      out(id, shell.prompt);
+      if (command) out(id, `eco: ${command}\r\n`, project);
+      out(id, shell.prompt, project);
     } else if (char === '\x7f') {
-      if (shell.line) { shell.line = shell.line.slice(0, -1); out(id, '\b \b'); }
+      if (shell.line) { shell.line = shell.line.slice(0, -1); out(id, '\b \b', project); }
     } else if (char >= ' ') {
       shell.line += char;
-      out(id, char);
+      out(id, char, project);
     }
   }
 }
@@ -1014,12 +1018,13 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
     return openMockProject(path, false);
   },
   close_project: ({ project }: { project: string }) => {
+    if (debug.failCloseProject) throw 'Não foi possível fechar o projeto (simulado).';
     const closed = openProjects.get(project);
     openProjects.delete(project);
     if (activeProject === project) activeProject = null;
     if (closed) {
-      shells.forEach((shell, id) => {
-        if (shell.project === project) { shells.delete(id); terms.delete(id); }
+      shells.forEach((shell, key) => {
+        if (shell.project === project) { shells.delete(key); terms.delete(key); }
       });
     }
     orchestrators.delete(project);
@@ -1038,19 +1043,21 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   set_executor_choice: ({ choice }: { choice: Choice }) => { options.last.executor = choice; },
   start_shell: ({ project, id, cwd }: { project: string | null; id: string; cwd?: string }) => {
     // Pasta do projeto (relativa); sem ela, ou com '', é a raiz, como no backend. Pasta que não existe é recusada antes de abrir.
+    const key = termKey(id, project);
+    if (shells.has(key)) throw 'Já há um shell aberto com este id.';
     if (!projectOpen) {
       if (cwd) throw 'Não há pasta de projeto aberta.';
       const prompt = 'PS C:\\Users\\Luan> ';
-      terms.delete(id);
-      shells.set(id, { line: '', prompt, project });
+      terms.delete(key);
+      shells.set(key, { id, line: '', prompt, project });
       out(id, prompt, project);
       return 'pwsh.exe';
     }
     if (cwd && !folderAt(cwd)) throw `Pasta não encontrada: ${cwd}`;
     const prompt = cwd ? `PS C:\\projetos\\exemplo\\${cwd.split('/').join('\\')}> ` : SHELL_PROMPT;
     // Começa do zero: o terminal antigo (se houver) some, como no backend.
-    terms.delete(id);
-    shells.set(id, { line: '', prompt, project });
+    terms.delete(key);
+    shells.set(key, { id, line: '', prompt, project });
     out(id, prompt, project);
     return 'pwsh.exe';
   },
@@ -1115,16 +1122,16 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   replace_preview: ({ query, replacement }: { query: ReplaceQuery; replacement: string }): ReplacePreview => replacePreview(query, replacement),
   replace_apply: ({ request }: { request: ReplaceRequest }): ReplaceApplied => replaceApply(request),
   // Mata o shell sem evento de saída: o terminal some e nenhum `shell-exit` chega.
-  close_shell: ({ id }: { project: string | null; id: string }) => {
-    shells.delete(id);
-    terms.delete(id);
+  close_shell: ({ project, id }: { project: string | null; id: string }) => {
+    shells.delete(termKey(id, project));
+    terms.delete(termKey(id, project));
   },
   // O simulado não roda CLI: todo terminal é shell comum.
   term_cli: () => null,
   term_write: ({ project, id, data }: { project: string | null; id: string; data: string }) => {
     // Marcas de colagem entre aspas (bracketed paste) não são texto: o simulado só põe o conteúdo no rascunho.
     const text = data.replace(/\x1b\[20[01]~/g, '');
-    if (shells.has(id)) shellTyped(id, text);
+    if (shells.has(termKey(id, project))) shellTyped(termKey(id, project), text);
     // O orquestrador simulado só mostra o que chega (a colagem, por exemplo), com as quebras de linha do texto (LF no bracketed paste, CR no paste do xterm).
     else if (id === 'orchestrator') out(id, text.replace(/\r\n?|\n/g, '\r\n'), project);
   },
@@ -1201,8 +1208,8 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   git_write_index: ({ path, text, expected }: { path: string; text: string; expected: string }) => { writeIndex(path, text, expected); return null; },
   search: ({ query }: { query: ReplaceQuery }): SearchResults => searchText(query),
   term_resize: () => undefined,
-  term_snapshot: ({ id }: { project: string | null; id: string }) => {
-    const term = terms.get(id);
+  term_snapshot: ({ project, id }: { project: string | null; id: string }) => {
+    const term = terms.get(termKey(id, project));
     return { seq: term?.seq ?? 0, data: base64(term?.text ?? '') };
   },
   stop_executor: () => {},
@@ -1229,7 +1236,10 @@ export const mock: Transport = {
       }
     }, (cmd === 'term_snapshot' ? 100 : 15) + (debug.delay[cmd] ?? 0));
   }),
-  listen: async (event, handler) => void handlers.set(event, [...(handlers.get(event) ?? []), handler as Handler]),
+  listen: async (event, handler) => {
+    handlers.set(event, [...(handlers.get(event) ?? []), handler as Handler]);
+    return () => void handlers.set(event, (handlers.get(event) ?? []).filter((h) => h !== handler));
+  },
   onCloseRequested: async (mayClose) => { closeHandler = mayClose; },
   // Janela simulada: minimizar e maximizar não fazem nada; fechar segue o mesmo caminho de `__mock.close()`.
   minimize: async () => {},

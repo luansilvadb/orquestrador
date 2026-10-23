@@ -8,7 +8,8 @@ import type {
 
 export interface Transport {
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
-  listen<K extends keyof Events>(event: K, handler: (payload: Events[K]) => void): Promise<void>;
+  /** Responde o cancelamento da escuta. */
+  listen<K extends keyof Events>(event: K, handler: (payload: Events[K]) => void): Promise<() => void>;
   /** `mayClose` responde se a janela pode fechar. */
   onCloseRequested(mayClose: () => Promise<boolean>): Promise<void>;
   minimize(): Promise<void>;
@@ -25,7 +26,7 @@ export interface Transport {
 
 const tauri: Transport = {
   invoke,
-  listen: async (event, handler) => void (await listen(event, (e) => handler(e.payload as never))),
+  listen: (event, handler) => listen(event, (e) => handler(e.payload as never)),
   onCloseRequested: async (mayClose) =>
     void (await getCurrentWindow().onCloseRequested(async (event) => {
       if (!(await mayClose())) event.preventDefault();

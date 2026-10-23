@@ -170,3 +170,38 @@ scenario('recarregar restaura ordem e aba ativa', async ({ page }) => {
   assert.match(await tabs(page).nth(1).textContent(), /simulado-2/i);
   assert.match(await selected(page).textContent(), /exemplo/i);
 });
+
+// Issue #64: o shell aberto sem projeto morre no backend quando a primeira pasta abre; depois de fechá-la, o novo `shell-1` não colide com ele.
+scenario('shell sem projeto, abrir e fechar a pasta, e o shell abre de novo', async ({ page }) => {
+  await page.goto(`${BASE}?project=none`);
+  await page.locator('[data-home]').waitFor();
+  const startShell = () => page.evaluate(() => window.__mock.calls.filter((c) => c.cmd === 'start_shell' && c.completedAt !== null).at(-1));
+  await page.keyboard.press('Control+Backquote');
+  await page.locator('[data-shell]').first().waitFor();
+  await page.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === 'start_shell' && c.completedAt !== null));
+  assert.equal((await startShell()).error, null);
+  await openFolder(page);
+  await selected(page).waitFor();
+  await page.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === 'close_shell' && c.project === null && c.args.id === 'shell-1'));
+  await page.getByRole('button', { name: 'Fechar exemplo' }).click();
+  await page.locator('[data-home]').waitFor();
+  await page.evaluate(() => { window.__mock.calls.length = 0; });
+  await page.keyboard.press('Control+Backquote');
+  await page.locator('[data-shell]').first().waitFor();
+  await page.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === 'start_shell' && c.completedAt !== null));
+  assert.equal((await startShell()).error, null, 'o shell novo abre sem erro de id');
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('[data-shell]').count(), 1, 'a aba do shell novo continua');
+});
+
+// Issue #64: `close_project` que falha mostra o erro e não trava o fechamento; o X da aba volta a responder.
+scenario('fechar a pasta com erro do backend mostra o erro e o X volta a responder', async ({ page }) => {
+  await twoProjects(page);
+  await page.evaluate(() => { window.__mock.failCloseProject = true; });
+  await page.getByRole('button', { name: 'Fechar simulado-2' }).click();
+  await page.getByText('Não foi possível fechar o projeto (simulado).').waitFor();
+  assert.equal(await tabs(page).count(), 2, 'a aba fica');
+  await page.evaluate(() => { window.__mock.failCloseProject = false; });
+  await page.getByRole('button', { name: 'Fechar simulado-2' }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('header [role="tab"]')].filter((el) => getComputedStyle(el).visibility === 'visible').length === 1);
+});

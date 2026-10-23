@@ -14,7 +14,8 @@ export const terminals = {
     const k = key(data.id, data.project);
     const view = views.get(k);
     if (view) view.push(data.seq, data.data);
-    else early.set(k, [...(early.get(k) ?? []), data]);
+    else if (early.has(k)) early.get(k)!.push(data);
+    else early.set(k, [data]);
   },
   forget(id: string, project?: string | null) {
     early.delete(key(id, project));

@@ -74,13 +74,6 @@ function readRecentProjects(): string[] {
   }
 }
 
-function storeProject(path: string | null) {
-  try {
-    if (path) localStorage.setItem(LAST_PROJECT_KEY, path);
-    else localStorage.removeItem(LAST_PROJECT_KEY);
-  } catch { /* Preferência local não impede abrir ou fechar a pasta. */ }
-}
-
 type Overlay = 'start' | 'executor' | null;
 // Um shell do painel Terminal: `program` nasce com o último que o backend devolveu (ou '' no primeiro) e é confirmado quando ele responde.
 // `cwd` é a pasta (relativa ao projeto) em que o shell abre; sem ela, a raiz do projeto.
@@ -103,8 +96,6 @@ type State = {
 type Action =
   | { type: 'update'; status: UpdateStatus }
   | { type: 'projectBusy'; busy: boolean }
-  | { type: 'project'; id: string; project: string; options: Options }
-  | { type: 'projectClosed' }
   | { type: 'options'; options: Options }
   | { type: 'open'; options: Options }
   | { type: 'started'; choice: Choice }
@@ -117,7 +108,6 @@ type Action =
   | { type: 'shellAdd'; id: string; program: string; cwd?: string; project: string | null }
   | { type: 'shellProgram'; id: string; program: string }
   | { type: 'shellRemove'; id: string }
-  | { type: 'projectShellsClosed'; id: string }
   | { type: 'shellSelect'; id: string }
   | { type: 'shellMove'; id: string; index: number }
   | { type: 'shellOpen'; open: boolean };
@@ -133,10 +123,6 @@ function reducer(state: State, action: Action): State {
       return { ...state, update: action.status };
     case 'projectBusy':
       return { ...state, projectBusy: action.busy };
-    case 'project':
-      return { ...state, projectId: action.id, project: action.project, options: action.options, projectBusy: false, orchestrator: null, executorChoice: null, executors: [], notice: '' };
-    case 'projectClosed':
-      return { ...state, projectId: null, project: '', projectBusy: false, options: null, orchestrator: null, executorChoice: null, executors: [], notice: '' };
     case 'options':
       return { ...state, options: action.options };
     case 'open':
@@ -180,12 +166,6 @@ function reducer(state: State, action: Action): State {
       if (shells.length === 0) return { ...state, shells, shellActive: '', shellOpen: false };
       // A aba ativa que sai passa para a vizinha: a da direita, ou a da esquerda se era a última.
       const shellActive = state.shellActive === action.id ? shells[index]?.id ?? shells[index - 1].id : state.shellActive;
-      return { ...state, shells, shellActive };
-    }
-    case 'projectShellsClosed': {
-      const shells = state.shells.filter((s) => s.project !== action.id);
-      if (shells.length === 0) return { ...state, shells, shellActive: '', shellOpen: false };
-      const shellActive = shells.some((s) => s.id === state.shellActive) ? state.shellActive : shells[0].id;
       return { ...state, shells, shellActive };
     }
     case 'shellSelect':
@@ -348,7 +328,6 @@ export function App() {
     persist(next, nextActive);
     setBusyByProject((items) => { const rest = { ...items }; delete rest[id]; return rest; });
   };
-  const closeManagedProject = (id: string) => dropManagedProject(id).catch(report);
   const moveProject = (id: string, target: number) => {
     const next = [...projectsRef.current];
     const from = next.findIndex((item) => item.id === id);
@@ -424,10 +403,10 @@ export function App() {
     <Text as="p" fontSize={14} style={SECONDARY} role="status" aria-live="polite">{stage}</Text>
   )}>{null}</Screen>;
   const tabs: ProjectTab[] = projects.map((item) => ({ id: item.id, path: item.project, busy: busyByProject[item.id] }));
-  if (projects.length === 0) return <ProjectApp managed projects={tabs} onSelect={selectProject} onClose={closeManagedProject} onMove={moveProject} onOpen={addProject} recentProjects={recentProjects} />;
+  if (projects.length === 0) return <ProjectApp projects={tabs} onSelect={selectProject} onClose={dropManagedProject} onMove={moveProject} onOpen={addProject} recentProjects={recentProjects} />;
   return <div className="relative h-dvh w-full overflow-hidden">
     {projects.map((item) => <div key={item.id} className={`absolute inset-0 ${active === item.id ? '' : 'invisible'}`}>
-      {mounted.includes(item.id) && <ProjectApp managed initialProject={item} active={active === item.id} projects={tabs} onSelect={selectProject} onClose={closeManagedProject} onMove={moveProject} onOpen={addProject} recentProjects={recentProjects} />}
+      {mounted.includes(item.id) && <ProjectApp initialProject={item} active={active === item.id} projects={tabs} onSelect={selectProject} onClose={dropManagedProject} onMove={moveProject} onOpen={addProject} recentProjects={recentProjects} />}
     </div>)}
   </div>;
 }
@@ -437,13 +416,14 @@ let updateChecked = false;
 // Programa do último shell aberto (vale para todos os projetos): a aba nova já nasce com ele e não muda de largura quando o backend responde.
 let lastShellProgram = '';
 
-function ProjectApp({ managed, initialProject, active = true, projects, onSelect, onClose, onMove, onOpen, recentProjects: sharedRecent }: {
-  managed: boolean; initialProject?: ManagedProject; active?: boolean; projects?: ProjectTab[]; onSelect?: (id: string) => void;
-  onClose?: (id: string) => void; onMove?: (id: string, index: number) => void; onOpen?: (path?: string) => void; recentProjects?: string[];
+// `onClose` fecha o projeto no backend e tira a aba; rejeita com o erro, e nada muda.
+function ProjectApp({ initialProject, active = true, projects, onSelect, onClose, onMove, onOpen, recentProjects }: {
+  initialProject?: ManagedProject; active?: boolean; projects?: ProjectTab[]; onSelect?: (id: string) => void;
+  onClose: (id: string) => Promise<void>; onMove?: (id: string, index: number) => void; onOpen: (path?: string) => void; recentProjects: string[];
 }) {
   const [state, dispatch] = useReducer(reducer, initial, () => {
     const base: State = updateChecked ? { ...initial, update: { phase: 'ready' } } : initial;
-    return managed && initialProject ? { ...base, projectId: initialProject.id, project: initialProject.project } : base;
+    return initialProject ? { ...base, projectId: initialProject.id, project: initialProject.project } : base;
   });
   const backend = projectBackend(state.projectId);
   const stateRef = useRef(state);
@@ -487,8 +467,6 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   const [connected, setConnected] = useState(updateChecked);
   const [fatal, setFatal] = useState(false);
   const [retrying, setRetrying] = useState(false);
-  const [localRecentProjects, setLocalRecentProjects] = useState(readRecentProjects);
-  const recentProjects = sharedRecent ?? localRecentProjects;
   const projectChordTimer = useRef(0);
   const projectChordPending = useRef(false);
   // Fechamento da janela: alterações não salvas (salvar, descartar ou cancelar) e terminais trabalhando (encerrar ou cancelar).
@@ -534,9 +512,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   }
 
   useEffect(() => {
-    if (!managed) return;
     if (initialProject) {
-      if (state.projectId !== initialProject.id) return;
       projectOpeners.set(initialProject.id, openPath);
       for (const path of pendingProjectFiles.get(initialProject.id) ?? []) openPath(path);
       pendingProjectFiles.delete(initialProject.id);
@@ -544,10 +520,10 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     }
     looseFileOpener = openPath;
     return () => { if (looseFileOpener === openPath) looseFileOpener = null; };
-  }, [managed, initialProject?.id, state.projectId]);
+  }, [initialProject?.id]);
 
   useEffect(() => {
-    if (!managed || !active) return;
+    if (!active) return;
     let live = true;
     const drain = async () => {
       if (!live || stateRef.current.update.phase !== 'ready') return;
@@ -555,18 +531,19 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
         await openAbsolutePath(path);
       }
     };
-    void host().listen('open-paths', () => { void drain(); }).then(drain);
-    return () => { live = false; };
-  }, [managed, active, state.update.phase]);
+    const off = host().listen('open-paths', () => { void drain(); });
+    void off.then(drain);
+    return () => { live = false; void off.then((unlisten) => unlisten()); };
+  }, [active, state.update.phase]);
 
   useEffect(() => {
-    if (!managed || !initialProject) return;
+    if (!initialProject) return;
     let live = true;
     void backend.getOptions().then((options) => {
       if (live) dispatch({ type: 'options', options });
     }).catch(report);
     return () => { live = false; };
-  }, [managed, initialProject?.id]);
+  }, [initialProject?.id]);
 
   // ---------- ações ----------
 
@@ -705,11 +682,13 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     dispatch({ type: 'shellRemove', id });
   }
 
-  async function boot() {
+  // `scope.offs` recebe a remoção de cada escuta, que a limpeza do efeito chama; desmontado antes de conectar, não escuta nada.
+  async function boot(scope: { live: boolean; offs: Promise<() => void>[] }) {
     try {
       await connect();
+      if (!scope.live) return;
       setConnected(true);
-      await Promise.all([
+      scope.offs.push(
         host().listen('update-status', (status) => {
           updateEvents.current++;
           dispatch({ type: 'update', status });
@@ -739,7 +718,8 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
         host().listen('shell-exit', ({ project, id }) => {
           if (stateRef.current.shells.some((shell) => shell.id === id && shell.project === project)) dropShell(id);
         }),
-      ]);
+      );
+      await Promise.all(scope.offs);
       // Depois de escutar os eventos: o estado atual cobre o que saiu antes do registro. Se um evento chegou
       // enquanto ele vinha, o evento é mais novo e a resposta não se aplica.
       // Se a resposta falha depois de um evento novo, a falha é da resposta velha e o evento vale.
@@ -765,7 +745,22 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   }, []);
 
   useEffect(() => {
-    void boot();
+    const scope = { live: true, offs: [] as Promise<() => void>[] };
+    void boot(scope);
+    return () => {
+      scope.live = false;
+      for (const off of scope.offs) void off.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  // Ao desmontar (o ProjectApp sem projeto sai quando a primeira pasta abre), os shells dele morrem no backend: senão o PTY segue vivo
+  // e o próximo `shell-1` colide com ele. Sem shells no estado, um `startShell` que ainda responde mata o que acabou de abrir.
+  useEffect(() => () => {
+    for (const shell of stateRef.current.shells) {
+      terminals.forget(shell.id, shell.project);
+      void backend.closeShell(shell.id, shell.project).catch(() => {});
+    }
+    stateRef.current = { ...stateRef.current, shells: [] };
   }, []);
 
   async function retryUpdate() {
@@ -780,72 +775,14 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     setRetrying(false);
   }
 
-  function rememberProject(path: string) {
-    const next = [path, ...readRecentProjects().filter((item) => item.toLowerCase() !== path.toLowerCase())].slice(0, 10);
-    try { localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next)); } catch { /* A lista é uma preferência local. */ }
-    setLocalRecentProjects(next);
-    storeProject(path);
-  }
-
-  function removeRecentProject(path: string) {
-    const next = readRecentProjects().filter((item) => item.toLowerCase() !== path.toLowerCase());
-    try { localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next)); } catch { /* A lista é uma preferência local. */ }
-    setLocalRecentProjects(next);
-  }
-
-  async function openProject(path?: string) {
-    if (managed) { onOpen?.(path); return; }
-    if (stateRef.current.projectBusy) return;
-    dispatch({ type: 'projectBusy', busy: true });
-    const request = path ? backend.openProject(path) : backend.chooseProject();
-    try {
-      const picked = await request;
-      if (!picked) {
-        dispatch({ type: 'projectBusy', busy: false });
-        return;
-      }
-      const previous = stateRef.current.projectId;
-      if (previous === picked.id) {
-        rememberProject(picked.project);
-        dispatch({ type: 'projectBusy', busy: false });
-        return;
-      }
-      if (previous) {
-        if (hasWork(await backend.projectSnapshot(previous))) {
-          if (!picked.existing) await backend.closeProject(picked.id);
-          dispatch({ type: 'projectBusy', busy: false });
-          report(new Error('Feche o orquestrador antes de trocar de projeto.'));
-          return;
-        }
-        await backend.closeProject(previous);
-        dropProjectShells(previous);
-        resetOrchestrator();
-      }
-      const options = await backend.getOptions();
-      rememberProject(picked.project);
-      dispatch({ type: 'project', id: picked.id, project: picked.project, options });
-      if (picked.subfolder) toast.info({ title: `Esta pasta está dentro do repositório ${picked.project}. O projeto aberto é a raiz dele.`, duration: 6000 });
-    } catch (e) {
-      dispatch({ type: 'projectBusy', busy: false });
-      if (path && /não existe|não é uma pasta/i.test(message(e))) {
-        removeRecentProject(path);
-        toast.warning({ title: `Projeto removido dos recentes: ${path}`, duration: 6000 });
-      } else {
-        report(e);
-      }
-    }
-  }
-
+  const openProject = (path?: string) => onOpen(path);
   const chooseProject = () => openProject();
   const openRecentProject = (path: string) => openProject(path);
 
   async function chooseFile() {
     try {
       const path = await backend.pickFile();
-      if (path) {
-        if (managed) await openAbsolutePath(path);
-        else openPath(path);
-      }
+      if (path) await openAbsolutePath(path);
     } catch (e) {
       report(e);
     }
@@ -856,25 +793,12 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     if (!id || stateRef.current.projectBusy) return;
     dispatch({ type: 'projectBusy', busy: true });
     try {
-      if (!(await mayCloseProject(id))) {
-        dispatch({ type: 'projectBusy', busy: false });
-        return;
-      }
-      if (managed) {
-        if (onClose) onClose(id);
-        return;
-      }
-      await backend.closeProject(id);
-      dropProjectShells(id);
-      resetOrchestrator();
-      storeProject(null);
-      dispatch({ type: 'projectClosed' });
-      setActiveTarget(null);
-      setRoute('arquivos');
+      if (await mayCloseProject(id)) await onClose(id);
     } catch (e) {
-      dispatch({ type: 'projectBusy', busy: false });
       report(e);
     }
+    // Fechado, o ProjectApp já saiu; recusado ou com erro, "Fechar pasta" e o X da aba voltam a responder.
+    dispatch({ type: 'projectBusy', busy: false });
   }
 
   // Arquivos não salvos e trabalho do projeto `id` (orquestrador, executores e fila): pergunta antes de fechar a aba.
@@ -891,9 +815,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   async function closeTab(id: string) {
     if (id === stateRef.current.projectId) return closeProject();
     try {
-      if (await mayCloseProject(id)) {
-        if (onClose) onClose(id);
-      }
+      if (await mayCloseProject(id)) await onClose(id);
     } catch (e) { report(e); }
   }
 
@@ -932,13 +854,6 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   // Foco das janelas de escolha: ao fechar, a janela não devolve o foco ao botão que as abriu.
   function focusOrchestrator() {
     terminals.get(ORCHESTRATOR, stateRef.current.projectId)?.term.focus();
-  }
-
-  function dropProjectShells(id: string) {
-    for (const shell of stateRef.current.shells) {
-      if (shell.project === id) terminals.forget(shell.id, shell.project);
-    }
-    dispatch({ type: 'projectShellsClosed', id });
   }
 
   // Nova aba: id novo e ativo. O TermHost dela monta e chama startShell. `cwd` (relativo ao projeto) é a pasta em que ela abre.
@@ -1233,7 +1148,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     <Flexbox height="100dvh">
       <TitleBar connected={connected} project={state.project} titleActive={active} menu={titlebarMenu} projectTabs={projects ? {
         projects, active: initialProject?.id ?? null, onSelect: (id) => onSelect?.(id), onClose: (id) => void closeTab(id),
-        onMove: (id, index) => onMove?.(id, index), onAdd: () => onOpen?.(),
+        onMove: (id, index) => onMove?.(id, index), onAdd: () => onOpen(),
       } : undefined}>
         {counts.map(([n, label]) => (
           <Text key={label} as="span" fontSize={12} style={SECONDARY} noWrap ellipsis title={`${n} ${label}`} data-tauri-drag-region>
