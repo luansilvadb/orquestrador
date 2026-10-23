@@ -169,6 +169,14 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
     </Flexbox>
   );
 
+  const addButton = (
+    <ActionIcon
+      variant="borderless" size="small" icon={Plus} className="shrink-0 self-center"
+      aria-label="Novo terminal" title="Novo terminal"
+      onClick={onAdd}
+    />
+  );
+
   // `shrink-0`: a área do arquivo é que encolhe; o painel mantém a altura que o usuário deu.
   return (
     <div className={open ? 'shrink-0' : 'hidden'}>
@@ -202,12 +210,13 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
                   title={current ? `Fechar o terminal ${current.title}` : 'Fechar o terminal ativo'}
                   onClick={() => current && onClose(current.id)}
                 />
+                {addButton}
               </>
             ) : (
               <>
-                {/* Só as abas rolam na horizontal; as setas, a lista, o "+" e o botão de esconder ficam fora da rolagem. */}
+                {/* Só as abas rolam na horizontal; as setas, a lista, o "+" e o botão de esconder ficam fora da rolagem. A faixa só cresce até o conteúdo, para o "+" vir logo depois da última aba. */}
                 <Flexbox
-                  ref={strip} horizontal align="stretch" flex={1} className="min-w-0 overflow-x-auto [scrollbar-width:none]!"
+                  ref={strip} horizontal align="stretch" flex="0 1 auto" className="min-w-0 overflow-x-auto [scrollbar-width:none]!"
                   onScroll={measure}
                   onWheel={wheelToScroll}
                 >
@@ -234,6 +243,8 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
                     </TabsList>
                   </TabsRoot>
                 </Flexbox>
+                {addButton}
+                <div className="flex-1" />
                 {overflow && (
                   <ActionIcon
                     variant="borderless" size="small" icon={ChevronLeft} className="shrink-0 self-center"
@@ -258,11 +269,6 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
                 </Popover>
               </>
             )}
-            <ActionIcon
-              variant="borderless" size="small" icon={Plus} className="shrink-0 self-center"
-              aria-label="Novo terminal" title="Novo terminal"
-              onClick={onAdd}
-            />
             <ActionIcon
               variant="borderless" size="small" icon={ChevronDown} className="shrink-0 self-center"
               aria-label="Esconder o painel Terminal" title="Esconde o painel; os shells continuam rodando"
