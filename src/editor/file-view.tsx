@@ -146,6 +146,8 @@ const basicExtensions = [
   darkTheme,
   syntaxHighlighting(darkHighlight),
   bracketColors,
+  // Quebra visual das linhas longas, sem rolagem horizontal.
+  EditorView.lineWrapping,
   // Marcadores de mudança do Git (gutter, barra de rolagem e minimap). Sem base (rascunho, conflito), o gutter fica vazio, com a mesma largura.
   gitChanges(COLOR_LIMIT),
   // Bloco aberto do marcador (clique no gutter, Alt+F5): linhas antigas, Preparar, Restaurar e navegação. Fechado, não desenha nada.

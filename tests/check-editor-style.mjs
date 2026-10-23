@@ -284,8 +284,11 @@ scenario('docs/design-system.md real, aberto no mock: lista, código inline e ma
   await open(page, 'design-system.md', text);
   await page.locator('.cm-content:visible').first().click();
   await page.keyboard.press('Control+Home');
-  // Desce até a lista de "Regras" (linha 47): o cursor rola a área sozinho.
-  for (let i = 0; i < 46; i++) await page.keyboard.press('ArrowDown');
+  // Desce até a lista de "Regras" (linha 47): o cursor rola a área sozinho. Com a quebra de linha, ArrowDown anda por linha
+  // visual, então o laço para pelo número da linha ativa na medianiz.
+  const activeLine = () => page.evaluate(() => Number(document.querySelector('.cm-activeLineGutter')?.textContent));
+  for (let i = 0; i < 400 && (await activeLine()) < 47; i++) await page.keyboard.press('ArrowDown');
+  assert.equal(await activeLine(), 47, 'cursor na linha 47');
   const marks = await eventually(async () => {
     const found = await listMarks(page);
     assert.ok(found.length > 0, 'marcadores de lista visíveis');
@@ -295,4 +298,23 @@ scenario('docs/design-system.md real, aberto no mock: lista, código inline e ma
   assert.equal((await styleOf(page, 'Concorrência dos executores')).color, 'rgb(204, 204, 204)', 'corpo da lista (#CCCCCC)');
   assert.equal((await styleOf(page, 'src/window/titlebar.tsx')).color, 'rgb(206, 145, 120)', 'código inline dentro da lista (#CE9178)');
   await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'editor-style-design-system.png') });
+});
+
+scenario('linha longa quebra na largura do editor, sem rolagem horizontal', async ({ page }) => {
+  await open(page, 'linha-longa.txt', `${'palavra '.repeat(400)}\nfim\n`);
+  const g = await page.evaluate(() => {
+    const content = document.querySelector('.cm-content:not([aria-hidden])');
+    const scroller = document.querySelector('.cm-scroller');
+    return {
+      wrapping: content.classList.contains('cm-lineWrapping'), whiteSpace: getComputedStyle(content).whiteSpace,
+      overflow: scroller.scrollWidth - scroller.clientWidth,
+      lineH: content.querySelector('.cm-line').getBoundingClientRect().height,
+    };
+  });
+  assert.ok(g.wrapping, 'classe cm-lineWrapping no conteúdo');
+  // O CodeMirror usa `break-spaces` onde o navegador suporta e `pre-wrap` nos demais.
+  assert.match(g.whiteSpace, /^(pre-wrap|break-spaces)$/, `white-space: ${g.whiteSpace}`);
+  assert.ok(g.overflow <= 0, `rolagem horizontal de ${g.overflow} px`);
+  assert.ok(g.lineH > 19, `linha longa em mais de uma linha visual (${g.lineH} px)`);
+  await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'editor-style-wrap.png') });
 });
