@@ -206,7 +206,7 @@ pub fn diff(dir: &Path, rel: &str, staged: bool) -> Result<Diff, String> {
 /// então o `raw` é o patch sintético que a tela mostra, e não há bloco a tratar.
 struct Lido {
     diff: Diff,
-    raw: String,
+    raw: Vec<u8>,
     untracked: bool,
 }
 
@@ -218,10 +218,10 @@ fn snapshot(dir: &Path, rel: &str, staged: bool) -> Result<Lido, String> {
     }
     if !staged && !tracked_file(dir, rel)? {
         let diff = untracked(&guarded(dir, rel)?, rel)?;
-        return Ok(Lido { raw: diff.patch.clone(), diff, untracked: true });
+        return Ok(Lido { raw: diff.patch.clone().into_bytes(), diff, untracked: true });
     }
     let raw = raw_diff(dir, rel, staged, CONTEXTO_BLOCO)?;
-    Ok(Lido { diff: read_diff(&raw), raw, untracked: false })
+    Ok(Lido { diff: read_diff(&String::from_utf8_lossy(&raw)), raw, untracked: false })
 }
 
 /// Contexto do diff que vira bloco: o padrão do Git. A revisão e as ações por bloco dependem dele.
@@ -229,14 +229,15 @@ const CONTEXTO_BLOCO: &str = "-U3";
 /// Contexto do arquivo inteiro: só o comparador o mostra (`ReviewDiff::display`) e o histórico, que é imutável.
 const CONTEXTO_TODO: &str = "-U1000000";
 
-/// O diff bruto de `rel`, como o Git escreve (sem `read_diff`). Sua impressão digital é a revisão que a UI devolve.
-fn raw_diff(dir: &Path, rel: &str, staged: bool, contexto: &str) -> Result<String, String> {
+/// O diff bruto de `rel`, em bytes, como o Git escreve (sem `read_diff`): o que vai ao `git apply` não passa pela troca
+/// de byte inválido. Sua impressão digital é a revisão que a UI devolve.
+fn raw_diff(dir: &Path, rel: &str, staged: bool, contexto: &str) -> Result<Vec<u8>, String> {
     let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", contexto];
     if staged {
         args.push("--cached");
     }
     args.extend(["--", rel]);
-    proc::git_saida(dir, &args)
+    proc::git_bytes(dir, &args)
 }
 
 /// A saída do `git diff`: binário e diff grande viram aviso; o resto segue como patch, sem mexer no texto.
@@ -525,12 +526,12 @@ pub fn review_diff(dir: &Path, rel: &str, staged: bool) -> Result<ReviewDiff, St
     let rel = spec(rel)?;
     for _ in 0..2 {
         let lido = snapshot(dir, rel, staged)?;
-        let revision = files::fingerprint(lido.raw.as_bytes());
+        let revision = files::fingerprint(&lido.raw);
         if lido.untracked || lido.diff.binary || lido.diff.too_large {
             return Ok(ReviewDiff { revision, display: lido.diff.clone(), diff: lido.diff, untracked: lido.untracked });
         }
-        let display = read_diff(&raw_diff(dir, rel, staged, CONTEXTO_TODO)?);
-        if files::fingerprint(raw_diff(dir, rel, staged, CONTEXTO_BLOCO)?.as_bytes()) == revision {
+        let display = read_diff(&String::from_utf8_lossy(&raw_diff(dir, rel, staged, CONTEXTO_TODO)?));
+        if files::fingerprint(&raw_diff(dir, rel, staged, CONTEXTO_BLOCO)?) == revision {
             return Ok(ReviewDiff { revision, display, diff: lido.diff, untracked: false });
         }
     }
@@ -562,14 +563,15 @@ fn stale(rel: &str) -> String {
 }
 
 /// O patch do bloco pedido, lido agora do Git. Recusa se o diff mudou desde a revisão, se o bloco não existe
-/// mais ou se a linha `@@` não bate. Binário e texto grande não têm bloco a tratar.
+/// mais ou se a linha `@@` não bate. Binário, texto grande e diff que não é UTF-8 não têm bloco a tratar: o `git apply`
+/// confere só o contexto e as linhas `-`, então um bloco com byte trocado gravaria o lixo.
 fn current_block(dir: &Path, hunk: &HunkRef, staged: bool) -> Result<String, String> {
     let rel = spec(&hunk.path)?;
     let lido = snapshot(dir, rel, staged)?;
     if lido.untracked {
         return Err(format!("{rel} não está rastreado: prepare ou descarte o arquivo inteiro, não por bloco."));
     }
-    if files::fingerprint(lido.raw.as_bytes()) != hunk.revision {
+    if files::fingerprint(&lido.raw) != hunk.revision {
         return Err(stale(rel));
     }
     if lido.diff.binary {
@@ -578,7 +580,10 @@ fn current_block(dir: &Path, hunk: &HunkRef, staged: bool) -> Result<String, Str
     if lido.diff.too_large {
         return Err(format!("O diff de {rel} é grande demais para trabalhar por bloco."));
     }
-    let (head, blocks) = split_hunks(&lido.raw);
+    let Ok(raw) = std::str::from_utf8(&lido.raw) else {
+        return Err(format!("O diff de {rel} não está em UTF-8: trate o arquivo inteiro, não por bloco."));
+    };
+    let (head, blocks) = split_hunks(raw);
     match blocks.get(hunk.index) {
         Some(block) if block_header(block) == hunk.header => Ok(format!("{head}{block}")),
         _ => Err(format!("O bloco {} de {rel} não existe mais. Atualize o diff.", hunk.index + 1)),
@@ -611,13 +616,30 @@ pub fn discard_hunk(dir: &Path, hunk: &HunkRef) -> Result<(), String> {
 /// que a UI mostrou; se o arquivo mudou desde então, nada é feito. O índice não muda. Não rastreado é recusado.
 pub fn discard_file(dir: &Path, rel: &str, revision_seen: &str) -> Result<(), String> {
     let rel = spec(rel)?;
+    let patch = discard_patch(dir, rel, revision_seen)?;
+    apply_discard(dir, rel, patch)
+}
+
+/// O patch que o descarte de `rel` desfaz, conferido com a revisão. `None` é binário: o patch não traz o conteúdo.
+fn discard_patch(dir: &Path, rel: &str, revision_seen: &str) -> Result<Option<Vec<u8>>, String> {
     if !tracked_file(dir, rel)? {
         return Err(format!("{rel} não está rastreado: o Git não o descarta. Mande-o para a Lixeira pela tela."));
     }
-    if files::fingerprint(raw_diff(dir, rel, false, CONTEXTO_BLOCO)?.as_bytes()) != revision_seen {
+    let raw = raw_diff(dir, rel, false, CONTEXTO_BLOCO)?;
+    if files::fingerprint(&raw) != revision_seen {
         return Err(stale(rel));
     }
-    proc::git_saida(dir, &["restore", "--worktree", "--", rel]).map(|_| ())
+    Ok((!read_diff(&String::from_utf8_lossy(&raw)).binary).then_some(raw))
+}
+
+/// Desfaz o patch conferido com `git apply -R`: uma gravação depois da conferência que muda o trecho faz o Git recusar
+/// sem gravar, e a que muda outra linha fica. Binário volta ao índice com `git restore --worktree`.
+fn apply_discard(dir: &Path, rel: &str, patch: Option<Vec<u8>>) -> Result<(), String> {
+    match patch {
+        None => proc::git_saida(dir, &["restore", "--worktree", "--", rel]).map(drop),
+        Some(patch) if patch.is_empty() => Ok(()),
+        Some(patch) => proc::git_entrada(dir, &["apply", "-R"], &patch).map_err(|why| format!("{rel} não pôde ser descartado: {why}")),
+    }
 }
 
 /// `--max-count` e `--skip` de uma página do `log`: `limit` fica entre 1 e `MAX_HISTORY`. Sem HEAD (repositório sem
@@ -1920,6 +1942,65 @@ mod tests {
         let why = discard_file(&dir, "novo.txt", "x").unwrap_err();
         assert!(why.contains("não está rastreado") && why.contains("Lixeira"), "{why}");
         assert!(dir.join("novo.txt").is_file(), "não rastreado nunca é apagado pelo descarte");
+    }
+
+    #[test]
+    fn bloco_que_nao_e_utf8_e_recusado_sem_gravar() {
+        let tmp = Tmp::new("orq-git", "bloco-1252");
+        let dir = repo(&tmp, "r");
+        write(&dir, "f.txt", texto(30));
+        commit_all(&dir, "base");
+        // "ação" em Windows-1252 depois da linha 2, com o contexto em ASCII.
+        let base = texto(30);
+        let com_acao = [&base.as_bytes()[..16], b"a\xe7\xe3o\n", &base.as_bytes()[16..]].concat();
+        assert!(com_acao.starts_with(b"linha 1\nlinha 2\na\xe7\xe3o\nlinha 3\n"));
+        write(&dir, "f.txt", &com_acao);
+        let indice = git(&dir, &["ls-files", "-s", "f.txt"]);
+
+        let why = stage_hunk(&dir, &bloco(&dir, "f.txt", false, 0)).unwrap_err();
+        assert!(why.contains("UTF-8"), "{why}");
+        assert_eq!(git(&dir, &["ls-files", "-s", "f.txt"]), indice, "o índice não mudou");
+        assert_eq!(fs::read(dir.join("f.txt")).unwrap(), com_acao);
+
+        // A linha em Windows-1252 apagada da pasta: descartar o bloco a gravaria com o byte trocado.
+        commit_all(&dir, "acao");
+        write(&dir, "f.txt", &base);
+        let why = discard_hunk(&dir, &bloco(&dir, "f.txt", false, 0)).unwrap_err();
+        assert!(why.contains("UTF-8"), "{why}");
+        assert_eq!(fs::read_to_string(dir.join("f.txt")).unwrap(), base, "a pasta não mudou");
+
+        git(&dir, &["add", "f.txt"]);
+        let indice = git(&dir, &["ls-files", "-s", "f.txt"]);
+        let why = unstage_hunk(&dir, &bloco(&dir, "f.txt", true, 0)).unwrap_err();
+        assert!(why.contains("UTF-8"), "{why}");
+        assert_eq!(git(&dir, &["ls-files", "-s", "f.txt"]), indice);
+
+        // O arquivo inteiro aplica os bytes do Git: a linha volta como estava.
+        git(&dir, &["reset", "-q", "--", "f.txt"]);
+        discard_file(&dir, "f.txt", &review_diff(&dir, "f.txt", false).unwrap().revision).unwrap();
+        assert_eq!(fs::read(dir.join("f.txt")).unwrap(), com_acao);
+    }
+
+    #[test]
+    fn descarte_por_arquivo_desfaz_so_o_patch_conferido() {
+        let tmp = Tmp::new("orq-git", "descarte-conferido");
+        let dir = repo(&tmp, "r");
+        write(&dir, "f.txt", texto(30));
+        commit_all(&dir, "base");
+        write(&dir, "f.txt", texto(30).replace("linha 2\n", "dois\n"));
+        let rev = review_diff(&dir, "f.txt", false).unwrap().revision;
+        let patch = discard_patch(&dir, "f.txt", &rev).unwrap();
+
+        // Uma gravação entre a conferência e o descarte, em outra linha: fica.
+        write(&dir, "f.txt", texto(30).replace("linha 2\n", "dois\n").replace("linha 28\n", "vinte e oito\n"));
+        apply_discard(&dir, "f.txt", patch.clone()).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("f.txt")).unwrap(), texto(30).replace("linha 28\n", "vinte e oito\n"));
+
+        // No mesmo trecho: o Git recusa e a pasta fica como a gravação a deixou.
+        let novo = texto(30).replace("linha 2\n", "outro\n");
+        write(&dir, "f.txt", &novo);
+        assert!(apply_discard(&dir, "f.txt", patch).unwrap_err().contains("não pôde ser descartado"));
+        assert_eq!(fs::read_to_string(dir.join("f.txt")).unwrap(), novo);
     }
 
     #[test]
