@@ -266,8 +266,8 @@ pub fn serve_video(file: &Path, range: Option<&str>) -> tauri::http::Response<Ve
 ///
 /// Durante a comparação e a escrita o arquivo fica aberto sem `FILE_SHARE_WRITE` (ver `hold`): outro programa não
 /// consegue gravar nele no meio. A janela residual é a de quem já tinha o arquivo aberto para gravar antes desta chamada.
-/// Se `base` usa só CRLF e `text` veio só com LF (o textarea normaliza), `text` volta a ter CRLF. Não há gravação atômica:
-/// se a escrita falha no meio, o erro avisa que o arquivo pode ter ficado parcial.
+/// O fim de linha de `text` vai como veio, sem conversão (ver `write_held`). Não há gravação atômica: se a escrita falha no
+/// meio, o erro avisa que o arquivo pode ter ficado parcial.
 pub fn write_checked(project: &Path, rel: &str, text: &str, base: &str, base_bom: bool) -> Result<(), String> {
     write_held(hold(project, rel)?, text, base, base_bom)
 }
@@ -398,9 +398,10 @@ pub fn check_name(name: &str) -> Result<(), String> {
 
 /// Recusas que valem para toda ação sobre arquivo: a pasta `.git` nunca entra (em qualquer caixa, e com ponto ou espaço no
 /// fim, que o Windows descarta), e o caminho sai do projeto só por erro. Caminho com barra invertida é recusado: o contrato
-/// é `/`, e o `Path` do Windows também aceita `\`, o que contornaria as checagens.
+/// é `/`, e o `Path` do Windows também aceita `\`, o que contornaria as checagens. `:` também: o NTFS lê
+/// `.git::$INDEX_ALLOCATION` como a própria pasta `.git`.
 pub(crate) fn no_git(rel: &str) -> Result<(), String> {
-    if rel.contains('\\') {
+    if rel.contains(['\\', ':']) {
         return Err(format!("Caminho inválido: {rel}. Use / como separador."));
     }
     if rel.split('/').any(|part| part.trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".git")) {
@@ -434,7 +435,12 @@ pub(crate) fn no_links(project: &Path, rel: &str) -> Result<(), String> {
 pub fn plain(project: &Path, rel: &str, dir: bool) -> Result<PathBuf, String> {
     no_git(rel)?;
     no_links(project, rel)?;
-    inside(project, rel, dir)?;
+    let real = inside(project, rel, dir)?;
+    // O caminho real pega o `.git` que o nome escrito esconde, como o nome curto `GIT~1`.
+    let base = project.canonicalize().map_err(|e| format!("Não foi possível abrir o projeto: {e}"))?;
+    if real.strip_prefix(&base).is_ok_and(|r| r.components().any(|c| c.as_os_str().eq_ignore_ascii_case(".git"))) {
+        return Err("A pasta .git não pode ser alterada aqui.".into());
+    }
     Ok(rel.split('/').filter(|p| !p.is_empty()).fold(project.to_path_buf(), |path, part| path.join(part)))
 }
 
@@ -1278,6 +1284,26 @@ src/gerado/
         // Remove os links sem seguir: `remove_dir` tira a junction, o destino fica.
         let _ = std::fs::remove_dir(root.join("alias"));
         let _ = std::fs::remove_dir(root.join("git-alias"));
+    }
+
+    #[test]
+    fn dois_pontos_nao_contornam_git() {
+        let root = &fixture("dois-pontos").0;
+        std::fs::write(root.join(".git/config"), "antes").unwrap();
+        for rel in [".git::$INDEX_ALLOCATION/config", "a:b"] {
+            assert!(no_git(rel).is_err(), "{rel}");
+            assert!(write_checked(&root, rel, "x", "antes", false).is_err(), "{rel}");
+            assert!(create_file(&root, rel, "hook").is_err(), "{rel}");
+        }
+        assert!(create_file(&root, ".git::$INDEX_ALLOCATION", "hook").is_err());
+        assert_eq!(std::fs::read_to_string(root.join(".git/config")).unwrap(), "antes");
+        assert!(!root.join(".git/hook").exists());
+        // Só onde o volume gera nomes 8.3.
+        if root.join("GIT~1").is_dir() {
+            assert!(write_checked(&root, "GIT~1/config", "x", "antes", false).is_err());
+            assert!(create_file(&root, "GIT~1", "hook").is_err());
+            assert!(plain(&root, "git~1", true).is_err());
+        }
     }
 
     #[test]
