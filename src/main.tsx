@@ -46,8 +46,9 @@ const antdTheme = { token: { fontFamily: "'Inter Variable', Inter, sans-serif", 
 
 // O ThemeProvider abre um ConfigProvider sem `motion`, e o contexto mais interno zera o valor. Por isso o ConfigProvider com motion fica dentro dele.
 // Sem isso, os componentes de @lobehub/ui/base-ui (Button, Modal, Toast...) lançam erro ao renderizar.
+// appearance="dark": sem ele, o antd-style começa em light e só troca para dark depois do primeiro paint, que sai branco.
 createRoot(document.getElementById('root')!).render(
-  <ThemeProvider themeMode="dark" enableCustomFonts={false} theme={antdTheme}>
+  <ThemeProvider themeMode="dark" appearance="dark" enableCustomFonts={false} theme={antdTheme}>
     <ConfigProvider motion={motion}>
       <App />
       <ToastHost />

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Janela principal: invoke, eventos, barra de título própria (arrastar, minimizar, maximizar e atualizar o título nativo) e o pedido de fechamento.",
+  "description": "Janela principal: invoke, eventos, barra de título própria (arrastar, minimizar, maximizar e atualizar o título nativo), a exibição da janela ao pintar a abertura e o pedido de fechamento.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -11,6 +11,7 @@
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-set-title",
+    "core:window:allow-show",
     "dialog:allow-save"
   ]
 }

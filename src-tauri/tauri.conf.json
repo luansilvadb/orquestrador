@@ -10,7 +10,7 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "Orquestrador", "width": 1400, "height": 900, "center": true, "decorations": false, "backgroundColor": "#000000" }],
+    "windows": [{ "label": "main", "title": "Orquestrador", "width": 1400, "height": 900, "center": true, "decorations": false, "visible": false, "backgroundColor": "#000000" }],
     "security": { "csp": null }
   },
   "bundle": {

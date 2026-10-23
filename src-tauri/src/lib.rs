@@ -628,6 +628,16 @@ pub fn run(context: tauri::Context, initial_paths: Vec<std::path::PathBuf>) {
             let gate = Gate::new(cfg!(debug_assertions), emit);
             app.manage(gate.clone());
             update::check(app.handle(), &gate);
+            // A janela nasce oculta e o index.html a mostra; se o JS falhar, ela aparece mesmo assim.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                if let Some(window) = handle.get_webview_window("main") {
+                    if !window.is_visible().unwrap_or(false) {
+                        let _ = window.show();
+                    }
+                }
+            });
             Ok(())
         })
         .invoke_handler(gated(tauri::generate_handler![
