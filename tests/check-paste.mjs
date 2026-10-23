@@ -1,7 +1,7 @@
 // Check da colagem de arquivo e imagem no terminal (src/terminal/paste.ts), a mesma no orquestrador e nos shells: imagem solta vs arquivo, vários
 // arquivos misturados e na ordem, texto sem repetição, o CLI que abre e sai no mesmo terminal, terminais com CLIs diferentes e o que não dá
 // para colar virando erro. O efeito real nos CLIs fica no teste ignorado `src-tauri/tests/colagem.rs`. Roda sem dependências:
-// `node scripts/check-paste.mjs`. Sai com 1 e mostra a falha se alguma regra quebrar.
+// `node tests/check-paste.mjs`. Sai com 1 e mostra a falha se alguma regra quebrar.
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import { clipboardFiles, clipboardPaste } from '../src/terminal/paste.ts';

@@ -1,5 +1,5 @@
 // Check dos buffers, rascunhos, recuperação, conflitos e blocos de diff (src/editor/workspace-store.ts).
-// Roda sem dependências e sem navegador: `node scripts/check-editor-store.mjs`. Sai com 1 se alguma regra quebrar.
+// Roda sem dependências e sem navegador: `node tests/check-editor-store.mjs`. Sai com 1 se alguma regra quebrar.
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import {

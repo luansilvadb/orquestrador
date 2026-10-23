@@ -1,6 +1,6 @@
 // QA do arrasto das abas do painel Terminal (issue #13), em Chrome headless contra o app simulado: clique seleciona sem mover, arrastar
 // reordena (faixa, lista e vizinha ao fechar), o X e o Esc não reordenam, e a faixa rola sozinha com a aba na borda.
-// Uso: node scripts/check-shell-tabs-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
+// Uso: node tests/check-shell-tabs-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 import assert from 'node:assert/strict';
 import { uiSuite } from './editor-ui-harness.mjs';
 

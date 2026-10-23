@@ -2,7 +2,7 @@
 // Os valores esperados vêm dos arquivos do Antigravity (ver docs/interface.md, "Cores e fontes do editor"). Cada cenário abre um
 // arquivo pela árvore, espera a linguagem carregar (é assíncrona) e confere estilos computados e geometria, não aparência: a
 // comparação pixel a pixel não é feita aqui. Capturas em .playwright-mcp/editor-style-*.png para leitura humana.
-// Uso: node scripts/check-editor-style.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
+// Uso: node tests/check-editor-style.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';

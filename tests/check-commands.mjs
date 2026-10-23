@@ -1,5 +1,5 @@
 // Check do contrato dos comandos: as chaves de `Commands` (src/backend/types.ts) são as mesmas da lista `generate_handler![...]` (src-tauri/src/lib.rs).
-// Lê os dois arquivos por texto, sem compilar nada. Roda sem dependências: `node scripts/check-commands.mjs`. Sai com 1 e mostra quais nomes faltam de cada lado.
+// Lê os dois arquivos por texto, sem compilar nada. Roda sem dependências: `node tests/check-commands.mjs`. Sai com 1 e mostra quais nomes faltam de cada lado.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test as check } from 'node:test';

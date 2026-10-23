@@ -1,6 +1,6 @@
 // Check das regras puras de caminho e nome usadas pelo app (src/shared/file-tab-actions.ts): texto copiado, caminho relativo, pasta que contém,
-// e nomes recusados no Windows. Roda sem dependências e sem navegador: `node scripts/check-file-tabs.mjs`. Sai com 1 se alguma regra quebrar.
-// As regras de abas (fechamento em lote, vizinha, fixadas, renomear) estão em scripts/check-workspace.mjs, no modelo que o editor usa.
+// e nomes recusados no Windows. Roda sem dependências e sem navegador: `node tests/check-file-tabs.mjs`. Sai com 1 se alguma regra quebrar.
+// As regras de abas (fechamento em lote, vizinha, fixadas, renomear) estão em tests/check-workspace.mjs, no modelo que o editor usa.
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import { fileNameError, pathText, relativeTo } from '../src/shared/file-tab-actions.ts';

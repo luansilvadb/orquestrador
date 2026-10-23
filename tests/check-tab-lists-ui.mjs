@@ -1,7 +1,7 @@
 // QA das listas "Todas as abas" (issues #15, #16 e #17), em Chrome headless contra o app simulado: o mesmo menu no Orquestrador, no Terminal
 // e no editor, numa linha por item, com o ícone na margem, o título cortado, o estado à direita e o check na ativa; no Terminal e no editor,
 // o X na linha destacada e o Delete fecham a aba sem fechar o menu; o "..." do editor fica só com as ações.
-// Uso: node scripts/check-tab-lists-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
+// Uso: node tests/check-tab-lists-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { uiSuite, OUT } from './editor-ui-harness.mjs';

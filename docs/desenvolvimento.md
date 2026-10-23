@@ -27,7 +27,7 @@ npm run check       # 9 checagens puras (Node, sem dependências)
 npm run check:ui    # 11 checks de interface, 4 em paralelo (Chrome headless)
 ```
 
-`npm run check` roda os arquivos listados em `package.json`; `npm run check:ui` sobe um Vite só na porta 1421 (`SMOKE_PORT`) pelo setup global (`scripts/ui-setup.mjs`) e roda 4 arquivos de cada vez, cada um com o próprio Chromium. Um arquivo rodado sozinho (`node --test scripts/check-git-ui.mjs`) sobe o próprio Vite se a porta estiver livre. Os dois saem com código diferente de 0 se algum teste falhou, e mostram o resultado de todos os arquivos.
+`npm run check` roda os arquivos listados em `package.json`; `npm run check:ui` sobe um Vite só na porta 1421 (`SMOKE_PORT`) pelo setup global (`tests/ui-setup.mjs`) e roda 4 arquivos de cada vez, cada um com o próprio Chromium. Um arquivo rodado sozinho (`node --test tests/check-git-ui.mjs`) sobe o próprio Vite se a porta estiver livre. Os dois saem com código diferente de 0 se algum teste falhou, e mostram o resultado de todos os arquivos.
 
 O plugin de instância única roda só em builds release. Builds debug usam o mesmo identificador do app instalado, mas não encaminham caminhos nem ativam outra instância; assim `npm run tauri dev` pode coexistir com o app instalado.
 
@@ -46,4 +46,4 @@ cargo test
 
 Os testes usam CLIs simulados e não chamam nenhum modelo. `tests\lote.rs` fala com o servidor MCP real (`orquestrador.exe --mcp`) por JSON-RPC, sem PowerShell no caminho. `tests\real.rs` faz o ciclo com os CLIs reais e fica ignorado por padrão: defina `ORQ_REAL_REPO` e `ORQ_REAL=codex,claude` e rode `cargo test --test real -- --ignored --nocapture`. `tests\colagem.rs` sobe o Claude Code ou o Codex reais (`ORQ_PASTE=claude` ou `codex`) e mede a colagem sem enviar mensagem: `colar_caminho` (caminhos de imagem e de outro arquivo viram anexo e texto) e `cli_real` (o shell reconhece o CLI aberto nele e o esquece quando ele sai) não mexem no clipboard; `colar_imagem` lê a imagem que estiver no clipboard. Rode com `cargo test --test colagem -- --ignored --nocapture --test-threads=1`.
 
-O workflow de release (`.github/workflows/release.yml`) roda antes de publicar: `npm run build`, `node scripts/check-file-tabs.mjs`, `node scripts/check-release.mjs` e `cargo test --manifest-path src-tauri/Cargo.toml`. As regras do fluxo de release estão em `scripts/release.mjs`; o processo de publicação, em [atualização e release](atualizacao.md).
+O workflow de release (`.github/workflows/release.yml`) roda antes de publicar: `npm run build`, `node tests/check-file-tabs.mjs`, `node tests/check-release.mjs` e `cargo test --manifest-path src-tauri/Cargo.toml`. As regras do fluxo de release estão em `scripts/release.mjs`; o processo de publicação, em [atualização e release](atualizacao.md).

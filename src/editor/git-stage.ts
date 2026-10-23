@@ -1,5 +1,5 @@
 // Preparar e tirar do preparo um bloco do editor, calculando o texto novo do índice no frontend, como o Zed: o backend só grava o
-// texto inteiro (`git_write_index`). Funções puras, sem DOM, para o check (scripts/check-git-stage.mjs) e para o bloco aberto
+// texto inteiro (`git_write_index`). Funções puras, sem DOM, para o check (tests/check-git-stage.mjs) e para o bloco aberto
 // (git-hunk.ts). Textos com `\n`, como o editor. O bloco é o trecho buffer × HEAD do marcador, em posições do buffer (`fromB`/`toB`
 // do `Chunk` do @codemirror/merge: `toB` é o começo da linha seguinte, ou o tamanho + 1 quando o trecho vai até o fim).
 import { Chunk, type DiffConfig } from '@codemirror/merge';

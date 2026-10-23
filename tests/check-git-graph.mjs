@@ -1,6 +1,6 @@
 // Check do modelo do gráfico de commits (src/git/git-graph.ts): linear, branch e merge, convergência, merge com 3 pais, raiz,
 // primeira página com pai não carregado, reaproveitamento de faixa livre, cor estável e lista vazia.
-// Roda sem dependências: `node scripts/check-git-graph.mjs`. Sai com 1 e mostra a falha se alguma regra quebrar.
+// Roda sem dependências: `node tests/check-git-graph.mjs`. Sai com 1 e mostra a falha se alguma regra quebrar.
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import { layoutGraph } from '../src/git/git-graph.ts';

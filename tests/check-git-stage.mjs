@@ -1,5 +1,5 @@
 // Check de preparar e tirar do preparo um bloco do editor (src/editor/git-stage.ts): o texto novo do índice calculado no frontend.
-// Roda sem dependências e sem navegador: `node scripts/check-git-stage.mjs`. Sai com 1 se alguma regra quebrar.
+// Roda sem dependências e sem navegador: `node tests/check-git-stage.mjs`. Sai com 1 se alguma regra quebrar.
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import { Chunk } from '@codemirror/merge';

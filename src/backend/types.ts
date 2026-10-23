@@ -143,7 +143,7 @@ export type Events = {
 
 // Contrato dos comandos do Tauri. A chave é o nome que vai ao `invoke` (snake_case); `args` são as chaves como o front-end envia
 // (`Option` do Rust vira `| null`, ou opcional quando o front-end pode omitir) e `result` é o retorno (`void` quando não há).
-// Comando sem argumento tem `args: NoArgs`. `backend.ts` e `mock.ts` são tipados por este mapa; `scripts/check-commands.mjs` confere as chaves com `lib.rs`.
+// Comando sem argumento tem `args: NoArgs`. `backend.ts` e `mock.ts` são tipados por este mapa; `tests/check-commands.mjs` confere as chaves com `lib.rs`.
 export type NoArgs = Record<string, never>;
 export type ProjectArgs<T = NoArgs> = { project: string } & T;
 export type Commands = {

@@ -4,7 +4,7 @@ import { Children, useEffect, useRef, useState, type ComponentType, type ReactNo
 import { Flexbox } from '@lobehub/ui';
 import { Folder, Plus, X } from 'lucide-react';
 import { DropdownMenu, Text, Tooltip, type ContextMenuItem } from '@lobehub/ui/base-ui';
-import { SECONDARY } from './text-style';
+import { SECONDARY } from '../shared/text-style';
 import { AppMark } from './app-mark';
 import { host } from '../backend/backend';
 import { CloseIcon, MaximizeIcon, MinimizeIcon, RestoreIcon } from './window-icons';

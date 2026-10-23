@@ -2,7 +2,7 @@
 // Cada cenário roda com contexto de navegador próprio (localStorage e clipboard fakes limpos) e interage pela UI. O mock só entra
 // na fronteira de I/O: fixtures (`__mock.addFile`), edição externa (`__mock.external`), latência (`__mock.delay`) e o disco (`__mock.disk`).
 // Loader compartilhado em editor-ui-harness.mjs: Vite na porta 1421 (SMOKE_PORT), encerrado só aqui, e o browser deste teste. Não instala nada.
-// Uso: node scripts/check-editor-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
+// Uso: node tests/check-editor-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 // Capturas em .playwright-mcp/editor-ui-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
 import assert from 'node:assert/strict';

@@ -3,7 +3,7 @@
 // e o handler de fechar (o simulado troca o corpo por "Janela fechada (simulado)", sem fechar nada de verdade).
 // Minimizar, maximizar/restaurar e o estado maximizado usam o TitleBar real com o transporte da janela substituído só neste teste
 // (`windowHost`): contador, estado simulado e resize emitido. Não prova o efeito da janela nativa do Tauri (minimizar, maximizar, redimensionar).
-// Uso: node scripts/check-titlebar-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
+// Uso: node tests/check-titlebar-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 // Capturas em .playwright-mcp/titlebar-controls-*.png a cada execução: recorte para revisão visual, não asserção.
 import assert from 'node:assert/strict';
 import { join } from 'node:path';

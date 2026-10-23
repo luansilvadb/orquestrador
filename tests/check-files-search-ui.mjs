@@ -2,7 +2,7 @@
 // só no `vite` de desenvolvimento). Usa o mesmo loader do check-editor-ui (editor-ui-harness.mjs): cada cenário roda com contexto novo,
 // clipboard fake e a árvore carregada. O mock só entra na fronteira de I/O: fixtures (`__mock.addFile`, `__mock.addFolder`), edição externa
 // (`__mock.external`), disco (`__mock.disk`), falha de I/O (`__mock.failOn`) e o clipboard simulado (`__mock.clipboard`).
-// Uso: node scripts/check-files-search-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
+// Uso: node tests/check-files-search-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 // Capturas em .playwright-mcp/files-search-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
 import assert from 'node:assert/strict';

@@ -5,7 +5,7 @@
 // ao vivo com Desfazer, a nova leitura da base depois de salvar, e a ausência de marcadores em arquivo não rastreado e em rascunho. O bloco
 // aberto (src/editor/git-hunk.ts): clicar no marcador mostra as linhas antigas e destaca as novas, Esc e o X fecham, Restaurar com Desfazer,
 // Preparar e Tirar do preparo (o índice que o mock recebeu em `git_write_index`), as setas, Alt+F5 e o menu de contexto.
-// Uso: node scripts/check-git-gutter-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
+// Uso: node tests/check-git-gutter-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 // Capturas em .playwright-mcp/git-gutter-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
 import assert from 'node:assert/strict';

@@ -11,22 +11,24 @@ Uma linha por pasta; os arquivos não óbvios de cada uma vêm logo abaixo da ta
 | `src/` | Raiz: `main.tsx` monta o app (o `ThemeProvider`, os hosts de aviso e de diálogo); `App.tsx` integra as telas e os painéis (a tela de atualização, a tela principal com árvore, área do arquivo, painel Terminal e painel do Orquestrador, e a tela Git); `index.css` é o CSS global. O design system (Lobe UI) está em [design system](design-system.md). |
 | `src/assets/` | Os codicons e o tema de ícones Symbols, com as licenças. |
 | `src/backend/` | O contato com o backend: `backend.ts` é o único ponto que fala com o Tauri, e o backend simulado fica aqui. |
-| `src/editor/` | A área central: abas, grupos, diff, commit, conflito, comparação com o disco, recuperação, o editor de texto, a aba de mídia, os breadcrumbs e o arquivo rápido. |
-| `src/explorer/` | A coluna de ícones da navegação, a árvore de pastas, a barra de status e as decorações do Git na árvore. |
+| `src/editor/` | A área central: abas, grupos, as vistas de diff, commit e conflito, comparação com o disco, recuperação, o editor de texto, a aba de mídia, os breadcrumbs e o arquivo rápido. |
+| `src/explorer/` | A árvore de arquivos e as decorações do Git nela. |
 | `src/git/` | A barra lateral do Git (alterações e histórico), o gráfico de commits e a trava das operações Git. |
 | `src/search/` | A pesquisa de texto nos arquivos, na faixa da árvore. |
 | `src/terminal/` | Os terminais (xterm), o painel do Orquestrador, o painel Terminal, a colagem de arquivo e imagem e o formulário de escolha. |
-| `src/window/` | A barra de título, o menu principal e os controles da janela. |
-| `src/shared/` | O que é usado por três ou mais áreas sem dono óbvio: caminhos, atualização periódica, faixa de abas, abas de arquivo, ícones e aviso para abrir pasta. |
+| `src/window/` | A barra de título, o menu principal, a coluna de ícones da navegação, a barra de status e os controles da janela. |
+| `src/shared/` | O que é usado por três ou mais áreas sem dono óbvio: caminhos, atualização periódica, faixa de abas, abas de arquivo, ícones, aviso para abrir pasta e o estilo de texto secundário. |
 
 Arquivos não óbvios:
 - src/editor/format.ts: carrega Prettier e os plugins oficiais sob demanda; combina as opções devolvidas pelo backend e formata com posição do cursor.
 - `src/backend/backend.ts`: o único ponto de contato com o Tauri, pela interface `Transport`; `projectBackend(id)` fixa o id das chamadas de projeto, fornecido aos workspaces por `backend-context.tsx`. Fora do app (no navegador, em desenvolvimento), entra o simulado.
 - `src/backend/mock.ts` e `mock-fixtures.ts`: o backend simulado, só em `npm run dev` fora do Tauri. Simula o modo sem projeto por `?project=none` e os modos sem Git por `?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1` (ver [desenvolvimento](desenvolvimento.md)).
-- `src/backend/types.ts`: os tipos do contrato com o Rust e o mapa `Commands`, com cada comando do Tauri, seus argumentos e o resultado. `backend.ts` e `mock.ts` são tipados por ele, e `scripts/check-commands.mjs` confere as chaves com `generate_handler!` em `lib.rs`.
+- `src/backend/types.ts`: os tipos do contrato com o Rust e o mapa `Commands`, com cada comando do Tauri, seus argumentos e o resultado. `backend.ts` e `mock.ts` são tipados por ele, e `tests/check-commands.mjs` confere as chaves com `generate_handler!` em `lib.rs`.
 - `src/shared/open-project.tsx`: aviso e botão `Abrir pasta` nos painéis que precisam de projeto.
 - `src/window/titlebar.tsx`: faixa de abas dos projetos; `src/App.tsx` mantém os workspaces montados, persiste ordem e seleção e exporta `openAbsolutePath` para resolver pastas e arquivos absolutos.
-- `src/editor/editor-workspace.tsx`: até dois grupos lado a lado, com abas de arquivo, diff, commit e conflito; a comparação com o disco antes de gravar; recuperação por projeto e recuperação sem projeto, com arquivos soltos e rascunhos.
+- `src/editor/editor-workspace.tsx`: até dois grupos lado a lado, com abas de arquivo, diff, commit e conflito; o diálogo de comparação com o disco antes de gravar; recuperação por projeto e recuperação sem projeto, com arquivos soltos e rascunhos.
+- `src/editor/diff-view.tsx`: as vistas de comparação: a comparação disco × edição (`CompareView`), o comparador contínuo (`Continuous`), as abas de diff (`DiffTab`) e de commit (`CommitTab`), e os tipos `Common` e `Ask`, que o workspace entrega às abas de Git.
+- `src/editor/conflict-view.tsx`: a aba de conflito (`ConflictTab`), com a escolha por trecho e o texto final editável.
 - `src/editor/workspace-model.ts` e `workspace-store.ts`: modelos puros, sem React. O modelo cuida das abas e dos grupos (prévia, fixadas, fechamento com confirmação, reabertura e carga do estado salvo); o store cuida de buffers, rascunhos, conflitos e do texto da recuperação, validado ao ler, sem disco.
 - `src/editor/file-view.tsx`: o editor de texto (CodeMirror com as cores do app e as medidas do Monaco, guias de recuo e minimap). Não lê nem grava o disco; guarda o estado do CodeMirror por arquivo e reporta cursor e rolagem.
 - `src/editor/media-view.tsx`: a aba de mídia, com imagem (Ajustar e Tamanho real), áudio e vídeo (controles nativos). Imagem e áudio vêm de `read_media` para um blob local; o vídeo vem por streaming do protocolo `orq-media` (HTTP Range), pela URL de `mediaUrl`. Não lê texto e não grava.
@@ -34,15 +36,17 @@ Arquivos não óbvios:
 - `src/editor/compare-rows.ts`: o modelo do comparador contínuo, em lado a lado e unificado.
 - `src/editor/git-gutter.ts`: os marcadores de mudança do Git no editor (gutter, barra de rolagem e minimap), pelo diff do buffer, mesmo não salvo, com o HEAD e o índice que `git_file_base` devolve.
 - `src/editor/git-hunk.ts`: o bloco aberto de um marcador, com as linhas antigas do HEAD, Preparar ou Tirar do preparo, Restaurar (edição no buffer) e a navegação entre alterações.
-- `src/editor/git-stage.ts`: o cálculo puro do texto novo do índice para preparar ou tirar do preparo um bloco, que `git_write_index` grava; testado por `scripts/check-git-stage.mjs`.
+- `src/editor/git-stage.ts`: o cálculo puro do texto novo do índice para preparar ou tirar do preparo um bloco, que `git_write_index` grava; testado por `tests/check-git-stage.mjs`.
 - `src/editor/bracket-colors.ts`: a cor dos parênteses, colchetes e chaves pelo nível de aninhamento, lida da árvore de sintaxe.
 - `src/editor/quick-open.tsx`: o arquivo rápido (Ctrl+P), com Enter, Shift+Enter e Ctrl+Enter.
-- `src/explorer/explorer.tsx`: a coluna de ícones, a árvore de pastas (pasta abre e fecha; arquivo abre na área central; menu com renomear, excluir, criar, copiar, recortar, colar e mover, inclusive em lote; barra com as ações da view e seção do projeto) e a barra de status com a branch, o Sincronizar e o botão Terminal.
+- `src/explorer/explorer.tsx`: a árvore de pastas (pasta abre e fecha; arquivo abre na área central; menu com renomear, excluir, criar, copiar, recortar, colar e mover, inclusive em lote; barra com as ações da view e seção do projeto).
 - `src/explorer/explorer-decorations.ts`: as decorações do Git na árvore, com cor e letra por arquivo, herança na pasta e o cinza do ignorado, nas cores do tema escuro do VS Code.
-- `src/explorer/source-control-icon.tsx`: o ícone do Git na coluna de ícones, o codicon `source-control` do Antigravity/VS Code (de `@vscode/codicons`, CC BY 4.0, licença em `src/assets/codicons/LICENSE`).
+- `src/window/nav.tsx`: a coluna de ícones (`Nav`, com o tipo `Route` das telas) e o contador de alterações no ícone do Git.
+- `src/window/status-bar.tsx`: a barra de status (`StatusBar`) com a branch, o Sincronizar e o botão Terminal.
+- `src/window/source-control-icon.tsx`: o ícone do Git na coluna de ícones, o codicon `source-control` do Antigravity/VS Code (de `@vscode/codicons`, CC BY 4.0, licença em `src/assets/codicons/LICENSE`).
 - `src/git/git.tsx`: a barra lateral do Git. Os comandos vêm do backend, e as operações passam pela trava compartilhada.
 - `src/git/git-guard.ts`: a trava das operações Git da interface, compartilhada pela barra lateral e pelo editor.
-- `src/git/git-graph.ts`: o layout puro do gráfico de commits (faixas, linhas de merge e cores), testado por `scripts/check-git-graph.mjs`.
+- `src/git/git-graph.ts`: o layout puro do gráfico de commits (faixas, linhas de merge e cores), testado por `tests/check-git-graph.mjs`.
 - `src/git/git-graph-view.tsx`: o gráfico e o hover de commit; corpo, estatísticas e URL do GitHub são pedidos uma vez por hash ao abrir o hover.
 - `src/search/search.tsx`: a pesquisa de texto, com o cabeçalho, o campo com as três opções e o histórico, o Substituir (com Preservar maiúsculas), os filtros de caminho, a lista ou árvore de ocorrências (com dispensar e menu de contexto) e a prévia da troca na própria lista.
 - `src/terminal/terminal-screen.tsx`: o painel do Orquestrador, à direita da tela principal: faixa de abas (orquestrador e um executor por aba), a barra da aba ativa e os terminais, com o da aba ativa visível.
@@ -53,6 +57,7 @@ Arquivos não óbvios:
 - `src/terminal/choice-form.tsx`: o formulário de escolha de ferramenta, modelo e esforço.
 - `src/shared/file-icons.ts` e `file-icon.tsx`: a escolha do ícone do tema Symbols pela ordem do VS Code (nome, extensão, linguagem, padrão) e o componente `FileIcon`, usado na árvore, nas abas, no Git, na pesquisa e no arquivo rápido.
 - `src/shared/file-tab-actions.ts`: as regras puras de caminho e nome das abas de arquivo.
+- `src/shared/text-style.ts`: `SECONDARY`, a cor do texto secundário do tema para informação em texto pequeno.
 
 Regras do layout:
 
@@ -86,36 +91,41 @@ O módulo src-tauri/src/ide/format.rs escolhe o motor pela extensão, procura as
 
 Cada comando dependente de projeto recebe o id devolvido por `open_project` (ou `choose_project`); reabrir a mesma raiz normalizada devolve o id existente. Os eventos do Core também carregam `project`; ids de terminal são locais ao Core e o front deve chavear por `(project, id)`. O limite de executores é global, com fila FIFO entre projetos. Opções e escolhas padrão ficam na configuração global; cada sessão em execução, seus shells e sua trava Git pertencem ao Core do projeto. O Core sem projeto é separado e sobrevive à abertura e ao fechamento de projetos.
 
-## Scripts
+## Testes (`tests/`)
 
-Agrupados por tipo.
+Os testes do front-end, agrupados por tipo. Os do backend ficam em `src-tauri/tests/` e nos módulos do Rust.
 
 **Checagens puras** (`npm run check`): Node, sem dependências, com `node:test`. Os 9 arquivos rodam um de cada vez.
 
-- `scripts/check-workspace.mjs`: o modelo de abas.
-- `scripts/check-editor-store.mjs`: rascunhos, conflitos e recuperação.
-- `scripts/check-git-stage.mjs`: o cálculo do texto novo do índice para preparar ou tirar do preparo um bloco do editor (`src/editor/git-stage.ts`), com o índice já diferente do HEAD em outro bloco, linhas apagadas e fim de arquivo sem quebra final.
-- `scripts/check-file-tabs.mjs`: caminhos copiados, nomes recusados e “dentro de pasta”.
-- `scripts/check-explorer.mjs`: a escolha de ícones (os casos do Explorer do Antigravity) e as decorações do Git na árvore.
-- `scripts/check-git-graph.mjs`: o layout do gráfico de commits.
-- `scripts/check-paste.mjs`: a colagem de arquivo e imagem no terminal. O efeito real nos CLIs fica no teste ignorado `src-tauri/tests/colagem.rs`.
-- `scripts/check-release.mjs`: as regras do fluxo de release.
-- `scripts/check-commands.mjs`: o contrato dos comandos, com as chaves de `Commands` (`types.ts`) iguais às de `generate_handler!` (`lib.rs`).
+- `tests/check-workspace.mjs`: o modelo de abas.
+- `tests/check-editor-store.mjs`: rascunhos, conflitos e recuperação.
+- `tests/check-git-stage.mjs`: o cálculo do texto novo do índice para preparar ou tirar do preparo um bloco do editor (`src/editor/git-stage.ts`), com o índice já diferente do HEAD em outro bloco, linhas apagadas e fim de arquivo sem quebra final.
+- `tests/check-file-tabs.mjs`: caminhos copiados, nomes recusados e “dentro de pasta”.
+- `tests/check-explorer.mjs`: a escolha de ícones (os casos do Explorer do Antigravity) e as decorações do Git na árvore.
+- `tests/check-git-graph.mjs`: o layout do gráfico de commits.
+- `tests/check-paste.mjs`: a colagem de arquivo e imagem no terminal. O efeito real nos CLIs fica no teste ignorado `src-tauri/tests/colagem.rs`.
+- `tests/check-release.mjs`: as regras do fluxo de release.
+- `tests/check-commands.mjs`: o contrato dos comandos, com as chaves de `Commands` (`types.ts`) iguais às de `generate_handler!` (`lib.rs`).
 
-**Checks de interface** (`npm run check:ui`): Chrome headless contra o app simulado (`src/backend/mock.ts`, só no `vite` de desenvolvimento). Todos sobem o Vite na mesma porta (1421, `SMOKE_PORT`), então rodam em sequência. Saem com 0 se todos os cenários passam.
+**Checks de interface** (`npm run check:ui`): Chrome headless contra o app simulado (`src/backend/mock.ts`, só no `vite` de desenvolvimento). Um Vite só, na porta 1421 (`SMOKE_PORT`), atende todos os arquivos, que rodam 4 de cada vez, cada um com o próprio Chromium. Saem com 0 se todos os cenários passam.
 
-- `scripts/editor-ui-harness.mjs`: loader e helpers dos checks de interface: sobe o Vite na porta `SMOKE_PORT` (padrão 1421), usa o Chromium já instalado, sem instalar nada, e dá a cada cenário um contexto novo (`browser.newContext`) no mesmo Chromium.
-- `scripts/check-editor-ui.mjs`: a área central: abas, grupos, fechamento, recuperação, comparação com o disco e atalhos.
-- `scripts/check-files-search-ui.mjs`: a árvore e a pesquisa: criar, renomear, recortar e colar; pesquisa com `./pasta`, prévia na lista, troca por arquivo e Substituir Tudo, árvore e só nos editores abertos.
-- `scripts/check-git-ui.mjs`: o Git, o diff, o histórico, os conflitos, o painel Terminal e o editor (mover aba, Ctrl+G), e os cenários do painel sem Git (sem repositório, sem Git, repositório acima e subpasta).
-- `scripts/check-media-ui.mjs`: a aba de mídia: imagem (Ajustar e Tamanho real), áudio e vídeo, com o app simulado em `read_media` e `mediaUrl` (um PNG, um WAV e um WebM de teste).
-- `scripts/check-titlebar-ui.mjs`: os controles da janela na barra de título.
-- `scripts/check-editor-style.mjs`: a paridade visual do editor central com o Antigravity (Dark Modern), por estilos computados e geometria, não por pixel. Os valores esperados vêm dos arquivos do Antigravity (ver [interface](interface.md), “Cores e fontes do editor”).
-- `scripts/check-git-gutter-ui.mjs`: os marcadores de mudança do Git no editor (tipo, linha, cheio × vazado, geometria, barra de rolagem, minimap, digitação com Desfazer, leitura depois de salvar e a ausência em arquivo não rastreado e em rascunho) e o bloco aberto: linhas antigas, fechar, Restaurar com Ctrl+Z, Preparar e Tirar do preparo (o índice que o app simulado recebeu em `git_write_index`) e a navegação com as setas, Alt+F5 e o menu de contexto.
-- `scripts/check-shell-tabs-ui.mjs`: o arrasto das abas do painel Terminal: clique sem mover, nova ordem na faixa, na lista e na vizinha ao fechar, Esc e X sem reordenar, e a faixa rolando com a aba na borda.
-- `scripts/check-project-tabs-ui.mjs`: abrir, trocar, focar, fechar e restaurar abas de projeto.
-- `scripts/check-tab-lists-ui.mjs`: listas de abas em menu: a do Orquestrador numa linha por item (ícone na margem, título cortado, estado e check) e o `...` do editor com o rótulo alinhado; executores vêm de `__mock.addNode`.
-- `scripts/check-editor-tabs-ui.mjs`: o arrasto das abas do editor: clique sem mover, nova ordem, Esc e X sem reordenar, fixadas no começo, soltar no outro grupo e a faixa rolando com a aba na borda.
+- `tests/ui-setup.mjs`: o setup global do `check:ui`: sobe o Vite uma vez para todos os arquivos.
+- `tests/editor-ui-harness.mjs`: loader e helpers dos checks de interface: sobe o Vite na porta `SMOKE_PORT` (padrão 1421), usa o Chromium já instalado, sem instalar nada, e dá a cada cenário um contexto novo (`browser.newContext`) no mesmo Chromium.
+- `tests/check-editor-ui.mjs`: a área central: abas, grupos, fechamento, recuperação, comparação com o disco e atalhos.
+- `tests/check-files-search-ui.mjs`: a árvore e a pesquisa: criar, renomear, recortar e colar; pesquisa com `./pasta`, prévia na lista, troca por arquivo e Substituir Tudo, árvore e só nos editores abertos.
+- `tests/check-git-ui.mjs`: o Git, o diff, o histórico, os conflitos, o painel Terminal e o editor (mover aba, Ctrl+G), e os cenários do painel sem Git (sem repositório, sem Git, repositório acima e subpasta).
+- `tests/check-media-ui.mjs`: a aba de mídia: imagem (Ajustar e Tamanho real), áudio e vídeo, com o app simulado em `read_media` e `mediaUrl` (um PNG, um WAV e um WebM de teste).
+- `tests/check-titlebar-ui.mjs`: os controles da janela na barra de título.
+- `tests/check-editor-style.mjs`: a paridade visual do editor central com o Antigravity (Dark Modern), por estilos computados e geometria, não por pixel. Os valores esperados vêm dos arquivos do Antigravity (ver [interface](interface.md), “Cores e fontes do editor”).
+- `tests/check-git-gutter-ui.mjs`: os marcadores de mudança do Git no editor (tipo, linha, cheio × vazado, geometria, barra de rolagem, minimap, digitação com Desfazer, leitura depois de salvar e a ausência em arquivo não rastreado e em rascunho) e o bloco aberto: linhas antigas, fechar, Restaurar com Ctrl+Z, Preparar e Tirar do preparo (o índice que o app simulado recebeu em `git_write_index`) e a navegação com as setas, Alt+F5 e o menu de contexto.
+- `tests/check-shell-tabs-ui.mjs`: o arrasto das abas do painel Terminal: clique sem mover, nova ordem na faixa, na lista e na vizinha ao fechar, Esc e X sem reordenar, e a faixa rolando com a aba na borda.
+- `tests/check-project-tabs-ui.mjs`: abrir, trocar, focar, fechar e restaurar abas de projeto.
+- `tests/check-tab-lists-ui.mjs`: listas de abas em menu: a do Orquestrador numa linha por item (ícone na margem, título cortado, estado e check) e o `...` do editor com o rótulo alinhado; executores vêm de `__mock.addNode`.
+- `tests/check-editor-tabs-ui.mjs`: o arrasto das abas do editor: clique sem mover, nova ordem, Esc e X sem reordenar, fixadas no começo, soltar no outro grupo e a faixa rolando com a aba na borda.
+
+## Scripts (`scripts/`)
+
+Ferramentas, sem testes.
 
 **Release**
 

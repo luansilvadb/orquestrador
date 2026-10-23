@@ -77,8 +77,8 @@ jobs:
         shell: bash
         run: |
           npm run build
-          node scripts/check-file-tabs.mjs
-          node scripts/check-release.mjs
+          node tests/check-file-tabs.mjs
+          node tests/check-release.mjs
           cargo test --manifest-path src-tauri/Cargo.toml
 
       # Instalador NSIS assinado com TAURI_SIGNING_PRIVATE_KEY (conteúdo da chave privada, secret do repositório; sem senha). Sai em rascunho.

@@ -1,6 +1,6 @@
 // Check puro do Explorer: a escolha de ícones (src/shared/file-icons.ts), com os casos do Explorer do Antigravity aberto neste projeto e a
 // ordem nome > extensão longa > extensão curta > linguagem > padrão, e as decorações do Git (src/explorer/explorer-decorations.ts).
-// Roda sem dependências: `node scripts/check-explorer.mjs`.
+// Roda sem dependências: `node tests/check-explorer.mjs`.
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';

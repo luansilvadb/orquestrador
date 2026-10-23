@@ -59,8 +59,8 @@ Dois formatos, da mesma fonte:
 3. Rode as checagens locais, sem publicar nada:
    - `node scripts/release.mjs check-versions X.Y.Z`
    - `node scripts/release.mjs check-notes X.Y.Z <versão anterior>`
-   - `node scripts/check-release.mjs` (regras de versão, notas, `latest.json` e a verificação Minisign, com assinaturas de teste geradas na hora)
-   - `node scripts/check-file-tabs.mjs`
+   - `node tests/check-release.mjs` (regras de versão, notas, `latest.json` e a verificação Minisign, com assinaturas de teste geradas na hora)
+   - `node tests/check-file-tabs.mjs`
    - `npm run build` e `cargo test --manifest-path src-tauri/Cargo.toml`
 4. Faça o commit, crie a tag `vX.Y.Z` e envie a tag. O commit e a tag são do mantenedor; o workflow não cria nem move tag.
 5. O workflow `.github/workflows/release.yml` faz o resto, nesta ordem:

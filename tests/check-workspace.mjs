@@ -1,5 +1,5 @@
 // Check do modelo do espaço de trabalho (src/editor/workspace-model.ts): grupos, prévias, pins, fechamento por decisão externa, reabertura,
-// remapeamento de pastas e estado salvo adulterado. Roda sem dependências: `node scripts/check-workspace.mjs`.
+// remapeamento de pastas e estado salvo adulterado. Roda sem dependências: `node tests/check-workspace.mjs`.
 // Sai com 1 e mostra a falha se alguma regra quebrar.
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';

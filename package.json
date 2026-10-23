@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "check": "node --test --test-concurrency=1 scripts/check-workspace.mjs scripts/check-editor-store.mjs scripts/check-git-stage.mjs scripts/check-file-tabs.mjs scripts/check-explorer.mjs scripts/check-git-graph.mjs scripts/check-paste.mjs scripts/check-release.mjs scripts/check-commands.mjs",
-    "check:ui": "node --test --test-global-setup=scripts/ui-setup.mjs --test-concurrency=4 scripts/check-editor-ui.mjs scripts/check-files-search-ui.mjs scripts/check-git-ui.mjs scripts/check-media-ui.mjs scripts/check-titlebar-ui.mjs scripts/check-editor-style.mjs scripts/check-git-gutter-ui.mjs scripts/check-shell-tabs-ui.mjs scripts/check-editor-tabs-ui.mjs scripts/check-project-tabs-ui.mjs scripts/check-tab-lists-ui.mjs",
+    "check": "node --test --test-concurrency=1 tests/check-workspace.mjs tests/check-editor-store.mjs tests/check-git-stage.mjs tests/check-file-tabs.mjs tests/check-explorer.mjs tests/check-git-graph.mjs tests/check-paste.mjs tests/check-release.mjs tests/check-commands.mjs",
+    "check:ui": "node --test --test-global-setup=tests/ui-setup.mjs --test-concurrency=4 tests/check-editor-ui.mjs tests/check-files-search-ui.mjs tests/check-git-ui.mjs tests/check-media-ui.mjs tests/check-titlebar-ui.mjs tests/check-editor-style.mjs tests/check-git-gutter-ui.mjs tests/check-shell-tabs-ui.mjs tests/check-editor-tabs-ui.mjs tests/check-project-tabs-ui.mjs tests/check-tab-lists-ui.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

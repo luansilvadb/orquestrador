@@ -1,14 +1,14 @@
-// A navegação da coluna de ícones, a árvore de pastas (na tela principal) e a barra de status com a branch e o botão do Terminal.
-// A árvore se atualiza sozinha (usePolling). O status do Git vem do App, que o usa no contador da navegação e na barra de status.
+// A árvore de pastas (na tela principal).
+// A árvore se atualiza sozinha (usePolling). O status do Git vem do App.
 // Arquivo e pasta da árvore têm menu de contexto (clique direito, Shift+F10 e a tecla de contexto); a área vazia do painel tem o menu da raiz do projeto.
 // Seleção com Ctrl e Shift; arrastar e soltar move para pasta ou para a raiz, com o destino mostrado e validado. As ações que mexem no App (abas,
 // rascunhos, telas) vêm pelo `actions`; as que só chamam o backend a árvore chama direto.
 // O visual segue o Explorer do Antigravity/VS Code: ícones do tema Symbols, decorações do Git (cor, letra e "•" na pasta; cinza no ignorado),
 // barra com as ações da view e a seção recolhível com o nome do projeto.
 import { type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronRight, ChevronsDownUp, FilePlus, Files, FolderPlus, Info, LoaderCircle, type LucideIcon, RefreshCw, Search, SquareTerminal, X } from 'lucide-react';
+import { ChevronRight, ChevronsDownUp, FilePlus, FolderPlus, Info, LoaderCircle, type LucideIcon, RefreshCw, X } from 'lucide-react';
 import {
-  ActionIcon, Alert, Badge, type ContextMenuItem, Modal, ScrollArea, showContextMenu, Text, toast, Tree, type TreeDataNode,
+  ActionIcon, Alert, type ContextMenuItem, Modal, ScrollArea, showContextMenu, Text, toast, Tree, type TreeDataNode,
 } from '@lobehub/ui/base-ui';
 import { createPortal } from 'react-dom';
 import { Flexbox } from '@lobehub/ui';
@@ -16,14 +16,11 @@ import { message } from '../backend/backend';
 import { useBackend } from '../backend/backend-context';
 import { decorations, IGNORED } from './explorer-decorations';
 import { FileIcon } from '../shared/file-icon';
-import { SourceControl } from './source-control-icon';
 import { fileNameError } from '../shared/file-tab-actions';
 import { action, blocked, DIVIDER, fileName, useChord } from '../shared/file-tabs';
 import { join, splitPath } from '../shared/paths';
 import { usePolling } from '../shared/polling';
 import type { Batch, DirEntry, GitStatus, Moved } from '../backend/types';
-
-export type Route = 'arquivos' | 'pesquisa' | 'git';
 
 /** Opções de abertura. Sem elas, o clique simples abre como prévia (a aba seguinte substitui). `permanent`: a aba fica. `side`: abre na área da direita. */
 export type OpenOptions = { permanent?: boolean; side?: boolean };
@@ -99,39 +96,6 @@ function dropProblem(paths: string[], dest: string): string | null {
 // Sem arquivo aberto nem seleção, nada fica marcado. Pasta abre e fecha sem ficar marcada.
 const NONE: string[] = [];
 const NO_MODS = { ctrl: false, shift: false };
-
-/** Coluna de ícones: uma tela por botão, na ordem Arquivos, Pesquisar, Git. O botão da tela aberta tem aria-current e um filete à esquerda. */
-export function Nav({ route, changed, onGo }: { route: Route | null; changed: number; onGo: (to: Route) => void }) {
-  // Botão de 36 px com ícone de 20 px (o size numérico já dá essa proporção). A linha ocupa a faixa toda, para o filete encostar na borda.
-  const button = (to: Route, label: string, icon: LucideIcon, title = label, badge?: ReactNode) => (
-    <Flexbox width="100%" align="center" className="relative">
-      {route === to && <span aria-hidden="true" className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-[var(--ant-color-primary)]" />}
-      <div className="relative">
-        <ActionIcon
-          icon={icon} size={20} variant="borderless" active={route === to}
-          aria-label={label} aria-current={route === to ? 'page' : undefined} title={title}
-          onClick={() => onGo(to)}
-        />
-        {badge}
-      </div>
-    </Flexbox>
-  );
-  const gitLabel = changed ? `Git (${changed} ${changed === 1 ? 'arquivo alterado' : 'arquivos alterados'})` : 'Git';
-  // Contador no canto de baixo à direita do botão, com as medidas do badge do Antigravity (pílula de 12 px, fonte de 10 px, preta para dar contraste sobre o vermelho) e a posição 19/5 px dentro do botão de 36 px. Sem filhos, o Badge é a própria pílula: o `style` troca o tamanho e a sombra do tema, e não há deslocamento para fora do canto.
-  const gitBadge = changed > 0 && (
-    <Badge
-      aria-hidden="true" count={changed} size="small" className="pointer-events-none absolute"
-      style={{ top: 19, right: 5, minWidth: 12, height: 12, padding: '0 3px', fontSize: 10, fontWeight: 600, color: '#000', lineHeight: '12px', borderRadius: 4, boxShadow: 'none' }}
-    />
-  );
-  return (
-    <Flexbox as="nav" aria-label="Telas" flex="none" width={44} align="center" gap={4} paddingBlock={8} className="border-r bg-card">
-      {button('arquivos', 'Arquivos', Files)}
-      {button('pesquisa', 'Pesquisar', Search, 'Pesquisar (Ctrl+Shift+F)')}
-      {button('git', gitLabel, SourceControl, 'Git', gitBadge)}
-    </Flexbox>
-  );
-}
 
 // Rola só o viewport do ScrollArea (o elemento com overflow: scroll), sem scrollIntoView: ele rolaria também o painel e os ancestrais.
 function scrollToNode(box: HTMLElement | null, path: string) {
@@ -1007,53 +971,6 @@ export function FilesScreen({
           </Flexbox>
         )}
       </FormDialog>
-    </Flexbox>
-  );
-}
-
-// Item da barra de status, nas medidas do Antigravity: 22 px de altura, 5 px de respiro dos lados e 12 px de texto da interface.
-const STATUS_ITEM = 'flex h-full shrink-0 items-center gap-1 px-[5px] text-[12px] outline-none hover:bg-[var(--ant-color-fill)] focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:cursor-default disabled:hover:bg-transparent';
-
-/**
- * Barra de status embaixo da tela principal, como a do Antigravity: à esquerda, a branch atual (abre o Controle do Código-Fonte) e
- * o Sincronizar, que recebe e envia (com os commits a receber e a enviar ao lado do ícone, quando há); à direita, o painel Terminal.
- */
-export function StatusBar({ git, terminalOpen, onToggleTerminal, onOpenGit, onSync }: {
-  /** Branch e contadores do repositório; sem repositório, a barra só tem o Terminal. */
-  git: { branch: string; ahead: number; behind: number; syncing: boolean } | undefined;
-  terminalOpen: boolean;
-  onToggleTerminal: () => void;
-  onOpenGit: () => void;
-  onSync: () => void;
-}) {
-  const counts = git && (git.ahead || git.behind) ? `${git.behind}↓ ${git.ahead}↑` : '';
-  return (
-    <Flexbox as="footer" horizontal align="stretch" height={22} flex="none" className="border-t bg-card px-[3px]">
-      {git && (
-        <>
-          <button
-            type="button" className={`${STATUS_ITEM} min-w-0 shrink`} onClick={onOpenGit}
-            aria-label={`${git.branch}, branch atual. Abrir o Controle do Código-Fonte`} title={`${git.branch}, branch atual`}
-          >
-            <span className="truncate">{git.branch}</span>
-          </button>
-          <button
-            type="button" className={STATUS_ITEM} onClick={onSync} disabled={git.syncing}
-            aria-label={`Sincronizar as alterações${counts ? ` (${git.behind} a receber, ${git.ahead} a enviar)` : ''}`}
-            title={git.syncing ? 'Sincronizando…' : `Sincronizar as alterações${counts ? ` (${counts})` : ''}`}
-          >
-            <RefreshCw className={`size-3.5 shrink-0${git.syncing ? ' animate-spin' : ''}`} aria-hidden />
-            {counts && <span>{counts}</span>}
-          </button>
-        </>
-      )}
-      <button
-        type="button" aria-pressed={terminalOpen} title="Painel Terminal (Ctrl+`)" onClick={onToggleTerminal}
-        className={`${STATUS_ITEM} ml-auto${terminalOpen ? ' bg-[var(--ant-color-fill-secondary)]' : ''}`}
-      >
-        <SquareTerminal className="size-3.5 shrink-0" aria-hidden />
-        Terminal
-      </button>
     </Flexbox>
   );
 }

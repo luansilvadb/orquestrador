@@ -5,7 +5,9 @@ import { backend, connect, host, message, projectBackend } from './backend/backe
 import { BackendProvider } from './backend/backend-context';
 import { ChoiceForm } from './terminal/choice-form';
 import { EditorWorkspace, type EditorWorkspaceHandle } from './editor/editor-workspace';
-import { FilesScreen, Nav, StatusBar, type FileActions, type OpenOptions, type Route } from './explorer/explorer';
+import { FilesScreen, type FileActions, type OpenOptions } from './explorer/explorer';
+import { Nav, type Route } from './window/nav';
+import { StatusBar } from './window/status-bar';
 import { fileName } from './shared/file-tabs';
 import { createGitGuard } from './git/git-guard';
 import { GitSidebar, usePolled } from './git/git';
@@ -18,7 +20,7 @@ import { type ExecutorTab, FINISHED, PANEL_MIN, PANEL_WIDTH, STATES, TerminalsSc
 import type { TermView } from './terminal/term';
 import { terminals } from './terminal/terminals';
 import { folderName, TitleBar, type ProjectTab, type TitleBarMenu } from './window/titlebar';
-import { SECONDARY } from './window/text-style';
+import { SECONDARY } from './shared/text-style';
 import { pathText, relativeTo } from './shared/file-tab-actions';
 import { OpenProjectPrompt } from './shared/open-project';
 import { isWithin, type TabTarget } from './editor/workspace-model';

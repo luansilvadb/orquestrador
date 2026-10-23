@@ -1,6 +1,6 @@
 // QA do arrasto das abas do editor (issue #14), em Chrome headless contra o app simulado: clique seleciona sem mover, arrastar reordena,
 // o X e o Esc não reordenam, as fixadas ficam no começo, soltar na faixa do outro grupo move a aba e a faixa rola sozinha com a aba na borda.
-// Uso: node scripts/check-editor-tabs-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
+// Uso: node tests/check-editor-tabs-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 import assert from 'node:assert/strict';
 import { uiSuite, treeItem, tabs, focusEditor } from './editor-ui-harness.mjs';
 

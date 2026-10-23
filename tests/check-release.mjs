@@ -1,4 +1,4 @@
-// Check das regras de release (scripts/release.mjs), sem dependências e sem rede: `node scripts/check-release.mjs`.
+// Check das regras de release (scripts/release.mjs), sem dependências e sem rede: `node tests/check-release.mjs`.
 // Sai com 1 e mostra a falha se alguma regra quebrar. A conferência real do repositório é `node scripts/release.mjs check-versions`.
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
@@ -6,7 +6,7 @@ import { test as check } from 'node:test';
 import {
   cargoLockVersions, cargoPackageVersion, checkNotes, checkVersions, installerName, installerUrl, noteProblems, prepareManifest,
   REQUIRED_SECTIONS, releaseBody, verifyBody, verifyInstaller, verifyManifest,
-} from './release.mjs';
+} from '../scripts/release.mjs';
 
 // Notas mínimas que passam: todas as seções, com texto suficiente em cada uma.
 const WORDS = 'Texto concreto sobre a mudança, com o comportamento real do app e o que muda para quem usa. '

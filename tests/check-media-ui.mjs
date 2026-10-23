@@ -5,7 +5,7 @@
 // Tudo o mais é o app de verdade. Áudio e vídeo usam os controles nativos do WebView2/Chromium: o check clica neles
 // (gesto), e usa a API HTMLMediaElement só onde o controle não expõe o ajuste (posição e volume).
 // Loader compartilhado em editor-ui-harness.mjs: Vite na porta 1421 (SMOKE_PORT), encerrado só aqui. Não instala nada.
-// Uso: node scripts/check-media-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
+// Uso: node tests/check-media-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 // Capturas em .playwright-mcp/media-ui-*.png só quando um cenário falha: evidência para leitura humana, não asserção.
 // Limite de codec: o que toca depende do WebView2/Windows; o simulado só prova WAV (PCM), PNG e WebM VP8 (nem H.264 nem o streaming do protocolo).
 import assert from 'node:assert/strict';

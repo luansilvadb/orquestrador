@@ -6,7 +6,7 @@ import { Button, colorsPreset, DraggablePanel, Tag, TabsIndicator, TabsList, Tab
 import { Center, Flexbox, type PresetColorKey } from '@lobehub/ui';
 import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
-import { SECONDARY } from '../window/text-style';
+import { SECONDARY } from '../shared/text-style';
 import { OpenProjectPrompt } from '../shared/open-project';
 import { TermHost, terminals } from './terminals';
 import { revealTab, wheelToScroll } from '../shared/tab-strip';

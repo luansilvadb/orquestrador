@@ -3,7 +3,7 @@
 // com contexto novo, clipboard fake e a árvore carregada. O mock só entra na fronteira de I/O: fixtures (`__mock.addConflict`, `__mock.addFile`),
 // edição externa (`__mock.external`), disco (`__mock.disk`), remoção pela árvore (`__mock.remove`) e o registro das chamadas Git (`__mock.calls`),
 // que o check usa para conferir o payload que a UI mandou (índice, cabeçalho e revisão vistos), não só o que apareceu na tela.
-// Uso: node scripts/check-git-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
+// Uso: node tests/check-git-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 // Capturas em .playwright-mcp/git-ui-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
