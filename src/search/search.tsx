@@ -346,7 +346,8 @@ export function SearchScreen({
       setShown({ query: f.query, options: f.options });
       if (quiet) {
         // Recolhido só sai da lista se o arquivo sumiu da busca.
-        setCollapsed((prev) => prev.filter((k) => !k.startsWith('f:') || found.files.some((x) => `f:${x.path}` === k)));
+        const kept = new Set(found.files.map((x) => `f:${x.path}`));
+        setCollapsed((prev) => prev.filter((k) => !k.startsWith('f:') || kept.has(k)));
       } else {
         setCollapsed([]);
         setDismissedFiles([]);

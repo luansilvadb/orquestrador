@@ -228,7 +228,7 @@ pub fn quick_open(dir: &Path, term: &str) -> Result<Quick, String> {
         })
         .collect();
     let name_of = |p: &str| p.rsplit('/').next().unwrap_or(p).to_lowercase();
-    hits.sort_by_key(|p| (!words.iter().all(|w| name_of(p).contains(w)), p.len(), p.clone()));
+    hits.sort_by_cached_key(|p| (!words.iter().all(|w| name_of(p).contains(w)), p.len(), p.clone()));
     // `plain` toca o disco, então só confere os que entram na lista. O total desconta os recusados entre os conferidos.
     let mut total = hits.len();
     let mut paths = Vec::new();
