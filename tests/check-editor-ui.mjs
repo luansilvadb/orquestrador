@@ -507,6 +507,19 @@ scenario('rascunho: fechar outra aba mantém o rascunho com o mesmo texto', asyn
   assert.ok((await editorText(page)).includes('texto preservado'), 'rascunho mantém o texto depois de fechar a outra aba');
 });
 
+scenario('Ctrl+Shift+T depois de reabrir o arquivo só ativa a aba dele, sem duplicar', async ({ page }) => {
+  await expand(page, ['src']);
+  await treeItem(page, 'App.tsx').dblclick();
+  await tabs(page).filter({ hasText: 'App.tsx' }).getByRole('button', { name: /^Fechar/ }).click();
+  await page.locator('[data-pane="A"] [data-empty]').waitFor();
+  await treeItem(page, 'App.tsx').dblclick();
+  await focusEditor(page);
+  await page.keyboard.press('Control+Shift+T');
+  await page.waitForTimeout(150);
+  const titles = await tabTitles(page);
+  assert.equal(titles.filter((t) => t.startsWith('App.tsx')).length, 1, `uma aba só de App.tsx (${JSON.stringify(titles)})`);
+});
+
 scenario('rascunho: Ctrl+N com o foco no editor cria um rascunho novo', async ({ page }) => {
   await expand(page, ['src']);
   await treeItem(page, 'App.tsx').dblclick();

@@ -164,13 +164,14 @@ export function closeTabs(state: WorkspaceState, tabIds: readonly string[]): Wor
   });
 }
 
-/** Reabre a última aba fechada no grupo de origem (ou no primeiro, se ele sumiu), como permanente e ativa. Se a identidade já está aberta lá, só ativa. */
-export function reopenClosed(state: WorkspaceState): WorkspaceState {
+/** Reabre a última aba fechada no grupo de origem (ou no primeiro, se ele sumiu), como permanente e ativa. Se a identidade já está aberta lá, só ativa.
+ *  `resolve` atualiza o alvo guardado (p. ex. o docId atual do caminho) antes de abrir. */
+export function reopenClosed(state: WorkspaceState, resolve: (target: TabTarget) => TabTarget = (target) => target): WorkspaceState {
   const last = state.closed[state.closed.length - 1];
   if (!last) return state;
   const rest: WorkspaceState = { ...state, closed: state.closed.slice(0, -1) };
   const group = rest.groups.find((g) => g.id === last.group) ?? rest.groups[0];
-  return openAt(rest, group.id, last.target, false, NO_DIRTY);
+  return openAt(rest, group.id, resolve(last.target), false, NO_DIRTY);
 }
 
 /** Anterior (-1) ou próxima (1) aba do grupo focado; dá a volta no fim e no começo. */

@@ -200,6 +200,19 @@ check('Reabrir a última fechada: volta ao grupo, ativa e permanente; depois a a
   assertConsistent(s);
 });
 
+check('Reabrir com resolve: usa o alvo resolvido e só ativa se a identidade já está no grupo', () => {
+  let s = openAll(createWorkspace(), 'A', [['da', 'a.ts'], ['db', 'b.ts']]);
+  s = closeTabs(s, [idOf(s, 'A', 'a.ts')]);
+  s = openPermanent(s, 'A', file('da2', 'a.ts'));
+  const resolve = (t) => (t.kind === 'file' && t.path === 'a.ts' ? file('da2', 'a.ts') : t);
+  s = activate(s, idOf(s, 'A', 'b.ts'));
+  s = reopenClosed(s, resolve);
+  assert.deepEqual(names(s, 'A'), ['b.ts', 'a.ts'], 'sem aba duplicada');
+  assert.equal(groupOf(s, 'A').active, idOf(s, 'A', 'a.ts'));
+  assert.equal(s.closed.length, 0);
+  assertConsistent(s);
+});
+
 check('Anterior/próxima dão a volta no grupo focado', () => {
   let s = openAll(createWorkspace(), 'A', [['da', 'a.ts'], ['db', 'b.ts'], ['dc', 'c.ts']]);
   assert.equal(groupOf(s, 'A').active, idOf(s, 'A', 'c.ts'));

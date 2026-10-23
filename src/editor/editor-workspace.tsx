@@ -778,7 +778,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (text === null) return;
     void copy(text, 'Caminho copiado');
   };
-  const reopen = () => setWs(reopenClosed(wsRef.current));
+  // Arquivo reabre pelo docId atual do caminho: o guardado pode ser de um buffer que já saiu, e a aba duplicaria.
+  const reopen = () => setWs(reopenClosed(wsRef.current, (t) => (t.kind === 'file' ? { ...t, docId: docIdFor(t.path) } : t)));
 
   const moveToOther = (tabId: string) => {
     const found = wsRef.current.groups.find((g) => g.tabs.some((t) => t.id === tabId));
