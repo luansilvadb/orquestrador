@@ -11,7 +11,7 @@
 // conflitos (resolver e aceitar remoção). Branches, fetch, pull e push são respostas fixas; as refs são fixas, exceto a `main`, que anda com o commit. Regex da pesquisa e da substituição usa a
 // sintaxe do JavaScript (o backend usa a do Rust); o texto de busca e de substituição é o mesmo nos dois.
 // Na pesquisa (Ctrl+Shift+F), `search` filtra de verdade, mas só os arquivos de `TEXTS` têm linhas; os demais não casam nada.
-// Ao abrir um arquivo, `read_file` devolve o texto de `TEXTS`; `write_file_checked` (a gravação do editor) atualiza esse texto. `.png` vem binário, `dados/exportacao.json` vem grande demais, e os demais começam vazios. `read_media` (aba de imagem e áudio) devolve um PNG 32×32 e um WAV de 2 s em silêncio para `.png` e `.wav`; `__mock.failRead = ['caminho']` faz a leitura falhar, e `__mock.corruptRead = ['caminho']` devolve bytes que o navegador não decodifica.
+// Ao abrir um arquivo, `read_file` devolve o texto de `TEXTS`; `write_file_checked` (a gravação do editor) atualiza esse texto. `.png` vem binário, `dados/exportacao.json` vem grande demais, e os demais começam vazios. `read_media` (aba de imagem e áudio) devolve um PNG 32×32 e um WAV de 2 s em silêncio para `.png` e `.wav`; `mediaUrl` (vídeo, que no app vem por streaming do protocolo `orq-media`) devolve um WebM VP8 64×48 de 2 s em `data:` para `.webm` e `.mp4`; `__mock.failRead = ['caminho']` faz a leitura falhar, e `__mock.corruptRead = ['caminho']` devolve bytes que o navegador não decodifica (no vídeo, as duas dão um `<video>` com erro).
 // Menu do arquivo na árvore: `rename_file` e `delete_files` mudam a árvore e `TEXTS` de verdade (com as mesmas recusas do backend); `reveal_file` e
 // `open_with` só conferem que o arquivo existe, porque o Explorer, o diálogo e a Lixeira são do Windows. `start_shell` aceita `cwd`.
 // Área vazia da árvore: `create_file` e `create_dir` criam de verdade na raiz (com as mesmas recusas); `reveal_dir` só confere a pasta.
@@ -310,9 +310,9 @@ const debug = { close: async () => {
   addFolder: (rel: string) => { const { dir, name } = splitPath(rel); const parent = folderAt(dir); if (parent && !parent.children[name]) parent.children[name] = folder(); },
   // Falha de I/O simulada: colar ou mover para quando chega num destes caminhos de origem (relativos), como um disco que recusa um item.
   failOn: [] as string[],
-  // Falha de leitura de mídia (`read_media`) nestes caminhos, como um disco que não entrega o arquivo.
+  // Falha de leitura de mídia (`read_media`, e a URL de vídeo) nestes caminhos, como um disco que não entrega o arquivo.
   failRead: [] as string[],
-  // Bytes que não são imagem nem áudio nestes caminhos: a leitura chega, mas o navegador recusa a decodificação.
+  // Bytes que não são imagem, áudio nem vídeo nestes caminhos: a leitura chega, mas o navegador recusa a decodificação.
   corruptRead: [] as string[],
   // Latência de I/O por comando (ms, somada à base): a gravação demora e o usuário pode digitar enquanto ela não chega.
   delay: {} as Record<string, number>,
@@ -944,6 +944,20 @@ const mockBytes = (path: string): ArrayBuffer => {
   if (ext === 'wav') return wavSilence(2);
   throw `Tipo de arquivo não aberto como mídia: ${path}`;
 };
+// WebM VP8 64×48, 10 fps, 2 s, cor sólida, sem áudio (976 bytes), reprodutível:
+// ffmpeg -f lavfi -i "color=c=0x3366cc:s=64x48:r=10:d=2" -c:v libvpx -b:v 20k -g 20 -an -fflags +bitexact -flags:v +bitexact -map_metadata -1 mock.webm
+const MOCK_WEBM = 'GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAOgEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHGTbuMU6uEElTDZ1OsggEiTbuMU6uEHFO7a1OsggOK7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmoCrXsYMPQkBNgIRMYXZmV0GETGF2ZkSJiECfQAAAAAAAFlSua9euAQAAAAAAAE7XgQFzxYgAAAAAAAAAAZyBACK1nIN1bmSIgQCGhVZfVlA4g4EBI+ODhAX14QDgkLCBQLqBMJqBAlWwhFW5gQFV7oEA7AEAAAAAAAACAAASVMNn0HNzzWPAi2PFiAAAAAAAAAABZ8iYRaOHRU5DT0RFUkSHi0xhdmMgbGlidnB4Z8ihRaOIRFVSQVRJT05Eh5MwMDowMDowMi4wMDAwMDAwMDAAH0O2dUIN54EAo8KBAACAUAMAnQEqQAAwAABHCIWFiIWEiAICAnWqA/gCBwjVZ5mPN9IA/vk2z/+vMvrzL68y/68y/+7zft5v283+/ICjloEAZADRAQABEBAAGAAYWC/0AAiMAACjloEAyADRAQABEBAAGAAYWC/0AAiMAACjloEBLADRAQABEBAAGAAYWC/0AAiMAACjloEBkADRAQABEBAAGAAYWC/0AAiMAACjloEB9ADRAQABEBAAGAAYWC/0AAiMAACjloECWADRAQABEBAAGAAYWC/0AAiMAACjlYECvACxAQABEBAUYABhYL/QACIwAKOWgQMgANEBAAEQEAAYABhYL/QACIwAAKOWgQOEANEBAAEQEAAYABhYL/QACIwAAKOWgQPoANEBAAEQEAAYABhYL/QACIwAAKOWgQRMANEBAAEQEAAYABhYL/QACIwAAKOWgQSwANEBAAEQEAAYABhYL/QACIwAAKOWgQUUANEBAAEQEAAYABhYL/QACIwAAKOWgQV4ANEBAAEQEAAYABhYL/QACIwAAKOWgQXcANEBAAEQEAAYABhYL/QACIwAAKOWgQZAANEBAAEQEAAYABhYL/QACIwAAKOVgQakALEBAAEQEBRgAGFgv9AAIjAAo5aBBwgA0QEAARAQABgAGFgv9AAIjAAAo5aBB2wA0QEAARAQABgAGFgv9AAIjAAAHFO7a5G7j7OBALeK94EB8YIBd/CBAw==';
+// Vídeo simulado: o `<video>` recebe a URL direto, sem `read_media`. Falha, bytes inválidos, arquivo ausente ou extensão fora da lista dão
+// uma URL que não decodifica: o elemento dispara `error`, como o status de erro do protocolo no app.
+const BROKEN_VIDEO = 'data:video/webm;base64,AAECAw==';
+function mockMediaUrl(path: string, project: string | null): string {
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  if (!['webm', 'mp4'].includes(ext) || debug.failRead.includes(path) || debug.corruptRead.includes(path)) return BROKEN_VIDEO;
+  if (project !== null) {
+    try { requireFile(path); } catch { return BROKEN_VIDEO; }
+  }
+  return `data:video/webm;base64,${MOCK_WEBM}`;
+}
 function formatInfo(path: string): FormatterInfo {
   const rel = relOf(path);
   requireFile(rel);
@@ -1224,4 +1238,5 @@ export const mock: Transport = {
     addEventListener('resize', h);
     return () => removeEventListener('resize', h);
   },
+  mediaUrl: mockMediaUrl,
 };

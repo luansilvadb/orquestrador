@@ -1,15 +1,17 @@
-// Aba de mídia do editor central: imagem (png, jpg, gif, webp, bmp) e áudio (mp3, wav, ogg, flac, m4a). Os bytes vêm de `read_media`
-// e entram num blob local (nada de asset protocol nem HTML). Mídia não lê texto, não cria rascunho e não grava: a aba é só de leitura.
-// O áudio não toca sozinho e para ao sair da vista (troca de aba, grupo oculto, app em segundo plano) e ao desmontar.
-// A lista de extensões espelha `MEDIA_EXTS` em `files.rs`: o backend recusa o que não estiver nela.
-import { useEffect, useRef, useState } from 'react';
+// Aba de mídia do editor central: imagem (png, jpg, gif, webp, bmp), áudio (mp3, wav, ogg, flac, m4a) e vídeo (mp4, m4v, webm, mov).
+// Imagem e áudio: os bytes vêm de `read_media` e entram num blob local (nada de asset protocol nem HTML). Vídeo não passa pelo IPC:
+// o `<video>` recebe a URL do protocolo `orq-media`, que o backend serve em pedaços (HTTP Range), sem limite de tamanho.
+// Mídia não lê texto, não cria rascunho e não grava: a aba é só de leitura.
+// Áudio e vídeo não tocam sozinhos e param ao sair da vista (troca de aba, grupo oculto, app em segundo plano) e ao desmontar.
+// As listas espelham `MEDIA_EXTS` e `VIDEO_EXTS` em `files.rs`: o backend recusa o que não estiver nelas.
+import { type RefObject, useEffect, useRef, useState } from 'react';
 import { Button, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { message } from '../backend/backend';
 import { useBackend } from '../backend/backend-context';
 import { fileName } from '../shared/file-tabs';
 
-export type MediaKind = 'image' | 'audio';
+export type MediaKind = 'image' | 'audio' | 'video';
 const TYPES: Record<string, { kind: MediaKind; mime: string }> = {
   png: { kind: 'image', mime: 'image/png' },
   jpg: { kind: 'image', mime: 'image/jpeg' },
@@ -23,6 +25,10 @@ const TYPES: Record<string, { kind: MediaKind; mime: string }> = {
   oga: { kind: 'audio', mime: 'audio/ogg' },
   flac: { kind: 'audio', mime: 'audio/flac' },
   m4a: { kind: 'audio', mime: 'audio/mp4' },
+  mp4: { kind: 'video', mime: 'video/mp4' },
+  m4v: { kind: 'video', mime: 'video/mp4' },
+  webm: { kind: 'video', mime: 'video/webm' },
+  mov: { kind: 'video', mime: 'video/quicktime' },
 };
 
 /** Tipo da mídia pelo nome do arquivo; null se não é mídia (texto e binário desconhecido seguem o caminho de sempre). */
@@ -42,7 +48,7 @@ export function MediaView({
   const [source, setSource] = useState<Source>(null);
   // Uma leitura por caminho: a troca de caminho (renomear) descarta o blob anterior, e a resposta tardia de um caminho velho não entra.
   useEffect(() => {
-    if (!media) return;
+    if (!media || media.kind === 'video') return;
     let live = true;
     let url: string | null = null;
     setSource(null);
@@ -61,6 +67,10 @@ export function MediaView({
   }, [path]);
 
   if (!media) return null;
+  if (media.kind === 'video') {
+    const url = backend.mediaUrl(path);
+    return <VideoBody key={url} url={url} name={fileName(path)} shown={shown} />;
+  }
   if (!source) return <Note text="Lendo o arquivo…" />;
   if ('error' in source) return <Note text={source.error} danger />;
   return media.kind === 'image'
@@ -111,18 +121,13 @@ function ImageBody({ url, name }: { url: string; name: string }) {
   );
 }
 
-// Controles nativos do WebView2 (tocar, pausar, posição, volume), sem pacote novo. Não toca sozinho (sem `autoplay`).
-function AudioBody({ url, name, shown }: { url: string; name: string; shown: boolean }) {
-  const audio = useRef<HTMLAudioElement>(null);
-  const box = useRef<HTMLDivElement>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  // Fora da vista, para: troca de aba (`shown`), grupo oculto ou outra tela (a interseção cai a zero), app em segundo plano.
+// Fora da vista, para: troca de aba (`shown`), grupo oculto ou outra tela (a interseção de `box` cai a zero), app em segundo plano, desmontar.
+function usePauseOutOfView(media: RefObject<HTMLMediaElement | null>, box: RefObject<HTMLElement | null>, shown: boolean) {
   useEffect(() => {
-    if (!shown) audio.current?.pause();
+    if (!shown) media.current?.pause();
   }, [shown]);
   useEffect(() => {
-    const el = audio.current;
+    const el = media.current;
     const frame = box.current;
     if (!el || !frame) return;
     const observer = new IntersectionObserver(([entry]) => { if (!entry.isIntersecting) el.pause(); });
@@ -135,6 +140,14 @@ function AudioBody({ url, name, shown }: { url: string; name: string; shown: boo
       el.pause();
     };
   }, []);
+}
+
+// Controles nativos do WebView2 (tocar, pausar, posição, volume), sem pacote novo. Não toca sozinho (sem `autoplay`).
+function AudioBody({ url, name, shown }: { url: string; name: string; shown: boolean }) {
+  const audio = useRef<HTMLAudioElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  usePauseOutOfView(audio, box, shown);
 
   return (
     <Flexbox ref={box} flex={1} align="center" justify="center" gap={16} padding={24} className="min-h-0">
@@ -145,6 +158,34 @@ function AudioBody({ url, name, shown }: { url: string; name: string; shown: boo
         onError={() => setError('Não foi possível tocar este áudio. O formato pode não ser suportado pelo Windows.')}
       />
       {error && <Text as="p" role="alert" fontSize={12} type="danger">{error}</Text>}
+    </Flexbox>
+  );
+}
+
+// Controles nativos como no áudio; o quadro cabe no painel sem cortar (`object-contain`). A troca de URL (renomear) remonta pelo `key`.
+function VideoBody({ url, name, shown }: { url: string; name: string; shown: boolean }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  usePauseOutOfView(video, box, shown);
+
+  return (
+    <Flexbox flex={1} className="min-h-0">
+      <Flexbox horizontal align="center" gap={8} paddingInline={12} height={32} flex="none" className="border-b">
+        <Text as="span" role="status" fontSize={12} type="secondary" ellipsis className="min-w-0">
+          {size ? `${size.w} × ${size.h} px` : 'Vídeo'}
+        </Text>
+      </Flexbox>
+      <div ref={box} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <video
+          ref={video} src={url} controls preload="metadata" aria-label={name} className="min-h-0 w-full flex-1 object-contain"
+          onLoadedMetadata={(e) => setSize({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })}
+          onPlay={() => setError(null)}
+          onError={() => setError('Não foi possível tocar este vídeo. O arquivo pode ter sumido ou o formato pode não ser suportado pelo Windows.')}
+        />
+        {error && <Text as="p" role="alert" fontSize={12} type="danger" className="p-4">{error}</Text>}
+      </div>
     </Flexbox>
   );
 }

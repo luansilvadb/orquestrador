@@ -135,6 +135,36 @@ fn read_media_at(path: String) -> Result<tauri::ipc::Response, String> {
     files::read_media_at(std::path::Path::new(&path)).map(tauri::ipc::Response::new)
 }
 
+/// Responde ao protocolo `orq-media`, que serve vídeo em pedaços. Só a query importa: `path`, relativo ao `project` quando
+/// ele vem, ou absoluto quando não vem.
+fn media_protocol(app: &tauri::AppHandle, request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
+    let (mut path, mut project) = (None, None);
+    if let Ok(url) = tauri::Url::parse(&request.uri().to_string()) {
+        for (key, value) in url.query_pairs() {
+            match key.as_ref() {
+                "path" => path = Some(value.into_owned()),
+                "project" => project = Some(value.into_owned()),
+                _ => {}
+            }
+        }
+    }
+    let file = match (path, project) {
+        (None, _) => Err((403, "Falta o caminho do vídeo.".to_string())),
+        (Some(path), Some(project)) => app
+            .state::<Projects>()
+            .core(&project)
+            .and_then(|core| core.repo())
+            .map_err(|e| (403, e))
+            .and_then(|repo| files::video_path(&repo, &path)),
+        (Some(path), None) => files::video_path_at(std::path::Path::new(&path)),
+    };
+    let range = request.headers().get(tauri::http::header::RANGE).and_then(|v| v.to_str().ok());
+    match file {
+        Ok(file) => files::serve_video(&file, range),
+        Err((status, message)) => files::text_response(status, message),
+    }
+}
+
 /// Diz qual formatador serve ao caminho absoluto e devolve as opções locais do Prettier.
 #[tauri::command(async)]
 fn formatter_info(path: String) -> Result<format::Info, String> {
@@ -591,6 +621,11 @@ pub fn run(context: tauri::Context, initial_paths: Vec<std::path::PathBuf>) {
     builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // A leitura do disco vai para o pool de bloqueio, fora da thread do webview.
+        .register_asynchronous_uri_scheme_protocol("orq-media", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn_blocking(move || responder.respond(media_protocol(&app, &request)));
+        })
         .setup(move |app| {
             let handle = app.handle().clone();
             let emit: core::Emit = Arc::new(move |event, payload| drop(handle.emit(event, payload)));
