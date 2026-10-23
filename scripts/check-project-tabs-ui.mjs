@@ -107,7 +107,7 @@ scenario('fechar a última aba volta ao modo sem projeto', async ({ page }) => {
   await twoProjects(page);
   await page.getByRole('button', { name: 'Fechar simulado-2' }).click();
   await page.getByRole('button', { name: 'Fechar exemplo' }).click();
-  await page.getByText('Abra uma pasta para explorar os arquivos.', { exact: true }).waitFor();
+  await page.locator('dt').getByText('Abrir pasta', { exact: true }).waitFor();
   assert.equal(await tabs(page).count(), 0);
 });
 

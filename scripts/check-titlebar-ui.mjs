@@ -108,19 +108,26 @@ scenario('título nativo simulado acompanha o projeto aberto', async ({ page }) 
   assert.equal(await page.title(), `${folder} - Orquestrador`);
 });
 
-scenario('modo sem projeto: painéis pedem pasta e o rascunho do menu volta ao recarregar', async ({ page }) => {
+scenario('modo sem projeto: tela limpa, a faixa abre pelo ícone e o rascunho do menu volta ao recarregar', async ({ page }) => {
   await openApp(page, '?project=none');
   const nav = page.getByRole('navigation', { name: 'Telas' });
+  const visible = (description) => page.getByText(description, { exact: true }).isVisible();
   const prompt = async (description) => {
     const text = page.getByText(description, { exact: true });
     await text.waitFor();
     assert.equal(await text.evaluate((el) => el.parentElement?.querySelector('button')?.textContent), 'Abrir pasta');
   };
+  // Só a marca e os atalhos: sem faixa e sem o painel do Orquestrador.
+  await page.locator('dt').getByText('Abrir pasta', { exact: true }).waitFor();
+  assert.equal(await visible('Abra uma pasta para explorar os arquivos.'), false, 'faixa fechada');
+  assert.equal(await visible('Abra uma pasta para iniciar o Orquestrador.'), false, 'painel do Orquestrador oculto');
+  assert.equal(await nav.locator('[aria-current="page"]').count(), 0, 'nenhuma tela marcada com a faixa fechada');
   await nav.getByRole('button', { name: /^Git/ }).click();
   await prompt('Abra uma pasta para usar o Git.');
   await nav.getByRole('button', { name: /^Pesquisa/ }).click();
   await prompt('Abra uma pasta para pesquisar nos arquivos.');
-  await prompt('Abra uma pasta para iniciar o Orquestrador.');
+  await nav.getByRole('button', { name: /^Pesquisa/ }).click();
+  await page.getByText('Abra uma pasta para pesquisar nos arquivos.', { exact: true }).waitFor({ state: 'detached' });
 
   await button(page, 'Arquivo').click();
   await page.getByRole('menuitem', { name: 'Novo arquivo' }).click();

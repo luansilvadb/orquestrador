@@ -32,9 +32,10 @@ import {
 } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownMenu, Modal, Text, toast } from '@lobehub/ui/base-ui';
 import { Center, Flexbox, Hotkey, PatchDiff } from '@lobehub/ui';
-import { ArrowRight, ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, FolderOpen, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
 import { EditorView } from '@codemirror/view';
 import { FileIcon } from '../shared/file-icon';
+import { AppMark } from '../window/app-mark';
 import { Breadcrumbs } from './breadcrumbs';
 import { backend, message } from '../backend/backend';
 import { usePolling } from '../shared/polling';
@@ -85,10 +86,6 @@ export type EditorWorkspaceHandle = {
 export type EditorWorkspaceProps = {
   project: string;
   active?: boolean;
-  recentProjects?: string[];
-  onOpenFile?: () => void;
-  onOpenProject?: () => void;
-  onOpenRecent?: (path: string) => void;
   locked: boolean;
   refreshGit: () => void;
   /** Trava compartilhada com a barra do Git: as operações Git desta área e da barra não rodam juntas. */
@@ -205,7 +202,7 @@ async function writeNewFile(path: string, text: string): Promise<void> {
 function emptyData(): EditorData { return { buffers: {}, conflicts: {} }; }
 
 export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(props, handle) {
-  const { project, active = true, recentProjects = [], onOpenFile, onOpenProject, onOpenRecent, locked, guard, refreshGit, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
+  const { project, active = true, locked, guard, refreshGit, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
   const storageProject = project || NO_PROJECT;
   // Ref para que as gravações antigas (ainda em await) avisem com a prop atual.
   const savedRef = useRef(onSaved);
@@ -1320,13 +1317,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       )}
       <Flexbox horizontal flex={1} className="min-h-0" height="100%">
         {showHome ? (
-          <HomeScreen
-            recentProjects={recentProjects}
-            onNewFile={() => newDraft(wsRef.current.focus)}
-            onOpenFile={onOpenFile ?? (() => {})}
-            onOpenProject={onOpenProject ?? (() => {})}
-            onOpenRecent={onOpenRecent ?? (() => {})}
-          />
+          <HomeScreen onNewFile={() => newDraft(wsRef.current.focus)} />
         ) : ws.groups.map((group, index) => (
           <Fragment key={group.id}>
             {index === 1 && (
@@ -1400,6 +1391,12 @@ const EMPTY_HINTS = [
   ['Alternar o terminal', 'Ctrl+`'],
 ] as const;
 
+const HOME_HINTS = [
+  ['Novo arquivo', 'Ctrl+N'],
+  ['Abrir arquivo', 'Ctrl+O'],
+  ['Abrir pasta', 'Ctrl+K Ctrl+O'],
+] as const;
+
 // Duplo clique em qualquer ponto da área (também sobre as dicas) abre um rascunho, como no VS Code. `select-none`: o duplo clique não seleciona o texto das dicas.
 function EmptyGroup({ onNewDraft }: { onNewDraft: () => void }) {
   return (
@@ -1416,37 +1413,20 @@ function EmptyGroup({ onNewDraft }: { onNewDraft: () => void }) {
   );
 }
 
-function HomeScreen({ recentProjects, onNewFile, onOpenFile, onOpenProject, onOpenRecent }: {
-  recentProjects: string[]; onNewFile: () => void; onOpenFile: () => void; onOpenProject: () => void; onOpenRecent: (path: string) => void;
-}) {
+// Sem projeto e sem abas: a marca apagada e os atalhos de começar, como o editor vazio do VS Code sem pasta. Duplo clique abre um rascunho.
+function HomeScreen({ onNewFile }: { onNewFile: () => void }) {
   return (
-    <Center flex={1} className="min-w-0 min-h-0 overflow-auto p-6">
-      <Flexbox gap={24} className="w-full max-w-lg">
-        <Flexbox gap={6}>
-          <Text as="h1" fontSize={20} weight={600}>Comece um arquivo ou abra uma pasta</Text>
-          <Text as="p" type="secondary" fontSize={13}>O editor e o Terminal estão prontos.</Text>
-        </Flexbox>
-        <Flexbox gap={8}>
-          <Button type="default" size="large" icon={<FileText className="size-4" />} onClick={onNewFile}>Novo arquivo <Hotkey keys="Ctrl+N" /></Button>
-          <Button type="default" size="large" icon={<ArrowRight className="size-4" />} onClick={onOpenFile}>Abrir arquivo… <Hotkey keys="Ctrl+O" /></Button>
-          <Button type="default" size="large" icon={<FolderOpen className="size-4" />} onClick={onOpenProject}>Abrir pasta… <Hotkey keys="Ctrl+K Ctrl+O" /></Button>
-        </Flexbox>
-        {recentProjects.length > 0 && (
-          <Flexbox gap={8}>
-            <Text as="h2" type="secondary" fontSize={12} weight={600}>Projetos recentes</Text>
-            <Flexbox gap={4}>
-              {recentProjects.slice(0, 10).map((path) => (
-                <Button key={path} type="text" size="small" className="justify-start" title={path} onClick={() => onOpenRecent(path)}>
-                  <Flexbox gap={2} className="min-w-0 text-left">
-                    <Text as="span" ellipsis>{path.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? path}</Text>
-                    <Text as="span" type="secondary" fontSize={11} ellipsis>{path}</Text>
-                  </Flexbox>
-                </Button>
-              ))}
-            </Flexbox>
-          </Flexbox>
-        )}
-      </Flexbox>
+    <Center flex={1} gap={40} className="min-w-0 min-h-0 overflow-hidden select-none" onDoubleClick={onNewFile}>
+      <AppMark color="#ECEAE4" className="size-60 max-h-[35vh] max-w-[35vw] opacity-[0.06]" />
+      <dl className="m-0 grid grid-cols-[auto_auto] items-center gap-x-4 gap-y-3">
+        {HOME_HINTS.map(([label, keys]) => (
+          <Fragment key={keys}>
+            <Text as="dt" type="secondary" fontSize={13} align="right">{label}</Text>
+            {/* Um Hotkey por acorde: "Ctrl+K Ctrl+O" num só juntaria o K ao segundo Ctrl. */}
+            <dd className="m-0 flex gap-2">{keys.split(' ').map((chord) => <Hotkey key={chord} keys={chord} />)}</dd>
+          </Fragment>
+        ))}
+      </dl>
     </Center>
   );
 }

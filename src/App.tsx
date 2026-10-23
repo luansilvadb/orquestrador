@@ -428,6 +428,8 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     stateRef.current = state;
   });
   const [route, setRoute] = useState<Route>('arquivos');
+  // Sem projeto a faixa nasce fechada, como no VS Code; o ícone da tela abre e, clicado de novo, fecha. Com projeto ela fica sempre aberta.
+  const [sideOpen, setSideOpen] = useState(false);
   // Área do editor central (grupos, abas, rascunhos e recuperação ficam nele). O App só pede coisas por este handle.
   const editor = useRef<EditorWorkspaceHandle>(null);
   useEffect(() => {
@@ -1187,6 +1189,11 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   // Este é o layout de uma tela só: a faixa da esquerda muda de conteúdo (Arquivos, Pesquisa, Git) e a área central fica montada.
   // A faixa é a mesma nas três rotas: a largura é uma só.
   const shown = (to: Route) => `absolute inset-0${route === to ? '' : ' invisible'}`;
+  const sideShown = !!state.project || sideOpen;
+  const go = (to: Route) => {
+    if (!state.project) setSideOpen(!sideOpen || to !== route);
+    setRoute(to);
+  };
   return (
     <Flexbox height="100dvh">
       <TitleBar connected={connected} project={state.project} titleActive={active} menu={titlebarMenu} projectTabs={projects ? {
@@ -1201,11 +1208,11 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
       </TitleBar>
 
       <Flexbox ref={rowRef} horizontal flex={1} className="min-h-0">
-        <Nav route={route} changed={changed} onGo={setRoute} />
+        <Nav route={sideShown ? route : null} changed={changed} onGo={go} />
         <main className="relative min-h-0 min-w-0 flex-1">
           <Flexbox horizontal height="100%">
             {/* Faixa da esquerda: árvore, pesquisa ou Git, todas montadas; só a da rota aparece. A borda direita arrasta a largura. */}
-            <DraggablePanel
+            {sideShown && <DraggablePanel
               placement="left" expandable={false} showHandleWideArea={false}
               size={{ width: shownSideWidth }} defaultSize={SIDE_DEFAULT_SIZE}
               onSizeChange={(_, size) => typeof size?.width === 'number' && setSideWidth(size.width)}
@@ -1236,7 +1243,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
                   /> : <OpenProjectPrompt onOpen={chooseProject} description="Abra uma pasta para usar o Git." />}
                 </div>
               </div>
-            </DraggablePanel>
+            </DraggablePanel>}
             {/* Coluna central: o editor (grupos, abas, diffs e conflitos) em cima e o painel Terminal embaixo. Sempre montada. */}
             <Flexbox ref={centerRef} height="100%" flex={1} allowShrink>
               <div className="relative min-h-0 flex-1">
@@ -1244,8 +1251,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
                   <Flexbox height="100%" flex={1} className="min-h-0">
                     {/* key por projeto: outro projeto remonta o editor (lê a recuperação dele); o anterior grava a sua ao sair. */}
                     <EditorWorkspace
-                      key={state.project} ref={editor} project={state.project} active={active} recentProjects={recentProjects}
-                      onOpenFile={() => void chooseFile()} onOpenProject={chooseProject} onOpenRecent={openRecentProject}
+                      key={state.project} ref={editor} project={state.project} active={active}
                       locked={busy} guard={gitGuard}
                       refreshGit={() => git.refresh()} onSaved={() => setSaveTick((n) => n + 1)}
                       onActiveTarget={setActiveTarget}
@@ -1273,7 +1279,8 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
             </Flexbox>
           </Flexbox>
         </main>
-        {/* Painel do Orquestrador, à direita de tudo e em todas as telas: nenhuma rota o desmonta nem muda o tamanho dele. */}
+        {/* Painel do Orquestrador, à direita de tudo e em todas as telas: nenhuma rota o desmonta nem muda o tamanho dele. Sem projeto fica oculto, sem desmontar. */}
+        <div className={state.project ? 'contents' : 'hidden'}>
         <TerminalsScreen
           projectId={state.projectId} projectOpen={!!state.project} onOpenProject={chooseProject}
           orchestrator={orchestrator}
@@ -1287,6 +1294,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
           onExecutorChoice={toggleExecutorChoice}
           onStop={(id) => backend.stopExecutor(id).catch(report)}
         />
+        </div>
       </Flexbox>
 
       <StatusBar

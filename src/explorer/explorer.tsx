@@ -99,7 +99,7 @@ const NONE: string[] = [];
 const NO_MODS = { ctrl: false, shift: false };
 
 /** Coluna de ícones: uma tela por botão, na ordem Arquivos, Pesquisar, Git. O botão da tela aberta tem aria-current e um filete à esquerda. */
-export function Nav({ route, changed, onGo }: { route: Route; changed: number; onGo: (to: Route) => void }) {
+export function Nav({ route, changed, onGo }: { route: Route | null; changed: number; onGo: (to: Route) => void }) {
   // Botão de 36 px com ícone de 20 px (o size numérico já dá essa proporção). A linha ocupa a faixa toda, para o filete encostar na borda.
   const button = (to: Route, label: string, icon: LucideIcon, title = label, badge?: ReactNode) => (
     <Flexbox width="100%" align="center" className="relative">
