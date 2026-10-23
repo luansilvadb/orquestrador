@@ -28,7 +28,7 @@
 // abre o diálogo "Salvar como"; depois de salvo, vira arquivo do projeto (caminho relativo) ou solto (absoluto).
 // Recuperação: localStorage por projeto (`orquestrador.editor:<project>`) e uma chave fixa no modo sem projeto.
 import {
-  forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent, type FocusEvent, type KeyboardEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode,
+  forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type FocusEvent, type KeyboardEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode,
 } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownMenu, Modal, Text, toast } from '@lobehub/ui/base-ui';
 import { Center, Flexbox, Hotkey, PatchDiff } from '@lobehub/ui';
@@ -47,7 +47,7 @@ import {
   activate, closeTabs, createWorkspace, draftName, isDirty, isSafePath, isWithin, joinGroups, liveDocIds, loadWorkspace, markEdited, moveTab, navigate,
   openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
 } from './workspace-model';
-import { revealTab, wheelToScroll } from '../shared/tab-strip';
+import { dragShift, revealTab, trackTabDrag, type TabDrag, wheelToScroll } from '../shared/tab-strip';
 import {
   blockCount, type Buffer, type Choice, type ConflictDraft, decodeRecovery, dirtyKeys, encodeRecovery, hasDraftAt,
   hasMarkers, isBufferDirty, isConflictDirty, newlineOf, normalizeNewlines, parseConflict, patchHunks, type PatchHunk, type Recovery,
@@ -260,7 +260,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const revealSeq = useRef(0);
   const layoutRef = useRef(layout ?? boot.layout);
   const splitRef = useRef(split);
-  const dragId = useRef<string | null>(null);
+  // Aba em arrasto na faixa de `group`; `into` é o outro grupo, com o ponteiro sobre a faixa dele.
+  const [tabDrag, setTabDrag] = useState<({ id: string; group: GroupId; from: number; into: GroupId | null } & TabDrag) | null>(null);
   const splitDrag = useRef<{ startX: number; start: number; width: number } | null>(null);
   // Sujos: rascunhos de arquivo e de conflito.
   const dirtyNow = (d: EditorData = dataRef.current) => dirtyKeys(d);
@@ -791,12 +792,47 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     setSplit(next);
   };
 
-  // ---- Arrastar abas ----
-  const dropOn = (groupId: GroupId, index?: number) => {
-    const id = dragId.current;
-    dragId.current = null;
-    if (!id) return;
-    setWs(moveTab(wsRef.current, id, groupId, index));
+  // ---- Arrastar abas: como no painel Terminal (src/shared/tab-strip.ts); soltar na faixa do outro grupo move a aba para lá ----
+  const dragTab = (e: ReactPointerEvent<HTMLDivElement>, groupId: GroupId, tabId: string) => {
+    const box = strips.current.get(groupId)?.el;
+    const group = wsRef.current.groups.find((g) => g.id === groupId);
+    // Só pela aba: o X não arrasta.
+    if (e.button !== 0 || !box || !group || !(e.target as HTMLElement).closest('[role="tab"]')) return;
+    const nodes = [...box.querySelectorAll<HTMLElement>('[data-tab]')];
+    const from = nodes.findIndex((node) => node.dataset.tab === tabId);
+    if (from < 0) return;
+    // As fixadas ficam no começo: a aba só anda entre as do mesmo tipo.
+    const pinned = group.tabs.filter((t) => t.pinned).length;
+    const range: [number, number] = group.tabs[from].pinned ? [0, pinned - 1] : [pinned, nodes.length - 1];
+    const otherStrip = (x: number, y: number) => {
+      const id = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-group]')?.dataset.group as GroupId | undefined;
+      return id && id !== groupId ? id : null;
+    };
+    trackTabDrag(e, box, nodes, from, {
+      range,
+      onStart: () => activateTab(tabId),
+      // Sobre o outro grupo, as vizinhas voltam ao lugar: a aba sai desta faixa.
+      onDrag: (d, x, y) => {
+        const into = otherStrip(x, y);
+        setTabDrag({ id: tabId, group: groupId, from, into, ...d, target: into ? from : d.target });
+      },
+      onDrop: (target, x, y) => {
+        setTabDrag(null);
+        if (target === null) return;
+        const into = otherStrip(x, y);
+        if (!into) {
+          if (target !== from) setWs(moveTab(wsRef.current, tabId, groupId, target));
+          return;
+        }
+        // Entra antes da primeira aba do destino cujo meio fica à direita do ponteiro.
+        const dest = strips.current.get(into)?.el;
+        const index = dest ? [...dest.querySelectorAll<HTMLElement>('[data-tab]')].filter((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.left + rect.width / 2 < x;
+        }).length : undefined;
+        setWs(moveTab(wsRef.current, tabId, into, index));
+      },
+    });
   };
 
   // ---- Teclado (só dentro da área; terminal e campos fora dela não passam por aqui) ----
@@ -1150,9 +1186,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     ];
     return (
       <div
-        className="relative flex h-[30px] flex-none bg-[var(--ant-color-bg-layout)]"
-        onDragOver={(e: DragEvent) => { if (dragId.current) e.preventDefault(); }}
-        onDrop={(e: DragEvent) => { e.preventDefault(); dropOn(groupId); }}
+        className={`relative flex h-[30px] flex-none ${tabDrag?.into === groupId ? 'bg-[var(--ant-color-primary-bg)]' : 'bg-[var(--ant-color-bg-layout)]'}`}
         data-group={groupId}
       >
         <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-border" />
@@ -1167,16 +1201,16 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
             const active = tab.id === current?.id;
             const dirtyTab = isDirtyTab(tab.target);
             const detail = tab.target.kind === 'draft' ? '' : (details.get(tab.target.path) ?? '');
+            // Vizinhas entre a origem e o destino abrem o espaço da arrastada, com transição; ao soltar, tudo volta a 0 junto com a ordem nova.
+            const dragHere = tabDrag?.group === groupId ? tabDrag : null;
+            const shift = dragHere ? dragShift(dragHere, dragHere.from, index) : 0;
             return (
               <ContextMenuTrigger key={tab.id} items={() => tabMenu(tab)}>
                 <div
                   data-tab={tab.id}
-                  draggable
-                  onDragStart={(e) => { dragId.current = tab.id; e.dataTransfer.setData('text/plain', tab.id); }}
-                  onDragEnd={() => { dragId.current = null; }}
-                  onDragOver={(e) => { if (dragId.current) e.preventDefault(); }}
-                  onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOn(groupId, index); }}
-                  className={`group/tab relative z-[1] flex h-full max-w-[min(14rem,100cqw)] flex-none items-center border-r border-border ${active ? 'bg-[var(--ant-color-bg-container)]' : 'hover:bg-[var(--ant-color-bg-container)]'}`}
+                  style={shift ? { transform: `translateX(${shift}px)` } : undefined}
+                  onPointerDown={(e) => dragTab(e, groupId, tab.id)}
+                  className={`group/tab relative ${dragHere?.id === tab.id ? 'z-20' : dragHere ? 'z-[1] transition-transform duration-150 motion-reduce:transition-none' : 'z-[1]'} flex h-full max-w-[min(14rem,100cqw)] flex-none items-center border-r border-border ${active ? 'bg-[var(--ant-color-bg-container)]' : 'hover:bg-[var(--ant-color-bg-container)]'}`}
                   onKeyDown={(e) => {
                     if (!((e.key === 'F10' && e.shiftKey) || e.key === 'ContextMenu')) return;
                     e.preventDefault();

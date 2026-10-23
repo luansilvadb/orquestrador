@@ -6,7 +6,7 @@ import { ActionIcon, Button, DraggablePanel, Popover, TabsIndicator, TabsList, T
 import { Flexbox } from '@lobehub/ui';
 import type { TermView } from './term';
 import { TermHost } from './terminals';
-import { revealTab, wheelToScroll } from '../shared/tab-strip';
+import { dragShift, revealTab, trackTabDrag, type TabDrag, wheelToScroll } from '../shared/tab-strip';
 
 // Altura ao abrir o app (não se guarda entre aberturas); o mínimo mantém a barra e uma linha de terminal.
 export const SHELL_HEIGHT = 280;
@@ -14,9 +14,6 @@ export const SHELL_MIN = 120;
 // Abaixo dessa largura do painel, a faixa de abas vira um seletor do terminal ativo. Com as setas, a faixa fica ~186 px menor que o cabeçalho;
 // a aba com o rótulo no máximo (número, programa de até 128 px e o X) precisa de ~274 px, então o normal só começa aqui.
 const COMPACT_WIDTH = 460;
-// Arrasto de aba: começa depois de DRAG_START px, para o clique seguir só selecionando; a menos de EDGE px da borda da faixa, ela rola sozinha.
-const DRAG_START = 4;
-const EDGE = 24;
 // Objeto constante: o DraggablePanel recalcula o tamanho quando `defaultSize` muda de identidade.
 const DEFAULT_SIZE = { height: SHELL_HEIGHT };
 
@@ -62,8 +59,8 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
   // Se as abas cabem sem as setas: elas só aparecem quando a faixa, sem elas, não comporta tudo.
   const [overflow, setOverflow] = useState(false);
   const current = tabs.find((tab) => tab.id === active);
-  // Aba sendo arrastada: desloca `dx` px da posição original; `target` é onde ela entra entre as outras; `width` é o espaço que as vizinhas abrem.
-  const [drag, setDrag] = useState<{ id: string; dx: number; target: number; width: number } | null>(null);
+  // Aba sendo arrastada (o deslocamento e o destino estão em TabDrag).
+  const [drag, setDrag] = useState<({ id: string } & TabDrag) | null>(null);
   const dragFrom = drag ? tabs.findIndex((tab) => tab.id === drag.id) : -1;
 
   function measure() {
@@ -140,71 +137,14 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
     if (e.button !== 0 || !box || !(e.target as HTMLElement).closest('[role="tab"]')) return;
     const nodes = [...box.querySelectorAll<HTMLElement>('[data-shell]')];
     const from = nodes.findIndex((node) => node.dataset.shell === id);
-    // Posições de antes do arrasto (offset ignora as transformações): o destino é medido contra elas.
-    const slots = nodes.map((node) => ({ left: node.offsetLeft, width: node.offsetWidth }));
-    const self = slots[from];
-    const last = slots[slots.length - 1];
-    const min = slots[0].left - self.left;
-    const max = last.left + last.width - self.left - self.width;
-    const startX = e.clientX;
-    const startScroll = box.scrollLeft;
-    const pointer = e.pointerId;
-    let x = startX;
-    let moving = false;
-    let target = from;
-    let frame = 0;
-
-    const update = () => {
-      // A rolagem da faixa conta no deslocamento: a aba fica sob o ponteiro enquanto a faixa anda.
-      const dx = Math.min(max, Math.max(min, x - startX + box.scrollLeft - startScroll));
-      // Passa uma vizinha quando a borda da frente cruza o meio dela: com a aba travada no fim da faixa, ainda alcança a primeira e a última posição.
-      const left = self.left + dx;
-      target = slots.filter((slot, i) => i !== from && slot.left + slot.width / 2 < (i < from ? left : left + self.width)).length;
-      setDrag({ id, dx, target, width: self.width });
-    };
-    const edgeScroll = () => {
-      const rect = box.getBoundingClientRect();
-      const before = box.scrollLeft;
-      box.scrollLeft += x < rect.left + EDGE ? -8 : x > rect.right - EDGE ? 8 : 0;
-      if (box.scrollLeft !== before) update();
-      frame = requestAnimationFrame(edgeScroll);
-    };
-    const move = (ev: WindowEventMap['pointermove']) => {
-      if (ev.pointerId !== pointer) return;
-      x = ev.clientX;
-      if (!moving) {
-        if (Math.abs(x - startX) < DRAG_START) return;
-        moving = true;
-        onSelect(id);
-        frame = requestAnimationFrame(edgeScroll);
-      }
-      update();
-    };
-    const finish = (commit: boolean) => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', cancel);
-      window.removeEventListener('blur', cancel);
-      window.removeEventListener('keydown', escape, true);
-      cancelAnimationFrame(frame);
-      if (!moving) return;
-      if (commit && target !== from) onMove(id, target);
-      setDrag(null);
-    };
-    const up = (ev: WindowEventMap['pointerup']) => { if (ev.pointerId === pointer) finish(true); };
-    const cancel = () => finish(false);
-    // Em captura, para o Esc não chegar ao shell.
-    const escape = (ev: WindowEventMap['keydown']) => {
-      if (ev.key !== 'Escape' || !moving) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      finish(false);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', cancel);
-    window.addEventListener('blur', cancel);
-    window.addEventListener('keydown', escape, true);
+    trackTabDrag(e, box, nodes, from, {
+      onStart: () => onSelect(id),
+      onDrag: (d) => setDrag({ id, ...d }),
+      onDrop: (target) => {
+        if (target !== null && target !== from) onMove(id, target);
+        setDrag(null);
+      },
+    });
   }
 
   // Lista aberta: as setas do teclado andam entre os itens (sem passar pelos X); Escape fecha (o Popover cuida disso) e devolve o foco ao gatilho.
@@ -309,9 +249,7 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
                       <TabsIndicator style={drag ? { transform: `translateX(${drag.dx}px)`, transition: 'none', zIndex: 30 } : undefined} />
                       {tabs.map((tab, index) => {
                         // Vizinhas entre a origem e o destino abrem o espaço da arrastada, com transição; ao soltar, tudo volta a 0 junto com a ordem nova.
-                        const shift = !drag ? 0 : tab.id === drag.id ? drag.dx
-                          : dragFrom < index && index <= drag.target ? -drag.width
-                          : drag.target <= index && index < dragFrom ? drag.width : 0;
+                        const shift = drag ? dragShift(drag, dragFrom, index) : 0;
                         // Aba e X são irmãos: o X fica por cima da aba, na parte direita, e não aninha um button no outro. Os dois ocupam a altura da faixa; o X centraliza na vertical.
                         return (
                           <div
