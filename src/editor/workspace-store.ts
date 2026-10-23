@@ -191,6 +191,8 @@ export type ConflictBlock = {
 export type ConflictPiece = { line: string } | { block: ConflictBlock };
 export type Choice = 'ours' | 'theirs' | 'both' | 'pending';
 const MARKER = /^(<{7}|\|{7}|={7}|>{7})(\s|$)/;
+// Exatamente sete caracteres: `=========` (sublinhado de Markdown) é texto. `\s` aceita o `\r` de linhas CRLF.
+const isMarker = (line: string, char: string) => MARKER.test(line) && line.startsWith(char.repeat(7));
 
 /** Quebra o texto em linhas e blocos. `malformed` quando um bloco não fecha: aí a tela não oferece ação por trecho. */
 export function parseConflict(text: string): { pieces: ConflictPiece[]; malformed: boolean } {
@@ -198,7 +200,7 @@ export function parseConflict(text: string): { pieces: ConflictPiece[]; malforme
   const pieces: ConflictPiece[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (!line.startsWith('<<<<<<<')) {
+    if (!isMarker(line, '<')) {
       pieces.push({ line });
       continue;
     }
@@ -207,16 +209,16 @@ export function parseConflict(text: string): { pieces: ConflictPiece[]; malforme
     let baseHead: string | null = null;
     let base: string[] | null = null;
     let j = i + 1;
-    while (j < lines.length && !lines[j].startsWith('=======') && !lines[j].startsWith('|||||||')) ours.push(lines[j++]);
-    if (j < lines.length && lines[j].startsWith('|||||||')) {
+    while (j < lines.length && !isMarker(lines[j], '=') && !isMarker(lines[j], '|')) ours.push(lines[j++]);
+    if (j < lines.length && isMarker(lines[j], '|')) {
       baseHead = lines[j++];
       base = [];
-      while (j < lines.length && !lines[j].startsWith('=======')) base.push(lines[j++]);
+      while (j < lines.length && !isMarker(lines[j], '=')) base.push(lines[j++]);
     }
     if (j >= lines.length) return { pieces, malformed: true };
     const mid = lines[j++];
     const theirs: string[] = [];
-    while (j < lines.length && !lines[j].startsWith('>>>>>>>')) theirs.push(lines[j++]);
+    while (j < lines.length && !isMarker(lines[j], '>')) theirs.push(lines[j++]);
     if (j >= lines.length) return { pieces, malformed: true };
     pieces.push({ block: { ours, base, theirs, head, baseHead, mid, tail: lines[j] } });
     i = j;

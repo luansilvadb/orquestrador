@@ -210,6 +210,21 @@ check('Bloco vazio de um lado (lado apagou só o texto) funciona', () => {
   assert.equal(renderConflict(pieces, ['ours']), '');
   assert.equal(renderConflict(pieces, ['theirs']), 'novo');
 });
+check('Marcador vale só com sete caracteres: `=========` e `<<<<<<<<` ficam nos lados', () => {
+  const text = ['<<<<<<< HEAD', 'Título', '=========', '<<<<<<<< nosso', '=======', 'Outro', '=========', '<<<<<<<<', '>>>>>>> t'].join('\n');
+  const { pieces, malformed } = parseConflict(text);
+  assert.equal(malformed, false);
+  assert.equal(blockCount(pieces), 1);
+  const block = pieces.find((p) => 'block' in p).block;
+  assert.deepEqual(block.ours, ['Título', '=========', '<<<<<<<< nosso']);
+  assert.deepEqual(block.theirs, ['Outro', '=========', '<<<<<<<<']);
+  assert.equal(renderConflict(pieces, ['pending']), text);
+});
+check('Marcador com CRLF continua reconhecido', () => {
+  const block = parseConflict('<<<<<<< HEAD\r\nminha\r\n=======\r\ndeles\r\n>>>>>>> t\r\n').pieces.find((p) => 'block' in p).block;
+  assert.deepEqual(block.ours, ['minha\r']);
+  assert.deepEqual(block.theirs, ['deles\r']);
+});
 check('hasMarkers: pega marcador, não pega sete sinais colados em texto', () => {
   assert.equal(hasMarkers(plain), true);
   assert.equal(hasMarkers('=======\n'), true);
