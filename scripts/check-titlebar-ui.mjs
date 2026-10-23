@@ -96,8 +96,9 @@ scenario('três controles: 46 px de largura, 35 px úteis, colados à direita, �
     if (i > 0) assert.equal(m.buttons[i - 1].right, b.left, `${b.label}: sem espaço entre os controles`);
   });
   assert.equal(m.buttons.at(-1).right, m.header.right, 'Fechar colado à borda direita da janela');
-  // Área passiva da barra segue arrastável: o título leva o atributo.
-  assert.equal(await page.locator('header').getByText('Orquestrador', { exact: true }).evaluate((el) => el.hasAttribute('data-tauri-drag-region')), true, 'título arrastável');
+  // Área passiva da barra segue arrastável, e o nome do app não aparece nela (o título nativo identifica a janela).
+  assert.equal(await page.locator('header').evaluate((el) => el.hasAttribute('data-tauri-drag-region')), true, 'barra arrastável');
+  assert.equal(await page.locator('header').getByText('Orquestrador', { exact: true }).count(), 0, 'sem o nome do app na barra');
 });
 
 scenario('título nativo simulado acompanha o projeto aberto', async ({ page }) => {

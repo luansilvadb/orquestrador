@@ -112,9 +112,6 @@ export function TitleBar({ connected, project, children, menu, projectTabs, titl
         </DropdownMenu>
       )}
       {projectTabs && <ProjectTabs {...projectTabs} />}
-      <Flexbox data-tauri-drag-region horizontal align="center" paddingInline={12} flex="none">
-        <Text as="span" data-tauri-drag-region fontSize={13} weight={600}>Orquestrador</Text>
-      </Flexbox>
       {!projectTabs && <Flexbox data-tauri-drag-region horizontal align="center" gap={8} flex={1} allowShrink className="min-w-0">
         {project && <>
           <Text as="span" data-tauri-drag-region fontSize={13} weight={500} ellipsis title={project} className="min-w-0 shrink">
