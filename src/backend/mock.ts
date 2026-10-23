@@ -629,11 +629,11 @@ function commitById(id: string): Rec {
 const commitPatch = (path: string, kind: GitKind) => kind === 'added'
   ? `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+depois\n`
   : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-antes\n+depois\n`;
-// Log do HEAD (todos os pais, como `git log`), com filtro de caminho opcional.
-function history(limit: number, skip: number, path?: string | null): Commit[] {
+// Log do HEAD (todos os pais, como `git log`), com as refs e filtro de caminho opcional.
+function history(limit: number, skip: number, path?: string | null): GraphCommit[] {
   const reach = ancestors([headHash()]);
   return page(commits.filter((c) => reach.has(c.hash) && (!path || c.files.some((f) => f.path === path || f.origPath === path))), limit, skip)
-    .map(plain);
+    .map((c) => ({ ...plain(c), parents: c.parents, refs: refsAt(c.hash) }));
 }
 function commitDiff(id: string, path?: string | null): GitDiff {
   const c = commitById(id);
@@ -1155,7 +1155,7 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   git_unstage_hunk: ({ hunk }: { hunk: HunkRef }) => { unstageHunk(hunk); return null; },
   git_discard_hunk: ({ hunk }: { hunk: HunkRef }) => { discardHunk(hunk); return null; },
   git_discard_file: ({ path, revision }: { path: string; revision: string }) => { discardFile(path, revision); return null; },
-  git_history: ({ limit, skip, path }: { limit: number; skip: number; path: string | null }): Commit[] => history(limit, skip, path),
+  git_history: ({ limit, skip, path }: { limit: number; skip: number; path: string | null }): GraphCommit[] => history(limit, skip, path),
   git_graph: ({ limit, skip }: { limit: number; skip: number }): GraphCommit[] => graph(limit, skip),
   git_commit_detail: ({ id }: { id: string }): CommitDetail => {
     const c = commitById(id);

@@ -1,10 +1,10 @@
-// Painel Git da barra lateral: o controle de versão (branch, commit, Preparadas, Alterações e Gráfico) ou o histórico do projeto e de um arquivo.
+// Painel Git da barra lateral, em duas abas: o controle de versão (branch, commit, Preparadas, Alterações e Gráfico) e o histórico do projeto ou de um arquivo.
 // Clique num arquivo abre a revisão em prévia; duplo clique abre de vez; conflito abre o conflito. O histórico abre o arquivo de um commit.
 // Tudo roda na pasta do projeto e só por clique do usuário. O status atualiza sozinho (usePolled, no App); cada ação atualiza na hora.
 import { useEffect, useRef, useState } from 'react';
-import { ActionIcon, Button, ContextMenuTrigger, DropdownMenu, Input, Popover, Text, TextArea, toast } from '@lobehub/ui/base-ui';
+import { ActionIcon, Button, ContextMenuTrigger, DropdownMenu, Input, Popover, TabsIndicator, TabsList, TabsRoot, TabsTab, Text, TextArea, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, GitBranch, History, LoaderCircle, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, GitBranch, LoaderCircle, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
 import { backend, message } from '../backend/backend';
 import { FileIcon } from '../shared/file-icon';
 import { KIND_COLOR } from '../explorer/explorer-decorations';
@@ -116,10 +116,10 @@ type RowActions = {
 };
 
 /**
- * Controle de versão: cabeçalho com atualizar, histórico e o menu de Buscar, Receber e Enviar; a branch; o commit; e as duas seções.
+ * Controle de versão: cabeçalho com atualizar e o menu de Buscar, Receber e Enviar; a branch; o commit; e as duas seções.
  * Fica montado mesmo com o histórico na frente: a mensagem digitada e os recolhidos não se perdem.
  */
-function ChangesPanel({ status, error, refresh, locked, guard, active, selected, onOpenTarget, onOpenFile, onShowHistory }: {
+function ChangesPanel({ status, error, refresh, locked, guard, active, selected, onOpenTarget, onOpenFile }: {
   status: GitStatus | null;
   error: string;
   refresh: () => Promise<void>;
@@ -131,7 +131,6 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
   onOpenTarget: OpenCommitTarget;
   /** `permanent` abre de vez (duplo clique) em vez de prévia. */
   onOpenFile: (path: string, options?: { permanent?: boolean }) => void;
-  onShowHistory: () => void;
 }) {
   const [busy, setBusy] = useState<Busy | null>(null);
   // O segundo clique chega antes de o estado (busy) mudar: a trava que vale é a do ref.
@@ -266,7 +265,6 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
     <Flexbox className="min-h-0" flex={1}>
       <Flexbox horizontal align="center" gap={2} paddingInline={12} height={36} flex="none">
         <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">Controle do Código-Fonte</Text>
-        <ActionIcon size="small" variant="borderless" icon={History} aria-label="Ver o histórico do projeto" title="Histórico do projeto" onClick={onShowHistory} />
         <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar status" title="Atualizar status do Git" onClick={() => void refresh()} />
         <DropdownMenu items={remoteMenu} placement="bottomRight">
           <ActionIcon
@@ -599,9 +597,9 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
 }
 
 /**
- * Barra lateral do Git: o controle de versão, ou o histórico (do projeto, ou do arquivo de `historyRequest`).
- * Os dois ficam montados: alternar não perde a mensagem do commit, os recolhidos nem a lista de commits.
- * Fora do modo `repo` não há nada disso: o painel é só o estado vazio, e nada consulta o Git.
+ * Barra lateral do Git: abas Alterações e Histórico, como no painel do Zed. O histórico é do projeto, ou do arquivo de `historyRequest`.
+ * Os dois ficam montados: alternar não perde a mensagem do commit, os recolhidos, o escopo nem o commit aberto do histórico.
+ * Fora do modo `repo` não há nada disso: o painel é só o estado vazio, sem abas, e nada consulta o Git.
  */
 export function GitSidebar({ git, locked, guard, active, selected, onOpenTarget, onOpenFile, historyRequest }: GitSidebarProps) {
   const [view, setView] = useState<'changes' | 'history'>('changes');
@@ -614,12 +612,6 @@ export function GitSidebar({ git, locked, guard, active, selected, onOpenTarget,
     setView('history');
   }, [historyRequest]);
 
-  // O cabeçalho alterna para o histórico do projeto inteiro; de volta, a lista de mudanças.
-  const showHistory = () => {
-    setRequest({ path: null });
-    setView('history');
-  };
-
   const { data, error, refresh } = git;
   if (data && data.kind !== 'repo') {
     return (
@@ -628,19 +620,31 @@ export function GitSidebar({ git, locked, guard, active, selected, onOpenTarget,
       </Flexbox>
     );
   }
+  const count = data?.status.files.length;
   return (
     <Flexbox height="100%" className="min-h-0">
+      {/* Faixa de 36 px com as duas abas dividindo a largura; a ativa tem a linha de 2 px (variant square), sobre o divisor de largura total. */}
+      <Flexbox horizontal align="stretch" height={36} flex="none" className="relative">
+        <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-border" />
+        <TabsRoot variant="square" value={view} onValueChange={(key: string) => setView(key as typeof view)} className="min-w-0 flex-1 gap-0">
+          <TabsList className="h-full w-full flex-nowrap" style={{ gap: 0, boxShadow: 'none' }}>
+            <TabsIndicator />
+            <TabsTab value="changes" className="min-w-0 flex-1 gap-1 px-2">
+              Alterações
+              {count !== undefined && <span className="text-[0.9em] tabular-nums opacity-70">({count})</span>}
+            </TabsTab>
+            <TabsTab value="history" className="min-w-0 flex-1 px-2">Histórico</TabsTab>
+          </TabsList>
+        </TabsRoot>
+      </Flexbox>
       <div className={view === 'changes' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
         <ChangesPanel
           status={data?.status ?? null} error={error} refresh={refresh} locked={locked} guard={guard} selected={selected}
-          active={active && view === 'changes'} onOpenTarget={onOpenTarget} onOpenFile={onOpenFile} onShowHistory={showHistory}
+          active={active && view === 'changes'} onOpenTarget={onOpenTarget} onOpenFile={onOpenFile}
         />
       </div>
       <div className={view === 'history' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
-        <HistoryPanel
-          request={request} active={active && view === 'history'} selected={selected}
-          onOpenTarget={onOpenTarget} onShowChanges={() => setView('changes')}
-        />
+        <HistoryPanel request={request} active={active && view === 'history'} selected={selected} onOpenTarget={onOpenTarget} />
       </div>
     </Flexbox>
   );

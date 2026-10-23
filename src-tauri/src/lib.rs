@@ -297,7 +297,7 @@ fn git_discard_file(projects: State<Projects>, project: String, path: String, re
 #[tauri::command(async)]
 fn git_history(
     projects: State<Projects>, project: String, limit: usize, skip: usize, path: Option<String>,
-) -> Result<Vec<git::Commit>, String> {
+) -> Result<Vec<git::GraphCommit>, String> {
     let core = projects.core(&project)?;
     git::history(&core.repo()?, limit, skip, path.as_deref())
 }

@@ -4,13 +4,13 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { ActionIcon, Button, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { ArrowLeft, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Cloud, GitBranch, RefreshCw, Tag, Target } from 'lucide-react';
 import { FileIcon } from '../shared/file-icon';
 import { splitPath } from '../shared/paths';
 import { KIND_COLOR } from '../explorer/explorer-decorations';
 import { backend, message } from '../backend/backend';
 import type { TabTarget } from '../editor/workspace-model';
-import type { CommitDetail, CommitFile, GitKind } from '../backend/types';
+import type { CommitDetail, CommitFile, GitKind, GitRef } from '../backend/types';
 
 /** Pedido de histórico: `path` null é o projeto inteiro. Um pedido novo (outro objeto) sempre refaz a lista. */
 export type HistoryRequest = { path: string | null };
@@ -30,6 +30,41 @@ export const when = (iso: string, style: Intl.DateTimeFormatOptions) => {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString('pt-BR', style);
 };
+// Cores das etiquetas: branch local em azul, remota em lilás, tag em laranja (historyItemRefColor, RemoteRefColor e BaseRefColor).
+const REF_COLOR = { local: '#59a4f9', remote: '#b180d7', tag: '#ea5c00' } as const;
+
+/**
+ * Etiqueta de uma ref, como a do grafo do Antigravity: pílula de 18 px e raio de 10 px, na cor do tipo (branch azul, remota lilás,
+ * tag laranja), com o texto escuro de 12 px. A branch atual tem o alvo e sempre mostra o nome; as outras, na linha estreita, viram
+ * só o ícone (o nome fica no title e aparece quando a linha tem espaço).
+ */
+export function RefBadge({ item }: { item: GitRef }) {
+  const Icon = item.current ? Target : item.kind === 'remote' ? Cloud : item.kind === 'tag' ? Tag : GitBranch;
+  const kind = item.kind === 'remote' ? 'remota' : item.kind === 'tag' ? 'tag' : 'branch';
+  const color = item.kind === 'remote' ? REF_COLOR.remote : item.kind === 'tag' ? REF_COLOR.tag : REF_COLOR.local;
+  return (
+    <span
+      title={`${item.name} (${item.current ? `${kind} atual` : kind})`}
+      className="flex h-[18px] min-w-0 max-w-[9rem] shrink items-center rounded-[10px] text-[#181818]"
+      style={{ backgroundColor: color }}
+    >
+      <Icon className="size-4 shrink-0 p-px" aria-hidden />
+      <span className={`min-w-0 truncate pr-1 text-[12px] leading-[18px]${item.current ? '' : ' hidden @[22rem]:inline'}`}>{item.name}</span>
+    </span>
+  );
+}
+
+const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ['year', 31_536_000], ['month', 2_592_000], ['week', 604_800], ['day', 86_400], ['hour', 3_600], ['minute', 60], ['second', 1],
+];
+export function relativeDate(iso: string) {
+  const timestamp = Date.parse(iso);
+  if (!Number.isFinite(timestamp)) return iso;
+  const seconds = (timestamp - Date.now()) / 1_000;
+  const [unit, amount] = RELATIVE_UNITS.find(([, size]) => Math.abs(seconds) >= size) ?? ['second', 1];
+  return new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' }).format(Math.round(seconds / amount), unit);
+}
+
 /** Linha de status no lugar da lista (lendo, vazio, erro). */
 export const note = (text: string, danger = false) => (
   <Text as="p" role="status" fontSize={12} type={danger ? 'danger' : 'secondary'} style={{ paddingInline: 12, paddingBlock: 6 }}>{text}</Text>
@@ -173,11 +208,10 @@ export type HistoryPanelProps = {
   active: boolean;
   selected: TabTarget | null | undefined;
   onOpenTarget: OpenCommitTarget;
-  onShowChanges: () => void;
 };
 
 /** Lista paginada de commits (do projeto ou do arquivo) e, ao escolher um, os arquivos dele. */
-export function HistoryPanel({ request, active, selected, onOpenTarget, onShowChanges }: HistoryPanelProps) {
+export function HistoryPanel({ request, active, selected, onOpenTarget }: HistoryPanelProps) {
   // Lista e detalhe são os mesmos dos gráficos (ver os hooks acima). Aqui recarregar esvazia a lista e fecha o commit aberto.
   const { scope, items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList(historyPage, true);
   const { openHash, detail, detailError, open: openCommit, close: closeCommit } = useCommitDetail();
@@ -234,15 +268,25 @@ export function HistoryPanel({ request, active, selected, onOpenTarget, onShowCh
         <ul className="grid grid-cols-[minmax(0,1fr)]">
           {commits.map((c) => (
             <li key={c.hash}>
+              {/* Duas linhas, como no histórico do Zed: o assunto e as refs; embaixo a inicial do autor, o autor, a data relativa e o hash. */}
               <button
                 type="button" onClick={() => openCommit(c.hash)} title={`${c.short} · ${c.subject}`}
-                className="flex w-full min-w-0 flex-col gap-0.5 rounded-sm px-3 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="@container flex w-full min-w-0 flex-col gap-0.5 px-3 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
               >
-                <span className="flex min-w-0 items-baseline gap-2">
-                  <span className="shrink-0 font-mono text-xs text-muted-foreground">{c.short}</span>
-                  <Text as="span" ellipsis fontSize={13} className="min-w-0">{c.subject || '(sem mensagem)'}</Text>
+                <span className="flex w-full min-w-0 items-center gap-1">
+                  <Text as="span" ellipsis fontSize={13} className="min-w-[6rem] flex-1">{c.subject || '(sem mensagem)'}</Text>
+                  {c.refs.map((r) => <RefBadge key={`${r.kind}:${r.name}`} item={r} />)}
                 </span>
-                <Text as="span" ellipsis fontSize={11} type="secondary">{c.author} · {when(c.date, { dateStyle: 'short', timeStyle: 'short' })}</Text>
+                <span className="flex w-full min-w-0 items-center gap-1.5 text-[11px] text-[var(--ant-color-text-secondary)]">
+                  <span aria-hidden className="flex size-4 shrink-0 items-center justify-center rounded-full bg-[var(--ant-color-fill-secondary)] text-[10px] uppercase leading-none">
+                    {c.author.trim().charAt(0) || '?'}
+                  </span>
+                  <span className="min-w-0 truncate">{c.author}</span>
+                  <span aria-hidden>·</span>
+                  <span className="shrink-0" title={when(c.date, { dateStyle: 'medium', timeStyle: 'short' })}>{relativeDate(c.date)}</span>
+                  <span aria-hidden>·</span>
+                  <span className="shrink-0 font-mono">{c.short}</span>
+                </span>
               </button>
             </li>
           ))}
@@ -265,7 +309,6 @@ export function HistoryPanel({ request, active, selected, onOpenTarget, onShowCh
         )}
         <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">{inDetail ? 'Commit' : 'Histórico'}</Text>
         {!inDetail && <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar o histórico" title="Atualizar o histórico" onClick={() => reload(scope)} />}
-        <Button size="small" type="text" onClick={onShowChanges} title="Voltar ao controle de versão">Alterações</Button>
       </Flexbox>
       {!inDetail && scope && (
         <Flexbox horizontal align="center" gap={6} paddingInline={12} paddingBlock={4}>

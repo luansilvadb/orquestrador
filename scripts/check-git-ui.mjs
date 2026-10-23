@@ -22,6 +22,8 @@ const scenario = uiSuite('git-ui', {
 const nav = (page) => page.getByRole('navigation', { name: 'Telas' });
 const openRoute = (page, name) => nav(page).getByRole('button', { name, exact: true }).click();
 const openGit = (page) => nav(page).getByRole('button', { name: /^Git/ }).click();
+// Abas do painel Git: Alterações (com a contagem) e Histórico.
+const gitTab = (page, name) => page.getByRole('tab', { name: new RegExp(`^${name}`) });
 // Seção do painel Git pelo título (o botão de recolher traz o título e a contagem).
 const section = (page, title) => page.locator('section').filter({ has: page.getByRole('button', { name: new RegExp(`^${title}\\b`) }) });
 const SIDE = { staged: 'Preparadas', unstaged: 'Alterações' };
@@ -578,7 +580,7 @@ scenario('divisor: arrastar muda a proporção e mantém a mesma linha no topo; 
 // No commit, o divisor existe e arrastar muda a proporção (o commit é só leitura, mas a proporção é a mesma).
 scenario('divisor: o commit também tem o divisor entre as colunas, e arrastar nele muda a proporção', async ({ page }) => {
   await openGit(page);
-  await page.getByRole('button', { name: 'Ver o histórico do projeto', exact: true }).click();
+  await gitTab(page, 'Histórico').click();
   await page.locator('button[title^="4b2e8d0 · "]').click();
   await page.locator('button[title^="src/lib/utils.ts (renomeado de src/utils.ts)"]').click();
   await tab(page, 'src/lib/utils.ts @ 4b2e8d0').waitFor();
@@ -602,10 +604,23 @@ scenario('divisor: o commit também tem o divisor entre as colunas, e arrastar n
 
 scenario('histórico do projeto abre commit, arquivo e a aba de diff do commit (só leitura); histórico do arquivo pelo menu; rename no disco não troca o caminho da revisão', async ({ page }) => {
   await openGit(page);
-  await page.getByRole('button', { name: 'Ver o histórico do projeto', exact: true }).click();
+  // Abas no topo: abre em Alterações, com a contagem dos arquivos; o ícone antigo de histórico saiu.
+  assert.match(await gitTab(page, 'Alterações').textContent(), /^Alterações\s*\(\d+\)$/, 'aba Alterações com a contagem');
+  assert.equal(await gitTab(page, 'Alterações').getAttribute('aria-selected'), 'true', 'abre na aba Alterações');
+  assert.equal(await page.getByRole('button', { name: 'Ver o histórico do projeto' }).count(), 0, 'sem o ícone de histórico');
+  await gitTab(page, 'Histórico').click();
+  assert.equal(await gitTab(page, 'Histórico').getAttribute('aria-selected'), 'true', 'aba Histórico ativa');
   const commit = page.locator('button[title^="4b2e8d0 · "]');
   await commit.waitFor();
   assert.equal(await page.locator('button[title*=" · "]').count(), 4, 'quatro commits do projeto');
+  assert.equal(await page.getByRole('button', { name: 'Alterações', exact: true }).count(), 0, 'sem o botão Alterações no histórico');
+  // Linha do commit: assunto e refs; embaixo a inicial do autor, o autor, a data relativa e o hash.
+  const topo = page.locator('button[title^="9f3a1c2 · "]');
+  assert.equal(await topo.locator('[title="main (branch atual)"]').count(), 1, 'selo da branch atual');
+  assert.equal(await topo.locator('[title="v0.1.7 (tag)"]').count(), 1, 'selo da tag');
+  assert.equal(await topo.locator('.font-mono', { hasText: '9f3a1c2' }).count(), 1, 'hash curto na linha');
+  assert.match(await topo.textContent(), /há \d|ontem|agora/, 'data relativa');
+  await page.screenshot({ path: join(OUT, 'git-ui-historico-abas.png') });
   await commit.click();
   const renamed = page.locator('button[title^="src/lib/utils.ts (renomeado de src/utils.ts)"]');
   await renamed.waitFor();
@@ -629,6 +644,11 @@ scenario('histórico do projeto abre commit, arquivo e a aba de diff do commit (
   await treeItem(page, 'design-system.md').click({ button: 'right' });
   await page.getByRole('menuitem', { name: /Histórico Git/ }).click();
   await openGit(page);
+  await page.locator('code', { hasText: 'design-system.md' }).waitFor();
+  assert.equal(await gitTab(page, 'Histórico').getAttribute('aria-selected'), 'true', 'Histórico Git abre a aba Histórico');
+  // Ir a Alterações e voltar mantém o escopo do arquivo.
+  await gitTab(page, 'Alterações').click();
+  await gitTab(page, 'Histórico').click();
   await page.locator('code', { hasText: 'design-system.md' }).waitFor();
   assert.equal(await page.locator('button[title^="d7e1a9c · "]').count(), 1, 'um commit do arquivo');
   await page.locator('button[title^="d7e1a9c · "]').click();
@@ -1066,6 +1086,7 @@ scenario('pasta sem repositório: o painel traz o texto e o botão, sem contador
   await page.screenshot({ path: join(OUT, 'git-ui-sem-repositorio.png') });
   assert.equal(await page.getByRole('heading', { name: 'Controle do Código-Fonte', exact: true }).count(), 1, 'título do painel');
   assert.equal(await page.getByRole('button', { name: 'Atualizar status' }).count(), 0, 'sem ações do painel cheio');
+  assert.equal(await gitTab(page, 'Histórico').count(), 0, 'sem abas fora do repositório');
   assert.equal(await page.getByText('Publicar no GitHub').count(), 0, 'sem Publicar no GitHub');
   assert.equal(await nav(page).getByRole('button', { name: 'Git', exact: true }).count(), 1, 'Git na navegação sem contador');
   assert.equal(await page.locator('footer').getByText('main', { exact: true }).count(), 0, 'barra de status sem branch');

@@ -196,7 +196,7 @@ export type Commands = {
   git_unstage_hunk: { args: ProjectArgs<{ hunk: HunkRef }>; result: void };
   git_discard_hunk: { args: ProjectArgs<{ hunk: HunkRef }>; result: void };
   git_discard_file: { args: ProjectArgs<{ path: string; revision: string }>; result: void };
-  git_history: { args: ProjectArgs<{ limit: number; skip: number; path: string | null }>; result: Commit[] };
+  git_history: { args: ProjectArgs<{ limit: number; skip: number; path: string | null }>; result: GraphCommit[] };
   git_graph: { args: ProjectArgs<{ limit: number; skip: number }>; result: GraphCommit[] };
   git_commit_detail: { args: ProjectArgs<{ id: string }>; result: CommitDetail };
   git_commit_hover: { args: ProjectArgs<{ hash: string }>; result: GitCommitHoverDetail };

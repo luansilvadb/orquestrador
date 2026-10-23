@@ -4,13 +4,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, Popover, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, Cloud, CloudDownload, Copy, ExternalLink, GitBranch, RefreshCw, Tag, Target } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, CloudDownload, Copy, ExternalLink, RefreshCw } from 'lucide-react';
 import { backend, message } from '../backend/backend';
-import { CommitFileList, note, type OpenCommitTarget, PAGE, useCommitDetail, usePagedList, when } from './git-history';
+import { CommitFileList, note, type OpenCommitTarget, PAGE, RefBadge, relativeDate, useCommitDetail, usePagedList, when } from './git-history';
 import { copy } from '../shared/paths';
 import { type GraphLine, type GraphRow, layoutGraph } from './git-graph';
 import type { TabTarget } from '../editor/workspace-model';
-import type { GitCommitHoverDetail, GitRef, GraphCommit } from '../backend/types';
+import type { GitCommitHoverDetail, GraphCommit } from '../backend/types';
 
 // Medidas em px, as do grafo do Antigravity/VS Code: faixas de 11 px (a primeira começa em 11, então uma faixa ocupa 22), linha de
 // commit de 22 px e linha de arquivo (a mesma do painel).
@@ -25,8 +25,6 @@ const KEY_STEP = 16;
 // branch atual, em azul; as outras em ciclo. São cores de dado, iguais nos temas claro e escuro.
 const PALETTE = ['#59a4f9', '#ffb000', '#dc267f', '#994f00', '#40b0a6', '#b66dff'];
 const colorOf = (n: number) => PALETTE[n % PALETTE.length];
-// Cores das etiquetas: branch local em azul, remota em lilás, tag em laranja (historyItemRefColor, RemoteRefColor e BaseRefColor).
-const REF_COLOR = { local: '#59a4f9', remote: '#b180d7', tag: '#ea5c00' } as const;
 // Fundo da barra lateral: o contorno dos pontos usa esta cor para cortar a linha em volta deles, como no VS Code.
 const BG = 'var(--ant-color-bg-layout)';
 // Busca de uma página do gráfico: o gráfico é do HEAD e do upstream, sem escopo de arquivo.
@@ -98,39 +96,7 @@ function GapLanes({ row }: { row: GraphRow }) {
   );
 }
 
-/**
- * Etiqueta de uma ref, como a do grafo do Antigravity: pílula de 18 px e raio de 10 px, na cor do tipo (branch azul, remota lilás,
- * tag laranja), com o texto escuro de 12 px. A branch atual tem o alvo e sempre mostra o nome; as outras, na linha estreita, viram
- * só o ícone (o nome fica no title e aparece quando a linha tem espaço).
- */
-function RefBadge({ item }: { item: GitRef }) {
-  const Icon = item.current ? Target : item.kind === 'remote' ? Cloud : item.kind === 'tag' ? Tag : GitBranch;
-  const kind = item.kind === 'remote' ? 'remota' : item.kind === 'tag' ? 'tag' : 'branch';
-  const color = item.kind === 'remote' ? REF_COLOR.remote : item.kind === 'tag' ? REF_COLOR.tag : REF_COLOR.local;
-  return (
-    <span
-      title={`${item.name} (${item.current ? `${kind} atual` : kind})`}
-      className="flex h-[18px] min-w-0 max-w-[9rem] shrink items-center rounded-[10px] text-[#181818]"
-      style={{ backgroundColor: color }}
-    >
-      <Icon className="size-4 shrink-0 p-px" aria-hidden />
-      <span className={`min-w-0 truncate pr-1 text-[12px] leading-[18px]${item.current ? '' : ' hidden @[22rem]:inline'}`}>{item.name}</span>
-    </span>
-  );
-}
-
 type CommitHoverState = { kind: 'loading' } | { kind: 'ready'; detail: GitCommitHoverDetail } | { kind: 'error'; text: string };
-
-const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
-  ['year', 31_536_000], ['month', 2_592_000], ['week', 604_800], ['day', 86_400], ['hour', 3_600], ['minute', 60], ['second', 1],
-];
-function relativeDate(iso: string) {
-  const timestamp = Date.parse(iso);
-  if (!Number.isFinite(timestamp)) return iso;
-  const seconds = (timestamp - Date.now()) / 1_000;
-  const [unit, amount] = RELATIVE_UNITS.find(([, size]) => Math.abs(seconds) >= size) ?? ['second', 1];
-  return new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' }).format(Math.round(seconds / amount), unit);
-}
 
 function coAuthors(messageText: string) {
   const lines = messageText.replace(/\r\n/g, '\n').split('\n');

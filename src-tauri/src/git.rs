@@ -625,15 +625,15 @@ fn pagina(dir: &Path, limit: usize, skip: usize) -> Option<[String; 2]> {
     has_head(dir).then(|| [format!("--max-count={}", limit.clamp(1, MAX_HISTORY)), format!("--skip={skip}")])
 }
 
-/// Commits do HEAD, do mais novo para o mais antigo. `limit` fica entre 1 e 200; `skip` pula os já mostrados.
+/// Commits do HEAD, do mais novo para o mais antigo, com as refs de cada um. `limit` fica entre 1 e 200; `skip` pula os já mostrados.
 /// Com `path`, só os commits que tocaram o caminho, seguindo renomeações. Repositório sem commit: lista vazia.
-pub fn history(dir: &Path, limit: usize, skip: usize, path: Option<&str>) -> Result<Vec<Commit>, String> {
+pub fn history(dir: &Path, limit: usize, skip: usize, path: Option<&str>) -> Result<Vec<GraphCommit>, String> {
     let Some([max, skip]) = pagina(dir, limit, skip) else { return Ok(Vec::new()) };
-    let mut args = vec!["log", GRAPH_FORMAT, "--no-color", &max, &skip];
+    let mut args = vec!["log", GRAPH_FORMAT, "--no-color", "--decorate=full", &max, &skip];
     if let Some(path) = path {
         args.extend(["--follow", "--", spec(path)?]);
     }
-    Ok(parse_graph(&proc::git_saida(dir, &args)?).into_iter().map(|g| g.commit).collect())
+    Ok(parse_graph(&proc::git_saida(dir, &args)?))
 }
 
 /// Os registros de uma saída do Git: separados por 0x1e, sem as quebras de linha do começo e sem os vazios.
@@ -1962,19 +1962,25 @@ mod tests {
         git(&dir, &["commit", "-q", "-m", "c3 renomeia"]);
 
         let todos = history(&dir, 10, 0, None).unwrap();
-        let assuntos: Vec<&str> = todos.iter().map(|c| c.subject.as_str()).collect();
+        let assuntos: Vec<&str> = todos.iter().map(|c| c.commit.subject.as_str()).collect();
         assert_eq!(assuntos, ["c3 renomeia", "c2 com hifen", "c1 raiz"]);
-        assert_eq!(todos[0].author, "teste");
-        assert_eq!(todos[0].short.len(), 7);
-        assert!(todos[0].date.contains('T'), "data ISO: {}", todos[0].date);
+        assert_eq!(todos[0].commit.author, "teste");
+        assert_eq!(todos[0].commit.short.len(), 7);
+        assert!(todos[0].commit.date.contains('T'), "data ISO: {}", todos[0].commit.date);
+        // As refs vêm junto: a branch atual e a tag no topo; o resto sem refs.
+        git(&dir, &["tag", "v1"]);
+        let topo = &history(&dir, 1, 0, None).unwrap()[0];
+        assert!(topo.refs.iter().any(|r| r.kind == RefKind::Branch && r.current), "{:?}", topo.refs);
+        assert!(topo.refs.contains(&GitRef { name: "v1".into(), kind: RefKind::Tag, current: false }), "{:?}", topo.refs);
+        assert!(todos[1].refs.is_empty());
         assert_eq!(history(&dir, 2, 0, None).unwrap().len(), 2);
-        assert_eq!(history(&dir, 2, 2, None).unwrap()[0].subject, "c1 raiz");
+        assert_eq!(history(&dir, 2, 2, None).unwrap()[0].commit.subject, "c1 raiz");
         assert!(history(&dir, 2, 9, None).unwrap().is_empty());
 
-        let do_arquivo: Vec<String> = history(&dir, 10, 0, Some("renomeado [r] x.txt")).unwrap().into_iter().map(|c| c.subject).collect();
+        let do_arquivo: Vec<String> = history(&dir, 10, 0, Some("renomeado [r] x.txt")).unwrap().into_iter().map(|c| c.commit.subject).collect();
         assert_eq!(do_arquivo, ["c3 renomeia", "c1 raiz"], "acompanha a renomeação");
-        assert_eq!(history(&dir, 10, 0, Some("-x.txt")).unwrap()[0].subject, "c2 com hifen");
-        assert_eq!(history(&dir, 10, 0, Some("[b] c.txt")).unwrap()[0].subject, "c2 com hifen");
+        assert_eq!(history(&dir, 10, 0, Some("-x.txt")).unwrap()[0].commit.subject, "c2 com hifen");
+        assert_eq!(history(&dir, 10, 0, Some("[b] c.txt")).unwrap()[0].commit.subject, "c2 com hifen");
         assert!(history(&dir, 10, 0, Some("../fora")).is_err());
 
         let vazio = repo(&tmp, "vazio");
