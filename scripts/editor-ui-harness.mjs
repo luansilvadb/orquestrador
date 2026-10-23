@@ -50,11 +50,11 @@ export function startVite() {
   return { stop };
 }
 
+const serverUp = () => fetch(BASE).then((r) => r.ok, () => false);
+
 export async function waitForServer() {
   for (let i = 0; i < 120; i++) {
-    try {
-      if ((await fetch(BASE)).ok) return;
-    } catch { /* ainda subindo */ }
+    if (await serverUp()) return;
     await new Promise((r) => setTimeout(r, 250));
   }
   throw new Error(`Vite não respondeu em ${BASE}`);
@@ -145,7 +145,11 @@ export const primaryCursor = (page) => page.evaluate(() => {
  */
 export function uiSuite(prefix, { diagnose, launch } = {}) {
   let vite, browser, count = 0;
-  before(async () => { vite = startVite(); await waitForServer(); browser = await launchBrowser(launch); });
+  // No `npm run check:ui`, o Vite é o do setup global (ui-setup.mjs), comum aos arquivos em paralelo; rodando um arquivo só, este sobe o próprio.
+  before(async () => {
+    if (!(await serverUp())) { vite = startVite(); await waitForServer(); }
+    browser = await launchBrowser(launch);
+  });
   after(async () => { await browser?.close(); vite?.stop(); });
   return (name, fn) => {
     const index = ++count;

@@ -24,10 +24,10 @@ Para acrescentar um comando: escreva a função `#[tauri::command]` em `lib.rs`,
 
 ```powershell
 npm run check       # 9 checagens puras (Node, sem dependências)
-npm run check:ui    # 10 checks de interface, em sequência (Chrome headless)
+npm run check:ui    # 11 checks de interface, 4 em paralelo (Chrome headless)
 ```
 
-`npm run check` roda os arquivos listados em `package.json`; `npm run check:ui` roda os checks de interface um de cada vez, porque todos sobem o Vite na mesma porta (1421, `SMOKE_PORT`). Os dois saem com código diferente de 0 se algum teste falhou, e mostram o resultado de todos os arquivos.
+`npm run check` roda os arquivos listados em `package.json`; `npm run check:ui` sobe um Vite só na porta 1421 (`SMOKE_PORT`) pelo setup global (`scripts/ui-setup.mjs`) e roda 4 arquivos de cada vez, cada um com o próprio Chromium. Um arquivo rodado sozinho (`node --test scripts/check-git-ui.mjs`) sobe o próprio Vite se a porta estiver livre. Os dois saem com código diferente de 0 se algum teste falhou, e mostram o resultado de todos os arquivos.
 
 O plugin de instância única roda só em builds release. Builds debug usam o mesmo identificador do app instalado, mas não encaminham caminhos nem ativam outra instância; assim `npm run tauri dev` pode coexistir com o app instalado.
 
