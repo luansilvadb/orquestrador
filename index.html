@@ -6,7 +6,7 @@
 <title>Orquestrador</title>
 <link rel="icon" href="data:,">
 <!-- Tela da abertura: pintada antes do bundle, no formato da tela de verificação (Screen em App.tsx), que reusa as classes boot-* daqui.
-     A marca é o glifo do ícone (src-tauri/icons/icon.svg): o hub desenha as linhas até os executores, que depois pulsam em sequência (só transform).
+     A marca é o glifo do ícone (src-tauri/icons/icon.svg): o hub (orquestrador) faz brotar as raízes (executores) em sequência, que seguram e recolhem, em loop.
      Os atrasos descontam --t (ms desde a navegação), que o React define ao montar: a animação segue da mesma fase em vez de reiniciar. -->
 <style>
   html, body, #root { margin: 0; height: 100%; }
@@ -18,28 +18,27 @@
   .boot h1 { margin: 0 0 6px; font-size: 16px; font-weight: 600; line-height: 1; }
   .boot p { margin: 0; color: #aaa; }
 
-  .boot-mark { --t: 0ms; --ease: cubic-bezier(.2, .8, .2, 1); display: block; width: 64px; height: 64px; margin: 0 auto 4px; overflow: visible; }
-  .boot-mark line { stroke-dasharray: 1; animation: boot-draw 420ms var(--ease) both; }
+  /* Ciclo de 2,4 s por raiz: a linha sai do hub, a ponta abre, segura e fecha, e a linha recolhe para o hub. Cada raiz começa 160 ms depois da anterior. */
+  .boot-mark { --t: 0ms; --cycle: 2400ms; --ease: cubic-bezier(.2, .8, .2, 1); display: block; width: 64px; height: 64px; margin: 0 auto 4px; overflow: visible; }
+  .boot-mark line { stroke-dasharray: 1; animation: boot-root var(--cycle) var(--ease) infinite both; }
   .boot-mark circle { transform-box: fill-box; transform-origin: center; }
-  .boot-mark .hub { animation: boot-pop 360ms var(--ease) calc(0ms - var(--t)) both; }
-  .boot-mark .node { animation: boot-pop 260ms var(--ease) both, boot-pulse 1800ms ease-in-out infinite; }
-  .boot-mark :nth-child(1 of line) { animation-delay: calc(200ms - var(--t)); }
-  .boot-mark :nth-child(2 of line) { animation-delay: calc(300ms - var(--t)); }
-  .boot-mark :nth-child(3 of line) { animation-delay: calc(400ms - var(--t)); }
-  .boot-mark :nth-child(1 of .node) { animation-delay: calc(520ms - var(--t)), calc(1400ms - var(--t)); }
-  .boot-mark :nth-child(2 of .node) { animation-delay: calc(620ms - var(--t)), calc(1640ms - var(--t)); }
-  .boot-mark :nth-child(3 of .node) { animation-delay: calc(720ms - var(--t)), calc(1880ms - var(--t)); }
+  .boot-mark .hub { animation: boot-pop 360ms var(--ease) calc(0ms - var(--t)) both, boot-beat var(--cycle) ease-in-out calc(360ms - var(--t)) infinite; }
+  .boot-mark .node { animation: boot-tip var(--cycle) var(--ease) infinite both; }
+  .boot-mark :nth-child(1 of line), .boot-mark :nth-child(1 of .node) { animation-delay: calc(200ms - var(--t)); }
+  .boot-mark :nth-child(2 of line), .boot-mark :nth-child(2 of .node) { animation-delay: calc(360ms - var(--t)); }
+  .boot-mark :nth-child(3 of line), .boot-mark :nth-child(3 of .node) { animation-delay: calc(520ms - var(--t)); }
   .boot-mark.still *, .boot-mark.still { animation: none; }
   @media (prefers-reduced-motion: reduce) { .boot-mark * { animation: none; } }
-  @keyframes boot-draw { from { stroke-dashoffset: 1; } }
   @keyframes boot-pop { from { opacity: 0; transform: scale(.4); } }
-  @keyframes boot-pulse { 50% { transform: scale(1.22); } }
+  @keyframes boot-root { 0% { stroke-dashoffset: 1; } 22%, 70% { stroke-dashoffset: 0; } 90%, 100% { stroke-dashoffset: 1; } }
+  @keyframes boot-tip { 0%, 16% { opacity: 0; transform: scale(.3); } 26% { opacity: 1; transform: scale(1.15); } 32%, 60% { opacity: 1; transform: scale(1); } 70%, 100% { opacity: 0; transform: scale(.3); } }
+  @keyframes boot-beat { 0%, 20%, 100% { transform: scale(1); } 8% { transform: scale(1.1); } }
 </style>
 </head>
 <body>
 <div id="root"><div class="boot"><header data-tauri-drag-region></header><main class="boot-main"><div class="boot-col">
 <svg class="boot-mark" viewBox="28 28 200 200" aria-hidden="true"><g stroke="#ECEAE4" stroke-width="19" stroke-linecap="round"><line x1="73.9" y1="182.1" x2="73.9" y2="59.1" pathLength="1"/><line x1="73.9" y1="182.1" x2="156.3" y2="91.1" pathLength="1"/><line x1="73.9" y1="182.1" x2="196.3" y2="169.2" pathLength="1"/></g><g fill="#ECEAE4"><circle class="node" cx="73.9" cy="59.1" r="23"/><circle class="node" cx="156.3" cy="91.1" r="23"/><circle class="node" cx="196.3" cy="169.2" r="23"/></g><circle class="hub" cx="73.9" cy="182.1" r="36.5" fill="#F5A524"/></svg>
-<div><h1>Orquestrador</h1><p role="status">Abrindo…</p></div>
+<div><h1>Orquestrador</h1><p role="status">Carregando a interface…</p></div>
 </div></main></div></div>
 <script type="module" src="/src/main.tsx"></script>
 </body>

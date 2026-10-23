@@ -280,6 +280,8 @@ export function App() {
   const [busyByProject, setBusyByProject] = useState<Record<string, number>>({});
   const [recentProjects, setRecentProjects] = useState(readRecentProjects);
   const [ready, setReady] = useState(false);
+  // Etapa da abertura, mostrada até os projetos salvos voltarem.
+  const [stage, setStage] = useState('Conectando ao backend…');
   const projectsRef = useRef(projects);
   projectsRef.current = projects;
   const activeRef = useRef(active);
@@ -381,7 +383,8 @@ export function App() {
       const saved = params.get('project') === 'none' ? [] : mockCount > 1
         ? ['C:\\projetos\\exemplo', ...Array.from({ length: Math.min(8, mockCount) - 1 }, (_, i) => `C:\\projetos\\simulado-${i + 2}`)]
         : readOpenProjects();
-      for (const path of saved) {
+      for (const [index, path] of saved.entries()) {
+        if (live) setStage(`Reabrindo ${folderName(path)}${saved.length > 1 ? ` (${index + 1} de ${saved.length})` : ''}…`);
         try {
           const opened = await backend.openProject(path);
           if (!restored.some((item) => item.id === opened.id)) restored.push({ id: opened.id, project: opened.project });
@@ -405,7 +408,7 @@ export function App() {
   }, []);
 
   if (!ready) return <Screen connected={false} description={(
-    <Text as="p" fontSize={14} style={SECONDARY} role="status" aria-live="polite">Reabrindo projetos…</Text>
+    <Text as="p" fontSize={14} style={SECONDARY} role="status" aria-live="polite">{stage}</Text>
   )}>{null}</Screen>;
   const tabs: ProjectTab[] = projects.map((item) => ({ id: item.id, path: item.project, busy: busyByProject[item.id] }));
   if (projects.length === 0) return <ProjectApp managed projects={tabs} onSelect={selectProject} onClose={closeManagedProject} onMove={moveProject} onOpen={addProject} recentProjects={recentProjects} />;

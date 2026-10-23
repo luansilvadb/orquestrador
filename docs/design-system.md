@@ -8,7 +8,7 @@ A interface usa o [Lobe UI](https://github.com/lobehub/lobe-ui) (`@lobehub/ui`, 
 | --- | --- |
 | `src/main.tsx` | `ThemeProvider` (tema escuro, fonte Inter no antd), um `ConfigProvider` do `@lobehub/ui` com `motion` (de `motion/react`) dentro dele, `ToastHost` e `ModalHost`; no escopo do módulo, os observadores que põem os rótulos dos avisos em português e a escuta de `pointerdown` que fecha o menu de contexto com clique fora. |
 | `src/index.css` | Ordem da camada `lobe-base`, Tailwind, fonte Inter, os tokens do Tailwind ligados às variáveis `--ant-*` do antd, o token do fundo dos terminais e os poucos estilos globais. |
-| `index.html` | Tela da abertura, antes do bundle: titlebar, a marca animada (glifo do ícone: linhas desenhadas do hub, executores pulsando só com `transform`; parada com movimento reduzido) e o status. As classes `boot-*` e a animação também servem ao `Screen` de `src/App.tsx` (verificação, download e reabertura), que segue a fase da animação do HTML. |
+| `index.html` | Tela da abertura, antes do bundle: titlebar, a marca animada (glifo do ícone: as raízes dos executores brotam do hub do orquestrador em sequência, seguram e recolhem, em loop; parada com movimento reduzido) e a etapa em curso (interface, backend, projeto reaberto, verificação de versão). As classes `boot-*` e a animação também servem ao `Screen` de `src/App.tsx` (verificação, download e reabertura), que segue a fase da animação do HTML. |
 | `src/terminal/term.ts` | Tema dos terminais xterm (cores em `theme`). |
 
 Componentes em uso. Os de `@lobehub/ui` são `Center`, `Flexbox`, `Hotkey`, `Markdown` e `PatchDiff`; os demais vêm de `@lobehub/ui/base-ui`:
