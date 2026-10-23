@@ -31,7 +31,7 @@ import {
   forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type FocusEvent, type KeyboardEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode,
 } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownMenu, Modal, Text, toast } from '@lobehub/ui/base-ui';
-import { Center, Flexbox, Hotkey, PatchDiff } from '@lobehub/ui';
+import { Center, Flexbox, PatchDiff } from '@lobehub/ui';
 import { ArrowRight, ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
 import { EditorView } from '@codemirror/view';
 import { FileIcon } from '../shared/file-icon';
@@ -1381,39 +1381,28 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   );
 });
 
-// ---- Grupo sem abas ----
+// ---- Grupos vazios ----
 
-// Como a marca d'água do editor vazio do VS Code: só atalhos que já existem no app, sem clique (é texto comum).
-const EMPTY_HINTS = [
-  ['Novo arquivo', 'Ctrl+N'],
-  ['Abrir arquivo', 'Ctrl+P'],
-  ['Pesquisar nos arquivos', 'Ctrl+Shift+F'],
-  ['Alternar o terminal', 'Ctrl+`'],
-] as const;
-
-// Duplo clique em qualquer ponto da área (também sobre as dicas) abre um rascunho, como no VS Code. `select-none`: o duplo clique não seleciona o texto das dicas.
+// Duplo clique em qualquer ponto da área abre um rascunho.
 function EmptyGroup({ onNewDraft }: { onNewDraft: () => void }) {
   return (
-    <Center flex={1} className="min-h-0 overflow-hidden select-none" onDoubleClick={onNewDraft}>
-      <dl className="m-0 grid grid-cols-[auto_auto] items-center gap-x-4 gap-y-3">
-        {EMPTY_HINTS.map(([label, keys]) => (
-          <Fragment key={keys}>
-            <Text as="dt" type="secondary" fontSize={13} align="right">{label}</Text>
-            <dd className="m-0"><Hotkey keys={keys} /></dd>
-          </Fragment>
-        ))}
-      </dl>
+    <Center data-empty flex={1} className="min-h-0 overflow-hidden select-none" onDoubleClick={onNewDraft}>
+      <EmptyMark />
     </Center>
   );
 }
 
-// Sem projeto e sem abas: só a marca apagada. Duplo clique abre um rascunho.
+// Sem projeto: a mesma marca apagada. Duplo clique abre um rascunho.
 function HomeScreen({ onNewFile }: { onNewFile: () => void }) {
   return (
     <Center data-home flex={1} className="min-w-0 min-h-0 overflow-hidden select-none" onDoubleClick={onNewFile}>
-      <AppMark color="#ECEAE4" className="size-60 max-h-[35vh] max-w-[35vw] opacity-[0.06]" />
+      <EmptyMark />
     </Center>
   );
+}
+
+function EmptyMark() {
+  return <AppMark color="#ECEAE4" className="size-60 max-h-[35vh] max-w-[35vw] opacity-[0.06]" />;
 }
 
 // ---- Arquivo ----

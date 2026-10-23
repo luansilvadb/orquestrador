@@ -489,12 +489,15 @@ async function emptyGroup(page, group = 'A') {
   await expand(page, ['src']);
   await treeItem(page, 'App.tsx').dblclick();
   await tabs(page).filter({ hasText: 'App.tsx' }).getByRole('button', { name: /^Fechar/ }).click();
-  await page.locator(`[data-pane="${group}"] dl`).waitFor();
-  return page.locator(`[data-pane="${group}"] dl`).locator('..');
+  const area = page.locator(`[data-pane="${group}"] [data-empty]`);
+  await area.waitFor();
+  return area;
 }
 
 scenario('rascunho: grupo sem abas, duplo clique no centro da área vazia cria "Sem título-1" ativa', async ({ page }) => {
   const area = await emptyGroup(page);
+  assert.equal(await page.locator('[data-empty] dt').count(), 0, 'grupo vazio sem atalhos');
+  assert.equal(await area.locator('svg').count(), 1, 'grupo vazio com a marca');
   const b = await area.boundingBox();
   await page.mouse.dblclick(b.x + b.width / 2, b.y + b.height / 2);
   await page.waitForFunction(() => [...document.querySelectorAll('[data-group="A"] [role="tab"]')].some((t) => t.textContent.startsWith('Sem título-1')));
