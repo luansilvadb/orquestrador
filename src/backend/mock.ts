@@ -5,6 +5,7 @@
 // `__mock.openPath(path)` simula um pedido de abertura vindo do Explorer ou de outra instância.
 // `__mock.addNode(node)` simula o orquestrador delegando: um executor chega ao projeto ativo (o orquestrador precisa estar aberto).
 // `__mock.nodeState(event)` simula a troca de estado de um executor (`done`, `stopped` ou `failed` fecham a aba).
+// `__mock.print(id, text)` escreve no terminal simulado do orquestrador, executor ou shell.
 // `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto.
 // A árvore (`list_dir`) é em memória e muda com as ações do menu e com `__mock.remove`.
 // O Git tem estado só no que a mock modela: blocos (preparar, tirar do preparo, descartar), arquivo descartado, commit, histórico, gráfico e
@@ -291,13 +292,17 @@ let closeHandler: (() => Promise<boolean>) | null = null;
 // Shells do painel Terminal: só `exit` ou `close_shell` os encerram.
 // Cada um guarda a própria linha em edição.
 const shells = new Map<string, { line: string; prompt: string; project: string | null }>();
+const executorProjects = new Map<string, string>();
 let pendingOpenPaths: string[] = [];
 const debug = { close: async () => {
   const closed = closeHandler ? await closeHandler() : true;
   if (closed) document.body.innerHTML = '<p style="padding:24px">Janela fechada (simulado).</p>';
   return closed;
 }, openPath: (path: string) => { pendingOpenPaths.push(path); emit('open-paths', undefined); },
-  addNode: (node: ExecutorNode & { project: string }) => emit('node-added', node), nodeState: (event: NodeStateEvent) => emit('node-state', event), remove: (path: string) => removePath(path),
+  addNode: (node: ExecutorNode & { project: string }) => { executorProjects.set(node.id, node.project); emit('node-added', node); },
+  nodeState: (event: NodeStateEvent) => { emit('node-state', event); if (['done', 'stopped', 'failed'].includes(event.state)) executorProjects.delete(event.id); },
+  print: (id: string, text: string) => out(id, text, shells.get(id)?.project ?? executorProjects.get(id) ?? terms.get(id)?.project ?? (id === 'orchestrator' ? activeProject : null)),
+  remove: (path: string) => removePath(path),
   // Clipboard simulado: o que as cópias e recortes do simulado puseram nele. Nunca toca no clipboard do Windows.
   clipboard: () => structuredClone(clip),
   // Edição externa: outro programa gravou o arquivo. Só troca o texto que o disco simulado devolve (o que `read_file` e `write_file_checked` comparam).
