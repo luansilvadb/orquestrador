@@ -21,6 +21,15 @@ check('Buffer limpo não é sujo; editar o rascunho torna sujo', () => {
 check('CRLF no disco e LF no editor não contam como alteração', () => {
   assert.equal(isBufferDirty(buffer({ raw: 'a\r\nb', draft: 'a\nb', newline: '\r\n' })), false);
 });
+check('isBufferDirty dá o mesmo que comparar com o raw normalizado (LF, CRLF, CR e misto)', () => {
+  const raws = ['', 'a\nb', 'a\r\nb', 'a\rb', 'a\r\nb\nc\rd', '\r\n', '\r', 'a\r', 'a\r\n\r\n', '\r\r\n'];
+  const drafts = ['', 'a', 'a\nb', 'a\nb\nc\nd', 'a\nb\nc\nd!', '\n', '\n\n', 'a\n', 'a\n\n', 'a\n\n\n', 'a\r\nb', 'a\rb', 'ab'];
+  for (const raw of raws) {
+    const clean = raw.replace(/\r\n|\r/g, '\n');
+    assert.equal(isBufferDirty(buffer({ raw, draft: clean })), false, JSON.stringify(raw));
+    for (const draft of drafts) assert.equal(isBufferDirty(buffer({ raw, draft })), draft !== clean, JSON.stringify([raw, draft]));
+  }
+});
 check('CR isolado volta ao disco como CR', () => {
   assert.equal(newlineOf('a\rb'), '\r');
   assert.equal(newlineOf('a\r\nb'), '\r\n');

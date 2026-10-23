@@ -393,7 +393,8 @@ export function App() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       for (const item of projectsRef.current) void backend.projectSnapshot(item.id).then((snapshot) => {
-        setBusyByProject((current) => ({ ...current, [item.id]: snapshot.executorsRunning + snapshot.executorsQueued }));
+        const busy = snapshot.executorsRunning + snapshot.executorsQueued;
+        setBusyByProject((current) => (current[item.id] === busy ? current : { ...current, [item.id]: busy }));
       }).catch(() => {});
     }, 1500);
     return () => window.clearInterval(timer);

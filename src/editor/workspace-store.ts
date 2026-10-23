@@ -23,11 +23,24 @@ export type Buffer = {
 export type ConflictDraft = { path: string; origin: string; draft: string; revision: string };
 export type EditorData = { buffers: Record<string, Buffer>; conflicts: Record<string, ConflictDraft> };
 
-export const normalizeNewlines = (text: string) => text.replace(/\r\n|\r/g, '\n');
+export const normalizeNewlines = (text: string) => (text.includes('\r') ? text.replace(/\r\n|\r/g, '\n') : text);
 export const newlineOf = (text: string): Newline => (text.includes('\r\n') ? '\r\n' : text.includes('\r') ? '\r' : '\n');
 export const toDiskNewlines = (text: string, newline: Newline) => (newline === '\n' ? text : text.replace(/\n/g, newline));
 export const conflictKey = (path: string) => `conflict:${path.toLowerCase()}`;
-export const isBufferDirty = (buffer: Buffer) => buffer.draft !== normalizeNewlines(buffer.raw);
+// Compara com o `raw` normalizado sem copiá-lo: roda a cada render, para todos os buffers.
+export function isBufferDirty({ raw, draft }: Buffer): boolean {
+  if (!raw.includes('\r')) return draft !== raw;
+  let j = 0;
+  for (let i = 0; i < raw.length; i++, j++) {
+    let code = raw.charCodeAt(i);
+    if (code === 13) {
+      if (raw.charCodeAt(i + 1) === 10) i++;
+      code = 10;
+    }
+    if (draft.charCodeAt(j) !== code) return true;
+  }
+  return j !== draft.length;
+}
 export const isConflictDirty = (draft: ConflictDraft) => draft.draft !== draft.origin;
 
 /** Chaves sujas, no formato que o workspace-model usa: docId para arquivo, `conflict:<path>` para conflito. */
