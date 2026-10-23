@@ -653,6 +653,63 @@ scenario('atualizar ao salvar: salvar um arquivo que deixou de ter o termo tira 
   await page.screenshot({ path: join(OUT, 'files-search-atualiza-salvar.png') });
 });
 
+scenario('muitos resultados: a lista monta só as linhas à vista, digitar não trava, e teclado, dispensar e F4 alcançam o fim da lista', async ({ page }) => {
+  await page.evaluate(() => window.__mock.addFile('src/muitos.ts', Array.from({ length: 3000 }, (_, i) => `volume ${i + 1}`).join('\n')));
+  await expand(page, ['src']);
+  await pesquisar(page);
+  await field(page).fill('volume');
+  await field(page).press('Enter');
+  await statusText(page, '2000 resultados em 1 arquivo. Só as 2000 primeiras linhas aparecem.').waitFor();
+  const mounted = await page.locator('[data-result]').count();
+  assert.ok(mounted < 100, `só as linhas à vista ficam no DOM (${mounted})`);
+
+  // Digitar com a lista cheia (antes do debounce buscar de novo): nenhuma tarefa longa no thread principal. Mede depois de a lista assentar.
+  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    window.__long = [];
+    new PerformanceObserver((list) => window.__long.push(...list.getEntries().map((e) => e.duration))).observe({ type: 'longtask' });
+  });
+  await field(page).press('End');
+  await page.keyboard.type('abc', { delay: 40 });
+  const long = await page.evaluate(() => window.__long);
+  assert.ok(Math.max(0, ...long) < 100, `digitar não trava a interface (tarefas longas: ${long.map(Math.round).join(', ') || 'nenhuma'})`);
+  await field(page).fill('volume');
+  await field(page).press('Enter');
+  await statusText(page, '2000 resultados em 1 arquivo. Só as 2000 primeiras linhas aparecem.').waitFor();
+
+  // Teclado: End vai à última ocorrência (fora da tela), Home volta ao cabeçalho do arquivo, ArrowDown desce para a primeira.
+  const focused = () => page.evaluate(() => document.activeElement?.getAttribute('title'));
+  // O clique abre a prévia e leva o foco ao editor; o teclado da lista parte da linha focada.
+  await result(page, 'src/muitos.ts', 1).focus();
+  await page.keyboard.press('End');
+  await page.waitForFunction(() => document.activeElement?.getAttribute('title') === 'src/muitos.ts:2000:1');
+  await page.keyboard.press('Home');
+  await page.waitForFunction(() => document.activeElement?.getAttribute('title') === 'src/muitos.ts');
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await focused(), 'src/muitos.ts:1:1', 'ArrowDown do cabeçalho vai à primeira ocorrência');
+
+  // Delete na última: ela sai, o foco passa à anterior e o resumo diminui.
+  await page.keyboard.press('End');
+  await page.waitForFunction(() => document.activeElement?.getAttribute('title') === 'src/muitos.ts:2000:1');
+  await page.keyboard.press('Delete');
+  await statusText(page, '1999 resultados em 1 arquivo. Só as 2000 primeiras linhas aparecem.').waitFor();
+  await page.waitForFunction(() => document.activeElement?.getAttribute('title') === 'src/muitos.ts:1999:1');
+
+  // F4 a partir da primeira (marcada pelo clique): Shift+F4 dá a volta até a última, que aparece rolada na lista.
+  await page.keyboard.press('Home');
+  await result(page, 'src/muitos.ts', 1).click();
+  await page.keyboard.press('Shift+F4');
+  await result(page, 'src/muitos.ts', 1999).and(page.locator('[aria-current="true"]')).waitFor();
+
+  // A roda do mouse leva a lista do começo ao fim e mostra as linhas de cada ponta.
+  await page.getByRole('tree', { name: 'Resultados da pesquisa' }).hover();
+  for (let i = 0; i < 60 && !(await result(page, 'src/muitos.ts', 1).count()); i++) await page.mouse.wheel(0, -2000);
+  await result(page, 'src/muitos.ts', 1).waitFor();
+  for (let i = 0; i < 60 && !(await result(page, 'src/muitos.ts', 1999).count()); i++) await page.mouse.wheel(0, 2000);
+  await result(page, 'src/muitos.ts', 1999).waitFor();
+  await page.screenshot({ path: join(OUT, 'files-search-muitos.png') });
+});
+
 
 scenario('visual do Explorer: ícones do tema Symbols, cores e letras do Git (pasta herda com •), ignorado em cinza; barra com Recolher Tudo e Novo Arquivo; seção do projeto recolhe a árvore', async ({ page }) => {
   const color = (path) => at(page, path).evaluate((el) => getComputedStyle(el).color);
