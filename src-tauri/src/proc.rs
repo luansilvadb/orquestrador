@@ -54,11 +54,19 @@ fn run_as(dir: &Path, globais: &[&str], args: &[&str], entrada: Option<&[u8]>) -
     let out = match entrada {
         None => cmd.stdin(Stdio::null()).output(),
         Some(bytes) => cmd.stdin(Stdio::piped()).spawn().and_then(|mut child| {
-            // Se o Git sair antes de ler tudo, o erro dele é o que importa: por isso a falha de escrita não é reportada.
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(bytes);
+            // A escrita corre em outra thread enquanto a saída é lida: escrever tudo antes trava quando a saída enche o
+            // pipe. Se o Git sair antes de ler tudo, o erro dele é o que importa: por isso a falha de escrita não é reportada.
+            let writer = child.stdin.take().map(|mut stdin| {
+                let bytes = bytes.to_vec();
+                std::thread::spawn(move || {
+                    let _ = stdin.write_all(&bytes);
+                })
+            });
+            let out = child.wait_with_output();
+            if let Some(writer) = writer {
+                let _ = writer.join();
             }
-            child.wait_with_output()
+            out
         }),
     }
     .map_err(|e| Falha::Ausente(format!("git não pôde ser executado: {e}")))?;
@@ -168,7 +176,7 @@ mod tests {
     use super::*;
     #[cfg(windows)]
     use crate::platform::start_time;
-    use crate::testutil::Tmp;
+    use crate::testutil::{git, write, Tmp};
 
     #[cfg(windows)]
     #[test]
@@ -207,6 +215,18 @@ mod tests {
         git_saida(&dir, &["checkout", "--detach", "-q"]).unwrap();
         let hash = git_saida(&dir, &["rev-parse", "--short", "HEAD"]).unwrap();
         assert_eq!(branch(&dir).unwrap(), hash.trim());
+    }
+
+    #[test]
+    fn ignorados_com_entrada_grande_termina() {
+        let dir = &Tmp::new("orq-proc", "ignorados").0;
+        git(dir, &["init", "-q"]);
+        write(dir, ".gitignore", "ignorada/\n");
+        // Saída maior que o buffer do pipe: travava quando a entrada era escrita inteira antes da leitura.
+        let paths: Vec<String> = (0..5000).map(|i| format!("ignorada/arquivo-{i}.txt")).collect();
+        let ignorados = git_ignorados(dir, &paths).unwrap();
+        assert_eq!(ignorados.len(), 5000);
+        assert!(paths.iter().all(|p| ignorados.contains(p)));
     }
 
     #[cfg(windows)]
