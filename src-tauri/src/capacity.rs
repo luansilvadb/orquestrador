@@ -96,7 +96,8 @@ fn schedule(weak: Weak<Global>) {
         let memory = (global.resources.memory)();
         let (queue, wake) = &*global.queue;
         let mut queue = queue.lock().unwrap_or_else(|e| e.into_inner());
-        if queue.waiting.is_empty() {
+        // Fila vazia ou sem vaga: espera um pedido, uma liberação ou o próximo passe, que relê a memória.
+        if queue.waiting.is_empty() || admission(global.resources.cpus, memory, queue.live) <= queue.live {
             let (next, _) = wake.wait_timeout(queue, Duration::from_millis(200)).unwrap_or_else(|e| e.into_inner());
             queue = next;
         }
@@ -214,6 +215,28 @@ mod tests {
         assert!(rx.recv_timeout(Duration::from_millis(100)).is_err(), "B espera enquanto as duas vagas estão ocupadas");
         global.release();
         assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), "B-b1");
+        global.release();
+        global.release();
+    }
+
+    #[test]
+    fn fila_sem_vaga_espera_em_vez_de_girar() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let passes = Arc::new(AtomicUsize::new(0));
+        let counted = passes.clone();
+        let memory = Arc::new(move || {
+            counted.fetch_add(1, Ordering::Relaxed);
+            mem(64, 64)
+        });
+        let global = Global::new(Resources { cpus: Some(2), memory });
+        global.request("A", "a1", || {});
+        global.request("A", "a2", || {});
+        thread::sleep(Duration::from_millis(100));
+        let before = passes.load(Ordering::Relaxed);
+        thread::sleep(Duration::from_millis(1000));
+        let during = passes.load(Ordering::Relaxed) - before;
+        assert!(during <= 10, "{during} passes em 1 s com a vaga ocupada");
         global.release();
         global.release();
     }
