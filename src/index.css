@@ -278,3 +278,55 @@ body {
 .compare-mark:focus-visible {
   outline: 1px solid #007fd4;
 }
+
+/* Avisos no estilo do `message` do antd, sobre o Toast do Lobe UI: pílula do tamanho do texto, centrada, sem fechar, e sempre em
+   lista (a pilha recolhida do Lobe vira a posição expandida). `--toast-offset-y` e `--toast-height` vêm da Base UI. */
+.app-toasts {
+    --toast-width: min(560px, calc(100vw - 32px));
+    /* Abaixo da barra de título (36 px, titlebar.tsx), com 8 px de folga. */
+    --toast-viewport-offset-y: 44px;
+}
+/* `html` vence a regra do Lobe, injetada depois com a mesma especificidade. */
+html .app-toasts > :is([role="dialog"], [role="alertdialog"]) {
+    --toast-gap: 8px;
+    width: fit-content;
+    max-width: 100%;
+    height: var(--toast-height);
+    margin-inline: auto;
+    padding: 8px 12px;
+    border-radius: 8px;
+    transform: translateX(var(--toast-swipe-movement-x))
+        translateY(calc(var(--toast-swipe-movement-y) + var(--toast-offset-y) + var(--toast-index) * var(--toast-gap)));
+}
+html .app-toasts > :is([role="dialog"], [role="alertdialog"])[data-starting-style],
+html .app-toasts > :is([role="dialog"], [role="alertdialog"])[data-ending-style] {
+    transform: translateY(-8px);
+}
+html .app-toasts > :is([role="dialog"], [role="alertdialog"]) > div {
+    opacity: 1;
+    pointer-events: auto;
+}
+html .app-toasts > :is([role="dialog"], [role="alertdialog"]) > div > div {
+    gap: 8px;
+    align-items: center;
+}
+html .app-toasts > :is([role="dialog"], [role="alertdialog"]) svg {
+    width: 16px;
+    height: 16px;
+}
+html .app-toasts > :is([role="dialog"], [role="alertdialog"]) h2 {
+    font-size: 13px;
+    font-weight: 400;
+}
+html .app-toasts > :is([role="dialog"], [role="alertdialog"]) p {
+    margin-block-start: 0 !important;
+    font-size: 12px;
+}
+html .app-toasts > :is([role="dialog"], [role="alertdialog"]) button {
+    display: none;
+}
+html .app-toasts > :is([role="dialog"], [role="alertdialog"]) > div > div > div {
+    flex-direction: row;
+    gap: 8px;
+    align-items: baseline;
+}

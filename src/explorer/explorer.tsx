@@ -864,8 +864,9 @@ export function FilesScreen({
     : 'Você pode restaurar esses itens da Lixeira.';
   return (
     <Flexbox height="100%" className="group/explorer min-h-0">
-      <Flexbox horizontal align="center" gap={2} height={36} paddingInline={12} flex="none">
-        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">Arquivos</Text>
+      <Flexbox horizontal align="center" gap={2} height={36} paddingInline={12} flex="none" className="border-b">
+        {/* Mesmo cinza das abas Alterações e Histórico do Git (#aaaaaa), mais legível que o `type="secondary"` do Text. */}
+        <Text as="h2" ellipsis weight={500} fontSize={12} color="var(--ant-color-text-secondary)" className="min-w-0 flex-1">Arquivos</Text>
         <Flexbox horizontal gap={2} className="opacity-0 transition-opacity group-hover/explorer:opacity-100 group-focus-within/explorer:opacity-100">
           <HeaderAction icon={FilePlus} label="Novo Arquivo..." onClick={() => startCreate('file', barDir())} />
           <HeaderAction icon={FolderPlus} label="Nova Pasta..." onClick={() => startCreate('dir', barDir())} />
@@ -876,10 +877,10 @@ export function FilesScreen({
       {/* Seção do projeto, como a da pasta no VS Code: recolhe a árvore inteira. */}
       <button
         type="button" aria-expanded={!collapsed} onClick={() => setCollapsed((v) => !v)}
-        className="flex h-[22px] flex-none cursor-pointer items-center gap-1 px-2 text-left text-xs font-semibold text-foreground outline-none hover:bg-[var(--ant-color-fill-tertiary)] focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="mt-1 flex h-[22px] flex-none cursor-pointer items-center gap-1 px-2 text-left text-[13px] font-medium text-foreground outline-none hover:bg-[var(--ant-color-fill-tertiary)] focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <ChevronRight aria-hidden="true" className={`size-4 shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
-        <span className="truncate" title={project}>{project}</span>
+        <span className="truncate leading-[22px]" title={project}>{project}</span>
       </button>
       {/* Cobre o resto do painel: tabIndex deixa o clique na área vazia focar o painel (sem anel, para não parecer um campo). */}
       <Flexbox

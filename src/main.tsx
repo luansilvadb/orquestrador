@@ -3,6 +3,7 @@ import { ConfigProvider, ThemeProvider } from '@lobehub/ui';
 import { closeContextMenu, ContextMenuHost, ModalHost, ToastHost } from '@lobehub/ui/base-ui';
 import { motion } from 'motion/react';
 import { App } from './App';
+import { showFieldMenu } from './shared/field-menu';
 import './index.css';
 
 // Clique fora fecha o menu de contexto aberto. O overlay inerte da biblioteca não fecha o menu no pointerdown externo; a escuta em captura chama a API pública.
@@ -17,12 +18,22 @@ window.addEventListener(
   true,
 );
 
-// Avisos em português. A região dos avisos da Base UI se chama "Notifications" e o fechar do Toast do Lobe UI, "Close", fixos no código das
-// bibliotecas, sem prop para trocar: o observador troca os rótulos assim que as regiões e os avisos aparecem. Cada aviso (`dialog`) já tem o
-// título como nome (`aria-labelledby`); um sem título ganharia o texto como nome. Até o ToastHost montar as regiões, o observador olha a
-// árvore toda; depois, só as regiões, que ficam montadas enquanto o app roda.
+// Sem o menu de contexto do WebView (Voltar, Atualizar, Salvar como, Imprimir, Inspecionar): o app se comporta como nativo. Campos de texto
+// ganham o menu de edição do app; o textarea oculto do xterm não conta. Os menus do app (`ContextMenuTrigger`) abrem antes e marcam o evento.
+window.addEventListener('contextmenu', (event) => {
+  const wasHandled = event.defaultPrevented;
+  event.preventDefault();
+  const field = event.target instanceof Element ? event.target.closest('input, textarea') : null;
+  if (wasHandled || !(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
+  if (field.classList.contains('xterm-helper-textarea') || field.selectionStart === null) return;
+  showFieldMenu(field);
+});
+
+// Avisos em português. A região dos avisos da Base UI se chama "Notifications", fixo no código da biblioteca, sem prop para trocar: o
+// observador troca o rótulo assim que as regiões aparecem. Cada aviso (`dialog`) já tem o título como nome (`aria-labelledby`); um sem
+// título ganharia o texto como nome. Até o ToastHost montar as regiões, o observador olha a árvore toda; depois, só as regiões, que ficam
+// montadas enquanto o app roda. O fechar do Lobe UI fica escondido pelo CSS (`.app-toasts` em index.css).
 const fixToasts = () => {
-  for (const close of document.querySelectorAll('[aria-label="Notificações"] button[aria-label="Close"]')) close.setAttribute('aria-label', 'Fechar');
   for (const item of document.querySelectorAll('[aria-label="Notificações"] [role="dialog"]:not([aria-labelledby]):not([aria-label])')) {
     item.setAttribute('aria-label', item.textContent?.trim() ?? '');
   }
@@ -51,7 +62,7 @@ createRoot(document.getElementById('root')!).render(
   <ThemeProvider themeMode="dark" appearance="dark" enableCustomFonts={false} theme={antdTheme}>
     <ConfigProvider motion={motion}>
       <App />
-      <ToastHost />
+      <ToastHost className="app-toasts" position="top" swipeDirection="up" />
       <ModalHost />
       <ContextMenuHost />
     </ConfigProvider>

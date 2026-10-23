@@ -318,3 +318,22 @@ scenario('linha longa quebra na largura do editor, sem rolagem horizontal', asyn
   assert.ok(g.lineH > 19, `linha longa em mais de uma linha visual (${g.lineH} px)`);
   await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'editor-style-wrap.png') });
 });
+
+scenario('linha recuada quebra no recuo dela, como o wrappingIndent "same" do VS Code', async ({ page }) => {
+  await open(page, 'linha-recuada.txt', `inicio\n${' '.repeat(6)}${'palavra '.repeat(200)}\nfim\n`);
+  const g = await page.evaluate(() => {
+    const line = document.querySelectorAll('.cm-content:not([aria-hidden]) .cm-line')[1];
+    const text = line.firstChild;
+    const at = (i) => { const r = document.createRange(); r.setStart(text, i); r.setEnd(text, i + 1); return r.getBoundingClientRect(); };
+    const all = document.createRange();
+    all.selectNodeContents(line);
+    // Uma entrada por linha visual: o menor `left` de cada `top`.
+    const rows = new Map();
+    for (const r of all.getClientRects()) if (r.width > 0) rows.set(Math.round(r.top), Math.min(rows.get(Math.round(r.top)) ?? Infinity, r.left));
+    return { first: at(6).left, rows: [...rows.values()], lineLeft: line.getBoundingClientRect().left, charW: at(6).width };
+  });
+  assert.ok(g.rows.length > 2, `linha em várias linhas visuais (${g.rows.length})`);
+  // Seis espaços: o texto começa na coluna 6, e cada continuação também.
+  assert.ok(Math.abs(g.first - g.lineLeft - 6 * g.charW) < 1, `texto na coluna 6 (${g.first - g.lineLeft} px)`);
+  for (const left of g.rows.slice(1)) assert.ok(Math.abs(left - g.first) < 1, `continuação em ${left}, texto em ${g.first}`);
+});

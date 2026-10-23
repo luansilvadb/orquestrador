@@ -7,6 +7,7 @@ import { Flexbox } from '@lobehub/ui';
 import { ArrowLeft, Cloud, GitBranch, RefreshCw, Tag, Target } from 'lucide-react';
 import { FileIcon } from '../shared/file-icon';
 import { splitPath } from '../shared/paths';
+import { spinIcon } from '../shared/spin';
 import { KIND_COLOR } from '../explorer/explorer-decorations';
 import { message } from '../backend/backend';
 import { useBackend } from '../backend/backend-context';
@@ -311,8 +312,8 @@ export function HistoryPanel({
         {inDetail && (
           <ActionIcon size="small" variant="borderless" icon={ArrowLeft} aria-label="Voltar à lista de commits" title="Voltar à lista" onClick={closeCommit} />
         )}
-        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">{inDetail ? 'Commit' : 'Histórico'}</Text>
-        {!inDetail && <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar o histórico" title="Atualizar o histórico" onClick={() => reload(scope)} />}
+        <Text as="h2" ellipsis weight={500} fontSize={12} color="var(--ant-color-text-secondary)" className="min-w-0 flex-1">{inDetail ? 'Commit' : 'Histórico'}</Text>
+        {!inDetail && <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar o histórico" title="Atualizar o histórico" onClick={(e) => { spinIcon(e.currentTarget); reload(scope); }} />}
       </Flexbox>
       {!inDetail && scope && (
         <Flexbox horizontal align="center" gap={6} paddingInline={12} paddingBlock={4}>

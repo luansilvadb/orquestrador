@@ -813,8 +813,8 @@ export function SearchScreen({
 
   return (
     <Flexbox height="100%" className="min-h-0">
-      <Flexbox horizontal align="center" gap={2} height={36} paddingInline={12} flex="none">
-        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">Pesquisar</Text>
+      <Flexbox horizontal align="center" gap={2} height={36} paddingInline={12} flex="none" className="border-b">
+        <Text as="h2" ellipsis weight={500} fontSize={12} color="var(--ant-color-text-secondary)" className="min-w-0 flex-1">Pesquisar</Text>
         <HeaderAction icon={RotateCw} label="Atualizar" disabled={!form.query} spin={pending} onClick={() => now(form)} />
         <HeaderAction icon={ListX} label="Limpar os Resultados da Pesquisa" disabled={!canClear} onClick={clear} />
         <HeaderAction
@@ -888,7 +888,8 @@ export function SearchScreen({
               />
               <ActionIcon
                 size="small" variant="borderless" icon={ReplaceAll} aria-label="Substituir Tudo" title="Substituir Tudo (Ctrl+Alt+Enter)"
-                disabled={!form.query || !files.length || applying} loading={applying} onClick={() => void replaceIn(null)} className={FOCUS}
+                disabled={!form.query || !files.length || applying} onClick={() => void replaceIn(null)}
+                className={FOCUS} aria-busy={applying || undefined}
               />
             </div>
           )}

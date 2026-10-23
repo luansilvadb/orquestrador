@@ -202,6 +202,8 @@ const updateText = (status: UpdateStatus, fatal: boolean) => {
   }
 };
 
+// Ação destrutiva do diálogo de fechar: texto vermelho com borda vermelha escura, mais leve que a borda `colorError` do `danger`.
+const DANGER_SOFT = { borderColor: 'var(--ant-color-error-border)' };
 const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
 
 // Layout da janela guardado por projeto (texto opaco na recuperação do editor). Lê com desconfiança: o que não for número vira o padrão,
@@ -1293,33 +1295,33 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
       <Modal
         open={closeAsk !== null}
         title={closeFiles.length > 0 ? 'Fechar com alterações não salvas?' : closeAsk?.projectWork ? 'Fechar o projeto?' : 'Fechar o Orquestrador?'}
-        width={480}
+        width={420}
         closable={false}
         keyboard
         maskClosable
         onCancel={() => settleClose('cancel')}
         style={{ border: '1px solid var(--ant-color-border)', boxShadow: 'var(--ant-box-shadow-secondary)' }}
         styles={{
-          header: { padding: '24px 24px 0', minHeight: 0 },
+          header: { padding: '20px 20px 0', minHeight: 0 },
           title: { fontSize: 16, fontWeight: 600, lineHeight: 1.4 },
-          body: { padding: '8px 24px 24px' },
-          footer: { padding: '16px 24px', borderTop: '1px solid var(--ant-color-border)' },
+          body: { padding: '6px 20px 20px' },
+          footer: { padding: '0 20px 20px' },
         }}
         footer={(
           <Flexbox horizontal wrap="wrap" justify="flex-end" gap={8} width="100%">
             {/* Foco inicial no Cancelar: Enter recusa o fechamento, e nunca encerra os terminais por engano. */}
-            <Button size="large" autoFocus disabled={closeSaving} onClick={() => settleClose('cancel')}>Cancelar</Button>
+            <Button autoFocus disabled={closeSaving} onClick={() => settleClose('cancel')}>Cancelar</Button>
             {closeFiles.length > 0 ? (
               <>
-                <Button size="large" danger disabled={closeSaving} onClick={() => settleClose('discard')}>
+                <Button danger disabled={closeSaving} style={DANGER_SOFT} onClick={() => settleClose('discard')}>
                   {closeAsk?.terminals ? 'Descartar e encerrar todos' : 'Descartar'}
                 </Button>
-                <Button size="large" type="fill" loading={closeSaving} onClick={() => settleClose('save')}>
+                <Button type="fill" loading={closeSaving} onClick={() => settleClose('save')}>
                   {closeSaving ? 'Salvando…' : closeAsk?.terminals ? 'Salvar e encerrar todos' : 'Salvar'}
                 </Button>
               </>
             ) : (
-              <Button size="large" type="fill" danger disabled={closeSaving} onClick={() => settleClose('close')}>
+              <Button danger disabled={closeSaving} style={DANGER_SOFT} onClick={() => settleClose('close')}>
                 {closeAsk?.projectWork ? 'Fechar projeto e encerrar' : 'Fechar e encerrar todos'}
               </Button>
             )}
@@ -1351,8 +1353,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
               </Text>
             ) : (
               <Text as="p" fontSize={14} lineHeight={1.6} style={{ ...SECONDARY, margin: 0, overflowWrap: 'anywhere' }}>
-                Há terminais do orquestrador ou de executores em execução. Fechar encerra todos os terminais, inclusive os shells: o trabalho
-                dos executores para no meio, e a conversa do orquestrador vai junto com o terminal dele.
+                Todos os terminais serão encerrados, inclusive os shells. O trabalho dos executores para no meio.
               </Text>
             )
           )}

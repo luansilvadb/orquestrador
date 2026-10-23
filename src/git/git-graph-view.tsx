@@ -10,6 +10,7 @@ import { useBackend } from '../backend/backend-context';
 import { CommitFileList, note, type OpenCommitTarget, PAGE, RefBadge, relativeDate, useCommitDetail, usePagedList, when } from './git-history';
 import { copy } from '../shared/paths';
 import { type GraphLine, type GraphRow, layoutGraph } from './git-graph';
+import { flyIcon, spinIcon } from '../shared/spin';
 import type { TabTarget } from '../editor/workspace-model';
 import type { GitCommitHoverDetail, GraphCommit } from '../backend/types';
 
@@ -18,6 +19,9 @@ import type { GitCommitHoverDetail, GraphCommit } from '../backend/types';
 const LANE = 11;
 const ROW = 22;
 const FILE_ROW = 22;
+// Ações dos cabeçalhos de seção (Grafo, Preparadas, Alterações): 22 px, a altura do cabeçalho, com ícone de 14 px; o `small` do Lobe
+// tem 24 px e passava da linha.
+export const SECTION_ACTION = { blockSize: 22, size: 14, borderRadius: 4 } as const;
 // Altura da seção aberta. O gráfico e a lista de arquivos não descem do mínimo ao arrastar o divisor; setas andam de 16 em 16.
 export const GRAPH_MIN = 96;
 export const FILES_MIN = 96;
@@ -223,10 +227,12 @@ export function GraphSection({
   const maxFor = (divider: HTMLElement) => ((divider.previousElementSibling as HTMLElement | null)?.clientHeight ?? 0) + sizeOf(divider) - FILES_MIN;
   const clamp = (n: number, max: number) => Math.max(GRAPH_MIN, Math.min(n, max));
 
+  // A seta do ícone voa na direção da ação; sem o `loading` do Lobe, que desliza um spinner para dentro do botão.
   const remoteButton = (kind: GraphRemote, icon: typeof CloudDownload) => (
     <ActionIcon
-      size="small" variant="borderless" icon={icon} disabled={remote[kind].disabled} loading={running === kind}
-      aria-label={remote[kind].label} title={remote[kind].label} onClick={() => onRemote(kind)}
+      size={SECTION_ACTION} variant="borderless" icon={icon} disabled={remote[kind].disabled} aria-busy={running === kind || undefined}
+      aria-label={remote[kind].label} title={remote[kind].label}
+      onClick={(e) => { flyIcon(e.currentTarget, kind === 'push' ? 'up' : 'down'); onRemote(kind); }}
     />
   );
 
@@ -243,8 +249,8 @@ export function GraphSection({
       {remoteButton('pull', ArrowDownToLine)}
       {remoteButton('push', ArrowUpFromLine)}
       <ActionIcon
-        size="small" variant="borderless" icon={RefreshCw} loading={loading}
-        aria-label="Atualizar o gráfico" title="Atualizar o gráfico" onClick={onRefresh}
+        size={SECTION_ACTION} variant="borderless" icon={RefreshCw}
+        aria-label="Atualizar o gráfico" title="Atualizar o gráfico" onClick={(e) => { spinIcon(e.currentTarget); onRefresh(); }}
       />
     </Flexbox>
   );

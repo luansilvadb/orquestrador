@@ -14,6 +14,7 @@ import { showMinimap, type MinimapConfig } from '@replit/codemirror-minimap';
 import { bracketColors } from './bracket-colors';
 import { gitChanges, gitField, gitHunks, minimapGutter, sameGitBase, setGitBase } from './git-gutter';
 import { gitHunkView, gitIndexWriter, gotoGitHunk } from './git-hunk';
+import { wrapIndent } from './wrap-indent';
 import { message } from '../backend/backend';
 import { useBackend } from '../backend/backend-context';
 import type { FormatterInfo } from '../backend/types';
@@ -37,7 +38,7 @@ const ECHO_LIMIT = 64;
 // Medidas e cores do editor do Antigravity (Monaco), tema Dark Modern: texto de 14 px em linhas de 19 px, Consolas no Windows, sem
 // ligaduras (editor.fontLigatures é false por padrão); à esquerda, 19 px da margem de ícones, 31 px dos números (alinhados à direita)
 // e 26 px da dobra, que só aparece com o ponteiro na medianiz (os 6 px da esquerda dela são o gutter do Git, `git-gutter.ts`, e a dobra
-// fica com 20 px, sem o recuo: o ícone e o texto ficam onde estavam); a linha do cursor tem só uma borda, sem fundo. As cores são fixas (hex),
+// fica com 20 px, sem o recuo: o ícone e o texto ficam onde estavam); a linha do cursor fica sem borda e sem fundo. As cores são fixas (hex),
 // de dark_modern.json, dark_vs.json e do bundle do workbench (ver docs/interface.md, "Cores e fontes do editor"): não herdam os tokens
 // do antd, que mudam com o tema da interface. As barras de rolagem têm 14 px (vertical) e 12 px (horizontal), quadradas.
 const darkTheme = EditorView.theme({
@@ -75,7 +76,7 @@ const darkTheme = EditorView.theme({
   '.cm-foldGutter .cm-gutterElement': { width: '20px', opacity: '0', transition: 'opacity 0.1s' },
   '.cm-gutters:hover .cm-foldGutter .cm-gutterElement': { opacity: '1' },
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: '#CCCCCC' },
-  '.cm-activeLine': { backgroundColor: 'transparent', boxShadow: 'inset 0 0 0 2px #282828' },
+  '.cm-activeLine': { backgroundColor: 'transparent' },
   '&.cm-focused': { outline: 'none' },
   // Seleção com foco é #264F78 e sem foco é #3A3D41 (inactiveSelectionBackground). O seletor com `&.cm-focused` precisa ser o mesmo
   // do CodeMirror, que tem mais especificidade e venceria um seletor simples.
@@ -146,8 +147,9 @@ const basicExtensions = [
   darkTheme,
   syntaxHighlighting(darkHighlight),
   bracketColors,
-  // Quebra visual das linhas longas, sem rolagem horizontal.
+  // Quebra visual das linhas longas, sem rolagem horizontal; a continuação fica no recuo da linha.
   EditorView.lineWrapping,
+  wrapIndent,
   // Marcadores de mudança do Git (gutter, barra de rolagem e minimap). Sem base (rascunho, conflito), o gutter fica vazio, com a mesma largura.
   gitChanges(COLOR_LIMIT),
   // Bloco aberto do marcador (clique no gutter, Alt+F5): linhas antigas, Preparar, Restaurar e navegação. Fechado, não desenha nada.

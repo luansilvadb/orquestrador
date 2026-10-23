@@ -4,17 +4,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, DropdownMenu, Input, Popover, TabsIndicator, TabsList, TabsRoot, TabsTab, Text, TextArea, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, GitBranch, LoaderCircle, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, GitBranch, LoaderCircle, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
 import { message } from '../backend/backend';
 import { useBackend } from '../backend/backend-context';
 import { FileIcon } from '../shared/file-icon';
 import { KIND_COLOR } from '../explorer/explorer-decorations';
-import { GraphSection, type GraphRemote } from './git-graph-view';
+import { GraphSection, type GraphRemote, SECTION_ACTION } from './git-graph-view';
 import { HistoryPanel, type HistoryRequest, KIND, type OpenCommitTarget } from './git-history';
 import { splitPath } from '../shared/paths';
 import { usePolling } from '../shared/polling';
 import type { DiffSide, TabTarget } from '../editor/workspace-model';
 import type { GitGuard } from './git-guard';
+import { spinIcon } from '../shared/spin';
 import type { GitBranches, GitFile, GitKind, GitState, GitStatus } from '../backend/types';
 
 const LOCKED_TITLE = 'Há executores trabalhando. Espere o lote terminar.';
@@ -112,7 +113,7 @@ type RowActions = {
 };
 
 /**
- * Controle de versão: cabeçalho com atualizar e o menu de Buscar, Receber e Enviar; a branch; o commit; e as duas seções.
+ * Controle de versão: cabeçalho com atualizar; a branch; o commit; e as duas seções.
  * Fica montado mesmo com o histórico na frente: a mensagem digitada e os recolhidos não se perdem.
  */
 function ChangesPanel({
@@ -163,15 +164,12 @@ function ChangesPanel({
   const unstaged = status.files.filter((f) => f.unstaged);
   const canCommit = !!text.trim() && staged.length > 0 && !busy;
   const hint = !staged.length ? 'Prepare arquivos para commitar' : !text.trim() ? 'Escreva a mensagem do commit' : '';
-  // Buscar, Receber e Enviar: o menu do cabeçalho e os botões do gráfico usam o mesmo rótulo e a mesma trava.
+  // Buscar, Receber e Enviar: os botões do cabeçalho do gráfico, com a contagem no rótulo e a trava.
   const remoteActions: Record<GraphRemote, { label: string; disabled: boolean }> = {
     fetch: { label: 'Buscar', disabled: busy !== null },
     pull: { label: status.behind > 0 ? `Receber (${commits(status.behind)})` : 'Receber', disabled: busy !== null || locked },
     push: { label: status.ahead > 0 ? `Enviar (${commits(status.ahead)})` : 'Enviar', disabled: busy !== null },
   };
-  const remoteMenu = (['fetch', 'pull', 'push'] as const).map((key) => ({
-    key, label: remoteActions[key].label, disabled: remoteActions[key].disabled, onClick: () => void remote(key),
-  }));
   const running = busy === 'fetch' || busy === 'pull' || busy === 'push' ? busy : null;
   // Depois de Buscar, Receber, Enviar ou commit, o gráfico recarrega junto com o status.
   const refreshWithGraph = async () => {
@@ -203,7 +201,7 @@ function ChangesPanel({
   }, refreshWithGraph));
 
   // Commit, e depois o push. O push só sai se o commit deu certo: commit com erro mantém a mensagem e não envia.
-  // Commit feito limpa a mensagem mesmo se o envio falhar, para ninguém commitar o mesmo texto de novo; Enviar no menu tenta só o envio.
+  // Commit feito limpa a mensagem mesmo se o envio falhar, para ninguém commitar o mesmo texto de novo; Enviar no gráfico tenta só o envio.
   // A limpeza só vale se o texto ainda é o enviado: o que foi digitado durante o commit fica.
   async function commit(then: CommitMode) {
     if (!canCommit) return;
@@ -218,7 +216,7 @@ function ChangesPanel({
             const out = await backend.gitPush();
             toast.success({ title: remoteCalls.push.done, description: lastLine(out), duration: 3000 });
           }, refreshWithGraph);
-          if (!pushed) toast.warning({ title: 'Commit criado, mas o envio falhou', description: 'Use Enviar no menu para tentar de novo. Não precisa commitar outra vez.', duration: 7000 });
+          if (!pushed) toast.warning({ title: 'Commit criado, mas o envio falhou', description: 'Use Enviar no gráfico para tentar de novo. Não precisa commitar outra vez.', duration: 7000 });
         } else {
           toast.success({ title: 'Commit criado', duration: 3000 });
         }
@@ -265,14 +263,8 @@ function ChangesPanel({
   return (
     <Flexbox className="min-h-0" flex={1}>
       <Flexbox horizontal align="center" gap={2} paddingInline={12} height={36} flex="none">
-        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary" className="min-w-0 flex-1">Controle do Código-Fonte</Text>
-        <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar status" title="Atualizar status do Git" onClick={() => void refresh()} />
-        <DropdownMenu items={remoteMenu} placement="bottomRight">
-          <ActionIcon
-            size="small" variant="borderless" icon={Ellipsis} loading={busy === 'fetch' || busy === 'pull' || busy === 'push'}
-            aria-label="Mais opções: buscar, receber e enviar" title="Buscar, receber e enviar"
-          />
-        </DropdownMenu>
+        <Text as="h2" ellipsis weight={500} fontSize={12} color="var(--ant-color-text-secondary)" className="min-w-0 flex-1">Controle do Código-Fonte</Text>
+        <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar status" title="Atualizar status do Git" onClick={(e) => { spinIcon(e.currentTarget); void refresh(); }} />
       </Flexbox>
 
       <Flexbox paddingInline={12} gap={2}>
@@ -286,8 +278,9 @@ function ChangesPanel({
             <ArrowDown className="inline size-3 align-[-1px]" aria-hidden />{status.behind}
           </Text>
         </Flexbox>
-        {(busy || locked) && (
-          <Text as="p" role="status" fontSize={12} type="secondary">{busy ? BUSY_TEXT[busy] : LOCKED_TITLE}</Text>
+        {/* Buscar, Receber e Enviar já giram no próprio botão e terminam num aviso: sem texto aqui. */}
+        {((busy && !running) || locked) && (
+          <Text as="p" role="status" fontSize={12} type="secondary">{busy && !running ? BUSY_TEXT[busy] : LOCKED_TITLE}</Text>
         )}
       </Flexbox>
 
@@ -526,7 +519,7 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
           <span className="ml-auto shrink-0 rounded-full bg-[var(--ant-color-fill-secondary)] px-[5px] text-[11px] leading-[18px] tabular-nums">{files.length}</span>
         </button>
         <ActionIcon
-          size="small" variant="borderless" icon={staged ? Minus : Plus} disabled={busy || !files.length}
+          size={SECTION_ACTION} variant="borderless" icon={staged ? Minus : Plus} disabled={busy || !files.length}
           aria-label={allLabel} title={allLabel} onClick={() => actions.stageAll(side)}
         />
       </Flexbox>
