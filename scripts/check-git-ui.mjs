@@ -291,6 +291,8 @@ scenario('comparador: o arquivo inteiro numa visão só, com linhas antes, entre
   await view(page).waitFor();
   assert.equal(await page.locator('[data-body]:visible .compare-stage diffs-container').count(), 1, 'um só motor de diff para o arquivo');
   const modes = () => page.locator('[data-body]:visible pre[data-diff-type]').evaluateAll((els) => els.map((el) => el.getAttribute('data-diff-type')));
+  // O motor desenha depois de montar: sob carga, ler na hora acha a lista vazia.
+  await page.locator('[data-body]:visible pre[data-diff-type]').first().waitFor();
   const initial = await modes();
   assert.ok(initial.length > 0 && initial.every((m) => m === 'split'), `padrão lado a lado: ${initial}`);
   const split = await engineRows(page);
@@ -433,7 +435,8 @@ const contrast = (a, b) => {
   return (hi + 0.05) / (lo + 0.05);
 };
 // Mede a proporção nas caixas de texto (as calhas numéricas são trilhas separadas); o vão começa após o texto esquerdo e termina na calha direita.
-const splitGeo = (page) => stage(page).evaluate((stage) => {
+// O motor desenha no shadow DOM depois de montar: o locator atravessa o shadow e espera as colunas antes de medir.
+const splitGeo = async (page) => { await stage(page).locator('pre[data-diff-type] [data-additions] [data-content]').first().waitFor(); return stage(page).evaluate((stage) => {
   const root = stage.querySelector('diffs-container').shadowRoot;
   const pre = root.querySelector('pre[data-diff-type]');
   const delText = pre.querySelector(':scope > [data-deletions] > [data-content]').getBoundingClientRect();
@@ -453,7 +456,7 @@ const splitGeo = (page) => stage(page).evaluate((stage) => {
     stageLeft: s.left,
     stageWidth: s.width,
   };
-});
+}); };
 // Ponto do divisor no meio da parte visível do corpo, e se nele o clique cai no divisor (e não no texto do motor).
 const sashPoint = (page) => body(page).evaluate((el) => {
   const box = el.getBoundingClientRect();

@@ -9,8 +9,18 @@ import assert from 'node:assert/strict';
 import { OUT, uiSuite, openApp, expand, treeItem, tabs, tabTitles, editorText, focusEditor, columnPoint, primaryCursor } from './editor-ui-harness.mjs';
 
 
-// Geometria real da faixa: área visível (scroll), ações do editor à direita, aba ativa e o X dela.
+// Geometria real da faixa: área visível (scroll), ações do editor à direita, aba ativa e o X dela. Espera até 2 s a rolagem levar a aba
+// ativa para dentro da faixa (sob carga, ela chega depois das pausas fixas); se não chegar, devolve a última medida.
 async function strip(page, group = 'A') {
+  let s;
+  for (let i = 0; i < 40; i++) {
+    s = await measureStrip(page, group);
+    if (!s?.active || (s.active.l >= s.box.l - EPS && s.active.r <= s.box.r + EPS)) break;
+    await page.waitForTimeout(50);
+  }
+  return s;
+}
+function measureStrip(page, group) {
   return page.evaluate((g) => {
     const box = document.querySelector(`[data-group="${g}"] .overflow-x-auto`);
     if (!box) return null;
