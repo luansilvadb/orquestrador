@@ -3,7 +3,7 @@
 use crate::platform::{self, Job, Situacao};
 use std::collections::HashSet;
 use std::path::Path;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 /// Um comando que não abre janela de console (o app é de janela; cada filho abriria a sua).
@@ -95,6 +95,47 @@ pub fn git_completa(dir: &Path, args: &[&str]) -> Result<String, String> {
 /// A saída (stdout) do Git em bytes crus, sem trocar byte inválido: para saber se um conteúdo é UTF-8. Na falha, o erro é o de `run`.
 pub fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     run(dir, args, None).map(|(out, _)| out).map_err(String::from)
+}
+
+/// O `git_bytes` que lê no máximo `limite` bytes da saída: com `limite` bytes lidos, o Git é encerrado e volta só esse
+/// começo. Mede uma saída grande sem guardá-la inteira. O ambiente é o de `run_as`.
+pub fn git_bytes_ate(dir: &Path, args: &[&str], limite: usize) -> Result<Vec<u8>, String> {
+    let mut cmd = quiet("git");
+    cmd.arg("-C")
+        .arg(dir)
+        .args(["--literal-pathspecs", "-c", "core.quotepath=false"])
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_EDITOR", ":")
+        .env("GIT_MERGE_AUTOEDIT", "no")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let ausente = |e: std::io::Error| format!("git não pôde ser executado: {e}");
+    let mut child = cmd.spawn().map_err(ausente)?;
+    // O stderr é lido em outra thread: cheio, ele pararia o Git antes de a saída chegar ao limite.
+    let erro = child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stderr.read_to_end(&mut bytes);
+            bytes
+        })
+    });
+    let mut out = Vec::new();
+    let lido = child.stdout.take().map_or(Ok(0), |stdout| stdout.take(limite as u64).read_to_end(&mut out));
+    let cortado = out.len() >= limite;
+    if cortado {
+        let _ = child.kill();
+    }
+    let status = child.wait().map_err(ausente)?;
+    let err = erro.and_then(|t| t.join().ok()).unwrap_or_default();
+    lido.map_err(|e| format!("Não foi possível ler a saída do git: {e}"))?;
+    if cortado || status.success() {
+        return Ok(out);
+    }
+    let why: Vec<String> = [&err, &out].into_iter().map(|bytes| String::from_utf8_lossy(bytes).trim().to_string()).filter(|s| !s.is_empty()).collect();
+    Err(if why.is_empty() { format!("código {}", status.code().unwrap_or(-1)) } else { why.join("\n") })
 }
 
 /// O Git com `entrada` pela entrada padrão, como o `git apply` que recebe o patch. Na falha, o erro é o de `run`.
@@ -227,6 +268,18 @@ mod tests {
         let ignorados = git_ignorados(dir, &paths).unwrap();
         assert_eq!(ignorados.len(), 5000);
         assert!(paths.iter().all(|p| ignorados.contains(p)));
+    }
+
+    #[test]
+    fn leitura_limitada_corta_a_saida_e_traz_o_erro_do_git() {
+        let dir = &Tmp::new("orq-proc", "limitada").0;
+        git(dir, &["init", "-q"]);
+        write(dir, "a.txt", "x".repeat(10_000));
+        let objeto = git(dir, &["hash-object", "-w", "a.txt"]);
+        let objeto = objeto.trim();
+        assert_eq!(git_bytes_ate(dir, &["cat-file", "blob", objeto], 100).unwrap(), vec![b'x'; 100]);
+        assert_eq!(git_bytes_ate(dir, &["cat-file", "blob", objeto], 20_000).unwrap().len(), 10_000);
+        assert!(git_bytes_ate(dir, &["cat-file", "blob", "nao-existe"], 100).unwrap_err().contains("nao-existe"));
     }
 
     #[cfg(windows)]

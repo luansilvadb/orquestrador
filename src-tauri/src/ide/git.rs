@@ -221,7 +221,7 @@ fn snapshot(dir: &Path, rel: &str, staged: bool) -> Result<Lido, String> {
         return Ok(Lido { raw: diff.patch.clone().into_bytes(), diff, untracked: true });
     }
     let raw = raw_diff(dir, rel, staged, CONTEXTO_BLOCO)?;
-    Ok(Lido { diff: read_diff(&String::from_utf8_lossy(&raw)), raw, untracked: false })
+    Ok(Lido { diff: read_diff(&raw), raw, untracked: false })
 }
 
 /// Contexto do diff que vira bloco: o padrão do Git. A revisão e as ações por bloco dependem dele.
@@ -230,18 +230,29 @@ const CONTEXTO_BLOCO: &str = "-U3";
 const CONTEXTO_TODO: &str = "-U1000000";
 
 /// O diff bruto de `rel`, em bytes, como o Git escreve (sem `read_diff`): o que vai ao `git apply` não passa pela troca
-/// de byte inválido. Sua impressão digital é a revisão que a UI devolve.
+/// de byte inválido. Sua impressão digital é a revisão que a UI devolve. A leitura para em `MAX_DIFF + 1` bytes: diff
+/// maior só vira o aviso, então o resto nem é lido.
 fn raw_diff(dir: &Path, rel: &str, staged: bool, contexto: &str) -> Result<Vec<u8>, String> {
+    proc::git_bytes_ate(dir, &diff_args(rel, staged, contexto), MAX_DIFF + 1)
+}
+
+fn diff_args<'a>(rel: &'a str, staged: bool, contexto: &'a str) -> Vec<&'a str> {
     let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", contexto];
     if staged {
         args.push("--cached");
     }
     args.extend(["--", rel]);
-    proc::git_bytes(dir, &args)
+    args
 }
 
-/// A saída do `git diff`: binário e diff grande viram aviso; o resto segue como patch, sem mexer no texto.
-fn read_diff(text: &str) -> Diff {
+/// A revisão de um diff bruto inteiro: a impressão digital do que `raw_diff` leria dele.
+fn revisao(raw: &[u8]) -> String {
+    files::fingerprint(&raw[..raw.len().min(MAX_DIFF + 1)])
+}
+
+/// A saída do `git diff`: binário e diff grande viram aviso; o resto segue como patch, com a troca de byte inválido.
+fn read_diff(raw: &[u8]) -> Diff {
+    let text = String::from_utf8_lossy(raw);
     if text.lines().any(|l| l.starts_with("Binary files ")) {
         return Diff { binary: true, too_large: false, patch: String::new() };
     }
@@ -319,26 +330,41 @@ pub fn commit(dir: &Path, message: &str) -> Result<(), String> {
 
 /// Busca do remoto. Devolve a saída do Git.
 pub fn fetch(dir: &Path) -> Result<String, String> {
-    remotes(dir)?;
-    proc::git_completa(dir, &["fetch"])
+    proc::git_completa(dir, &rede(dir, Rede::Fetch)?)
 }
 
 /// `git pull` simples: respeita a configuração do usuário, e sem editor para o commit de merge.
 pub fn pull(dir: &Path) -> Result<String, String> {
-    remotes(dir)?;
-    proc::git_completa(dir, &["pull"])
+    proc::git_completa(dir, &rede(dir, Rede::Pull)?)
 }
 
 /// Envia a branch. Sem upstream, publica em `origin` e configura o upstream.
 pub fn push(dir: &Path) -> Result<String, String> {
+    proc::git_completa(dir, &rede(dir, Rede::Push)?)
+}
+
+/// Prazo dos comandos de rede: conexão HTTP abaixo de 1000 bytes/s por 30 s é abandonada. Sem ele, uma conexão
+/// pendurada prende o `git` (e, no pull, a fila do projeto) sem fim.
+const PRAZO: [&str; 4] = ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30"];
+
+#[derive(Clone, Copy)]
+enum Rede {
+    Fetch,
+    Pull,
+    Push,
+}
+
+/// Os argumentos do comando de rede, com o `PRAZO` antes do subcomando. Sem remoto, ou push sem upstream e sem `origin`, é erro.
+fn rede(dir: &Path, op: Rede) -> Result<Vec<&'static str>, String> {
     let names = remotes(dir)?;
-    if upstream(dir).is_some() {
-        return proc::git_completa(dir, &["push"]);
-    }
-    if !names.iter().any(|n| n == "origin") {
-        return Err("A branch atual não tem upstream e não há remoto origin para publicá-la.".into());
-    }
-    proc::git_completa(dir, &["push", "-u", "origin", "HEAD"])
+    let sub: &[&'static str] = match op {
+        Rede::Fetch => &["fetch"],
+        Rede::Pull => &["pull"],
+        Rede::Push if upstream(dir).is_some() => &["push"],
+        Rede::Push if names.iter().any(|n| n == "origin") => &["push", "-u", "origin", "HEAD"],
+        Rede::Push => return Err("A branch atual não tem upstream e não há remoto origin para publicá-la.".into()),
+    };
+    Ok(PRAZO.iter().chain(sub).copied().collect())
 }
 
 /// Os nomes dos remotos. Sem nenhum, nada de sincronizar.
@@ -530,7 +556,7 @@ pub fn review_diff(dir: &Path, rel: &str, staged: bool) -> Result<ReviewDiff, St
         if lido.untracked || lido.diff.binary || lido.diff.too_large {
             return Ok(ReviewDiff { revision, display: lido.diff.clone(), diff: lido.diff, untracked: lido.untracked });
         }
-        let display = read_diff(&String::from_utf8_lossy(&raw_diff(dir, rel, staged, CONTEXTO_TODO)?));
+        let display = read_diff(&raw_diff(dir, rel, staged, CONTEXTO_TODO)?);
         if files::fingerprint(&raw_diff(dir, rel, staged, CONTEXTO_BLOCO)?) == revision {
             return Ok(ReviewDiff { revision, display, diff: lido.diff, untracked: false });
         }
@@ -625,11 +651,12 @@ fn discard_patch(dir: &Path, rel: &str, revision_seen: &str) -> Result<Option<Ve
     if !tracked_file(dir, rel)? {
         return Err(format!("{rel} não está rastreado: o Git não o descarta. Mande-o para a Lixeira pela tela."));
     }
-    let raw = raw_diff(dir, rel, false, CONTEXTO_BLOCO)?;
-    if files::fingerprint(&raw) != revision_seen {
+    // O patch inteiro: o `git apply -R` precisa dele, mesmo quando a tela só mostrou o aviso de diff grande.
+    let raw = proc::git_bytes(dir, &diff_args(rel, false, CONTEXTO_BLOCO))?;
+    if revisao(&raw) != revision_seen {
         return Err(stale(rel));
     }
-    Ok((!read_diff(&String::from_utf8_lossy(&raw)).binary).then_some(raw))
+    Ok((!read_diff(&raw).binary).then_some(raw))
 }
 
 /// Desfaz o patch conferido com `git apply -R`: uma gravação depois da conferência que muda o trecho faz o Git recusar
@@ -775,22 +802,23 @@ fn resolve_commit(dir: &Path, id: &str) -> Result<String, String> {
 /// Cabeçalho do commit e os arquivos que ele mudou. Commit raiz também lista tudo como adicionado.
 pub fn commit_detail(dir: &Path, id: &str) -> Result<CommitDetail, String> {
     let hash = resolve_commit(dir, id)?;
-    let commit = parse_graph(&proc::git_saida(dir, &["show", "-s", GRAPH_FORMAT, &hash])?)
+    let commit = cabecalho(dir, id, &hash)?;
+    Ok(CommitDetail { commit, files: commit_files(dir, &hash)? })
+}
+
+/// O cabeçalho do commit `hash` (já resolvido de `id`), como o histórico o mostra.
+fn cabecalho(dir: &Path, id: &str, hash: &str) -> Result<Commit, String> {
+    parse_graph(&proc::git_saida(dir, &["show", "-s", GRAPH_FORMAT, hash])?)
         .into_iter()
         .next()
-        .ok_or_else(|| format!("Commit não encontrado: {id}"))?
-        .commit;
-    Ok(CommitDetail { commit, files: commit_files(dir, &hash)? })
+        .map(|graph| graph.commit)
+        .ok_or_else(|| format!("Commit não encontrado: {id}"))
 }
 
 /// Detalhes carregados só quando o usuário abre o hover do gráfico.
 pub fn commit_hover(dir: &Path, id: &str) -> Result<CommitHoverDetail, String> {
     let hash = resolve_commit(dir, id)?;
-    let commit = parse_graph(&proc::git_saida(dir, &["show", "-s", GRAPH_FORMAT, &hash])?)
-        .into_iter()
-        .next()
-        .ok_or_else(|| format!("Commit não encontrado: {id}"))?
-        .commit;
+    let commit = cabecalho(dir, id, &hash)?;
     let message = proc::git_saida(dir, &["show", "-s", "--format=%B", &hash])?;
     let stats = proc::git_saida(
         dir,
@@ -897,7 +925,7 @@ pub fn commit_diff(dir: &Path, id: &str, path: Option<&str>) -> Result<Diff, Str
         "--diff-merges=first-parent", &hash, "--",
     ];
     args.extend(specs.iter().map(String::as_str));
-    Ok(read_diff(&proc::git_saida(dir, &args)?))
+    Ok(read_diff(&proc::git_bytes_ate(dir, &args, MAX_DIFF + 1)?))
 }
 
 /// Estágios de conflito do caminho exato `rel` (1 base, 2 atual, 3 recebido), com os bytes crus dos registros do
@@ -1189,15 +1217,9 @@ pub fn file_base(dir: &Path, rel: &str) -> Result<Option<FileBase>, String> {
     Ok(Some(FileBase { head, index }))
 }
 
-/// `rel` está no índice no estágio 0 como arquivo (não submódulo).
+/// `rel` está no índice no estágio 0 como arquivo (modo `100644`, `100755` ou `120000`; `160000` é submódulo).
 fn index_blob(dir: &Path, rel: &str) -> Result<bool, String> {
-    Ok(index_mode(dir, rel)?.is_some_and(|modo| modo != "160000"))
-}
-
-/// O modo de `rel` no índice no estágio 0 (`100644`, `100755`, `120000`, `160000`), ou `None` quando não há esse estágio.
-/// Registro de `ls-files -s`: `modo SP hash SP estágio TAB caminho`.
-fn index_mode(dir: &Path, rel: &str) -> Result<Option<String>, String> {
-    Ok(index_entry(dir, rel)?.map(|(modo, _)| modo))
+    Ok(index_entry(dir, rel)?.is_some_and(|(modo, _)| modo != "160000"))
 }
 
 /// Modo e hash de `rel` no estágio 0 do índice. Registro de `ls-files -s`: `modo SP hash SP estágio TAB caminho`.
@@ -1499,6 +1521,32 @@ mod tests {
     }
 
     #[test]
+    fn diff_grande_da_pasta_do_indice_e_do_commit_vem_so_com_o_aviso() {
+        let tmp = Tmp::new("orq-git", "diff-grande");
+        let dir = repo(&tmp, "r");
+        let antes = "a\n".repeat(600_000);
+        write(&dir, "grande.json", &antes);
+        commit_all(&dir, "base");
+        let aviso = Diff { binary: false, too_large: true, patch: String::new() };
+
+        write(&dir, "grande.json", "b\n".repeat(600_000));
+        let r = review_diff(&dir, "grande.json", false).unwrap();
+        assert_eq!((&r.diff, &r.display), (&aviso, &aviso));
+        // A revisão de um diff grande é a do começo lido, e o descarte ainda desfaz o patch inteiro.
+        discard_file(&dir, "grande.json", &r.revision).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("grande.json")).unwrap(), antes);
+
+        write(&dir, "grande.json", "c\n".repeat(600_000));
+        git(&dir, &["add", "grande.json"]);
+        assert_eq!(diff(&dir, "grande.json", true).unwrap(), aviso);
+
+        commit_all(&dir, "grande");
+        let hash = git(&dir, &["rev-parse", "HEAD"]);
+        assert_eq!(commit_diff(&dir, hash.trim(), Some("grande.json")).unwrap(), aviso);
+        assert_eq!(commit_diff(&dir, hash.trim(), None).unwrap(), aviso);
+    }
+
+    #[test]
     fn stage_e_unstage_por_arquivo_e_com_lista_vazia() {
         let tmp = Tmp::new("orq-git", "stage");
         let dir = repo(&tmp, "r");
@@ -1692,6 +1740,19 @@ mod tests {
         push(&dir).unwrap();
         assert!(git(&bare, &["branch", "--list", "feature"]).contains("feature"));
         assert_eq!(upstream(&dir).as_deref(), Some("origin/feature"));
+    }
+
+    #[test]
+    fn comandos_de_rede_levam_o_prazo_antes_do_subcomando() {
+        let tmp = Tmp::new("orq-git", "rede-prazo");
+        let (_, dir) = with_remote(&tmp);
+        let com_prazo = |sub: &[&'static str]| PRAZO.iter().chain(sub).copied().collect::<Vec<_>>();
+        assert_eq!(rede(&dir, Rede::Fetch).unwrap(), com_prazo(&["fetch"]));
+        assert_eq!(rede(&dir, Rede::Pull).unwrap(), com_prazo(&["pull"]));
+        assert_eq!(rede(&dir, Rede::Push).unwrap(), com_prazo(&["push"]));
+        git(&dir, &["switch", "-q", "-c", "feature"]);
+        assert_eq!(rede(&dir, Rede::Push).unwrap(), com_prazo(&["push", "-u", "origin", "HEAD"]));
+        assert_eq!(PRAZO, ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30"]);
     }
 
     #[test]
