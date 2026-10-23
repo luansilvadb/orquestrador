@@ -1,5 +1,5 @@
 // Único ponto de contato com o Tauri. Fora do app (navegador, em desenvolvimento) entra o simulado.
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
@@ -19,6 +19,8 @@ export interface Transport {
   setTitle(title: string): Promise<void>;
   /** Chama `handler` a cada mudança de tamanho (maximizar e restaurar entram aqui); responde o cancelamento da escuta. */
   onResized(handler: () => void): Promise<() => void>;
+  /** URL de vídeo para o `<video>`: no app, o protocolo `orq-media` (streaming com Range); `project` null é caminho absoluto. */
+  mediaUrl(path: string, project: string | null): string;
 }
 
 const tauri: Transport = {
@@ -34,6 +36,8 @@ const tauri: Transport = {
   isMaximized: () => getCurrentWindow().isMaximized(),
   setTitle: (title) => getCurrentWindow().setTitle(title),
   onResized: (handler) => getCurrentWindow().onResized(() => handler()),
+  mediaUrl: (path, project) => `${convertFileSrc('video', 'orq-media')}?path=${encodeURIComponent(path)}`
+    + (project === null ? '' : `&project=${encodeURIComponent(project)}`),
 };
 
 let transport: Transport;
@@ -97,6 +101,8 @@ export const projectBackend = (projectId: string | null) => ({
   // Bytes de uma imagem ou áudio (extensão na lista de `files.rs`), como `ArrayBuffer`. Erro chega como mensagem em português; limite de 32 MiB.
   readMedia: (path: string) => absolutePath(path) ? call('read_media_at', { path }) : projectCall(projectId, 'read_media', { path }),
   readMediaAt: (path: string) => call('read_media_at', { path }),
+  // Vídeo não passa pelo IPC: o `<video>` lê a URL em pedaços.
+  mediaUrl: (path: string) => transport.mediaUrl(path, absolutePath(path) ? null : requireProjectId(projectId)),
   formatterInfo: (path: string) => call('formatter_info', { path }),
   formatCli: (path: string, text: string) => call('format_cli', { path, text }),
   // Grava só se o arquivo ainda é `base` (o texto lido, sem BOM) e ainda tem o BOM `bom`; senão rejeita sem gravar.

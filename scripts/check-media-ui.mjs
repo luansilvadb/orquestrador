@@ -1,12 +1,13 @@
-// QA da aba de mídia (imagem e áudio), em Chrome headless contra o app simulado (src/backend/mock.ts, só no `vite` de desenvolvimento).
+// QA da aba de mídia (imagem, áudio e vídeo), em Chrome headless contra o app simulado (src/backend/mock.ts, só no `vite` de desenvolvimento).
 // O simulado entra só na fronteira de I/O: `read_media` devolve um PNG 32×32 para `.png` e um WAV de 2 s em silêncio para
-// `.wav` (`__mock.addFile`); `__mock.failRead` faz a leitura falhar e `__mock.corruptRead` devolve bytes que o navegador não decodifica.
-// Tudo o mais é o app de verdade. O áudio usa o `<audio controls>` nativo do WebView2/Chromium: o check clica nos controles
+// `.wav` (`__mock.addFile`); `mediaUrl` devolve um WebM VP8 64×48 de 2 s para `.webm` (no app, o protocolo `orq-media` com Range);
+// `__mock.failRead` faz a leitura falhar e `__mock.corruptRead` devolve bytes que o navegador não decodifica.
+// Tudo o mais é o app de verdade. Áudio e vídeo usam os controles nativos do WebView2/Chromium: o check clica neles
 // (gesto), e usa a API HTMLMediaElement só onde o controle não expõe o ajuste (posição e volume).
 // Loader compartilhado em editor-ui-harness.mjs: Vite na porta 1421 (SMOKE_PORT), encerrado só aqui. Não instala nada.
 // Uso: node scripts/check-media-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 // Capturas em .playwright-mcp/media-ui-*.png só quando um cenário falha: evidência para leitura humana, não asserção.
-// Limite de codec: o que toca depende do WebView2/Windows; o simulado só prova WAV (PCM) e PNG.
+// Limite de codec: o que toca depende do WebView2/Windows; o simulado só prova WAV (PCM), PNG e WebM VP8 (nem H.264 nem o streaming do protocolo).
 import assert from 'node:assert/strict';
 import { uiSuite, openApp, expand, treeItem, tabs } from './editor-ui-harness.mjs';
 
@@ -199,4 +200,100 @@ scenario('imagem aberta volta na aba depois de recarregar o app', async ({ page 
   await page.locator('[data-tab]').filter({ hasText: 'logo.png' }).first().waitFor();
   await page.waitForFunction(() => document.querySelector('img[alt="logo.png"]')?.naturalWidth > 0);
   assert.equal(await page.locator('.cm-content').count(), 0, 'restaurada sem editor de texto');
+});
+
+// Vídeo: abre na aba sem editor, controles nativos com nome, não toca sozinho, decodifica, cabe no painel e toca e pausa pelo gesto.
+scenario('vídeo abre na aba, decodifica, cabe no painel, não toca sozinho e toca e pausa pelo gesto', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__mock.addFolder('midia');
+    window.__mock.addFile('midia/clipe.webm');
+  });
+  await expand(page, ['midia']);
+  await treeItem(page, 'clipe.webm').dblclick();
+  const video = page.locator('video');
+  await video.waitFor();
+  await page.waitForFunction(() => { const v = document.querySelector('video'); return !!v && v.readyState >= 1 && v.videoWidth > 0; });
+  const attrs = await video.evaluate((v) => ({ controls: v.controls, autoplay: v.autoplay, preload: v.getAttribute('preload'), paused: v.paused, w: v.videoWidth, h: v.videoHeight, duration: v.duration }));
+  assert.equal(attrs.controls, true, 'controles nativos ligados');
+  assert.equal(attrs.autoplay, false, 'sem autoplay');
+  assert.equal(attrs.preload, 'metadata', 'preload metadata');
+  assert.equal(await page.locator('video[aria-label="clipe.webm"]').count(), 1, 'o elemento de vídeo tem o nome do arquivo');
+  assert.equal(attrs.paused, true, 'vídeo não toca sozinho');
+  assert.deepEqual({ w: attrs.w, h: attrs.h }, { w: 64, h: 48 }, 'WebM decodificado com o tamanho do arquivo');
+  assert.ok(Math.abs(attrs.duration - 2) < 0.1, `duração do WebM: ${attrs.duration}`);
+  await page.getByRole('status').filter({ hasText: '64 × 48 px' }).waitFor();
+  assert.equal(await page.locator('.cm-content').count(), 0, 'vídeo não abre editor de texto');
+
+  const fit = await video.evaluate((v) => {
+    const b = v.getBoundingClientRect();
+    const p = v.parentElement.getBoundingClientRect();
+    return { l: b.left - p.left, t: b.top - p.top, r: p.right - b.right, b: p.bottom - b.bottom, h: b.height, fit: getComputedStyle(v).objectFit };
+  });
+  assert.ok(Math.min(fit.l, fit.t, fit.r, fit.b) >= -0.5 && fit.h > 48, `vídeo fora do painel ou sem ocupá-lo: ${JSON.stringify(fit)}`);
+  assert.equal(fit.fit, 'contain', 'o quadro cabe sem cortar');
+  await page.waitForTimeout(300);
+  assert.equal(await video.evaluate((v) => v.paused), true, 'continua parado depois de um instante');
+
+  // Gesto: clicar no quadro alterna tocar e pausar nos controles nativos do Chromium.
+  const box = await video.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.waitForFunction(() => { const v = document.querySelector('video'); return !!v && !v.paused && v.currentTime > 0.05; }, null, { timeout: 5000 });
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.waitForFunction(() => document.querySelector('video')?.paused === true, null, { timeout: 5000 });
+  const at = await video.evaluate((v) => v.currentTime);
+  await page.waitForTimeout(250);
+  assert.equal(await video.evaluate((v) => v.currentTime), at, 'pausado não avança');
+});
+
+// Vídeo: mesma política do áudio. Pausa ao trocar de aba, ao ficar oculto e ao fechar a aba.
+scenario('vídeo pausa ao trocar de aba, ao ficar oculto e ao fechar a aba', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__mock.addFolder('midia');
+    window.__mock.addFile('midia/clipe.webm');
+  });
+  await expand(page, ['midia']);
+  await treeItem(page, 'clipe.webm').dblclick();
+  const video = page.locator('video');
+  await video.waitFor();
+  await page.waitForFunction(() => document.querySelector('video')?.readyState >= 1);
+
+  await video.evaluate((v) => v.play());
+  await page.waitForFunction(() => document.querySelector('video')?.paused === false);
+  await treeItem(page, 'README.md').click();
+  await page.waitForFunction(() => document.querySelector('video')?.paused === true);
+  await page.getByRole('tab', { name: 'clipe.webm' }).click();
+  await page.waitForTimeout(200);
+  assert.equal(await video.evaluate((v) => v.paused), true, 'voltar à aba não retoma sozinho');
+
+  await video.evaluate((v) => v.play());
+  await page.waitForFunction(() => document.querySelector('video')?.paused === false);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.hidden;
+  });
+  await page.waitForFunction(() => document.querySelector('video')?.paused === true);
+
+  await video.evaluate((v) => { window.__videoAntigo = v; v.play(); });
+  await page.waitForFunction(() => window.__videoAntigo.paused === false);
+  await tabs(page).filter({ hasText: 'clipe.webm' }).getByRole('button', { name: /^Fechar/ }).click();
+  await page.waitForFunction(() => window.__videoAntigo.paused === true);
+  assert.equal(await page.locator('video').count(), 0, 'aba fechada sem elemento de vídeo');
+});
+
+// Vídeo que falha (no app, status de erro do protocolo) ou não decodifica: aviso na aba, sem editor.
+scenario('vídeo com falha de leitura ou bytes inválidos mostra aviso na aba, sem editor', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__mock.addFolder('midia');
+    window.__mock.addFile('midia/sumiu.mp4');
+    window.__mock.addFile('midia/ruim.webm');
+    window.__mock.failRead = ['midia/sumiu.mp4'];
+    window.__mock.corruptRead = ['midia/ruim.webm'];
+  });
+  await expand(page, ['midia']);
+  for (const name of ['sumiu.mp4', 'ruim.webm']) {
+    await treeItem(page, name).dblclick();
+    await page.locator(`video[aria-label="${name}"] ~ [role="alert"]`).filter({ hasText: 'Não foi possível tocar este vídeo' }).waitFor();
+    assert.equal(await page.locator('.cm-content').count(), 0, `${name}: sem editor de texto`);
+  }
 });
