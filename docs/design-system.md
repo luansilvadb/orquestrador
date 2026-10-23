@@ -8,16 +8,16 @@ A interface usa o [Lobe UI](https://github.com/lobehub/lobe-ui) (`@lobehub/ui`, 
 | --- | --- |
 | `src/main.tsx` | `ThemeProvider` (tema escuro, fonte Inter no antd), um `ConfigProvider` do `@lobehub/ui` com `motion` (de `motion/react`) dentro dele, `ToastHost` e `ModalHost`; no escopo do módulo, os observadores que põem os rótulos dos avisos em português e a escuta de `pointerdown` que fecha o menu de contexto com clique fora. |
 | `src/index.css` | Ordem da camada `lobe-base`, Tailwind, fonte Inter, os tokens do Tailwind ligados às variáveis `--ant-*` do antd, o token do fundo dos terminais e os poucos estilos globais. |
+| `index.html` | Tela da abertura, antes do bundle: titlebar, a marca animada (glifo do ícone: linhas desenhadas do hub, executores pulsando só com `transform`; parada com movimento reduzido) e o status. As classes `boot-*` e a animação também servem ao `Screen` de `src/App.tsx` (verificação, download e reabertura), que segue a fase da animação do HTML. |
 | `src/terminal/term.ts` | Tema dos terminais xterm (cores em `theme`). |
 
-Componentes em uso. Os de `@lobehub/ui` são `Block`, `Center`, `Flexbox`, `Hotkey`, `Markdown` e `PatchDiff`; os demais vêm de `@lobehub/ui/base-ui`:
+Componentes em uso. Os de `@lobehub/ui` são `Center`, `Flexbox`, `Hotkey`, `Markdown` e `PatchDiff`; os demais vêm de `@lobehub/ui/base-ui`:
 
 | Componente | Onde |
 | --- | --- |
 | `Alert` | `src/App.tsx`, `src/terminal/choice-form.tsx`, `src/search/search.tsx` (relatório da substituição: arquivos alterados, erros e rascunhos que ficaram de fora). |
-| `Block` | `src/App.tsx` (cartões da tela de atualização e de escolha de pasta). |
 | `Button` | `src/App.tsx`, `src/terminal/choice-form.tsx`, `src/explorer/explorer.tsx`, `src/git/git.tsx`, `src/terminal/terminal-screen.tsx`, `src/terminal/shell-panel.tsx` (botão com a contagem de terminais, que abre a lista, e os itens da lista), `src/editor/editor-workspace.tsx` (Descartar arquivo e Descartar bloco no diff), `src/search/search.tsx` (Ver substituições, Fechar revisão, Marcar todos, Nenhum e o Substituir da revisão). |
-| `Center` | `src/App.tsx`, `src/terminal/terminal-screen.tsx`, `src/editor/editor-workspace.tsx` (os atalhos do grupo sem abas). |
+| `Center` | `src/terminal/terminal-screen.tsx`, `src/editor/editor-workspace.tsx` (os atalhos do grupo sem abas). |
 | `Flexbox` | `src/window/titlebar.tsx`, `src/explorer/explorer.tsx`, `src/terminal/choice-form.tsx`, `src/terminal/terminal-screen.tsx`, `src/editor/file-view.tsx`, `src/git/git.tsx`, `src/App.tsx`, `src/terminal/shell-panel.tsx`, `src/search/search.tsx`, `src/editor/editor-workspace.tsx`. |
 | `ContextMenuTrigger` | `src/editor/editor-workspace.tsx` (menu da aba de arquivo, no clique direito, em Shift+F10 e na tecla de contexto; o `ContextMenuHost` que ele precisa fica em `src/main.tsx`), `src/search/search.tsx` (menu de cada linha e de cada arquivo dos resultados, no clique direito: Copiar, Copiar caminho, Copiar tudo e Dispensar). |
 | `ActionIcon` | `src/explorer/explorer.tsx`, `src/editor/editor-workspace.tsx`, `src/git/git.tsx`, `src/terminal/shell-panel.tsx`, `src/search/search.tsx` (no painel Git: atualizar o status, o menu de mais opções, o seletor da ação do commit, preparar ou tirar tudo em cada seção e, em cada arquivo, abrir no editor e preparar ou tirar; na pesquisa, no cabeçalho (filtros de caminho, substituir, atualizar, limpar e recolher), no campo (as três opções), no escopo de pasta (o X que tira o recorte), no campo de substituição (Preservar maiúsculas) e, em cada arquivo e linha de resultado, o X de dispensar; no painel Terminal, fechar a aba, setas da faixa de abas (só com overflow), novo terminal e esconder o painel; na área do arquivo, tentar de novo a leitura na nota de erro; na faixa de abas dos arquivos, fechar cada aba). |

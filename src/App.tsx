@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
-import { Block, Center, Flexbox } from '@lobehub/ui';
+import { Flexbox } from '@lobehub/ui';
 import { Alert, Button, DraggablePanel, Modal, Progress, setActiveScope, Text, toast } from '@lobehub/ui/base-ui';
 import { backend, connect, host, message, setProjectId } from './backend/backend';
 import { ChoiceForm } from './terminal/choice-form';
@@ -1160,7 +1160,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   if (!ready) {
     const retry = update.phase === 'failed';
     return (
-      <Screen connected={connected} description={(
+      <Screen connected={connected} still={retry} description={(
         <Text as="p" fontSize={14} style={SECONDARY} role="status" aria-live="polite">{updateText(update, fatal)}</Text>
       )}>
         {update.phase === 'downloading' && (
@@ -1176,7 +1176,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
           <Alert type="error" role="alert" description={update.message} className="select-text" />
         )}
         {retry && (
-          <Button type="primary" onClick={retryUpdate} disabled={retrying} loading={retrying} className="self-start">
+          <Button type="primary" onClick={retryUpdate} disabled={retrying} loading={retrying} className="self-center">
             Tentar novamente
           </Button>
         )}
@@ -1403,20 +1403,47 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   );
 }
 
-/** Atualização e escolha de projeto: barra no topo e o cartão centralizado no espaço que sobra. */
-function Screen({ connected, description, children }: { connected: boolean; description: ReactNode; children: ReactNode }) {
+/** Abertura, atualização e reabertura dos projetos: barra no topo e a marca com o status no centro, no layout do `index.html` (classes boot-* de lá). */
+function Screen({ connected, still, description, children }: { connected: boolean; still?: boolean; description: ReactNode; children: ReactNode }) {
   return (
     <Flexbox height="100dvh">
       <TitleBar connected={connected} />
-      <Center flex={1} padding={24} className="min-h-0">
-        <Block variant="outlined" direction="vertical" gap={16} padding={24} className="w-full max-w-md">
+      <main className="boot-main">
+        <div className="boot-col">
+          <BootMark still={still} />
           <Flexbox gap={6}>
             <Text as="h1" fontSize={16} weight={600} lineHeight={1}>Orquestrador</Text>
             {description}
           </Flexbox>
-          <Flexbox gap={16}>{children}</Flexbox>
-        </Block>
-      </Center>
+          <Flexbox gap={16} className="text-left empty:hidden">{children}</Flexbox>
+        </div>
+      </main>
     </Flexbox>
+  );
+}
+
+/** Início da animação da marca no `index.html`, lido antes de o React trocar o HTML; sem animação lá (movimento reduzido), o agora. */
+let bootStart: number | undefined;
+
+/** A marca animada do `index.html`. `--t` é o tempo desde o início dela: a animação continua da mesma fase, inclusive entre telas. */
+function BootMark({ still }: { still?: boolean }) {
+  const [t] = useState(() => {
+    bootStart ??= Number(document.querySelector('.boot-mark .hub')?.getAnimations()[0]?.startTime ?? performance.now());
+    return `${performance.now() - bootStart}ms`;
+  });
+  return (
+    <svg className={`boot-mark${still ? ' still' : ''}`} style={{ '--t': t } as React.CSSProperties} viewBox="28 28 200 200" aria-hidden="true">
+      <g stroke="#ECEAE4" strokeWidth={19} strokeLinecap="round">
+        <line x1={73.9} y1={182.1} x2={73.9} y2={59.1} pathLength={1} />
+        <line x1={73.9} y1={182.1} x2={156.3} y2={91.1} pathLength={1} />
+        <line x1={73.9} y1={182.1} x2={196.3} y2={169.2} pathLength={1} />
+      </g>
+      <g fill="#ECEAE4">
+        <circle className="node" cx={73.9} cy={59.1} r={23} />
+        <circle className="node" cx={156.3} cy={91.1} r={23} />
+        <circle className="node" cx={196.3} cy={169.2} r={23} />
+      </g>
+      <circle className="hub" cx={73.9} cy={182.1} r={36.5} fill="#F5A524" />
+    </svg>
   );
 }
