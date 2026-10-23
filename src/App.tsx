@@ -419,13 +419,17 @@ export function App() {
   </div>;
 }
 
+// A versão é conferida uma vez por abertura do app: um projeto aberto depois (o "+" das abas) nasce pronto e conectado, sem a tela de atualização.
+let updateChecked = false;
+
 function ProjectApp({ managed, initialProject, active = true, projects, onSelect, onClose, onMove, onOpen, recentProjects: sharedRecent }: {
   managed: boolean; initialProject?: ManagedProject; active?: boolean; projects?: ProjectTab[]; onSelect?: (id: string) => void;
   onClose?: (id: string) => void; onMove?: (id: string, index: number) => void; onOpen?: (path?: string) => void; recentProjects?: string[];
 }) {
-  const [state, dispatch] = useReducer(reducer, initial, () => managed && initialProject
-    ? { ...initial, projectId: initialProject.id, project: initialProject.project }
-    : initial);
+  const [state, dispatch] = useReducer(reducer, initial, () => {
+    const base: State = updateChecked ? { ...initial, update: { phase: 'ready' } } : initial;
+    return managed && initialProject ? { ...base, projectId: initialProject.id, project: initialProject.project } : base;
+  });
   const stateRef = useRef(state);
   useLayoutEffect(() => {
     stateRef.current = state;
@@ -464,7 +468,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
   // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
   const git = usePolled(() => backend.gitStatus(), active && state.update.phase === 'ready' && !!state.project);
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected] = useState(updateChecked);
   const [fatal, setFatal] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [localRecentProjects, setLocalRecentProjects] = useState(readRecentProjects);
@@ -1103,6 +1107,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
 
   const { update, orchestrator, executors, options } = state;
   const ready = update.phase === 'ready';
+  if (ready) updateChecked = true;
   // Título da aba: nome da pasta do projeto (último segmento do caminho) e, depois que o backend responde, o programa.
   const folder = folderName(state.project);
   const shellTabs = state.shells.map((s) => ({ id: s.id, title: s.program ? (folder ? `${folder} — ${s.program}` : s.program) : folder || 'Terminal', n: s.n, program: s.program, project: s.project }));

@@ -117,8 +117,9 @@ scenario('modo sem projeto: tela limpa, a faixa abre pelo ícone e o rascunho do
     await text.waitFor();
     assert.equal(await text.evaluate((el) => el.parentElement?.querySelector('button')?.textContent), 'Abrir pasta');
   };
-  // Só a marca e os atalhos: sem faixa e sem o painel do Orquestrador.
-  await page.locator('dt').getByText('Abrir pasta', { exact: true }).waitFor();
+  // Só a marca (issue #37: sem os atalhos), sem faixa e sem o painel do Orquestrador.
+  await page.locator('[data-home]').waitFor();
+  assert.equal(await page.locator('[data-home] dt').count(), 0, 'tela inicial sem atalhos');
   assert.equal(await visible('Abra uma pasta para explorar os arquivos.'), false, 'faixa fechada');
   assert.equal(await visible('Abra uma pasta para iniciar o Orquestrador.'), false, 'painel do Orquestrador oculto');
   assert.equal(await nav.locator('[aria-current="page"]').count(), 0, 'nenhuma tela marcada com a faixa fechada');

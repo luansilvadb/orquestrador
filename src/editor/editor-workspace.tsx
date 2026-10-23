@@ -1391,12 +1391,6 @@ const EMPTY_HINTS = [
   ['Alternar o terminal', 'Ctrl+`'],
 ] as const;
 
-const HOME_HINTS = [
-  ['Novo arquivo', 'Ctrl+N'],
-  ['Abrir arquivo', 'Ctrl+O'],
-  ['Abrir pasta', 'Ctrl+K Ctrl+O'],
-] as const;
-
 // Duplo clique em qualquer ponto da área (também sobre as dicas) abre um rascunho, como no VS Code. `select-none`: o duplo clique não seleciona o texto das dicas.
 function EmptyGroup({ onNewDraft }: { onNewDraft: () => void }) {
   return (
@@ -1413,20 +1407,11 @@ function EmptyGroup({ onNewDraft }: { onNewDraft: () => void }) {
   );
 }
 
-// Sem projeto e sem abas: a marca apagada e os atalhos de começar, como o editor vazio do VS Code sem pasta. Duplo clique abre um rascunho.
+// Sem projeto e sem abas: só a marca apagada. Duplo clique abre um rascunho.
 function HomeScreen({ onNewFile }: { onNewFile: () => void }) {
   return (
-    <Center flex={1} gap={40} className="min-w-0 min-h-0 overflow-hidden select-none" onDoubleClick={onNewFile}>
+    <Center data-home flex={1} className="min-w-0 min-h-0 overflow-hidden select-none" onDoubleClick={onNewFile}>
       <AppMark color="#ECEAE4" className="size-60 max-h-[35vh] max-w-[35vw] opacity-[0.06]" />
-      <dl className="m-0 grid grid-cols-[auto_auto] items-center gap-x-4 gap-y-3">
-        {HOME_HINTS.map(([label, keys]) => (
-          <Fragment key={keys}>
-            <Text as="dt" type="secondary" fontSize={13} align="right">{label}</Text>
-            {/* Um Hotkey por acorde: "Ctrl+K Ctrl+O" num só juntaria o K ao segundo Ctrl. */}
-            <dd className="m-0 flex gap-2">{keys.split(' ').map((chord) => <Hotkey key={chord} keys={chord} />)}</dd>
-          </Fragment>
-        ))}
-      </dl>
     </Center>
   );
 }

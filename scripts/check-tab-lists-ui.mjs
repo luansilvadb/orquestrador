@@ -116,6 +116,12 @@ scenario('lista do Terminal: o mesmo menu, sem cabeçalho; X na linha destacada 
   await page.getByRole('menuitem').nth(0).hover();
   await page.waitForFunction(() => document.querySelector('[role="menu"] > [role="menuitem"]').hasAttribute('data-highlighted'));
   assert.deepEqual(await closes(page), ['visible', 'hidden', 'hidden']);
+  // Issue #38: X e check centrados na linha.
+  const centers = await page.locator('[role="menu"] > [role="menuitem"]').first().evaluate((item) => {
+    const mid = (el) => { const r = el.getBoundingClientRect(); return r.y + r.height / 2; };
+    return [mid(item), mid(item.querySelector('.tab-list-close')), mid(item.querySelector('.tab-list-check'))];
+  });
+  assert.ok(centers.every((y) => Math.abs(y - centers[0]) <= 0.5), `X e check no centro da linha (${centers})`);
   await page.screenshot({ path: join(OUT, 'tab-lists-terminal.png') });
   await page.getByRole('menuitem').nth(2).hover();
   await page.waitForFunction(() => document.querySelectorAll('[role="menu"] > [role="menuitem"]')[2].hasAttribute('data-highlighted'));
@@ -153,6 +159,16 @@ scenario('lista do Terminal: número reaproveitado e menu fechado ao fechar o ú
   const numbers = await page.locator('[data-shell] [role="tab"]').evaluateAll((tabs) => tabs.map((t) => t.textContent.match(/Terminal (\d+)/)[1]));
   assert.deepEqual(numbers, ['1', '3', '2']);
 
+  // Issue #38: ao fechar o último, o menu some na hora, sem animar a saída no canto da janela (a âncora se esconde junto).
+  await page.evaluate(() => {
+    window.__menuTops = [];
+    const watch = () => {
+      const menu = document.querySelector('[role="menu"]');
+      if (menu && !document.querySelector('[data-shell]')) window.__menuTops.push(menu.getBoundingClientRect().top);
+      requestAnimationFrame(watch);
+    };
+    watch();
+  });
   for (let left = 3; left > 0; left--) {
     if (!await page.getByRole('menu').isVisible()) {
       await page.getByRole('button', { name: /^Lista de abas/ }).click();
@@ -163,6 +179,7 @@ scenario('lista do Terminal: número reaproveitado e menu fechado ao fechar o ú
     await page.waitForFunction((n) => document.querySelectorAll('[data-shell]').length === n, left - 1);
   }
   await page.locator('[role="menu"]').waitFor({ state: 'detached' });
+  assert.deepEqual(await page.evaluate(() => window.__menuTops), [], 'menu sem âncora depois do último terminal');
   await page.screenshot({ path: join(OUT, 'tab-lists-terminal-vazio.png') });
 
   await page.keyboard.press('Control+Backquote');

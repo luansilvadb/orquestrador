@@ -2,7 +2,7 @@
 // src/index.css), o ícone na margem, o rótulo que corta com reticências, o estado à direita e o check da ativa (invisível nas outras, para
 // o estado ficar na mesma coluna). Com `onClose`, o X toma o lugar do check na linha destacada (ponteiro ou teclado) e Delete fecha a aba
 // destacada; o menu continua aberto, menos quando a aba tem alteração não salva (fechar pede confirmação num diálogo) ou quando a lista
-// esvazia (o painel Terminal se esconde e o menu ficaria vazio, sem âncora).
+// esvazia: aí o menu desmonta na hora, pois o painel Terminal se esconde e a animação de saída, sem âncora, pulava para o canto da janela.
 import { type KeyboardEvent, type ReactNode, useState } from 'react';
 import { Check, List, X } from 'lucide-react';
 import { Button, DropdownMenu } from '@lobehub/ui/base-ui';
@@ -27,6 +27,7 @@ export function TabListMenu({ items, active, placement = 'bottomRight', children
   children?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  if (open && items.length === 0) setOpen(false);
   const close = (item: TabListItem) => {
     if (item.dirty) setOpen(false);
     item.onClose?.();
@@ -44,7 +45,8 @@ export function TabListMenu({ items, active, placement = 'bottomRight', children
     key: item.key, title: item.title, icon: item.icon,
     label: <span data-tab-key={item.key} className="block max-w-72 truncate">{item.label}</span>,
     extra: (
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      // Altura da linha (26 px, src/index.css) e itens centrados: em `inline-flex`, a coluna alinhava pela linha de base e ficava 2 px acima.
+      <span className="flex h-[26px] items-center gap-1.5 whitespace-nowrap">
         {item.state}
         {item.dirty && <span aria-label="Alteração não salva">●</span>}
         <span className="relative inline-flex size-4 items-center justify-center">
@@ -64,16 +66,18 @@ export function TabListMenu({ items, active, placement = 'bottomRight', children
     ),
     onClick: item.onSelect,
   }));
+  const trigger = children ?? (
+    <Button
+      type="text" size="small" icon={<List className="size-3.5" />} className="shrink-0 self-center"
+      aria-label={`Lista de abas: ${items.length}`} title={`Todas as abas (${items.length})`}
+    >
+      {items.length}
+    </Button>
+  );
+  if (items.length === 0) return trigger;
   return (
-    <DropdownMenu items={menu} placement={placement} open={open && items.length > 0} onOpenChange={setOpen} popupProps={{ onKeyDown }}>
-      {children ?? (
-        <Button
-          type="text" size="small" icon={<List className="size-3.5" />} className="shrink-0 self-center"
-          aria-label={`Lista de abas: ${items.length}`} title={`Todas as abas (${items.length})`}
-        >
-          {items.length}
-        </Button>
-      )}
+    <DropdownMenu items={menu} placement={placement} open={open} onOpenChange={setOpen} popupProps={{ onKeyDown }}>
+      {trigger}
     </DropdownMenu>
   );
 }

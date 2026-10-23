@@ -107,8 +107,36 @@ scenario('fechar a última aba volta ao modo sem projeto', async ({ page }) => {
   await twoProjects(page);
   await page.getByRole('button', { name: 'Fechar simulado-2' }).click();
   await page.getByRole('button', { name: 'Fechar exemplo' }).click();
-  await page.locator('dt').getByText('Abrir pasta', { exact: true }).waitFor();
+  await page.locator('[data-home]').waitFor();
   assert.equal(await tabs(page).count(), 0);
+});
+
+// Issue #36: a versão é conferida só na abertura do app; o "+" abre o projeto sem passar pela tela de atualização.
+scenario('abrir pasta pelo "+" não volta à tela de atualização', async ({ page }) => {
+  await tabs(page).first().waitFor();
+  await page.evaluate(() => {
+    window.__bootSeen = false;
+    new MutationObserver(() => { if (document.querySelector('.boot-main')) window.__bootSeen = true; })
+      .observe(document.body, { childList: true, subtree: true });
+  });
+  await twoProjects(page);
+  await page.locator('[data-group]:visible').first().waitFor();
+  assert.equal(await page.evaluate(() => window.__bootSeen), false, 'tela de atualização apareceu');
+  assert.equal(await page.getByRole('button', { name: 'Minimizar' }).isEnabled(), true, 'barra conectada');
+});
+
+// Issue #36: do modo sem projeto, a primeira pasta também abre direto.
+scenario('primeira pasta pelo "+" não volta à tela de atualização', async ({ page }) => {
+  await page.goto(`${BASE}?project=none`);
+  await page.locator('[data-home]').waitFor();
+  await page.evaluate(() => {
+    window.__bootSeen = false;
+    new MutationObserver(() => { if (document.querySelector('.boot-main')) window.__bootSeen = true; })
+      .observe(document.body, { childList: true, subtree: true });
+  });
+  await openFolder(page);
+  await selected(page).waitFor();
+  assert.equal(await page.evaluate(() => window.__bootSeen), false, 'tela de atualização apareceu');
 });
 
 scenario('recarregar restaura ordem e aba ativa', async ({ page }) => {
