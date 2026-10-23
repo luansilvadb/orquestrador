@@ -4,6 +4,7 @@
 // No console: `__mock.close()` simula fechar a janela.
 // `__mock.openPath(path)` simula um pedido de abertura vindo do Explorer ou de outra instância.
 // `__mock.addNode(node)` simula o orquestrador delegando: um executor chega ao projeto ativo (o orquestrador precisa estar aberto).
+// `__mock.nodeState(event)` simula a troca de estado de um executor (`done`, `stopped` ou `failed` fecham a aba).
 // `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto.
 // A árvore (`list_dir`) é em memória e muda com as ações do menu e com `__mock.remove`.
 // O Git tem estado só no que a mock modela: blocos (preparar, tirar do preparo, descartar), arquivo descartado, commit, histórico, gráfico e
@@ -29,7 +30,7 @@ import type { Transport } from './backend';
 import { fileNameError } from '../shared/file-tab-actions';
 import { splitPath } from '../shared/paths';
 import {
-  type Batch, type Choice, type ExecutorNode, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events, type FormatterInfo,
+  type Batch, type Choice, type ExecutorNode, type NodeStateEvent, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events, type FormatterInfo,
   type FileBase, type GitCommitHoverDetail, type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
   type SearchResults, type SkipReason,
@@ -296,7 +297,7 @@ const debug = { close: async () => {
   if (closed) document.body.innerHTML = '<p style="padding:24px">Janela fechada (simulado).</p>';
   return closed;
 }, openPath: (path: string) => { pendingOpenPaths.push(path); emit('open-paths', undefined); },
-  addNode: (node: ExecutorNode & { project: string }) => emit('node-added', node), remove: (path: string) => removePath(path),
+  addNode: (node: ExecutorNode & { project: string }) => emit('node-added', node), nodeState: (event: NodeStateEvent) => emit('node-state', event), remove: (path: string) => removePath(path),
   // Clipboard simulado: o que as cópias e recortes do simulado puseram nele. Nunca toca no clipboard do Windows.
   clipboard: () => structuredClone(clip),
   // Edição externa: outro programa gravou o arquivo. Só troca o texto que o disco simulado devolve (o que `read_file` e `write_file_checked` comparam).

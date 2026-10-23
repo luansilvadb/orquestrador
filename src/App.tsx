@@ -13,7 +13,7 @@ import { copy, join, splitPath } from './shared/paths';
 import { QuickOpen } from './editor/quick-open';
 import { SearchScreen } from './search/search';
 import { SHELL_HEIGHT, SHELL_MIN, ShellPanel } from './terminal/shell-panel';
-import { FINISHED, PANEL_MIN, PANEL_WIDTH, STATES, TerminalsScreen } from './terminal/terminal-screen';
+import { type ExecutorTab, FINISHED, PANEL_MIN, PANEL_WIDTH, STATES, TerminalsScreen } from './terminal/terminal-screen';
 import type { TermView } from './terminal/term';
 import { terminals } from './terminal/terminals';
 import { folderName, TitleBar, type ProjectTab, type TitleBarMenu } from './window/titlebar';
@@ -91,7 +91,7 @@ type State = {
   options: Options | null;
   orchestrator: { choice: Choice | null; overlay: Overlay } | null;
   executorChoice: Choice | null;
-  executors: ExecutorNode[];
+  executors: ExecutorTab[];
   notice: string;
   shells: ShellItem[];
   shellActive: string;
@@ -149,7 +149,9 @@ function reducer(state: State, action: Action): State {
       return { ...state, executorChoice: action.choice };
     case 'nodeAdded': {
       if (!state.orchestrator || state.executors.some((e) => e.id === action.node.id)) return state;
-      return { ...state, executors: [...state.executors, action.node] };
+      let n = 1;
+      while (state.executors.some((e) => e.n === n)) n += 1;
+      return { ...state, executors: [...state.executors, { ...action.node, n }] };
     }
     case 'nodeState':
       return {

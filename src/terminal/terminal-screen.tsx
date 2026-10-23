@@ -67,12 +67,15 @@ const Cover = ({ children }: { children: ReactNode }) => (
   </Flexbox>
 );
 
+// `n` é o número exibido (#n): o menor livre entre os executores abertos ao chegar, como no painel Terminal. `index` é a posição no lote, do backend.
+export type ExecutorTab = ExecutorNode & { n: number };
+
 type TerminalsProps = {
   projectId: string | null;
   projectOpen: boolean;
   onOpenProject: () => void;
   orchestrator: { choice: Choice | null } | null;
-  executors: ExecutorNode[];
+  executors: ExecutorTab[];
   executorChoice: Choice | null;
   notice: string;
   // Largura exibida e largura máxima, calculadas pelo App (dependem da janela e da faixa da árvore). A máxima fica indefinida enquanto a janela não foi medida.
@@ -123,7 +126,7 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
     const info = STATES[e.state];
     return {
       e, Icon: info.icon, color: colorsPreset(info.color), spin: e.state === 'running' ? ' animate-spin' : '',
-      label: `Executor #${e.index + 1}, ${info.label}: ${e.title}`, state: info.label,
+      label: `Executor #${e.n}, ${info.label}: ${e.title}`, state: info.label,
     };
   });
   const tabMenu: TabListItem[] = [
@@ -131,7 +134,7 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
     ...rows.map(({ e, Icon, color, spin, label: title, state }) => ({
       key: e.id, title, state,
       icon: <Icon className={`size-3.5${spin}`} style={{ color }} />,
-      label: <><span className="tabular-nums">#{e.index + 1}</span>&ensp;{e.title}</>,
+      label: <><span className="tabular-nums">#{e.n}</span>&ensp;{e.title}</>,
       onSelect: () => choose(e.id),
     })),
   ];
@@ -165,7 +168,7 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
                   return (
                     <TabsTab key={e.id} value={e.id} data-tab={e.id} title={label} aria-label={label} className="flex-none gap-1.5 px-3">
                       <Icon className={`size-3.5 shrink-0${spin}`} style={{ color }} />
-                      <Text as="span" className="tabular-nums">#{e.index + 1}</Text>
+                      <Text as="span" className="tabular-nums">#{e.n}</Text>
                     </TabsTab>
                   );
                 })}
@@ -188,7 +191,7 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
                       <Text as="span" ellipsis>{meta.label}</Text>
                     </Tag>
                   )}
-                  <Text as="span" code type="secondary" className="shrink-0">#{node.index + 1}</Text>
+                  <Text as="span" code type="secondary" className="shrink-0">#{node.n}</Text>
                   <Text ellipsis className="w-0 min-w-16 flex-1" title={node.title}>{node.title}</Text>
                   {node.choice && <ChoiceText choice={node.choice} compact />}
                   {CANCELLABLE.includes(node.state) && (

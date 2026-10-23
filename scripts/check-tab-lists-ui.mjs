@@ -60,6 +60,29 @@ scenario('lista do Orquestrador: uma linha por item, ícone na margem, título c
   assert.equal(await page.getByRole('tab', { name: /^Executor #3/ }).getAttribute('aria-selected'), 'true');
 });
 
+// Issue #26: o número do executor é o menor livre entre os abertos, não a posição no lote.
+scenario('executores: número é o menor livre, entre lotes e depois que um termina', async ({ page }) => {
+  await page.getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('tab', { name: 'Orquestrador' }).waitFor();
+  const numbers = () => page.locator('[role="tab"][data-tab^="e"]').evaluateAll((tabs) => tabs.map((t) => t.textContent));
+  await page.evaluate(() => {
+    const choice = { tool: 'claude', model: 'opus', effort: 'high' };
+    [['b1', 0], ['b1', 1], ['b2', 0]].forEach(([batch, index], i) =>
+      window.__mock.addNode({ project: 'project-1', id: `e${i}`, batch, index, title: `T${i}`, state: 'queued', choice }));
+  });
+  await page.waitForFunction(() => document.querySelectorAll('[role="tab"][data-tab^="e"]').length === 3);
+  assert.deepEqual(await numbers(), ['#1', '#2', '#3']);
+
+  await page.evaluate(() => window.__mock.nodeState({ project: 'project-1', id: 'e1', state: 'done', choice: null }));
+  await page.waitForFunction(() => document.querySelectorAll('[role="tab"][data-tab^="e"]').length === 2);
+  await page.evaluate(() => window.__mock.addNode({
+    project: 'project-1', id: 'e3', batch: 'b3', index: 0, title: 'T3', state: 'queued', choice: { tool: 'claude', model: 'opus', effort: 'high' },
+  }));
+  await page.waitForFunction(() => document.querySelectorAll('[role="tab"][data-tab^="e"]').length === 3);
+  assert.deepEqual(await numbers(), ['#1', '#3', '#2']);
+});
+
 // Confere a geometria comum das linhas: 26 px cada, sem sobrepor, ícone na margem e rótulo a 26 px.
 function assertRows(items) {
   for (const [i, { item, icon, label }] of items.entries()) {
