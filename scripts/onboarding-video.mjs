@@ -1,6 +1,6 @@
 // Grava o app simulado com Playwright e entrega o MP4 otimizado em docs/.
 import { spawn } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BASE, OUT, ROOT, launchBrowser, openApp, startVite, treeItem, waitForServer } from './editor-ui-harness.mjs';
 
@@ -17,48 +17,92 @@ function run(command, args, { capture = false } = {}) {
   });
 }
 
-async function caption(page, text) {
-  await page.evaluate((value) => {
-    let el = document.getElementById('onboarding-caption');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'onboarding-caption';
-      Object.assign(el.style, {
-        position: 'fixed', bottom: '28px', left: '50%', transform: 'translateX(-50%)', zIndex: '2147483647',
-        width: 'calc(100% - 96px)', maxWidth: '1200px', padding: '14px 24px', borderRadius: '10px',
-        background: 'rgba(10, 13, 20, .86)', color: '#fff', font: '500 24px/1.35 Inter, sans-serif',
-        textAlign: 'center', boxShadow: '0 8px 32px rgba(0,0,0,.35)', pointerEvents: 'none',
-      });
-      document.body.append(el);
-    }
-    el.textContent = value;
-  }, text);
-}
-
 async function waitForTerminalText(page, text) {
   await page.waitForFunction((needle) => [...document.querySelectorAll('.xterm-rows')].some((el) => el.textContent.includes(needle)), text);
 }
 
-async function encode(webm, output) {
+async function startScreencast(context, page, directory) {
+  const cdp = await context.newCDPSession(page);
+  const frames = [];
+  let queue = Promise.resolve();
+  let captureError;
+  let index = 0;
+  cdp.on('Page.screencastFrame', (event) => {
+    const receivedAt = performance.now();
+    const name = `frame-${String(index++).padStart(5, '0')}.png`;
+    queue = queue.then(async () => {
+      try {
+        const png = Buffer.from(event.data, 'base64');
+        await writeFile(join(directory, name), png);
+        frames.push({
+          name,
+          timestamp: Number(event.metadata.timestamp),
+          receivedAt,
+          width: png.readUInt32BE(16),
+          height: png.readUInt32BE(20),
+        });
+      } catch (error) {
+        captureError ??= error;
+      }
+      try {
+        await cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId });
+      } catch (error) {
+        captureError ??= error;
+      }
+    });
+  });
+  await cdp.send('Page.enable');
+  await cdp.send('Page.startScreencast', { format: 'png', maxWidth: SIZE.width, maxHeight: SIZE.height, everyNthFrame: 1 });
+
+  let stopPromise;
+  return {
+    stop() {
+      stopPromise ??= (async () => {
+        await cdp.send('Page.stopScreencast');
+        const stoppedAt = performance.now();
+        await queue;
+        if (captureError) throw captureError;
+        if (!frames.length) throw new Error('O screencast não capturou quadros.');
+        const last = frames.at(-1);
+        const endTimestamp = last.timestamp + Math.max(0, (stoppedAt - last.receivedAt) / 1000);
+        return { frames, endTimestamp };
+      })();
+      return stopPromise;
+    },
+  };
+}
+
+async function encode(frames, endTimestamp, directory, output) {
+  const list = frames.map((frame, index) => {
+    const nextTimestamp = frames[index + 1]?.timestamp ?? endTimestamp;
+    const duration = nextTimestamp - frame.timestamp;
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error(`Duração de quadro inválida: ${duration}.`);
+    return `file '${frame.name}'\nduration ${duration.toFixed(6)}`;
+  });
+  list.push(`file '${frames.at(-1).name}'`);
+  const concatList = join(directory, 'frames.txt');
+  await writeFile(concatList, `${list.join('\n')}\n`);
+  const needsScale = frames.some((frame) => frame.width !== SIZE.width || frame.height !== SIZE.height);
+  const filter = `${needsScale ? `scale=${SIZE.width}:${SIZE.height}:flags=lanczos,` : ''}fps=30,format=yuv420p`;
   await run('ffmpeg', [
-    '-hide_banner', '-loglevel', 'error', '-y', '-i', webm, '-an', '-c:v', 'libx264', '-preset', 'slow', '-crf', '27',
-    '-pix_fmt', 'yuv420p', '-movflags', '+faststart', output,
+    '-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', concatList,
+    '-vf', filter, '-c:v', 'libx264', '-preset', 'slow', '-crf', '14', '-tune', 'stillimage', '-movflags', '+faststart', '-an', output,
   ]);
   const data = JSON.parse(await run('ffprobe', [
-    '-v', 'error', '-show_entries', 'format=duration', '-show_entries', 'stream=codec_type,width,height', '-of', 'json', output,
+    '-v', 'error', '-show_entries', 'format=duration,bit_rate', '-show_entries', 'stream=codec_type,codec_name,width,height,pix_fmt', '-of', 'json', output,
   ], { capture: true }));
   const duration = Number(data.format.duration);
   const video = data.streams.find((stream) => stream.codec_type === 'video');
   const bytes = (await stat(output)).size;
   if (!video || video.width !== SIZE.width || video.height !== SIZE.height) throw new Error('O MP4 não ficou em 1600×900.');
   if (data.streams.some((stream) => stream.codec_type === 'audio')) throw new Error('O MP4 deveria estar sem áudio.');
-  if (duration < 60 || duration > 90) throw new Error(`Duração fora de 60–90 s: ${duration.toFixed(2)} s.`);
-  if (bytes >= 10 * 1024 * 1024) throw new Error(`O MP4 excedeu 10 MB: ${bytes} bytes.`);
-  return { duration, bytes };
+  if (duration < 55 || duration > 90) throw new Error(`Duração fora de 55–90 s: ${duration.toFixed(2)} s.`);
+  if (bytes >= 40 * 1024 * 1024) throw new Error(`O MP4 excedeu 40 MB: ${bytes} bytes.`);
+  return { duration, bytes, bitRate: Number(data.format.bit_rate), codec: video.codec_name, pixelFormat: video.pix_fmt };
 }
 
 const vite = startVite();
-let browser, context, tempDir;
+let browser, context, tempDir, screencast;
 try {
   await waitForServer();
   await mkdir(OUT, { recursive: true });
@@ -73,7 +117,7 @@ try {
   await warmPage.getByRole('navigation', { name: 'Telas' }).waitFor();
   await warm.close();
 
-  context = await browser.newContext({ viewport: SIZE, recordVideo: { dir: tempDir, size: SIZE } });
+  context = await browser.newContext({ viewport: SIZE, deviceScaleFactor: 1 });
   const page = await context.newPage();
   page.setDefaultTimeout(120000);
   page.setDefaultNavigationTimeout(120000);
@@ -81,12 +125,10 @@ try {
   await treeItem(page, 'README.md').click();
   await page.locator('.cm-content:visible').first().waitFor();
 
-  await caption(page, 'Orquestrador · Demonstração com dados simulados');
+  screencast = await startScreencast(context, page, tempDir);
   await sleep(4000);
-  await caption(page, 'Projeto aberto: árvore de arquivos e editor prontos para uso.');
   await sleep(4000);
 
-  await caption(page, 'Configure ferramenta, modelo e esforço do orquestrador.');
   await page.getByRole('button', { name: 'Abrir terminal', exact: true }).last().click();
   const choice = page.getByRole('dialog', { name: 'Orquestrador' });
   await choice.waitFor();
@@ -100,7 +142,6 @@ try {
   await page.locator('.xterm:visible').first().waitFor();
   await sleep(4000);
 
-  await caption(page, 'Converse com o orquestrador para definir um plano.');
   await sleep(3500);
   await page.locator('.xterm:visible').first().click();
   await page.keyboard.type('Analise o projeto e proponha um plano curto.', { delay: 60 });
@@ -110,7 +151,6 @@ try {
   await waitForTerminalText(page, 'Revisar a documentação.');
   await sleep(4000);
 
-  await caption(page, 'Dois executores trabalham em paralelo e devolvem suas respostas.');
   await page.evaluate(() => {
     const choice1 = { tool: 'codex', model: 'gpt-5.5', effort: 'medium' };
     const choice2 = { tool: 'claude', model: 'sonnet', effort: 'high' };
@@ -136,7 +176,6 @@ try {
   });
   await sleep(4000);
 
-  await caption(page, 'Revise a mudança no painel Git e registre um commit.');
   await page.getByRole('navigation', { name: 'Telas' }).getByRole('button', { name: /^Git/ }).click();
   const staged = page.locator('section').filter({ has: page.getByRole('button', { name: /^Preparadas\b/ }) });
   await staged.locator('button[title^="docs/design-system.md: "]').dblclick();
@@ -157,19 +196,19 @@ try {
   await page.getByRole('navigation', { name: 'Telas' }).getByRole('button', { name: 'Arquivos', exact: true }).click();
   await treeItem(page, 'README.md').click();
   await page.locator('.cm-content:visible').first().waitFor();
-  await caption(page, 'Baixe em github.com/luansilvadb/orquestrador/releases');
   await sleep(6000);
 
-  const video = page.video();
+  const { frames, endTimestamp } = await screencast.stop();
+  screencast = null;
   await context.close();
   context = null;
-  const webm = await video.path();
   const temporaryMp4 = join(tempDir, 'onboarding.mp4');
   const output = join(ROOT, 'docs', 'onboarding.mp4');
-  const result = await encode(webm, temporaryMp4);
+  const result = await encode(frames, endTimestamp, tempDir, temporaryMp4);
   await copyFile(temporaryMp4, output);
-  console.log(`Vídeo: docs/onboarding.mp4 · 1600×900 · ${result.duration.toFixed(2)} s · ${(result.bytes / 1024 / 1024).toFixed(2)} MB`);
+  console.log(`Vídeo: docs/onboarding.mp4 · 1600×900 · ${result.duration.toFixed(2)} s · ${(result.bytes / 1024 / 1024).toFixed(2)} MB · ${result.bitRate} bit/s · ${result.codec} · ${result.pixelFormat}`);
 } finally {
+  await screencast?.stop().catch(() => {});
   await context?.close().catch(() => {});
   await browser?.close().catch(() => {});
   vite.stop();
