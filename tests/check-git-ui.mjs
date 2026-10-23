@@ -40,8 +40,9 @@ async function lastReview(page, path, staged) {
   assert.ok(seen.length > 0, `nenhuma leitura do diff de ${path} (${staged ? 'preparadas' : 'alterações'})`);
   return seen.at(-1).result;
 }
+// Espera n chamadas concluídas: o simulado registra a chamada ao recebê-la e só a executa depois.
 const waitCount = async (page, cmd, n) => {
-  for (let i = 0; i < 100 && (await calls(page, cmd)).length < n; i++) await page.waitForTimeout(50);
+  for (let i = 0; i < 100 && (await calls(page, cmd)).filter((x) => x.completedAt !== null).length < n; i++) await page.waitForTimeout(50);
 };
 const cancelBtn = (page, title) => dialogBtn(page, title, 'Cancelar');
 const NO_REPO_TEXT = /^A pasta aberta não tem um repositório Git\./;
@@ -692,8 +693,10 @@ scenario('conflito de 2 trechos: escolher Atual e Recebida, texto fora preservad
   assert.ok(!/<<<<<<<|=======|>>>>>>>/.test(await editorText(page)), 'sem marcadores no editor');
 
   // Salvar: grava com a revisão lida, relê o conflito e continua em conflito.
+  const readsBefore = (await calls(page, 'git_conflict')).length;
   await page.getByRole('button', { name: 'Salvar', exact: true }).click();
   await waitCount(page, 'git_write_resolution', 1);
+  await waitCount(page, 'git_conflict', readsBefore + 1);
   const save = (await calls(page, 'git_write_resolution')).at(-1);
   assert.deepEqual(save.args, { path: 'src/dois.ts', content: text, revision: first.revision, markResolved: false, project: 'project-1' });
   assert.equal(await page.evaluate(() => window.__mock.disk('src/dois.ts')), text, 'o disco recebeu a resolução');
