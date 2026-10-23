@@ -264,6 +264,8 @@ type CloseAsk = { files: string[]; terminals: boolean; projectWork?: ProjectSnap
 
 type ManagedProject = { id: string; project: string };
 
+const hasWork = (work: ProjectSnapshot) => work.orchestratorOpen || work.executorsRunning > 0 || work.executorsQueued > 0;
+
 function readOpenProjects(): string[] {
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(OPEN_PROJECTS_KEY) ?? 'null');
@@ -515,6 +517,13 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     if (managed && active && initialProject) setProjectId(initialProject.id);
   }, [managed, active, initialProject?.id]);
 
+  function openPath(path: string) {
+    const absolute = path.replace(/\\/g, '/');
+    const relative = stateRef.current.project ? relativeTo(stateRef.current.project, absolute) : null;
+    editor.current?.openFile(relative ?? absolute, { permanent: true });
+    setRoute('arquivos');
+  }
+
   useEffect(() => {
     if (!managed) return;
     if (initialProject) {
@@ -606,7 +615,10 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
       try {
         const running = await backend.hasRunning();
         if (unsavedOf(list).length > 0) return await settleUnsaved(list, running);
-        if (running && (await askClose([], true)) !== 'close') return false;
+        if (running) {
+          const choice = await askClose([], true);
+          if (choice !== 'close') return false;
+        }
       } catch { /* Sem resposta do backend, deixa a janela fechar. */ }
       for (const { editor } of list) editor.flushRecovery();
       return true;
@@ -677,6 +689,13 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     void view.pasteFiles([text]).then(() => view.term.focus()).catch(report);
   }
 
+  // Tira a aba do estado e descarta o terminal dela. Não fala com o backend: quem chama decide se o shell morre.
+  function dropShell(id: string) {
+    const shell = stateRef.current.shells.find((item) => item.id === id);
+    terminals.forget(id, shell?.project);
+    dispatch({ type: 'shellRemove', id });
+  }
+
   async function boot() {
     try {
       await connect();
@@ -716,12 +735,10 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
       // enquanto ele vinha, o evento é mais novo e a resposta não se aplica.
       // Se a resposta falha depois de um evento novo, a falha é da resposta velha e o evento vale.
       const seen = updateEvents.current;
-      try {
-        const status = await backend.updateStatus();
-        if (updateEvents.current === seen) dispatch({ type: 'update', status });
-      } catch (e) {
-        if (updateEvents.current === seen) throw e;
-      }
+      await backend.updateStatus().then(
+        (status) => { if (updateEvents.current === seen) dispatch({ type: 'update', status }); },
+        (e: unknown) => { if (updateEvents.current === seen) throw e; },
+      );
     } catch (e) {
       setFatal(true);
       dispatch({ type: 'update', status: { phase: 'failed', message: message(e) } });
@@ -750,9 +767,8 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
       if (updateEvents.current === seen) dispatch({ type: 'update', status });
     } catch (e) {
       if (updateEvents.current === seen) dispatch({ type: 'update', status: { phase: 'failed', message: message(e) } });
-    } finally {
-      setRetrying(false);
     }
+    setRetrying(false);
   }
 
   function rememberProject(path: string) {
@@ -772,8 +788,9 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     if (managed) { onOpen?.(path); return; }
     if (stateRef.current.projectBusy) return;
     dispatch({ type: 'projectBusy', busy: true });
+    const request = path ? backend.openProject(path) : backend.chooseProject();
     try {
-      const picked = path ? await backend.openProject(path) : await backend.chooseProject();
+      const picked = await request;
       if (!picked) {
         dispatch({ type: 'projectBusy', busy: false });
         return;
@@ -784,11 +801,12 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
         dispatch({ type: 'projectBusy', busy: false });
         return;
       }
-      if (previous && previous !== picked.id) {
-        const work = await backend.projectSnapshot(previous);
-        if (work.orchestratorOpen || work.executorsRunning > 0 || work.executorsQueued > 0) {
+      if (previous) {
+        if (hasWork(await backend.projectSnapshot(previous))) {
           if (!picked.existing) await backend.closeProject(picked.id);
-          throw new Error('Feche o orquestrador antes de trocar de projeto.');
+          dispatch({ type: 'projectBusy', busy: false });
+          report(new Error('Feche o orquestrador antes de trocar de projeto.'));
+          return;
         }
         await backend.closeProject(previous);
         dropProjectShells(previous);
@@ -816,17 +834,13 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   async function chooseFile() {
     try {
       const path = await backend.pickFile();
-      if (path) managed ? await openAbsolutePath(path) : openPath(path);
+      if (path) {
+        if (managed) await openAbsolutePath(path);
+        else openPath(path);
+      }
     } catch (e) {
       report(e);
     }
-  }
-
-  function openPath(path: string) {
-    const absolute = path.replace(/\\/g, '/');
-    const relative = stateRef.current.project ? relativeTo(stateRef.current.project, absolute) : null;
-    editor.current?.openFile(relative ?? absolute, { permanent: true });
-    setRoute('arquivos');
   }
 
   async function closeProject() {
@@ -838,7 +852,10 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
         dispatch({ type: 'projectBusy', busy: false });
         return;
       }
-      if (managed) { onClose?.(id); return; }
+      if (managed) {
+        if (onClose) onClose(id);
+        return;
+      }
       await backend.closeProject(id);
       setProjectId(null);
       dropProjectShells(id);
@@ -856,7 +873,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   // Arquivos não salvos e trabalho do projeto `id` (orquestrador, executores e fila): pergunta antes de fechar a aba.
   async function mayCloseProject(id: string) {
     const work = await backend.projectSnapshot(id);
-    const busy = work.orchestratorOpen || work.executorsRunning > 0 || work.executorsQueued > 0;
+    const busy = hasWork(work);
     const list = editorOf(id);
     if (unsavedOf(list).length > 0) return settleUnsaved(list, busy, busy ? work : undefined);
     if (busy && (await askClose([], true, work)) !== 'close') return false;
@@ -867,7 +884,9 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   async function closeTab(id: string) {
     if (id === stateRef.current.projectId) return closeProject();
     try {
-      if (await mayCloseProject(id)) onClose?.(id);
+      if (await mayCloseProject(id)) {
+        if (onClose) onClose(id);
+      }
     } catch (e) { report(e); }
   }
 
@@ -908,13 +927,6 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     terminals.get(ORCHESTRATOR, stateRef.current.projectId)?.term.focus();
   }
 
-  // Tira a aba do estado e descarta o terminal dela. Não fala com o backend: quem chama decide se o shell morre.
-  function dropShell(id: string) {
-    const shell = stateRef.current.shells.find((item) => item.id === id);
-    terminals.forget(id, shell?.project);
-    dispatch({ type: 'shellRemove', id });
-  }
-
   function dropProjectShells(id: string) {
     for (const shell of stateRef.current.shells) {
       if (shell.project === id) terminals.forget(shell.id, shell.project);
@@ -932,9 +944,9 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
 
   // X da aba: mata o shell no backend e só depois tira a aba. Se o backend recusar, a aba fica para tentar de novo.
   async function closeShell(id: string) {
-    const shell = stateRef.current.shells.find((item) => item.id === id);
+    const project = stateRef.current.shells.find((item) => item.id === id)?.project;
     try {
-      await backend.closeShell(id, shell?.project);
+      await backend.closeShell(id, project);
     } catch (e) {
       report(e);
       return;
@@ -952,13 +964,14 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
 
   // Primeiro terminal de cada aba: inicia o shell com as colunas e linhas do xterm. Se falhar, mostra o erro e a aba sai.
   async function startShell(id: string, view: TermView) {
+    const shell = stateRef.current.shells.find((s) => s.id === id);
+    const cwd = shell?.cwd;
+    const project = shell?.project;
     try {
-      const shell = stateRef.current.shells.find((s) => s.id === id);
-      const cwd = shell?.cwd;
-      const program = await backend.startShell(id, view.term.cols, view.term.rows, cwd, shell?.project);
+      const program = await backend.startShell(id, view.term.cols, view.term.rows, cwd, project);
       // A aba foi fechada enquanto o shell abria: o terminal já saiu, e o shell que acabou de nascer no backend fica sem aba. Mata de novo.
       if (!stateRef.current.shells.some((s) => s.id === id)) {
-        await backend.closeShell(id, shell?.project).catch(() => {});
+        await backend.closeShell(id, project).catch(() => {});
         return;
       }
       lastShellProgram = program;
@@ -1095,22 +1108,25 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     try {
       await backend.gitPull();
       const now = await backend.gitStatus();
-      if (now.kind === 'repo' && now.status.ahead > 0) await backend.gitPush();
+      if (now.kind === 'repo') {
+        if (now.status.ahead > 0) await backend.gitPush();
+      }
       toast.success({ title: 'Alterações sincronizadas', duration: 3000 });
     } catch (e) {
       report(e);
-    } finally {
-      gitGuard.leave();
-      setSyncing(false);
-      void git.refresh();
     }
+    gitGuard.leave();
+    setSyncing(false);
+    void git.refresh();
   }
 
   // ---------- derivados ----------
 
   const { update, orchestrator, executors, options } = state;
   const ready = update.phase === 'ready';
-  if (ready) updateChecked = true;
+  useEffect(() => {
+    if (ready) updateChecked = true;
+  }, [ready]);
   // Título da aba: nome da pasta do projeto (último segmento do caminho) e o programa.
   const folder = folderName(state.project);
   const shellTabs = state.shells.map((s) => ({ id: s.id, title: s.program ? (folder ? `${folder} — ${s.program}` : s.program) : folder || 'Terminal', n: s.n, program: s.program, project: s.project }));
