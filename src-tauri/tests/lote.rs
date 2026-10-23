@@ -2,11 +2,11 @@
 //! falado por um cliente de teste em JSON-RPC pela entrada e saída padrão, e CLIs falsos (examples/fake_cli.rs) no
 //! lugar do claude e do codex.
 use base64::Engine;
-use orquestrador_lib::capacity::{Memory, Resources};
-use orquestrador_lib::cli::Exes;
+use orquestrador_lib::agents::cli::Exes;
+use orquestrador_lib::agents::session::Places;
 use orquestrador_lib::config::{self, Choice};
+use orquestrador_lib::core::capacity::{Memory, Resources};
 use orquestrador_lib::core::{title, Core, Emit, ORCHESTRATOR};
-use orquestrador_lib::session::Places;
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};

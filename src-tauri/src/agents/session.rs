@@ -1,11 +1,11 @@
 //! A pasta temporária de uma sessão do orquestrador (`strategist-<guid>`): o `mcp.json` que aponta o servidor MCP
 //! de delegação e o settings do Claude, a limpeza e a recuperação das sobras de sessões mortas, inclusive das
 //! regras do Codex que versões antigas deixavam em CODEX_HOME.
-use crate::cli::{self, toml};
+use crate::agents::cli::{self, toml};
+use crate::agents::roles;
 use crate::config::Config;
 use crate::platform::start_time;
 use crate::proc::{owner_state, Owner};
-use crate::roles;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -34,12 +34,12 @@ export function pathText(kind: CopyKind, path: string, project: string, cursor?:
   return cursor ? `${absolute}:${cursor.line}:${cursor.col}` : null;
 }
 
-// Nomes que o Windows reserva, com ou sem extensão. A mesma lista está em `src-tauri/src/files.rs`.
+// Nomes que o Windows reserva, com ou sem extensão. A mesma lista está em `src-tauri/src/ide/files.rs`.
 const RESERVED = new Set(['CON', 'PRN', 'AUX', 'NUL', ...Array.from({ length: 9 }, (_, i) => `COM${i + 1}`), ...Array.from({ length: 9 }, (_, i) => `LPT${i + 1}`)]);
 
 /**
  * Motivo para um nome de arquivo não servir no Windows (ou null se serve). Mostrado antes do envio; o backend confere de novo.
- * Mesmas mensagens de `check_name` em `src-tauri/src/files.rs`.
+ * Mesmas mensagens de `check_name` em `src-tauri/src/ide/files.rs`.
  */
 export function fileNameError(name: string): string | null {
   if (name.trim() === '') return 'Digite um nome para o arquivo.';

@@ -1,7 +1,8 @@
 //! O painel Git do projeto: o estado da árvore, o diff de um arquivo, preparar e tirar do índice, o commit,
 //! a sincronização com o remoto e a troca de branch. Tudo passa pelo `git` com `proc::git_saida` ou
 //! `proc::git_completa`, então nada espera digitação e o erro traz o que o Git escreveu.
-use crate::{files, proc};
+use crate::ide::files;
+use crate::proc;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::Read;

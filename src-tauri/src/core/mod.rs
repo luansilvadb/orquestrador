@@ -1,13 +1,17 @@
 //! O estado do app: o orquestrador, os lotes delegados, a fila e os executores. Não conhece o
 //! Tauri: os eventos saem por `Emit`, que os testes trocam por um canal.
-use crate::capacity::{Global, Resources};
-use crate::cli::{self, Exes};
+pub mod capacity;
+pub mod projects;
+pub mod pty;
+
+use crate::agents::cli::{self, Exes};
+use crate::agents::session::{self, Places, Session};
 use crate::config::{self, Choice, Options};
-use crate::files;
-use crate::git;
+use crate::core::capacity::{Global, Resources};
+use crate::core::pty::{Buffer, Shared, Term};
+use crate::ide::files;
+use crate::ide::git;
 use crate::proc;
-use crate::pty::{Buffer, Shared, Term};
-use crate::session::{self, Places, Session};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -846,7 +850,7 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git;
+    use crate::ide::git;
     use crate::testutil::{commit_all, git, identity, write, Tmp};
 
     fn ok(text: &str) -> Outcome {

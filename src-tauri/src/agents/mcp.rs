@@ -1,7 +1,7 @@
 //! O servidor MCP do orquestrador: `orquestrador.exe --mcp <pasta da sessão>`. O CLI do orquestrador o abre como
 //! servidor stdio e fala com ele em JSON-RPC 2.0, uma mensagem por linha, pela entrada e pela saída padrão. As
 //! ferramentas são `delegar` e `aguardar`, e cada uma age sobre o lote da sessão (`delegate.rs`).
-use crate::delegate::{self, Waited};
+use crate::agents::delegate::{self, Waited};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};

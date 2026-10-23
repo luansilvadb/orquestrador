@@ -1,29 +1,20 @@
 //! Backend do app Orquestrador: terminais em que um CLI orquestra e outros executam.
-pub mod capacity;
-pub mod cli;
-pub mod platform;
+pub mod agents;
 pub mod config;
 pub mod core;
-pub mod projects;
-pub mod delegate;
-pub mod files;
-pub mod format;
-pub mod git;
-pub mod hook;
-pub mod mcp;
+pub mod ide;
 pub mod open_paths;
+pub mod platform;
 pub mod proc;
-pub mod pty;
-pub mod roles;
-pub mod search;
-pub mod session;
 pub mod update;
 #[cfg(test)]
 mod testutil;
 
+use crate::agents::{cli, session};
 use crate::config::{Choice, Options};
+use crate::core::projects::{Opened, ProjectSnapshot, Projects};
 use crate::core::Snapshot;
-use crate::projects::{Opened, ProjectSnapshot, Projects};
+use crate::ide::{files, format, git, search};
 use crate::update::Gate;
 use std::sync::Arc;
 use tauri::ipc::Invoke;

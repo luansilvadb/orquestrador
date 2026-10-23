@@ -4,8 +4,8 @@
 //! Antes, ponha uma imagem no clipboard (o driver faz isso). Uso, num PowerShell:
 //!   $env:ORQ_PASTE = 'codex'   # ou 'claude'
 //!   cargo test --test colagem -- --ignored --nocapture
-use orquestrador_lib::cli::Spawn;
-use orquestrador_lib::pty::{Buffer, Shared, Term};
+use orquestrador_lib::agents::cli::Spawn;
+use orquestrador_lib::core::pty::{Buffer, Shared, Term};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -141,7 +141,7 @@ fn colar_caminho_de_arquivo_no_cli_real() {
 #[test]
 #[ignore]
 fn cli_real_no_shell_abre_e_sai() {
-    use orquestrador_lib::cli::shell;
+    use orquestrador_lib::agents::cli::shell;
     let cli = std::env::var("ORQ_PASTE").unwrap_or("codex".into());
     let dir = std::env::temp_dir().join(format!("orq-paste-shell-{}-{cli}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

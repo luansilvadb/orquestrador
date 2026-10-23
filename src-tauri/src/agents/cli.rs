@@ -1,9 +1,9 @@
 //! As linhas de comando dos dois CLIs nos dois papéis, e o único lugar das permissões deles: flags, settings e env.
 //! Nenhum agente tem comando barrado pelo app (sem sandbox, lista de ferramentas, `deny` ou hook `PreToolUse`); o
 //! que cada papel faz vem só dos textos de `roles.rs`.
+use crate::agents::roles::{self, EXECUTOR};
+use crate::agents::session::Session;
 use crate::config::Choice;
-use crate::roles::{self, EXECUTOR};
-use crate::session::Session;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -178,8 +178,8 @@ pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, pr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::session::tests::{places, APP};
     use crate::config::Config;
-    use crate::session::tests::{places, APP};
     use crate::testutil::Tmp;
 
     fn exes() -> Exes {

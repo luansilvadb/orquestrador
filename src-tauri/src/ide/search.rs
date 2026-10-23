@@ -4,8 +4,8 @@
 //! o padrão roda linha a linha, sem a quebra de linha, e o CR do fim não conta. Binário, não UTF-8, grande, o que não é
 //! arquivo comum (link, junção, submódulo) e arquivo cujo fim de linha a gravação não preservaria ficam de fora, e
 //! a resposta diz quais e por quê.
-use crate::files;
-use crate::git;
+use crate::ide::files;
+use crate::ide::git;
 use crate::proc;
 use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};

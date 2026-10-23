@@ -3,10 +3,10 @@
 //!   $env:ORQ_REAL_REPO = 'C:\caminho\repo'; $env:ORQ_REAL = 'codex,claude'   # orquestrador,executor
 //!   cargo test --test real -- --ignored --nocapture
 use base64::Engine;
-use orquestrador_lib::cli::Exes;
+use orquestrador_lib::agents::cli::Exes;
+use orquestrador_lib::agents::session::Places;
 use orquestrador_lib::config::Choice;
 use orquestrador_lib::core::{Core, Emit, ORCHESTRATOR};
-use orquestrador_lib::session::Places;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::mpsc::channel;

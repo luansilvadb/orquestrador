@@ -1,10 +1,10 @@
 //! Registro das sessões de projeto e o Core separado dos shells sem projeto.
-use crate::capacity::{Global, Resources};
-use crate::cli::Exes;
+use crate::agents::cli::Exes;
+use crate::agents::session::Places;
 use crate::config::{self, Choice, Options};
+use crate::core::capacity::{Global, Resources};
 use crate::core::{Core, Emit};
 use crate::proc;
-use crate::session::Places;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -220,7 +220,7 @@ impl Drop for Projects {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capacity::Memory;
+    use crate::core::capacity::Memory;
     use crate::testutil::{git, identity, write, Tmp};
     use std::sync::mpsc;
 

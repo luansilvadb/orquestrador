@@ -4,8 +4,8 @@
 //! O app lê `requests\` e grava `results\<lote>.txt`; este módulo nunca escreve o resultado. A marca
 //! `results\<lote>.delivered` é gravada por quem chama, só depois que a resposta saiu: sem ela, `aguardar`
 //! pega o lote de novo.
-use crate::hook;
-use crate::session::owner_alive;
+use crate::agents::hook;
+use crate::agents::session::owner_alive;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 

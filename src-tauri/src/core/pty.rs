@@ -1,5 +1,5 @@
 //! Um CLI rodando num PTY (ConPTY), com a saída guardada desde o início e numerada.
-use crate::cli::Spawn;
+use crate::agents::cli::Spawn;
 use crate::platform::Job;
 use crate::proc::cli_do_job;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
