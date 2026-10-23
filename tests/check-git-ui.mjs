@@ -1087,7 +1087,7 @@ scenario('pasta sem repositório: o painel traz o texto e o botão, sem contador
   await page.getByText(NO_REPO_TEXT).waitFor();
   await initBtn(page).waitFor();
   await page.screenshot({ path: join(OUT, 'git-ui-sem-repositorio.png') });
-  assert.equal(await page.getByRole('heading', { name: 'Controle do Código-Fonte', exact: true }).count(), 1, 'título do painel');
+  assert.equal(await page.getByRole('heading', { name: 'Controle do Código-Fonte', exact: true }).count(), 0, 'sem título no painel');
   assert.equal(await page.getByRole('button', { name: 'Atualizar status' }).count(), 0, 'sem ações do painel cheio');
   assert.equal(await gitTab(page, 'Histórico').count(), 0, 'sem abas fora do repositório');
   assert.equal(await page.getByText('Publicar no GitHub').count(), 0, 'sem Publicar no GitHub');
@@ -1110,7 +1110,7 @@ scenario('pasta sem repositório: o painel traz o texto e o botão, sem contador
   await page.keyboard.press('Escape');
 });
 
-scenario('barra de status: 22 px, branch abre o Controle do Código-Fonte; Sincronizar mostra 0↓ 1↑, recebe e envia uma vez', async ({ page }) => {
+scenario('barra de status: 22 px, branch abre o painel Git; Sincronizar mostra 0↓ 1↑, recebe e envia uma vez', async ({ page }) => {
   const footer = page.locator('footer');
   const branch = footer.getByRole('button', { name: /^main, branch atual/ });
   await branch.waitFor();
@@ -1118,7 +1118,7 @@ scenario('barra de status: 22 px, branch abre o Controle do Código-Fonte; Sincr
   const sync = footer.getByRole('button', { name: /^Sincronizar as alterações/ });
   assert.equal((await sync.innerText()).trim(), '0↓ 1↑', 'contadores ao lado do ícone');
   await branch.click();
-  await page.getByRole('heading', { name: 'Controle do Código-Fonte', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Atualizar status' }).waitFor();
   await sync.click();
   await waitCount(page, 'git_push', 1);
   assert.equal((await calls(page, 'git_pull')).length, 1, 'git_pull uma vez');

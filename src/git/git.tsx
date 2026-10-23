@@ -262,12 +262,7 @@ function ChangesPanel({
 
   return (
     <Flexbox className="min-h-0" flex={1}>
-      <Flexbox horizontal align="center" gap={2} paddingInline={12} height={36} flex="none">
-        <Text as="h2" ellipsis weight={500} fontSize={12} color="var(--ant-color-text-secondary)" className="min-w-0 flex-1">Controle do Código-Fonte</Text>
-        <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar status" title="Atualizar status do Git" onClick={(e) => { spinIcon(e.currentTarget); void refresh(); }} />
-      </Flexbox>
-
-      <Flexbox paddingInline={12} gap={2}>
+      <Flexbox paddingInline={12} gap={2} className="pt-1.5">
         <Flexbox horizontal align="center" gap={6}>
           <BranchPicker branch={status.branch} locked={locked} busy={busy} withBusy={withBusy} refresh={refresh} />
           <Text
@@ -277,6 +272,7 @@ function ChangesPanel({
             <ArrowUp className="inline size-3 align-[-1px]" aria-hidden />{status.ahead}{' '}
             <ArrowDown className="inline size-3 align-[-1px]" aria-hidden />{status.behind}
           </Text>
+          <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar status" title="Atualizar status do Git" onClick={(e) => { spinIcon(e.currentTarget); void refresh(); }} />
         </Flexbox>
         {/* Buscar, Receber e Enviar já giram no próprio botão e terminam num aviso: sem texto aqui. */}
         {((busy && !running) || locked) && (
@@ -375,9 +371,6 @@ function NoRepoPanel({
       : `Esta pasta está dentro do repositório ${state.root}, que não é a raiz do projeto. O painel Git só funciona com a raiz do repositório aberta como projeto.`;
   return (
     <Flexbox className="min-h-0" flex={1}>
-      <Flexbox paddingInline={12} paddingBlock={6}>
-        <Text as="h2" ellipsis weight={500} fontSize={12} type="secondary">Controle do Código-Fonte</Text>
-      </Flexbox>
       <Flexbox gap={12} paddingInline={12} paddingBlock={8}>
         <Text as="p" fontSize={12} type="secondary">{text}</Text>
         {state.kind === 'no-repo' && (
