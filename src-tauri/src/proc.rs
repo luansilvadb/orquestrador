@@ -45,6 +45,8 @@ fn run_as(dir: &Path, globais: &[&str], args: &[&str], entrada: Option<&[u8]>) -
         .args(["-c", "core.quotepath=false"])
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
+        // O status periódico não regrava o índice: sem isso, ele segura o `index.lock` e o `git commit` de um agente falha.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_EDITOR", ":")
         .env("GIT_MERGE_AUTOEDIT", "no")
         .stdout(Stdio::piped())

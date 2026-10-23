@@ -307,7 +307,9 @@ pub fn commit(dir: &Path, message: &str) -> Result<(), String> {
     if message.is_empty() {
         return Err("Escreva a mensagem do commit.".into());
     }
-    if proc::git_saida(dir, &["diff", "--cached", "--name-only", "-z"])?.is_empty() {
+    // No meio de um merge, o commit conclui o merge mesmo com o índice igual ao HEAD (resolvido ficando com o lado atual).
+    let merging = proc::git_saida(dir, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_ok();
+    if !merging && proc::git_saida(dir, &["diff", "--cached", "--name-only", "-z"])?.is_empty() {
         return Err("Não há nada preparado para o commit.".into());
     }
     proc::git_saida(dir, &["commit", "-q", "-m", message]).map(|_| ())
@@ -939,9 +941,10 @@ impl Snap {
         files::fingerprint(&all)
     }
 
-    /// Os três lados como texto. Lado que não é UTF-8 ou grande demais recusa o conflito inteiro: não há como mostrá-lo.
+    /// Os três lados como texto. Lado atual ou de entrada que não é UTF-8 ou grande demais recusa o conflito inteiro: não há
+    /// como mostrá-lo. A base, que a tela não mostra, só fica de fora.
     fn sides(&self, dir: &Path, rel: &str) -> Result<[Option<String>; 3], String> {
-        Ok([self.side(dir, rel, 1)?, self.side(dir, rel, 2)?, self.side(dir, rel, 3)?])
+        Ok([self.side(dir, rel, 1).ok().flatten(), self.side(dir, rel, 2)?, self.side(dir, rel, 3)?])
     }
 
     fn side(&self, dir: &Path, rel: &str, n: u8) -> Result<Option<String>, String> {
@@ -1171,11 +1174,17 @@ fn index_blob(dir: &Path, rel: &str) -> Result<bool, String> {
 /// O modo de `rel` no índice no estágio 0 (`100644`, `100755`, `120000`, `160000`), ou `None` quando não há esse estágio.
 /// Registro de `ls-files -s`: `modo SP hash SP estágio TAB caminho`.
 fn index_mode(dir: &Path, rel: &str) -> Result<Option<String>, String> {
+    Ok(index_entry(dir, rel)?.map(|(modo, _)| modo))
+}
+
+/// Modo e hash de `rel` no estágio 0 do índice. Registro de `ls-files -s`: `modo SP hash SP estágio TAB caminho`.
+fn index_entry(dir: &Path, rel: &str) -> Result<Option<(String, String)>, String> {
     let raw = proc::git_bytes(dir, &["ls-files", "-s", "-z", "--", rel])?;
     Ok(raw.split(|b| *b == 0).find_map(|record| {
         let tab = record.iter().position(|&b| b == b'\t')?;
         let campos: Vec<&[u8]> = record[..tab].split(|&b| b == b' ').collect();
-        (&record[tab + 1..] == rel.as_bytes() && campos.len() == 3 && campos[2] == b"0").then(|| String::from_utf8_lossy(campos[0]).into_owned())
+        (&record[tab + 1..] == rel.as_bytes() && campos.len() == 3 && campos[2] == b"0")
+            .then(|| (String::from_utf8_lossy(campos[0]).into_owned(), String::from_utf8_lossy(campos[1]).into_owned()))
     }))
 }
 
@@ -1227,23 +1236,24 @@ pub fn write_index(dir: &Path, rel: &str, text: &str, expected: &str) -> Result<
     if is_folder(dir, rel)? {
         return Err(format!("{rel} é uma pasta, não um arquivo."));
     }
-    let perm = match index_mode(dir, rel)?.as_deref() {
-        Some(m @ ("100644" | "100755")) => m.to_string(),
+    let (perm, antes) = match index_entry(dir, rel)? {
+        Some((m, hash)) if m == "100644" || m == "100755" => (m, hash),
         Some(_) => return Err(format!("{rel} não é um arquivo comum no índice (link ou submódulo).")),
         None => return Err(format!("{rel} não está no índice (não rastreado, em conflito ou removido do índice): prepare o arquivo inteiro.")),
     };
+    let mudou = || format!("O índice de {rel} mudou desde que o editor o leu. Tente de novo.");
     let indice = format!(":{rel}");
     let Some(atual) = texto_base(dir, &indice)? else {
         return Err(format!("{rel} é binário ou grande demais no índice para preparar por trecho."));
     };
     if so_lf(&atual) != expected {
-        return Err(format!("O índice de {rel} mudou desde que o editor o leu. Tente de novo."));
+        return Err(mudou());
     }
     if misto(&atual) {
         return Err(format!("{rel} mistura CRLF e LF no índice: prepare o arquivo inteiro."));
     }
     let mut novo = if atual.contains("\r\n") { text.replace("\r\n", "\n").replace('\n', "\r\n") } else { text.to_string() };
-    let blob = proc::git_bytes(dir, &["cat-file", "blob", &indice])?;
+    let blob = proc::git_bytes(dir, &["cat-file", "blob", &antes])?;
     if blob.starts_with(&files::BOM) {
         novo.insert(0, '\u{feff}');
     }
@@ -1260,6 +1270,11 @@ pub fn write_index(dir: &Path, rel: &str, text: &str, expected: &str) -> Result<
         }
     }
     let hash = proc::git_entrada_saida(dir, &args, novo.as_bytes())?;
+    // Um `git add` de agente entre a leitura e aqui seria desfeito pelo `update-index`: confere o hash de novo.
+    // shortcut: sobra a janela entre esta conferência e o `update-index`, um processo só; o Git não tem troca condicional.
+    if index_entry(dir, rel)?.map(|(_, h)| h) != Some(antes) {
+        return Err(mudou());
+    }
     let info = format!("{perm},{},{rel}", hash.trim());
     proc::git_saida(dir, &["update-index", "--cacheinfo", &info]).map(drop)
 }
@@ -2274,6 +2289,28 @@ mod tests {
         assert!(why.contains("mudou desde"), "{why}");
         assert_eq!(fs::read_to_string(dir.join("x.txt")).unwrap(), "de fora\n");
         assert_eq!(find(&git_status_of(&dir), "x.txt").unstaged, Some(Kind::Conflicted));
+    }
+
+    #[test]
+    fn merge_resolvido_igual_ao_head_conclui_no_commit() {
+        let tmp = Tmp::new("orq-git", "merge-igual");
+        let dir = conflito(&tmp, "r", "base\n", "main\n", "outra\n");
+        let c = conflict(&dir, "x.txt").unwrap();
+        write_resolution(&dir, "x.txt", "main\n", &c.revision, true).unwrap();
+        assert_eq!(git(&dir, &["diff", "--cached", "--name-only"]), "", "o índice ficou igual ao HEAD");
+        commit(&dir, "merge").unwrap();
+        assert!(proc::git_saida(&dir, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_err(), "o merge terminou");
+        assert_eq!(commit(&dir, "vazio").unwrap_err(), "Não há nada preparado para o commit.", "fora do merge, segue recusando");
+    }
+
+    #[test]
+    fn base_ilegivel_nao_recusa_o_conflito() {
+        let tmp = Tmp::new("orq-git", "base-ilegivel");
+        let dir = conflito(&tmp, "r", b"\xff base\n".to_vec(), b"main\n".to_vec(), b"outra\n".to_vec());
+        let c = conflict(&dir, "x.txt").unwrap();
+        assert_eq!((c.ours.as_deref(), c.theirs.as_deref()), (Some("main\n"), Some("outra\n")));
+        write_resolution(&dir, "x.txt", "fim\n", &c.revision, true).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("x.txt")).unwrap(), "fim\n");
     }
 
     #[test]
