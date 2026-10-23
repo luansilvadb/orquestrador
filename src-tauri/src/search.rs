@@ -224,14 +224,21 @@ pub fn quick_open(dir: &Path, term: &str) -> Result<Quick, String> {
         .into_iter()
         .filter(|p| {
             let low = p.to_lowercase();
-            words.iter().all(|w| low.contains(w)) && files::plain(dir, p, false).is_ok()
+            words.iter().all(|w| low.contains(w))
         })
         .collect();
     let name_of = |p: &str| p.rsplit('/').next().unwrap_or(p).to_lowercase();
     hits.sort_by_key(|p| (!words.iter().all(|w| name_of(p).contains(w)), p.len(), p.clone()));
-    let total = hits.len();
-    hits.truncate(MAX_QUICK);
-    Ok(Quick { paths: hits, total })
+    // `plain` toca o disco, então só confere os que entram na lista. O total desconta os recusados entre os conferidos.
+    let mut total = hits.len();
+    let mut paths = Vec::new();
+    for p in hits {
+        if paths.len() == MAX_QUICK {
+            break;
+        }
+        if files::plain(dir, &p, false).is_ok() { paths.push(p) } else { total -= 1 }
+    }
+    Ok(Quick { paths, total })
 }
 
 /// A prévia da substituição de `query` por `replacement`. Lê tudo e não grava nada. Consulta vazia devolve prévia vazia.
@@ -378,7 +385,8 @@ fn filters(query: &Query) -> Result<Filter, String> {
     Ok(Filter { include: compile_all(&query.include)?, exclude: compile_all(&query.exclude)?, only })
 }
 
-/// Trecho de caminho com `*` e `?`; o resto é literal. Sem `./` na frente, acha o trecho em qualquer lugar do caminho.
+/// Trecho de caminho com `*` e `?`; o resto é literal. Sem `./` na frente, acha o trecho em qualquer lugar do caminho;
+/// com `*` ou `?`, o trecho vai até o fim de um nome: `*.js` não casa `package.json`.
 /// Com `./`, o trecho começa na raiz e vai até o fim de um nome: `./src` casa `src` e o que está dentro, mas não
 /// `src-tauri` nem `outro/src`. `./` sozinho (ou `.`) é o projeto inteiro.
 fn glob(term: &str) -> Result<Regex, String> {
@@ -388,6 +396,7 @@ fn glob(term: &str) -> Result<Regex, String> {
     let pattern = match rooted.map(|rest| rest.trim_end_matches('/')) {
         Some("") => "^".to_string(),
         Some(rest) => format!("(?i)^{}(?:/|$)", body(rest)),
+        None if term.contains(['*', '?']) => format!("(?i){}(?:/|$)", body(term)),
         None => format!("(?i){}", body(term)),
     };
     Regex::new(&pattern).map_err(|e| format!("Filtro de caminho inválido: {}", regex_reason(&e)))
@@ -710,11 +719,12 @@ mod tests {
         write(&t.0, "src/a.ts", "marca\n");
         write(&t.0, "src/b.md", "marca\n");
         write(&t.0, "docs/c.ts", "marca\n");
+        write(&t.0, "src/d.tsx", "marca\n");
         commit_all(&t.0, "base");
         let so_ts = Query { include: vec!["*.ts".into()], ..q("marca") };
-        assert_eq!(caminhos(&buscar(&t.0, &so_ts)), vec!["docs/c.ts", "src/a.ts"]);
+        assert_eq!(caminhos(&buscar(&t.0, &so_ts)), vec!["docs/c.ts", "src/a.ts"], "*.ts não casa .tsx");
         let sem_docs = Query { exclude: vec!["docs/".into()], ..q("marca") };
-        assert_eq!(caminhos(&buscar(&t.0, &sem_docs)), vec!["src/a.ts", "src/b.md"]);
+        assert_eq!(caminhos(&buscar(&t.0, &sem_docs)), vec!["src/a.ts", "src/b.md", "src/d.tsx"]);
     }
 
     #[test]
