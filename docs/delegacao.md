@@ -35,5 +35,3 @@ Limites:
   - **Codex 0.162.1**, com `approval_policy` `never`: toda chamada MCP é negada (`MCP tool call requires approval, but approval policy is never`), a menos que o servidor tenha `default_tools_approval_mode = "approve"`. Os valores `auto`, `writes` e `prompt` e o `enabled_tools` não liberam. A anotação `readOnlyHint` liberaria, mas `delegar` não é só leitura. Com `approve`, o texto chegou exato. Chamadas de 90 s (sem ajuste) e de 400 s (com `tool_timeout_sec = 900`) voltaram normalmente. Ver `codex_mcp`, em `src-tauri/src/cli.rs`.
 
 O fim da rodada de um executor é detectado pelo hook `Stop` do Claude Code e pelo `notify` do Codex, que chamam o próprio executável do app.
-
-Limite: interromper a rodada não manda sinal em nenhum dos dois CLIs (nem o `Stop`, nem o `notify` do Codex; medido com o Esc). Por isso o app conta o Esc sozinho no terminal do orquestrador, com ele ocupado, como fim da rodada, sem distinguir se o Esc de fato interrompeu algo. Outra forma de interromper, como o Ctrl+C, não foi medida nem é reconhecida: depois dela, o app continua vendo o orquestrador ocupado até o próximo `Stop`, um Esc ou o fim do orquestrador.
