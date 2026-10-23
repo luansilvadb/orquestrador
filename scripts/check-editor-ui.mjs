@@ -340,7 +340,7 @@ scenario('fechar a janela: Descartar fecha e não grava; Salvar grava antes de f
   assert.equal((await page.evaluate(() => window.__mock.disk('README.md'))).includes('descartar'), false, 'Descartar não gravou');
 });
 
-scenario('fechar a janela: Salvar com gravação lenta; digitação nova durante o save não fecha a janela nem perde o texto', async ({ page }) => {
+scenario('fechar a janela: Salvar com gravação lenta segura o diálogo até gravar, e só então fecha', async ({ page }) => {
   await treeItem(page, 'README.md').dblclick();
   await focusEditor(page);
   await page.keyboard.press('Control+End');
@@ -350,15 +350,13 @@ scenario('fechar a janela: Salvar com gravação lenta; digitação nova durante
   const ask = page.getByRole('dialog').filter({ hasText: 'alterações não salvas' });
   await ask.waitFor();
   await ask.getByRole('button', { name: 'Salvar' }).click();
-  // Durante a gravação lenta o usuário digita: esse texto novo não pode sumir nem fechar a janela.
-  await page.waitForTimeout(300);
-  await focusEditor(page);
-  await page.keyboard.press('Control+End');
-  await page.keyboard.type(' NOVO');
-  await page.waitForTimeout(2300);
-  assert.equal(await page.evaluate(() => document.body.textContent.includes('Janela fechada')), false, 'a janela não fechou com texto novo sujo');
-  assert.ok((await editorText(page)).includes('NOVO'), 'texto digitado durante a gravação continua no editor');
-  assert.ok((await page.evaluate(() => window.__mock.disk('README.md'))).includes('salvo'), 'a gravação anterior chegou ao disco');
+  // Durante a gravação o diálogo fica, com Cancelar desligado: não há como voltar a digitar no meio do save.
+  await ask.getByRole('button', { name: 'Salvando…' }).waitFor();
+  assert.equal(await ask.getByRole('button', { name: 'Cancelar' }).isDisabled(), true, 'Cancelar desligado durante a gravação');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => document.body.textContent.includes('Janela fechada')), false, 'não fecha antes de gravar');
+  await page.waitForFunction(() => document.body.textContent.includes('Janela fechada'), null, { timeout: 5000 });
+  assert.ok((await page.evaluate(() => window.__mock.disk('README.md'))).includes('salvo'), 'a gravação chegou ao disco antes de fechar');
 });
 
 scenario('busca: resultado com emoji posiciona o cursor na coluna UTF-16 exata (linha 2, coluna 7)', async ({ page }) => {

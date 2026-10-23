@@ -71,6 +71,38 @@ scenario('fechar projeto com orquestrador pede confirmação', async ({ page }) 
   assert.equal(await tabs(page).count(), 1);
 });
 
+// Edita o README do projeto ativo (simulado-2, o último aberto).
+async function dirtyReadme(page) {
+  await page.getByRole('treeitem', { name: 'README.md', exact: true }).click();
+  await page.locator('.cm-content:visible').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type(' sujo');
+}
+const closeAsk = (page) => page.getByRole('dialog').filter({ hasText: 'alterações não salvas' });
+
+scenario('fechar a janela pergunta pelas edições do projeto que não está ativo', async ({ page }) => {
+  await twoProjects(page);
+  await dirtyReadme(page);
+  await tabs(page).first().click();
+  await page.evaluate(() => { void window.__mock.close(); });
+  await closeAsk(page).getByText('simulado-2: README.md', { exact: false }).waitFor();
+  await closeAsk(page).getByRole('button', { name: 'Cancelar' }).click();
+  await closeAsk(page).waitFor({ state: 'hidden' });
+  assert.equal(await page.evaluate(() => document.body.textContent.includes('Janela fechada')), false, 'Cancelar não fecha');
+});
+
+scenario('fechar a aba de projeto com edição suja pergunta antes', async ({ page }) => {
+  await twoProjects(page);
+  await dirtyReadme(page);
+  await page.getByRole('button', { name: 'Fechar simulado-2' }).click();
+  await closeAsk(page).getByText('README.md', { exact: false }).waitFor();
+  await closeAsk(page).getByRole('button', { name: 'Cancelar' }).click();
+  assert.equal(await tabs(page).count(), 2, 'Cancelar mantém a aba');
+  await page.getByRole('button', { name: 'Fechar simulado-2' }).click();
+  await closeAsk(page).getByRole('button', { name: 'Descartar' }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('header [role="tab"]')].filter((el) => getComputedStyle(el).visibility === 'visible').length === 1);
+});
+
 scenario('fechar a última aba volta ao modo sem projeto', async ({ page }) => {
   await twoProjects(page);
   await page.getByRole('button', { name: 'Fechar simulado-2' }).click();

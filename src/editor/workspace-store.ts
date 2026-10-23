@@ -54,7 +54,7 @@ export function remapData(data: EditorData, from: string, to: string): EditorDat
   const conflicts: Record<string, ConflictDraft> = {};
   for (const draft of Object.values(data.conflicts)) {
     const path = move(draft.path);
-    conflicts[path.toLowerCase()] = { ...draft, path };
+    conflicts[conflictKey(path)] = { ...draft, path };
   }
   return { buffers, conflicts };
 }

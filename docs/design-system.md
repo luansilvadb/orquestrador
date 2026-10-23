@@ -101,6 +101,6 @@ Antes de gravar sobre um arquivo que mudou no disco, o editor mostra as duas ver
 
 ## Fechamento
 
-Fechar a janela com alterações não salvas abre um modal com Salvar, Descartar e Cancelar. Salvar grava tudo e só fecha se nada falhou e nenhum texto novo ficou sujo. Descartar descarta os rascunhos, grava a recuperação de imediato (sem rascunho, com abas e layout) e encerra. Cancelar mantém tudo. Terminais vivos têm a mesma confirmação de antes.
+Fechar a janela com alterações não salvas, em qualquer projeto aberto (os de outro projeto vêm com o nome da pasta na frente), abre um modal com Salvar, Descartar e Cancelar; fechar a aba de um projeto pergunta pelos arquivos dele. Salvar grava tudo e só fecha se nada falhou e nenhum texto novo ficou sujo. Descartar descarta os rascunhos, grava a recuperação de imediato (sem rascunho, com abas e layout) e encerra. Cancelar mantém tudo. Terminais vivos têm a mesma confirmação de antes.
 
 Lista de abas (`TabListMenu`, `src/shared/tab-list-menu.tsx`), a mesma no Orquestrador, no Terminal e no editor: o gatilho é o `Button` de texto com `List` e a contagem; o menu é o `DropdownMenu`, com itens de 26 px, ícone na margem, rótulo que corta em 288 px e, à direita, o estado, o `●` de alteração não salva e o check da ativa. Com `onClose`, a linha destacada troca o check por um X (só para o ponteiro) e Delete fecha a aba destacada; o menu continua aberto, menos na aba não salva, que pede confirmação.

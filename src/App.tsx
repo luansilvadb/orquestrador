@@ -9,7 +9,7 @@ import { fileName } from './shared/file-tabs';
 import { createGitGuard } from './git/git-guard';
 import { GitSidebar, usePolled } from './git/git';
 import { type HistoryRequest } from './git/git-history';
-import { copy, join } from './shared/paths';
+import { copy, join, splitPath } from './shared/paths';
 import { QuickOpen } from './editor/quick-open';
 import { SearchScreen } from './search/search';
 import { SHELL_HEIGHT, SHELL_MIN, ShellPanel } from './terminal/shell-panel';
@@ -54,6 +54,13 @@ const pendingProjectFiles = new Map<string, string[]>();
 let looseFileOpener: ((path: string) => void) | null = null;
 export let openAbsolutePath = async (_path: string) => {};
 let windowCloseRequest: (() => Promise<boolean>) | null = null;
+// Os editores montados, por projeto ('' é o modo sem projeto): o fechamento da janela consulta todos, não só o ativo.
+const editorHandles = new Map<string, { name: string; editor: React.RefObject<EditorWorkspaceHandle | null> }>();
+type PendingEditor = { editor: EditorWorkspaceHandle; prefix: string };
+const unsavedOf = (list: PendingEditor[]) => list.flatMap(({ editor, prefix }) => editor.unsaved().map((path) => prefix + path));
+// O editor de cada projeto montado; os de outro projeto levam o nome da pasta na frente dos arquivos.
+const mountedEditors = (current: string): PendingEditor[] => [...editorHandles].flatMap(([id, { name, editor }]) =>
+  editor.current ? [{ editor: editor.current, prefix: id === current ? '' : `${name}: ` }] : []);
 
 function readRecentProjects(): string[] {
   try {
@@ -417,6 +424,11 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   const [route, setRoute] = useState<Route>('arquivos');
   // Área do editor central (grupos, abas, rascunhos e recuperação ficam nele). O App só pede coisas por este handle.
   const editor = useRef<EditorWorkspaceHandle>(null);
+  useEffect(() => {
+    const key = initialProject?.id ?? '';
+    editorHandles.set(key, { name: splitPath((initialProject?.project ?? '').replace(/\\/g, '/')).name, editor });
+    return () => { if (editorHandles.get(key)?.editor === editor) editorHandles.delete(key); };
+  }, [initialProject?.id]);
   // Trava das operações Git da UI: a barra lateral e o editor dividem a mesma.
   const [gitGuard] = useState(createGitGuard);
   // Sincronizar da barra de status em curso: o ícone gira e o botão fica parado.
@@ -545,30 +557,41 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     closeAnswer.current = null;
   };
 
+  // Salvar, descartar ou cancelar as alterações não salvas de `list`. `true` libera o fechamento, com a recuperação já gravada.
+  const settleUnsaved = async (list: PendingEditor[], running: boolean, projectWork?: ProjectSnapshot) => {
+    let choice = await askClose(unsavedOf(list), running, projectWork);
+    while (choice === 'save') {
+      const saved = (await Promise.all(list.map(({ editor }) => editor.saveAll()))).every(Boolean);
+      const left = unsavedOf(list);
+      if (saved && left.length === 0) break;
+      report(new Error('Não foi possível salvar tudo. Nada foi fechado.'));
+      setCloseSaving(false);
+      if (left.length === 0) { setCloseAsk(null); return false; }
+      choice = await askClose(left, running, projectWork);
+    }
+    if (choice === 'cancel') return false;
+    if (choice === 'discard') for (const { editor } of list) editor.discardAll();
+    setCloseSaving(false);
+    setCloseAsk(null);
+    for (const { editor } of list) editor.flushRecovery();
+    return true;
+  };
+  // O editor de um projeto montado, sozinho: o fechamento da aba só pergunta pelos arquivos dele.
+  const editorOf = (id: string): PendingEditor[] => {
+    const handle = editorHandles.get(id)?.editor.current;
+    return handle ? [{ editor: handle, prefix: '' }] : [];
+  };
+
   useEffect(() => {
     if (!active) return;
     const mayClose = async () => {
+      const list = mountedEditors(initialProject?.id ?? '');
       try {
         const running = await backend.hasRunning();
-        const unsaved = editor.current?.unsaved() ?? [];
-        if (unsaved.length > 0) {
-          let choice = await askClose(unsaved, running);
-          while (choice === 'save') {
-            const saved = await editor.current!.saveAll();
-            const left = editor.current!.unsaved();
-            if (saved && left.length === 0) break;
-            report(new Error('Não foi possível salvar tudo. Nada foi fechado.'));
-            setCloseSaving(false);
-            if (left.length === 0) { setCloseAsk(null); return false; }
-            choice = await askClose(left, running);
-          }
-          if (choice === 'cancel') return false;
-          if (choice === 'discard') editor.current!.discardAll();
-          setCloseSaving(false);
-          setCloseAsk(null);
-          editor.current?.flushRecovery();
-        } else if (running && (await askClose([], true)) !== 'close') return false;
+        if (unsavedOf(list).length > 0) return await settleUnsaved(list, running);
+        if (running && (await askClose([], true)) !== 'close') return false;
       } catch { /* Sem resposta do backend, deixa a janela fechar. */ }
+      for (const { editor } of list) editor.flushRecovery();
       return true;
     };
     windowCloseRequest = mayClose;
@@ -794,8 +817,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     if (!id || stateRef.current.projectBusy) return;
     dispatch({ type: 'projectBusy', busy: true });
     try {
-      const work = await backend.projectSnapshot(id);
-      if ((work.orchestratorOpen || work.executorsRunning > 0 || work.executorsQueued > 0) && (await askClose([], true, work)) !== 'close') {
+      if (!(await mayCloseProject(id))) {
         dispatch({ type: 'projectBusy', busy: false });
         return;
       }
@@ -814,13 +836,21 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     }
   }
 
+  // Arquivos não salvos e trabalho do projeto `id` (orquestrador, executores e fila): pergunta antes de fechar a aba.
+  async function mayCloseProject(id: string) {
+    const work = await backend.projectSnapshot(id);
+    const busy = work.orchestratorOpen || work.executorsRunning > 0 || work.executorsQueued > 0;
+    const list = editorOf(id);
+    if (unsavedOf(list).length > 0) return settleUnsaved(list, busy, busy ? work : undefined);
+    if (busy && (await askClose([], true, work)) !== 'close') return false;
+    for (const { editor } of list) editor.flushRecovery();
+    return true;
+  }
+
   async function closeTab(id: string) {
     if (id === stateRef.current.projectId) return closeProject();
     try {
-      const work = await backend.projectSnapshot(id);
-      if ((work.orchestratorOpen || work.executorsRunning > 0 || work.executorsQueued > 0)
-        && (await askClose([], true, work)) !== 'close') return;
-      onClose?.(id);
+      if (await mayCloseProject(id)) onClose?.(id);
     } catch (e) { report(e); }
   }
 

@@ -68,10 +68,11 @@ check('Salvar como pode remapear um arquivo solto', () => {
   assert.equal(remapData(data, 'C:/arquivos/a.ts', 'C:/arquivos/b.ts').buffers.d1.path, 'C:/arquivos/b.ts');
 });
 check('Conflito acompanha o rename: a chave muda para o caminho novo', () => {
-  const data = { buffers: {}, conflicts: { 'src/c.ts': { path: 'src/c.ts', origin: 'o', draft: 'p', revision: 'r' } } };
+  const data = { buffers: {}, conflicts: { 'conflict:src/c.ts': { path: 'src/c.ts', origin: 'o', draft: 'p', revision: 'r' } } };
   const moved = remapData(data, 'src', 'lib');
-  assert.deepEqual(Object.keys(moved.conflicts), ['lib/c.ts']);
-  assert.equal(moved.conflicts['lib/c.ts'].draft, 'p');
+  assert.deepEqual(Object.keys(moved.conflicts), [conflictKey('lib/c.ts')]);
+  assert.equal(moved.conflicts[conflictKey('lib/c.ts')].draft, 'p');
+  assert.deepEqual(Object.keys(remapData(data, 'outra', 'nova').conflicts), [conflictKey('src/c.ts')], 'rename de fora mantém a chave');
 });
 check('hasDraftAt: rascunho dentro da pasta bloqueia, irmã não', () => {
   const data = { buffers: { 'd1': buffer({ docId: 'd1', path: 'src/a.ts', draft: 'mudou' }) }, conflicts: {} };

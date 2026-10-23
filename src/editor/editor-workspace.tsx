@@ -215,6 +215,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   // Restaura a recuperação uma vez, na montagem (lê o localStorage de forma síncrona e valida tudo).
   const [boot] = useState(() => {
     let text: string | null = null;
+    let readFailed = false;
     const notes: string[] = [];
     try {
       text = localStorage.getItem(STORAGE(storageProject));
@@ -222,8 +223,9 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       // Erro de leitura não é primeira abertura: avisa, e a edição começa vazia sem apagar a recuperação gravada.
       notes.push(`Não foi possível ler a recuperação (${message(e)}). Começou vazia.`);
       text = null;
+      readFailed = true;
     }
-    if (text === null) return { ws: createWorkspace(), data: emptyData(), split: DEFAULT_SPLIT, layout: null as string | null, notes, cursors: {} as Record<string, Cursor>, scrolls: {} as Record<string, Scroll> };
+    if (text === null) return { ws: createWorkspace(), data: emptyData(), split: DEFAULT_SPLIT, layout: null as string | null, notes, cursors: {} as Record<string, Cursor>, scrolls: {} as Record<string, Scroll>, readFailed };
     const decoded = decodeRecovery(text, storageProject);
     notes.push(...decoded.notes);
     const ws = decoded.recovery.workspace ? loadWorkspace(decoded.recovery.workspace, true) : { state: createWorkspace(), notes: [] };
@@ -239,7 +241,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       if (b.dirty && (b.path !== '' || draftIds.has(b.docId))) data.buffers[b.docId] = { docId: b.docId, path: b.path, ...b.dirty };
     }
     for (const c of decoded.recovery.conflicts) data.conflicts[conflictKey(c.path)] = c;
-    return { ws: ws.state, data, split: decoded.recovery.split ?? DEFAULT_SPLIT, layout: decoded.recovery.layout, notes, cursors, scrolls };
+    return { ws: ws.state, data, split: decoded.recovery.split ?? DEFAULT_SPLIT, layout: decoded.recovery.layout, notes, cursors, scrolls, readFailed };
   });
 
   const [ws, setWsState] = useState<WorkspaceState>(boot.ws);
@@ -257,6 +259,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const scrolls = useRef<Record<string, Scroll>>(boot.scrolls);
   // Cursor e rolagem não passam pelo estado: este atraso os põe na fila de gravação da recuperação sem re-renderizar a área.
   const persistTimer = useRef(0);
+  // Leitura da recuperação falhou: nada é gravado por cima dela até o usuário mexer nas abas ou nos textos.
+  const untouched = useRef(boot.readFailed);
   const [compare, setCompare] = useState<Compare | null>(null);
   const saving = useRef(new Set<string>());
   const askOpen = useRef(false);
@@ -698,6 +702,10 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   // Grava a recuperação: com atraso (edição rápida não escreve a cada tecla) e de imediato ao sair da página ou desmontar.
   // Falha de quota vira aviso e não derruba a edição. Layout e divisor ficam mesmo sem abas; só some quando não há nada.
   const persist = () => {
+    if (untouched.current) {
+      if (wsRef.current === boot.ws && dataRef.current === boot.data) return;
+      untouched.current = false;
+    }
     const open = wsRef.current.groups.flatMap((g) => g.tabs);
     const savedWorkspace = wsRef.current;
     const savedTabs = savedWorkspace.groups.flatMap((g) => g.tabs);
