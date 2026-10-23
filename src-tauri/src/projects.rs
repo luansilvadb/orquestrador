@@ -301,4 +301,19 @@ mod tests {
         assert!(projects.shell_core(None).unwrap().repo().is_err());
     }
 
+    #[test]
+    fn escolha_do_executor_invalida_nao_grava_e_valida_persiste() {
+        let (projects, root, _, _) = fixture("escolha-executor");
+        let config_path = root.0.join("config.json");
+
+        assert!(projects.set_executor_choice(Choice::new("codex", "", "enorme")).is_err());
+        assert!(!config_path.exists());
+
+        projects.set_executor_choice(Choice::new("codex", "gpt-5.5", "high")).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(saved["executor"]["tool"], "codex");
+        assert_eq!(saved["executor"]["model"], "gpt-5.5");
+        assert_eq!(saved["executor"]["effort"], "high");
+    }
+
 }

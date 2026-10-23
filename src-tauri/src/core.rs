@@ -441,18 +441,6 @@ impl Core {
         Ok(())
     }
 
-    pub fn set_executor_choice(&self, choice: Choice) -> Result<(), String> {
-        config::check_choice("executor", &choice)?;
-        let mut inner = self.lock()?;
-        let _config = self.config_lock();
-        let mut cfg = config::read(&inner.cfg_path)?;
-        cfg.executor = choice.clone();
-        config::save(&inner.cfg_path, &cfg)?;
-        inner.choice = Some(choice.clone());
-        self.schedule(&mut inner);
-        Ok(())
-    }
-
     pub fn apply_executor_choice(&self, choice: Choice) -> Result<(), String> {
         let mut inner = self.lock()?;
         inner.choice = Some(choice);

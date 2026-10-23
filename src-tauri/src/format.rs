@@ -137,14 +137,8 @@ fn set_editor_option(options: &mut Map<String, Value>, key: &str, value: &str) {
     }
 }
 
-fn editorconfig_file(directory: &Path, file: &Path, options: &mut Map<String, Value>) -> Result<bool, String> {
-    let config = directory.join(".editorconfig");
-    if !config.is_file() {
-        return Ok(false);
-    }
-    let text = std::fs::read_to_string(&config).map_err(|e| format!("Não foi possível ler {}: {e}", config.display()))?;
+fn editorconfig_file(text: &str, file: &Path, options: &mut Map<String, Value>) {
     let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    let mut root = false;
     let mut section: Option<String> = None;
     let mut properties = Vec::new();
     let apply = |properties: &[(String, String)], options: &mut Map<String, Value>| {
@@ -186,9 +180,7 @@ fn editorconfig_file(directory: &Path, file: &Path, options: &mut Map<String, Va
         } else if let Some((key, value)) = line.split_once('=') {
             let key = key.trim().to_ascii_lowercase();
             let value = value.trim().to_string();
-            if section.is_none() && key == "root" && value.eq_ignore_ascii_case("true") {
-                root = true;
-            } else if section.is_some() {
+            if section.is_some() {
                 properties.push((key, value));
             }
         }
@@ -196,7 +188,20 @@ fn editorconfig_file(directory: &Path, file: &Path, options: &mut Map<String, Va
     if let Some(pattern) = section {
         if section_matches(&pattern, name) { apply(&properties, options); }
     }
-    Ok(root)
+}
+
+fn editorconfig_root(text: &str) -> bool {
+    let mut preamble = true;
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') { continue; }
+        if line.starts_with('[') && line.ends_with(']') { preamble = false; }
+        else if preamble {
+            if let Some((key, value)) = line.split_once('=') {
+                if key.trim().eq_ignore_ascii_case("root") && value.trim().eq_ignore_ascii_case("true") { return true; }
+            }
+        }
+    }
+    false
 }
 
 fn editorconfig_options(directory: &Path, file: &Path) -> Result<Map<String, Value>, String> {
@@ -204,19 +209,16 @@ fn editorconfig_options(directory: &Path, file: &Path) -> Result<Map<String, Val
     for dir in directory.ancestors() {
         let config = dir.join(".editorconfig");
         if config.is_file() {
-            configs.push(dir.to_path_buf());
             let content = std::fs::read_to_string(&config)
                 .map_err(|e| format!("Não foi possível ler {}: {e}", config.display()))?;
-            if content.lines().any(|line| line.split_once('=').is_some_and(|(key, value)|
-                key.trim().eq_ignore_ascii_case("root") && value.trim().eq_ignore_ascii_case("true")))
-            {
-                break;
-            }
+            let root = editorconfig_root(&content);
+            configs.push(content);
+            if root { break; }
         }
     }
     let mut options = Map::new();
-    for dir in configs.iter().rev() {
-        editorconfig_file(dir, file, &mut options)?;
+    for content in configs.iter().rev() {
+        editorconfig_file(content, file, &mut options);
     }
     Ok(options)
 }
@@ -373,6 +375,23 @@ mod tests {
         assert_eq!(options.get("printWidth"), Some(&json!(100)));
         let json_options = editorconfig_options(&tmp.0, &tmp.0.join("data.json")).unwrap();
         assert_eq!(json_options.get("tabWidth"), Some(&json!(4)));
+    }
+
+    #[test]
+    fn root_editorconfig_so_interrompe_no_preambulo() {
+        let tmp = Tmp::new("orq-format", "editorconfig-root");
+        let nested = tmp.0.join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        write(&tmp.0, ".editorconfig", "[*]\nindent_size = 4\nmax_line_length = 80\n");
+        write(&nested, ".editorconfig", "[*]\nroot = true\nindent_size = 2\n");
+        let options = editorconfig_options(&nested, &nested.join("file.js")).unwrap();
+        assert_eq!(options.get("tabWidth"), Some(&json!(2)));
+        assert_eq!(options.get("printWidth"), Some(&json!(80)));
+
+        write(&nested, ".editorconfig", "root = true\n[*]\nindent_size = 2\n");
+        let options = editorconfig_options(&nested, &nested.join("file.js")).unwrap();
+        assert_eq!(options.get("tabWidth"), Some(&json!(2)));
+        assert_eq!(options.get("printWidth"), None);
     }
 
     #[test]

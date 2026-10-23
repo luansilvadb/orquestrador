@@ -4,7 +4,7 @@
 use base64::Engine;
 use orquestrador_lib::capacity::{Memory, Resources};
 use orquestrador_lib::cli::Exes;
-use orquestrador_lib::config::Choice;
+use orquestrador_lib::config::{self, Choice};
 use orquestrador_lib::core::{title, Core, Emit, ORCHESTRATOR};
 use orquestrador_lib::session::Places;
 use serde_json::{json, Value};
@@ -275,7 +275,7 @@ impl Bench {
     /// espera o orquestrador falso desenhar.
     fn pronto(&self) {
         self.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
-        self.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+        self.core.apply_executor_choice(Choice::new("claude", "", "")).unwrap();
         until("o orquestrador falso desenhar", || self.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
     }
 
@@ -330,8 +330,8 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     assert_eq!(b.core.term_snapshot("não existe").unwrap().seq, 0);
 
     // Teto 2 (das CPUs): A e B abrem, C fica na fila; quando A termina, C abre e falha sem sinal de fim.
-    assert!(b.core.set_executor_choice(Choice::new("codex", "", "enorme")).is_err());
-    b.core.set_executor_choice(Choice::new("codex", "gpt-x", "low")).unwrap();
+    assert!(config::check_choice("executor", &Choice::new("codex", "", "enorme")).is_err());
+    b.core.apply_executor_choice(Choice::new("codex", "gpt-x", "low")).unwrap();
     assert_eq!(b.state(&a, "running")["choice"]["model"], "gpt-x");
     b.state(&bb, "running");
     b.state(&c, "queued");
@@ -360,7 +360,7 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     assert_eq!(b.core.term_snapshot(&a).unwrap().seq, 0, "o slot do executor concluído saiu");
 
     // Com a escolha feita, o próximo lote abre sozinho; agora com executor Claude.
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+    b.core.apply_executor_choice(Choice::new("claude", "", "")).unwrap();
     let run = m.start("delegar", json!({ "tarefas": ["Só uma: coração"] }));
     let node = &b.added(1)[0];
     assert_eq!(b.state(&id(node), "running")["choice"]["tool"], "claude");
@@ -452,7 +452,7 @@ fn saida_do_orquestrador_mata_os_executores_e_limpa_a_sessao() {
     assert!(!rule.exists() && !b.root.join("rules").exists());
     until("o orquestrador falso desenhar", || b.screen(ORCHESTRATOR).contains("orquestrador falso pronto"));
 
-    b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
+    b.core.apply_executor_choice(Choice::new("claude", "", "")).unwrap();
     let mut m = b.mcp();
     let run = m.start("delegar", json!({ "tarefas": ["DORMIR"] }));
     let node = id(&b.added(1)[0]);
@@ -469,7 +469,7 @@ fn saida_do_orquestrador_mata_os_executores_e_limpa_a_sessao() {
     // Reabre vazio, e a última escolha do orquestrador ficou salva.
     b.core.start_orchestrator(Choice::new("claude", "", ""), 100, 30).unwrap();
     let saved: Value = serde_json::from_str(&std::fs::read_to_string(b.root.join("config.json")).unwrap()).unwrap();
-    assert_eq!((saved["orchestrator"]["tool"].as_str(), saved["executor"]["tool"].as_str()), (Some("claude"), Some("claude")));
+    assert_eq!(saved["orchestrator"]["tool"].as_str(), Some("claude"));
 }
 
 /// Tarefa longa, com Unicode, aspas e barra no fim, de uns 9000 bytes.

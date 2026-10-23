@@ -37,7 +37,7 @@ fn lote_real() {
     let core = Core::new(exes, Places::real(), std::env::temp_dir().join("orq-real-config.json"), emit);
     core.set_project(std::path::Path::new(&repo)).unwrap();
     core.start_orchestrator(cheap(orchestrator), 120, 40).unwrap();
-    core.set_executor_choice(cheap(executor)).unwrap();
+    core.apply_executor_choice(cheap(executor)).unwrap();
     let session = core.session_dir().unwrap();
     println!("sessão: {}", session.display());
 
