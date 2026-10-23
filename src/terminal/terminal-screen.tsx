@@ -7,6 +7,7 @@ import { Center, Flexbox, type PresetColorKey } from '@lobehub/ui';
 import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
 import { SECONDARY } from '../window/text-style';
+import { OpenProjectPrompt } from '../shared/open-project';
 import { TermHost, terminals } from './terminals';
 import { revealTab, wheelToScroll } from '../shared/tab-strip';
 import { ORCHESTRATOR, TOOL_NAME, type Choice, type ExecutorNode, type NodeState, type Tool } from '../backend/types';
@@ -66,6 +67,8 @@ const Cover = ({ children }: { children: ReactNode }) => (
 );
 
 type TerminalsProps = {
+  projectOpen: boolean;
+  onOpenProject: () => void;
   orchestrator: { choice: Choice | null } | null;
   executors: ExecutorNode[];
   executorChoice: Choice | null;
@@ -81,7 +84,7 @@ type TerminalsProps = {
 };
 
 /** Painel à direita: abas em cima (orquestrador fixo, um executor por aba) e, embaixo, o terminal da aba ativa. */
-export function TerminalsScreen({ orchestrator, executors, executorChoice, notice, width, maxWidth, onWidthChange, onOpen, onExecutorChoice, onStop }: TerminalsProps) {
+export function TerminalsScreen({ projectOpen, onOpenProject, orchestrator, executors, executorChoice, notice, width, maxWidth, onWidthChange, onOpen, onExecutorChoice, onStop }: TerminalsProps) {
   const [picked, setPicked] = useState<string>(ORCHESTRATOR);
   // Aba de executor que sumiu (executor que terminou, reset do orquestrador) volta para o orquestrador.
   const active = executors.some((e) => e.id === picked) ? picked : ORCHESTRATOR;
@@ -272,7 +275,9 @@ export function TerminalsScreen({ orchestrator, executors, executorChoice, notic
               </div>
             ))}
 
-            {!orchestrator && (
+            {!projectOpen ? (
+              <OpenProjectPrompt onOpen={onOpenProject} description="Abra uma pasta para iniciar o Orquestrador." />
+            ) : !orchestrator && (
               <Flexbox align="center" gap={12} padding={16} width="min(380px, calc(100% - 32px))" height="fit-content" className="absolute inset-0 m-auto">
                 {notice && <Text as="p" role="status" fontSize={14} className="rounded-md border bg-card px-3 py-1.5">{notice}</Text>}
                 <Button type="primary" onClick={onOpen}>Abrir terminal</Button>

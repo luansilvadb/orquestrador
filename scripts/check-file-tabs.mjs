@@ -13,6 +13,12 @@ check('Texto absoluto junta projeto e caminho, sem barra final duplicada', () =>
   assert.equal(pathText('absolute', 'src/App.tsx', 'D:\\orquestrador\\'), 'D:\\orquestrador\\src\\App.tsx');
   assert.equal(pathText('absolute', 'src/App.tsx', '/home/u/proj'), '/home/u/proj/src/App.tsx');
 });
+check('Arquivo solto mantém o caminho absoluto e não inventa caminho relativo', () => {
+  assert.equal(pathText('absolute', 'C:\\arquivos\\solto.ts', ''), 'C:\\arquivos\\solto.ts');
+  assert.equal(pathText('navigation', 'C:\\arquivos\\solto.ts', '', { line: 3, col: 2 }), 'C:\\arquivos\\solto.ts:3:2');
+  assert.equal(pathText('relative', 'C:\\arquivos\\solto.ts', ''), null);
+  assert.equal(pathText('relative', 'D:/proj/src/a.ts', 'D:\\proj'), 'src\\a.ts');
+});
 check('Caminho de navegação traz linha e coluna; sem cursor, null', () => {
   assert.equal(pathText('navigation', 'src/App.tsx', 'D:\\orquestrador', { line: 12, col: 3 }), 'D:\\orquestrador\\src\\App.tsx:12:3');
   assert.equal(pathText('navigation', 'src/App.tsx', 'D:\\orquestrador'), null);

@@ -48,6 +48,7 @@ export async function connect(): Promise<void> {
 type CallArgs<K extends CommandName> = Commands[K]['args'] extends NoArgs ? [] : [args: Commands[K]['args']];
 const call = <K extends CommandName>(cmd: K, ...rest: CallArgs<K>) =>
   transport.invoke(cmd, rest[0] as Record<string, unknown> | undefined) as Promise<Commands[K]['result']>;
+const absolutePath = (path: string) => /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path);
 
 /** Acesso direto à janela e aos eventos (escuta, fechamento, barra de título). */
 export const host = (): Transport => transport;
@@ -58,6 +59,10 @@ export const backend = {
 
   // Pasta escolhida: `subfolder` quer dizer que ela está dentro de um repositório e o projeto é a raiz dele.
   chooseProject: () => call('choose_project'),
+  openProject: (path: string) => call('open_project', { path }),
+  closeProject: () => call('close_project'),
+  pickFile: () => call('pick_file'),
+  pickSavePath: (directory: string | null, fileName: string) => call('pick_save_path', { directory, fileName }),
   getOptions: () => call('get_options'),
   startOrchestrator: (choice: Choice, cols: number, rows: number) =>
     call('start_orchestrator', { choice, cols, rows }),
@@ -76,13 +81,18 @@ export const backend = {
   // Caminho relativo à pasta do projeto, com "/"; '' é a raiz.
   listDir: (path: string) => call('list_dir', { path }),
   // Conteúdo de um arquivo, com o mesmo caminho de `listDir`. Erro chega como mensagem em português.
-  readFile: (path: string) => call('read_file', { path }),
+  readFile: (path: string) => absolutePath(path) ? call('read_file_at', { path }) : call('read_file', { path }),
+  readFileAt: (path: string) => call('read_file_at', { path }),
   // Bytes de uma imagem ou áudio (extensão na lista de `files.rs`), como `ArrayBuffer`. Erro chega como mensagem em português; limite de 32 MiB.
-  readMedia: (path: string) => call('read_media', { path }),
+  readMedia: (path: string) => absolutePath(path) ? call('read_media_at', { path }) : call('read_media', { path }),
+  readMediaAt: (path: string) => call('read_media_at', { path }),
   formatterInfo: (path: string) => call('formatter_info', { path }),
   formatCli: (path: string, text: string) => call('format_cli', { path, text }),
   // Grava só se o arquivo ainda é `base` (o texto lido, sem BOM) e ainda tem o BOM `bom`; senão rejeita sem gravar.
-  writeFileChecked: (path: string, text: string, base: string, bom: boolean) => call('write_file_checked', { path, text, base, bom }),
+  writeFileChecked: (path: string, text: string, base: string, bom: boolean) => absolutePath(path)
+    ? call('write_file_at_checked', { path, text, base, bom })
+    : call('write_file_checked', { path, text, base, bom }),
+  writeFileAtChecked: (path: string, text: string, base: string, bom: boolean) => call('write_file_at_checked', { path, text, base, bom }),
   // Ações de um arquivo da árvore, com o caminho relativo ao projeto. Erro vem como mensagem em português.
   // Renomear devolve o caminho novo; nunca sobrescreve. Excluir manda à Lixeira do Windows.
   renameFile: (path: string, name: string) => call('rename_file', { path, name }),

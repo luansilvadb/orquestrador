@@ -24,18 +24,16 @@
 // layout externo, salvo na recuperação), `onRestoreLayout` (chamado uma vez na montagem com o layout salvo), `onReveal` (revelar no Explorer),
 // `onGroupCount` (1 ou 2 grupos), `onSaved()` (chamada depois de cada gravação bem-sucedida no disco pelo editor: Ctrl+S, salvar tudo,
 // comparação, resolução de conflito).
-// Rascunho ("Sem título-N"): duplo clique na faixa vazia, na área do grupo sem abas ou Ctrl+N (dentro da área) abrem um buffer em memória, sem caminho. Salvar
-// (Ctrl+S, Salvar, Salvar Tudo, fechar com alterações) abre o "Salvar como" com a raiz do projeto; só grava dentro dele. Cancelar não
-// muda nada. Rascunho não é restaurado ao reabrir a janela (a janela pergunta antes de fechar) e não entra em Reabrir Fechada.
-// Recuperação: localStorage por projeto (`orquestrador.editor:<project>`), validada ao ler; nunca grava no disco.
+// Rascunho ("Sem título-N"): duplo clique na faixa vazia, na área do grupo sem abas ou Ctrl+N abrem um buffer em memória, sem caminho. Salvar
+// abre o diálogo "Salvar como"; depois de salvo, vira arquivo do projeto (caminho relativo) ou solto (absoluto).
+// Recuperação: localStorage por projeto (`orquestrador.editor:<project>`) e uma chave fixa no modo sem projeto.
 import {
   forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent, type FocusEvent, type KeyboardEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode,
 } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownMenu, Modal, Text, toast } from '@lobehub/ui/base-ui';
 import { Center, Flexbox, Hotkey, PatchDiff } from '@lobehub/ui';
-import { ArrowRight, ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, ChevronUp, Columns2, Ellipsis, FileText, FolderOpen, Minus, Pin, Plus, Rows2, Undo2, X } from 'lucide-react';
 import { EditorView } from '@codemirror/view';
-import { save } from '@tauri-apps/plugin-dialog';
 import { FileIcon } from '../shared/file-icon';
 import { Breadcrumbs } from './breadcrumbs';
 import { backend, message } from '../backend/backend';
@@ -47,7 +45,7 @@ import { pathText } from '../shared/file-tab-actions';
 import { copy, splitPath } from '../shared/paths';
 import {
   activate, closeTabs, createWorkspace, draftName, isDirty, isSafePath, isWithin, joinGroups, liveDocIds, loadWorkspace, markEdited, moveTab, navigate,
-  openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, splitTab, targetKey, togglePin, withoutDrafts, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
+  openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
 } from './workspace-model';
 import { revealTab, wheelToScroll } from '../shared/tab-strip';
 import {
@@ -61,6 +59,9 @@ import { blockRanges, changeKeys, compareOf, type CompareModel } from './compare
 
 export type OpenOptions = { permanent?: boolean; line?: number; col?: number; side?: GroupId };
 export type EditorWorkspaceHandle = {
+  newFile(): void;
+  saveActive(): Promise<boolean>;
+  saveActiveAs(): Promise<boolean>;
   openFile(path: string, options?: OpenOptions): void;
   openTarget(target: TabTarget, options?: Pick<OpenOptions, 'permanent' | 'side'>): void;
   /** Abre à direita: com dois grupos, o segundo na ordem visual (mesmo com o foco nele); com um grupo só, o outro id, que entra depois dele (à direita). */
@@ -82,6 +83,10 @@ export type EditorWorkspaceHandle = {
 };
 export type EditorWorkspaceProps = {
   project: string;
+  recentProjects?: string[];
+  onOpenFile?: () => void;
+  onOpenProject?: () => void;
+  onOpenRecent?: (path: string) => void;
   locked: boolean;
   refreshGit: () => void;
   /** Trava compartilhada com a barra do Git: as operações Git desta área e da barra não rodam juntas. */
@@ -115,6 +120,7 @@ type Common = {
 };
 
 const STORAGE = (project: string) => `orquestrador.editor:${project}`;
+const NO_PROJECT = '__sem-projeto__';
 const POLL_MS = 2500;
 const DEFAULT_SPLIT = 0.5;
 const newDocId = () => `doc-${crypto.randomUUID()}`;
@@ -146,6 +152,7 @@ const tabIcon = (target: TabTarget) => (target.kind === 'draft'
 // Caminho do diálogo "Salvar como" (absoluto, com a raiz do projeto) como caminho relativo com "/". Null se ficou fora do projeto.
 // Sem diferença de caixa, como no Windows.
 function relativeToProject(project: string, picked: string): string | null {
+  if (!project) return null;
   const root = project.replace(/\\/g, '/').replace(/\/+$/, '');
   const full = picked.replace(/\\/g, '/');
   if (full.slice(0, root.length + 1).toLowerCase() !== `${root}/`.toLowerCase()) return null;
@@ -153,13 +160,31 @@ function relativeToProject(project: string, picked: string): string | null {
 }
 
 function absoluteFilePath(project: string, path: string): string {
-  if (!path || /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path)) return path;
+  if (!path) return path;
+  if (isAbsoluteFilePath(path)) return path.replace(/\//g, '\\');
   return project.replace(/[\\/]+$/, '') + '\\' + path.replace(/\//g, '\\');
 }
+
+const isAbsoluteFilePath = (path: string) => /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path);
 
 // Grava `text` em `path` (relativo, dentro do projeto). Arquivo novo é criado; se já existe (o diálogo confirmou a sobrescrita), o texto
 // vai por cima da versão que está no disco agora, sem gravar às cegas.
 async function writeNewFile(path: string, text: string): Promise<void> {
+  if (isAbsoluteFilePath(path)) {
+    let base = '';
+    let bom = false;
+    try {
+      const current = await backend.readFileAt(path);
+      if (current.binary || current.tooLarge) throw new Error(`${fileName(path)} não é texto: não dá para salvar por cima dele.`);
+      base = current.text;
+      bom = current.bom;
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('não é texto')) throw e;
+      // Caminho que ainda não existe: o backend cria só com base vazia e recusa se alguém o criar antes da gravação.
+    }
+    await backend.writeFileAtChecked(path, text, base, bom);
+    return;
+  }
   const slash = path.lastIndexOf('/');
   let base = '';
   let bom = false;
@@ -177,7 +202,8 @@ async function writeNewFile(path: string, text: string): Promise<void> {
 function emptyData(): EditorData { return { buffers: {}, conflicts: {} }; }
 
 export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(props, handle) {
-  const { project, locked, guard, refreshGit, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
+  const { project, recentProjects = [], onOpenFile, onOpenProject, onOpenRecent, locked, guard, refreshGit, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
+  const storageProject = project || NO_PROJECT;
   // Ref para que as gravações antigas (ainda em await) avisem com a prop atual.
   const savedRef = useRef(onSaved);
   savedRef.current = onSaved;
@@ -188,24 +214,26 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     let text: string | null = null;
     const notes: string[] = [];
     try {
-      text = localStorage.getItem(STORAGE(project));
+      text = localStorage.getItem(STORAGE(storageProject));
     } catch (e) {
       // Erro de leitura não é primeira abertura: avisa, e a edição começa vazia sem apagar a recuperação gravada.
       notes.push(`Não foi possível ler a recuperação (${message(e)}). Começou vazia.`);
       text = null;
     }
     if (text === null) return { ws: createWorkspace(), data: emptyData(), split: DEFAULT_SPLIT, layout: null as string | null, notes, cursors: {} as Record<string, Cursor>, scrolls: {} as Record<string, Scroll> };
-    const decoded = decodeRecovery(text, project);
+    const decoded = decodeRecovery(text, storageProject);
     notes.push(...decoded.notes);
-    const ws = decoded.recovery.workspace ? loadWorkspace(decoded.recovery.workspace) : { state: createWorkspace(), notes: [] };
+    const ws = decoded.recovery.workspace ? loadWorkspace(decoded.recovery.workspace, true) : { state: createWorkspace(), notes: [] };
     notes.push(...ws.notes);
     const data = emptyData();
+    const draftIds = new Set(ws.state.groups.flatMap((g) => g.tabs.flatMap((tab) => tab.target.kind === 'draft' ? [tab.target.docId] : [])));
+    for (const docId of draftIds) data.buffers[docId] = { docId, path: '', raw: '', bom: false, newline: '\n', draft: '', readOnly: false };
     const cursors: Record<string, Cursor> = {};
     const scrolls: Record<string, Scroll> = {};
     for (const b of decoded.recovery.buffers) {
       if (b.cursor) cursors[b.docId] = b.cursor;
       if (b.scroll) scrolls[b.docId] = b.scroll;
-      if (b.dirty) data.buffers[b.docId] = { docId: b.docId, path: b.path, ...b.dirty };
+      if (b.dirty && (b.path !== '' || draftIds.has(b.docId))) data.buffers[b.docId] = { docId: b.docId, path: b.path, ...b.dirty };
     }
     for (const c of decoded.recovery.conflicts) data.conflicts[conflictKey(c.path)] = c;
     return { ws: ws.state, data, split: decoded.recovery.split ?? DEFAULT_SPLIT, layout: decoded.recovery.layout, notes, cursors, scrolls };
@@ -471,23 +499,18 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     }
   };
 
-  // Rascunho sem caminho: "Salvar como" pede o lugar (pasta inicial = raiz do projeto). Só grava dentro do projeto; fora dele, recusa com
-  // aviso. Cancelar devolve false e nada muda. Se o caminho já está aberto noutra aba (sem alterações não salvas), o rascunho fecha e a
-  // aba existente fica ativa, com o texto gravado; se ela tem alterações, recusa antes de gravar, para não passar por cima.
-  // Dentro do projeto, a aba vira aba de arquivo com o mesmo buffer (`promoteDraft`).
+  // Rascunho sem caminho: o diálogo começa na pasta do projeto quando há uma; fora dela, o caminho segue absoluto.
   const saveDraft = async (docId: string): Promise<boolean> => {
     const tab = allTabs().find((t) => t.target.kind === 'draft' && t.target.docId === docId);
     const buffer = dataRef.current.buffers[docId];
-    if (!tab || !buffer || saving.current.has(docId)) return false;
+    if (!tab || tab.target.kind !== 'draft' || !buffer || saving.current.has(docId)) return false;
     saving.current.add(docId);
     try {
-      const picked = await save({ title: 'Salvar como', defaultPath: project });
+      const picked = await backend.pickSavePath(project || null, draftName(tab.target.num));
       if (picked === null) return false;
-      const path = relativeToProject(project, picked);
-      if (path === null || !isSafePath(path)) {
-        toast.error({ title: 'Salve dentro da pasta do projeto: o editor só grava arquivos do projeto.', duration: 7000 });
-        return false;
-      }
+      const absolute = picked.replace(/\\/g, '/');
+      const path = relativeToProject(project, absolute) ?? absolute;
+      if (!isAbsoluteFilePath(path) && !isSafePath(path)) return false;
       const lower = path.toLowerCase();
       const existing = allTabs().find((t) => t.target.kind === 'file' && t.target.path.toLowerCase() === lower);
       const existingBuffer = existing?.target.kind === 'file' ? dataRef.current.buffers[existing.target.docId] : undefined;
@@ -497,13 +520,14 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       }
       const sent = toDiskNewlines(buffer.draft, buffer.newline);
       await writeNewFile(path, sent);
+      const saved = await backend.readFile(path);
       if (existing) {
         const next = activate(closeTabs(wsRef.current, [tab.id]), existing.id);
         setWs(next);
         pruneData(next);
         if (existing.target.kind === 'file') void syncFile(existing.target.docId);
       } else {
-        patchBuffer(docId, (b) => ({ ...b, path, raw: sent }));
+        patchBuffer(docId, (b) => ({ ...b, path, raw: saved.text, bom: saved.bom, newline: newlineOf(saved.text) }));
         setWs(promoteDraft(wsRef.current, tab.id, path));
       }
       refreshGit();
@@ -522,6 +546,59 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (target.kind === 'draft') return saveDraft(target.docId);
     if (target.kind === 'conflict') return saveConflict(target.path, false);
     return Promise.resolve(true);
+  };
+
+  const saveAs = async (target: TabTarget): Promise<boolean> => {
+    if (target.kind === 'draft') return saveDraft(target.docId);
+    if (target.kind !== 'file') return false;
+    let buffer = dataRef.current.buffers[target.docId];
+    if (!buffer) {
+      await syncFile(target.docId);
+      buffer = dataRef.current.buffers[target.docId];
+    }
+    if (!buffer) return false;
+    const slash = buffer.path.lastIndexOf('/');
+    const directory = project || (isAbsoluteFilePath(buffer.path) && slash > 0 ? buffer.path.slice(0, slash) : null);
+    try {
+      const picked = await backend.pickSavePath(directory, fileName(buffer.path));
+      if (!picked) return false;
+      const absolute = picked.replace(/\\/g, '/');
+      const path = relativeToProject(project, absolute) ?? absolute;
+      if (path.toLowerCase() === buffer.path.toLowerCase()) return saveBuffer(target.docId);
+      const existing = allTabs().find((t) => t.target.kind === 'file' && t.target.path.toLowerCase() === path.toLowerCase());
+      const existingBuffer = existing?.target.kind === 'file' ? dataRef.current.buffers[existing.target.docId] : undefined;
+      if (existingBuffer && isBufferDirty(existingBuffer)) {
+        toast.error({ title: `Salve ou descarte a edição aberta de ${fileName(path)} antes de salvar por cima dele.`, duration: 7000 });
+        return false;
+      }
+      await writeNewFile(path, toDiskNewlines(buffer.draft, buffer.newline));
+      const saved = await backend.readFile(path);
+      if (existing) {
+        const source = allTabs().filter((t) => t.target.kind === 'file' && t.target.docId === target.docId).map((t) => t.id);
+        const next = activate(closeTabs(wsRef.current, source), existing.id);
+        setWs(next);
+        pruneData(next);
+        void syncFile(existing.target.kind === 'file' ? existing.target.docId : '');
+      } else {
+        remap(buffer.path, path);
+        patchBuffer(target.docId, (b) => ({ ...b, path, raw: saved.text, bom: saved.bom, newline: newlineOf(saved.text) }));
+      }
+      refreshGit();
+      notifySaved();
+      return true;
+    } catch (e) {
+      toast.error({ title: message(e), duration: 7000 });
+      return false;
+    }
+  };
+
+  const saveActive = () => {
+    const tab = focusedTab();
+    return tab ? saveTab(tab.target) : Promise.resolve(false);
+  };
+  const saveActiveAs = () => {
+    const tab = focusedTab();
+    return tab ? saveAs(tab.target) : Promise.resolve(false);
   };
 
   const saveAll = async (): Promise<boolean> => {
@@ -618,29 +695,32 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   // Falha de quota vira aviso e não derruba a edição. Layout e divisor ficam mesmo sem abas; só some quando não há nada.
   const persist = () => {
     const open = wsRef.current.groups.flatMap((g) => g.tabs);
+    const savedWorkspace = wsRef.current;
+    const savedTabs = savedWorkspace.groups.flatMap((g) => g.tabs);
     const conflicts = Object.values(dataRef.current.conflicts).filter(isConflictDirty);
-    const hasState = open.length > 0 || conflicts.length > 0 || layoutRef.current !== null;
+    const hasState = savedTabs.length > 0 || conflicts.length > 0 || layoutRef.current !== null;
     const recovery: Recovery = {
-      workspace: JSON.stringify(withoutDrafts(wsRef.current)),
+      workspace: JSON.stringify(savedWorkspace),
       layout: layoutRef.current,
       split: splitRef.current,
-      buffers: [...new Map(open.flatMap((t) => (t.target.kind === 'file' ? [[t.target.docId, t.target] as const] : []))).values()].map((target) => {
+      buffers: [...new Map(open.flatMap((t) => (t.target.kind === 'file' || t.target.kind === 'draft' ? [[t.target.docId, t.target] as const] : []))).values()].map((target) => {
         const docId = target.docId;
         const b = dataRef.current.buffers[docId];
+        const path = target.kind === 'file' ? target.path : '';
         return {
-          docId, path: target.path, cursor: cursors.current[docId] ?? null, scroll: scrolls.current[docId] ?? null,
-          dirty: b && isBufferDirty(b) ? { raw: b.raw, bom: b.bom, newline: b.newline, draft: b.draft, readOnly: b.readOnly } : null,
+          docId, path, cursor: cursors.current[docId] ?? null, scroll: scrolls.current[docId] ?? null,
+          dirty: b && (target.kind === 'draft' || isBufferDirty(b)) ? { raw: b.raw, bom: b.bom, newline: b.newline, draft: b.draft, readOnly: b.readOnly } : null,
         };
       }),
       conflicts,
     };
     try {
       if (!hasState) {
-        localStorage.removeItem(STORAGE(project));
+        localStorage.removeItem(STORAGE(storageProject));
         return;
       }
-      const encoded = encodeRecovery(project, recovery);
-      localStorage.setItem(STORAGE(project), encoded.text);
+      const encoded = encodeRecovery(storageProject, recovery);
+      localStorage.setItem(STORAGE(storageProject), encoded.text);
       if (encoded.notes.length > 0) setNotice(encoded.notes.join(' '));
     } catch (e) {
       setNotice(`Não foi possível guardar a recuperação (${message(e)}). A edição continua, mas não será recuperada.`);
@@ -769,6 +849,9 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   useEffect(() => { onGroupCount?.(ws.groups.length); }, [ws.groups.length]);
 
   useImperativeHandle(handle, () => ({
+    newFile: () => newDraft(wsRef.current.focus),
+    saveActive,
+    saveActiveAs,
     openFile,
     openTarget,
     openBeside,
@@ -921,6 +1004,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       [
         action('pin', tab.pinned ? 'Desafixar' : 'Fixar', () => setWs(togglePin(wsRef.current, tab.id)), 'Ctrl+K Shift+Enter'),
         target.kind === 'draft' ? blocked('reveal', 'Revelar no Explorer', noPath)
+          : target.kind === 'file' && isAbsoluteFilePath(target.path) && relativeToProject(project, target.path) === null
+            ? blocked('reveal', 'Revelar no Explorer', 'Este arquivo está fora da pasta do projeto.')
           : action('reveal', 'Revelar no Explorer', () => onReveal(target.path)),
       ],
     ];
@@ -1173,6 +1258,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
 
   // Renderiza os grupos que existem (1 ou 2), não A/B fixos: um grupo só ocupa a área inteira, mesmo que seja o B.
   const twoGroups = ws.groups.length === 2;
+  const showHome = !project && ws.groups.every((group) => group.tabs.length === 0);
   return (
     <Flexbox height="100%" className="min-h-0" onKeyDownCapture={onKey} onBlurCapture={onKeyLeave}>
       {notice && (
@@ -1182,7 +1268,15 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         </Flexbox>
       )}
       <Flexbox horizontal flex={1} className="min-h-0" height="100%">
-        {ws.groups.map((group, index) => (
+        {showHome ? (
+          <HomeScreen
+            recentProjects={recentProjects}
+            onNewFile={() => newDraft(wsRef.current.focus)}
+            onOpenFile={onOpenFile ?? (() => {})}
+            onOpenProject={onOpenProject ?? (() => {})}
+            onOpenRecent={onOpenRecent ?? (() => {})}
+          />
+        ) : ws.groups.map((group, index) => (
           <Fragment key={group.id}>
             {index === 1 && (
               <div
@@ -1271,6 +1365,41 @@ function EmptyGroup({ onNewDraft }: { onNewDraft: () => void }) {
   );
 }
 
+function HomeScreen({ recentProjects, onNewFile, onOpenFile, onOpenProject, onOpenRecent }: {
+  recentProjects: string[]; onNewFile: () => void; onOpenFile: () => void; onOpenProject: () => void; onOpenRecent: (path: string) => void;
+}) {
+  return (
+    <Center flex={1} className="min-w-0 min-h-0 overflow-auto p-6">
+      <Flexbox gap={24} className="w-full max-w-lg">
+        <Flexbox gap={6}>
+          <Text as="h1" fontSize={20} weight={600}>Comece um arquivo ou abra uma pasta</Text>
+          <Text as="p" type="secondary" fontSize={13}>O editor e o Terminal estão prontos.</Text>
+        </Flexbox>
+        <Flexbox gap={8}>
+          <Button type="default" size="large" icon={<FileText className="size-4" />} onClick={onNewFile}>Novo arquivo <Hotkey keys="Ctrl+N" /></Button>
+          <Button type="default" size="large" icon={<ArrowRight className="size-4" />} onClick={onOpenFile}>Abrir arquivo… <Hotkey keys="Ctrl+O" /></Button>
+          <Button type="default" size="large" icon={<FolderOpen className="size-4" />} onClick={onOpenProject}>Abrir pasta… <Hotkey keys="Ctrl+K Ctrl+O" /></Button>
+        </Flexbox>
+        {recentProjects.length > 0 && (
+          <Flexbox gap={8}>
+            <Text as="h2" type="secondary" fontSize={12} weight={600}>Projetos recentes</Text>
+            <Flexbox gap={4}>
+              {recentProjects.slice(0, 10).map((path) => (
+                <Button key={path} type="text" size="small" className="justify-start" title={path} onClick={() => onOpenRecent(path)}>
+                  <Flexbox gap={2} className="min-w-0 text-left">
+                    <Text as="span" ellipsis>{path.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? path}</Text>
+                    <Text as="span" type="secondary" fontSize={11} ellipsis>{path}</Text>
+                  </Flexbox>
+                </Button>
+              ))}
+            </Flexbox>
+          </Flexbox>
+        )}
+      </Flexbox>
+    </Center>
+  );
+}
+
 // ---- Arquivo ----
 
 // Texto-base do Git do arquivo aberto, para os marcadores de mudança do editor: lido ao montar, logo depois de salvar (o `raw` do buffer
@@ -1293,14 +1422,14 @@ function useGitBase(path: string, raw: string, shown: boolean): { base: FileBase
     if (pathRef.current !== path) return;
     setBase((prev) => (prev === next || (prev && next && prev.head === next.head && prev.index === next.index) ? prev : next));
   };
-  usePolling(load, POLL_MS, shown && path !== '' && path);
+  usePolling(load, POLL_MS, shown && path !== '' && !isAbsoluteFilePath(path) && path);
   const seenRaw = useRef(raw);
   useEffect(() => {
     if (seenRaw.current === raw) return;
     seenRaw.current = raw;
-    if (path !== '') void load();
+    if (path !== '' && !isAbsoluteFilePath(path)) void load();
   }, [raw]);
-  return { base: path === '' ? null : base, reload: load };
+  return { base: path === '' || isAbsoluteFilePath(path) ? null : base, reload: load };
 }
 
 function FileBody({ project, buffer, shown, status, disk, reveal, autoFocus, cursor, onChange, onFormatEol, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
@@ -1350,6 +1479,7 @@ function FileBody({ project, buffer, shown, status, disk, reveal, autoFocus, cur
             start={cursor}
             gitBase={git.base}
             onWriteIndex={async (text, expected) => {
+              if (isAbsoluteFilePath(buffer.path)) return;
               await backend.gitWriteIndex(buffer.path, text, expected);
               await git.reload();
             }}

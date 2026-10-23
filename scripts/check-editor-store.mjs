@@ -63,6 +63,10 @@ check('Rename com caminho inseguro não muda nada', () => {
   const data = { buffers: { 'd1': buffer({ docId: 'd1' }) }, conflicts: {} };
   assert.equal(remapData(data, 'src', '../fora').buffers['d1'].path, 'src/a.ts');
 });
+check('Salvar como pode remapear um arquivo solto', () => {
+  const data = { buffers: { 'd1': buffer({ docId: 'd1', path: 'C:/arquivos/a.ts' }) }, conflicts: {} };
+  assert.equal(remapData(data, 'C:/arquivos/a.ts', 'C:/arquivos/b.ts').buffers.d1.path, 'C:/arquivos/b.ts');
+});
 check('Conflito acompanha o rename: a chave muda para o caminho novo', () => {
   const data = { buffers: {}, conflicts: { 'src/c.ts': { path: 'src/c.ts', origin: 'o', draft: 'p', revision: 'r' } } };
   const moved = remapData(data, 'src', 'lib');
@@ -100,6 +104,18 @@ check('Recuperação: ida e volta preserva rascunhos, cursor, layout e proporç�
   assert.deepEqual(back.recovery.buffers[0].cursor, { line: 3, col: 2 });
   assert.equal(back.recovery.buffers[1].dirty, null);
   assert.equal(back.recovery.conflicts[0].revision, 'rev-1');
+});
+check('Recuperação aceita caminho absoluto de arquivo e caminho vazio de rascunho', () => {
+  const recovery = {
+    workspace: '{"version":1}', layout: null, split: null,
+    buffers: [
+      { docId: 'loose', path: 'C:/arquivos/a.ts', cursor: null, scroll: null, dirty: { raw: 'a', bom: false, newline: '\n', draft: 'b', readOnly: false } },
+      { docId: 'draft', path: '', cursor: null, scroll: null, dirty: { raw: '', bom: false, newline: '\n', draft: 'novo', readOnly: false } },
+    ],
+    conflicts: [],
+  };
+  const { text } = encodeRecovery('C:/p', recovery);
+  assert.deepEqual(decodeRecovery(text, 'C:/p').recovery.buffers.map((b) => b.path), ['C:/arquivos/a.ts', '']);
 });
 check('Recuperação de outro projeto começa vazia', () => {
   const { text } = encodeRecovery('C:/p', dirtyRecovery);

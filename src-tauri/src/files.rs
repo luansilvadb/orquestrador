@@ -1,5 +1,6 @@
 //! O explorador de arquivos do projeto: lista pastas, lê e grava conteúdo de arquivos, e renomeia, manda à Lixeira
-//! e mostra no Explorer do Windows. Toda ação recebe o caminho relativo ao projeto e recusa o que sai dele.
+//! e mostra no Explorer do Windows. Ações do projeto recebem caminho relativo; o editor também lê e grava caminhos
+//! absolutos dos arquivos que o usuário abriu ou escolheu.
 use crate::platform::{self, ErroShell, Snapshot};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -79,6 +80,18 @@ pub fn list(project: &Path, rel: &str) -> Result<Vec<Entry>, String> {
 /// O arquivo `rel` do projeto (com barras "/"). Arquivo grande ou binário volta sem `text`.
 pub fn read(project: &Path, rel: &str) -> Result<Content, String> {
     let file = inside(project, rel, false)?;
+    read_path(&file)
+}
+
+/// O arquivo absoluto que o usuário abriu ou escolheu para o editor. O caminho precisa ser absoluto e apontar para arquivo.
+pub fn read_at(path: &Path) -> Result<Content, String> {
+    if !path.is_absolute() {
+        return Err("O caminho do arquivo precisa ser absoluto.".into());
+    }
+    read_path(path)
+}
+
+fn read_path(file: &Path) -> Result<Content, String> {
     let size = std::fs::metadata(&file).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?.len();
     if size > MAX_FILE {
         return Ok(Content { binary: false, too_large: true, read_only: false, bom: false, text: String::new() });
@@ -106,10 +119,26 @@ pub fn read_media(project: &Path, rel: &str) -> Result<Vec<u8>, String> {
         return Err(format!("Tipo de arquivo não aberto como mídia: {rel}"));
     }
     let file = plain(project, rel, false)?;
-    let grande = || format!("Arquivo grande demais para abrir aqui (limite de 32 MiB): {rel}");
+    read_media_path(&file, rel)
+}
+
+/// Imagem ou áudio aberto pelo caminho absoluto que o usuário escolheu.
+pub fn read_media_at(path: &Path) -> Result<Vec<u8>, String> {
+    if !path.is_absolute() {
+        return Err("O caminho do arquivo precisa ser absoluto.".into());
+    }
+    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if !MEDIA_EXTS.contains(&ext.as_str()) {
+        return Err(format!("Tipo de arquivo não aberto como mídia: {}", path.display()));
+    }
+    read_media_path(path, &path.display().to_string())
+}
+
+fn read_media_path(file: &Path, label: &str) -> Result<Vec<u8>, String> {
+    let grande = || format!("Arquivo grande demais para abrir aqui (limite de 32 MiB): {label}");
     let erro = |e: std::io::Error| format!("Não foi possível ler o arquivo: {e}");
     // Um handle só: o tamanho checado é o do arquivo que se lê. O `take` corta o que crescer depois do `metadata`.
-    let handle = File::open(&file).map_err(erro)?;
+    let handle = File::open(file).map_err(erro)?;
     if handle.metadata().map_err(erro)?.len() > MAX_MEDIA {
         return Err(grande());
     }
@@ -130,11 +159,31 @@ pub fn read_media(project: &Path, rel: &str) -> Result<Vec<u8>, String> {
 /// Se `base` usa só CRLF e `text` veio só com LF (o textarea normaliza), `text` volta a ter CRLF. Não há gravação atômica:
 /// se a escrita falha no meio, o erro avisa que o arquivo pode ter ficado parcial.
 pub fn write_checked(project: &Path, rel: &str, text: &str, base: &str, base_bom: bool) -> Result<(), String> {
+    write_held(hold(project, rel)?, text, base, base_bom)
+}
+
+/// Grava um caminho absoluto escolhido pelo usuário, criando o arquivo se ainda não existe e recusando mudanças externas.
+pub fn write_checked_at(path: &Path, text: &str, base: &str, base_bom: bool) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("O caminho do arquivo precisa ser absoluto.".into());
+    }
+    let file = if std::fs::symlink_metadata(path).is_ok() {
+        hold_absolute(path)?
+    } else {
+        if !base.is_empty() || base_bom {
+            return Err("O arquivo não existe mais. Nada foi gravado.".into());
+        }
+        let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(path).map_err(open_err)?;
+        return write_held(file, text, base, base_bom);
+    };
+    write_held(file, text, base, base_bom)
+}
+
+fn write_held(mut file: File, text: &str, base: &str, base_bom: bool) -> Result<(), String> {
     let text = restore_eol(text, base);
     if text.len() as u64 > MAX_FILE {
         return Err("O arquivo ficaria grande demais para abrir aqui.".into());
     }
-    let mut file = hold(project, rel)?;
     let mut current = Vec::new();
     file.seek(SeekFrom::Start(0)).and_then(|_| file.read_to_end(&mut current)).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?;
     if current.len() as u64 > MAX_FILE {
@@ -178,6 +227,22 @@ fn hold(project: &Path, rel: &str) -> Result<File, String> {
     let link = std::fs::symlink_metadata(&lexical).is_ok_and(|m| m.file_type().is_symlink());
     if link || lexical.canonicalize().ok().as_deref() != Some(real.as_path()) {
         return Err(format!("{rel} mudou de lugar desde a validação. Nada foi gravado."));
+    }
+    Ok(file)
+}
+
+/// Abre um arquivo escolhido fora do projeto sem permitir gravação, renomeação ou troca do destino durante a checagem.
+fn hold_absolute(path: &Path) -> Result<File, String> {
+    if !path.is_absolute() {
+        return Err("O caminho do arquivo precisa ser absoluto.".into());
+    }
+    let real = path.canonicalize().map_err(open_err)?;
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
+        return Err(format!("{} não é um arquivo.", path.display()));
+    }
+    let file = platform::abrir_para_gravar(path).map_err(open_err)?;
+    if path.canonicalize().ok().as_deref() != Some(real.as_path()) {
+        return Err(format!("{} mudou de lugar desde a validação. Nada foi gravado.", path.display()));
     }
     Ok(file)
 }
@@ -1436,6 +1501,31 @@ src/gerado/
         let lido = read(&root, "b.txt").unwrap();
         write_checked(&root, "b.txt", "fim", &lido.text, lido.bom).unwrap();
         assert_eq!(std::fs::read(root.join("b.txt")).unwrap(), b"fim");
+    }
+
+    #[test]
+    fn arquivo_absoluto_le_grava_com_revisao_bom_limite_e_criacao() {
+        let root = &fixture("absoluto").0;
+        let file = root.join("fora.txt");
+        std::fs::write(&file, b"\xEF\xBB\xBFantes\r\nlinha\r\n").unwrap();
+        let lido = read_at(&file).unwrap();
+        assert!(lido.bom);
+        assert_eq!(lido.text, "antes\r\nlinha\r\n");
+        write_checked_at(&file, "depois\nfim\n", &lido.text, lido.bom).unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"\xEF\xBB\xBFdepois\r\nfim\r\n");
+
+        let lido = read_at(&file).unwrap();
+        std::fs::write(&file, "mudou fora").unwrap();
+        assert!(write_checked_at(&file, "minha versão", &lido.text, lido.bom).unwrap_err().contains("foi alterado"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "mudou fora");
+
+        let novo = root.join("novo.txt");
+        write_checked_at(&novo, "novo", "", false).unwrap();
+        assert_eq!(std::fs::read_to_string(&novo).unwrap(), "novo");
+
+        let grande = root.join("grande.txt");
+        std::fs::write(&grande, vec![b'x'; MAX_FILE as usize + 1]).unwrap();
+        assert!(read_at(&grande).unwrap().too_large);
     }
 
     #[test]

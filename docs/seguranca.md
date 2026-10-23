@@ -8,4 +8,6 @@
 
 **Painel Terminal.** Os shells do painel rodam com a permissão do próprio usuário, sem as barreiras dos executores.
 
+**Arquivos fora do projeto.** O editor lê e grava fora da pasta do projeto apenas arquivos que o usuário abriu ou escolheu em `Abrir`/`Salvar como`. Os comandos absolutos usam o mesmo limite de tamanho, preservação de BOM e checagem de mudança desde a leitura dos arquivos do projeto. Esses arquivos não entram na árvore, pesquisa ou Git.
+
 Na inicialização de uma sessão, pastas de sessões mortas são removidas quando o nome e o dono encerrado comprovam a origem; o que não puder ser verificado é preservado. Até 2027-02-01, a mesma limpeza tira de `CODEX_HOME\rules` os arquivos `strategist-<id>.rules` que sessões antigas do orquestrador Codex deixaram lá: eles liberam o `git` a qualquer `codex` que use esse diretório. Um desses arquivos só sai com a mesma prova pelo dono, e a primeira linha tem de ser exatamente o marcador da sessão, `# orquestrador strategist-<id>`, ou a regra de delegação daquela sessão (o adaptador `orq-<id>.ps1` liberado para um nome só); qualquer outra, inclusive uma parecida, não é do app, e o arquivo fica. O resto do arquivo sai com ele. A partir de 2027-02-01 esse reconhecimento sai do código; um teste em `src-tauri/src/session.rs` passa a falhar nessa data para lembrar.

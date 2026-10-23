@@ -20,6 +20,7 @@
 // e `repo-above` (pasta dentro de outro repositório, raiz `C:\projetos`). Fora de `repo`, `git_status` devolve só o `kind` (e a raiz, em `repo-above`).
 // `?subfolder=1` faz `choose_project` devolver `subfolder: true`. Em execução, `__mock.gitMode = 'no-repo'` e `__mock.subfolder = true` trocam isso
 // (por exemplo, um `git init` feito pelo terminal, que o painel vê na consulta seguinte).
+// `?project=none` abre o modo sem projeto mesmo que o navegador tenha um último projeto salvo.
 import { COMMIT_HOVER_FIXTURE, EDITOR_HEAD_LINES, MARCADORES_HEAD, MARCADORES_INDEX, MARCADORES_WORKTREE } from './mock-fixtures';
 import { parseDiffFromFile } from '@pierre/diffs';
 import type { Transport } from './backend';
@@ -189,6 +190,9 @@ function removePath(path: string) {
 // Pasta do projeto no simulado (a mesma que `choose_project` devolve) e a conversão de caminho relativo para o do Windows e de volta.
 const MOCK_ROOT = 'C:\\projetos\\exemplo';
 const absolute = (rel: string) => (rel ? `${MOCK_ROOT}\\${rel.split('/').join('\\')}` : MOCK_ROOT);
+let projectOpen = false;
+const absoluteFiles = new Map<string, string>([['C:/arquivos/solto.ts', 'const solto = true;\n']]);
+const absoluteKey = (path: string) => path.replace(/\\/g, '/').toLowerCase();
 const relOf = (abs: string) => {
   if (!abs.startsWith(`${MOCK_ROOT}\\`)) throw `Fora do projeto simulado: ${abs}`;
   return abs.slice(MOCK_ROOT.length + 1).split('\\').join('/');
@@ -944,6 +948,12 @@ function wavSilence(seconds: number): ArrayBuffer {
 // Um handler por comando de `Commands`: falta um, sobra um ou tipo errado de argumento ou resultado é erro do `tsc`.
 const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]['result'] } = {
   read_media: ({ path }: { path: string }) => mockBytes(path),
+  read_media_at: ({ path }: { path: string }) => {
+    const ext = path.split('.').pop()?.toLowerCase();
+    if (ext === 'png') return Uint8Array.fromBase64(MOCK_PNG).buffer;
+    if (ext === 'wav') return wavSilence(2);
+    throw `Tipo de arquivo não aberto como mídia: ${path}`;
+  },
   formatter_info: ({ path }: { path: string }) => formatInfo(path),
   format_cli: ({ path, text }: { path: string; text: string }) => {
     const info = formatInfo(path);
@@ -952,7 +962,11 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   },
   update_status: () => ({ phase: 'ready' }),
   retry_update: () => ({ phase: 'ready' }),
-  choose_project: () => ({ project: 'C:\\projetos\\exemplo', subfolder: debug.subfolder }),
+  choose_project: () => { projectOpen = true; return { project: 'C:\\projetos\\exemplo', subfolder: debug.subfolder }; },
+  open_project: ({ path }: { path: string }) => { projectOpen = true; return { project: path, subfolder: false }; },
+  close_project: () => { projectOpen = false; return null; },
+  pick_file: () => 'C:\\arquivos\\solto.ts',
+  pick_save_path: ({ directory, fileName }: { directory: string | null; fileName: string }) => `${(directory ?? 'C:\\Users\\Luan').replace(/[\\/]+$/, '')}\\${fileName}`,
   get_options: () => structuredClone(options),
   start_orchestrator: ({ choice }: { choice: Choice }) => {
     options.last.orchestrator = choice;
@@ -960,6 +974,14 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   set_executor_choice: ({ choice }: { choice: Choice }) => { options.last.executor = choice; },
   start_shell: ({ id, cwd }: { id: string; cwd?: string }) => {
     // Pasta do projeto (relativa); sem ela, ou com '', é a raiz, como no backend. Pasta que não existe é recusada antes de abrir.
+    if (!projectOpen) {
+      if (cwd) throw 'Não há pasta de projeto aberta.';
+      const prompt = 'PS C:\\Users\\Luan> ';
+      terms.delete(id);
+      shells.set(id, { line: '', prompt });
+      out(id, prompt);
+      return 'pwsh.exe';
+    }
     if (cwd && !folderAt(cwd)) throw `Pasta não encontrada: ${cwd}`;
     const prompt = cwd ? `PS C:\\projetos\\exemplo\\${cwd.split('/').join('\\')}> ` : SHELL_PROMPT;
     // Começa do zero: o terminal antigo (se houver) some, como no backend.
@@ -1006,6 +1028,13 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
     if (bom !== false || textOf(path) !== base) throw 'O arquivo foi alterado por outro programa desde que foi aberto. Nada foi gravado.';
     TEXTS[path] = text;
   },
+  write_file_at_checked: ({ path, text, base, bom }: { path: string; text: string; base: string; bom: boolean }) => {
+    const key = absoluteKey(path), current = absoluteFiles.get(key);
+    if (bom || (current !== undefined && current !== base) || (current === undefined && base !== '')) {
+      throw 'O arquivo foi alterado por outro programa desde que foi aberto. Nada foi gravado.';
+    }
+    absoluteFiles.set(key, text);
+  },
   delete_files: ({ paths }: { paths: string[] }): Batch<string> => batchOf<string>((done) => {
     checkSelection(paths);
     for (const p of paths) {
@@ -1045,6 +1074,11 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
     if (path.endsWith('.png')) return { binary: true, tooLarge: false, readOnly: false, bom: false, text: '' };
     if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, readOnly: false, bom: false, text: '' };
     return { binary: false, tooLarge: false, readOnly: false, bom: false, text: TEXTS[path] ?? '' };
+  },
+  read_file_at: ({ path }: { path: string }) => {
+    const text = absoluteFiles.get(absoluteKey(path));
+    if (text === undefined) throw `Não foi possível ler o arquivo: ${path}`;
+    return { binary: false, tooLarge: false, readOnly: false, bom: false, text };
   },
   git_status: () => {
     Object.keys(GIT_TEXT).forEach(syncEntry);

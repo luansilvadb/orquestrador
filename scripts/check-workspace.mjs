@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import {
-  activate, closeTabs, createWorkspace, draftName, isDirty, joinGroups, liveDocIds, loadWorkspace, markEdited, moveTab, navigate,
+  activate, closeTabs, createWorkspace, draftName, isDirty, isSafeFilePath, joinGroups, liveDocIds, loadWorkspace, markEdited, moveTab, navigate,
   openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, reorderTab, splitTab, targetKey, togglePin, withoutDrafts,
 } from '../src/editor/workspace-model.ts';
 
@@ -288,7 +288,7 @@ check('JSON quebrado, versão desconhecida ou não-objeto começam vazios, sem a
   }
 });
 
-check('Estado adulterado: paths fora do projeto são descartados e o resto é consertado', () => {
+check('Estado salvo aceita arquivos absolutos e descarta caminhos inválidos', () => {
   const tampered = {
     version: 1,
     groups: [
@@ -320,9 +320,9 @@ check('Estado adulterado: paths fora do projeto são descartados e o resto é co
   const { state, notes } = loadWorkspace(JSON.stringify(tampered));
   assertConsistent(state);
   assert.ok(notes.length > 0);
-  for (const g of state.groups) for (const t of g.tabs) assert.ok(/^(?!\/)(?!.*[\\:])(?!(.*\/)?\.\.?(\/|$))(?!.*\/\/)[^\u0000-\u001f]+$/.test(t.target.path), t.target.path);
-  assert.deepEqual(names(state, 'A'), ['src/a.ts', 'src/b.ts', 'src/c.ts']);
-  assert.deepEqual(tabsOf(state, 'A').map((t) => [t.pinned, t.preview]), [[true, false], [false, true], [false, false]]);
+  for (const g of state.groups) for (const t of g.tabs) if (t.target.kind === 'file') assert.equal(isSafeFilePath(t.target.path), true, t.target.path);
+  assert.deepEqual(names(state, 'A'), ['src/a.ts', 'C:\\Windows\\win.ini', '/etc/passwd', 'src/b.ts', 'src/c.ts']);
+  assert.deepEqual(tabsOf(state, 'A').map((t) => [t.pinned, t.preview]), [[true, false], [false, false], [false, false], [false, true], [false, false]]);
   assert.equal(tabsOf(state, 'A')[0].id, 't6', 'id repetido: fica o primeiro');
   assert.equal(groupOf(state, 'A').active, 't6', 'ativa inexistente cai na primeira');
   // B vazio some (o A tem abas), então sobra um grupo só.
@@ -330,6 +330,13 @@ check('Estado adulterado: paths fora do projeto são descartados e o resto é co
   assert.equal(state.focus, 'A');
   assert.deepEqual(state.closed, []);
   assert.equal(state.nextId, 1);
+});
+
+check('Rascunho volta no JSON do workspace', () => {
+  const state = openDraft(createWorkspace(), 'A', 'draft-1');
+  const loaded = loadWorkspace(JSON.stringify(state), true);
+  assert.deepEqual(loaded.notes, []);
+  assert.deepEqual(loaded.state, state);
 });
 
 check('Estado adulterado com 3 grupos ou grupo repetido: no máximo dois, sem id repetido', () => {
@@ -456,11 +463,13 @@ check('withoutDrafts tira o rascunho do workspace gravado e mantém as abas de a
   assert.equal(onlyDraft.groups[0].active, null);
 });
 
-check('Carregar workspace com rascunho salvo descarta a aba e avisa, sem quebrar', () => {
-  const { state, notes } = loadWorkspace(JSON.stringify(openDraft(createWorkspace(), 'A', 'x1')));
-  assert.deepEqual(state.groups[0].tabs, []);
-  assert.ok(notes.length > 0);
-  assertConsistent(state);
+check('Rascunho volta na recuperação do projeto e na recuperação sem projeto', () => {
+  const serialized = JSON.stringify(openDraft(createWorkspace(), 'A', 'x1'));
+  for (const storageKey of ['orquestrador.editor:C:\\projetos', 'orquestrador.editor:__sem-projeto__']) {
+    const loaded = loadWorkspace(serialized, true);
+    assert.equal(loaded.state.groups[0].tabs[0].target.kind, 'draft', storageKey);
+    assert.deepEqual(loaded.notes, [], storageKey);
+  }
 });
 
 check('Salvar como dentro do projeto: rascunho vira aba de arquivo, mesmo id e mesmo docId', () => {

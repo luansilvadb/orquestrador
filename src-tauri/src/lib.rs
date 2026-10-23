@@ -54,6 +54,36 @@ fn choose_project(app: tauri::AppHandle, core: State<Core>) -> Result<Option<Ope
 }
 
 #[tauri::command(async)]
+fn open_project(core: State<Core>, path: String) -> Result<Opened, String> {
+    core.set_project(std::path::Path::new(&path))
+}
+
+#[tauri::command(async)]
+fn close_project(core: State<Core>) -> Result<(), String> {
+    core.close_project()
+}
+
+#[tauri::command(async)]
+fn pick_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    match app.dialog().file().set_title("Abrir arquivo").blocking_pick_file() {
+        None => Ok(None),
+        Some(file) => Ok(Some(file.into_path().map_err(|e| e.to_string())?.display().to_string())),
+    }
+}
+
+#[tauri::command(async)]
+fn pick_save_path(app: tauri::AppHandle, directory: Option<String>, file_name: String) -> Result<Option<String>, String> {
+    let mut dialog = app.dialog().file().set_title("Salvar como").set_file_name(file_name);
+    if let Some(directory) = directory {
+        dialog = dialog.set_directory(directory);
+    }
+    match dialog.blocking_save_file() {
+        None => Ok(None),
+        Some(file) => Ok(Some(file.into_path().map_err(|e| e.to_string())?.display().to_string())),
+    }
+}
+
+#[tauri::command(async)]
 fn get_options(core: State<Core>) -> Result<Options, String> {
     core.options()
 }
@@ -70,11 +100,23 @@ fn read_file(core: State<Core>, path: String) -> Result<files::Content, String> 
     files::read(&core.repo()?, &path)
 }
 
+/// Conteúdo de um arquivo absoluto que o usuário abriu ou escolheu para o editor.
+#[tauri::command(async)]
+fn read_file_at(path: String) -> Result<files::Content, String> {
+    files::read_at(std::path::Path::new(&path))
+}
+
 /// Bytes de uma imagem ou áudio do projeto para a aba de mídia. `path` é relativo ao projeto. Vai como bytes crus (o
 /// frontend recebe `ArrayBuffer`), sem JSON nem base64; o tipo é o da extensão, decidido na tela.
 #[tauri::command(async)]
 fn read_media(core: State<Core>, path: String) -> Result<tauri::ipc::Response, String> {
     files::read_media(&core.repo()?, &path).map(tauri::ipc::Response::new)
+}
+
+/// Bytes de uma imagem ou áudio aberto pelo caminho absoluto escolhido pelo usuário.
+#[tauri::command(async)]
+fn read_media_at(path: String) -> Result<tauri::ipc::Response, String> {
+    files::read_media_at(std::path::Path::new(&path)).map(tauri::ipc::Response::new)
 }
 
 /// Diz qual formatador serve ao caminho absoluto e devolve as opções locais do Prettier.
@@ -94,6 +136,12 @@ fn format_cli(path: String, text: String) -> Result<String, String> {
 #[tauri::command(async)]
 fn write_file_checked(core: State<Core>, path: String, text: String, base: String, bom: bool) -> Result<(), String> {
     files::write_checked(&core.repo()?, &path, &text, &base, bom)
+}
+
+/// Grava um arquivo absoluto que o usuário abriu ou escolheu, só se não mudou desde a leitura.
+#[tauri::command(async)]
+fn write_file_at_checked(path: String, text: String, base: String, bom: bool) -> Result<(), String> {
+    files::write_checked_at(std::path::Path::new(&path), &text, &base, bom)
 }
 
 /// Busca `query.text` nos arquivos do projeto (rastreados e não ignorados; sem binário, não UTF-8 nem link). Consulta
@@ -448,13 +496,20 @@ pub fn run(context: tauri::Context) {
         })
         .invoke_handler(gated(tauri::generate_handler![
             choose_project,
+            open_project,
+            close_project,
+            pick_file,
+            pick_save_path,
             get_options,
             list_dir,
             read_file,
+            read_file_at,
             read_media,
+            read_media_at,
             formatter_info,
             format_cli,
             write_file_checked,
+            write_file_at_checked,
             rename_file,
             delete_files,
             move_files,

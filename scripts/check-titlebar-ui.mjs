@@ -7,7 +7,7 @@
 // Capturas em .playwright-mcp/titlebar-controls-*.png a cada execução: recorte para revisão visual, não asserção.
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { uiSuite, OUT } from './editor-ui-harness.mjs';
+import { uiSuite, OUT, openApp } from './editor-ui-harness.mjs';
 
 const scenario = uiSuite('titlebar-ui');
 const WINDOW_LABELS = ['Minimizar', 'Maximizar', 'Restaurar', 'Fechar'];
@@ -101,10 +101,36 @@ scenario('três controles: 46 px de largura, 35 px úteis, colados à direita, �
 });
 
 scenario('título nativo simulado acompanha o projeto aberto', async ({ page }) => {
-  const folder = await page.locator('header').locator('[title]').first().textContent();
+  const folder = await page.locator('header [title]').filter({ hasText: /.+/ }).first().textContent();
   assert.ok(folder, 'nome da pasta do projeto visível');
   await page.waitForFunction((name) => document.title === `${name} - Orquestrador`, folder);
   assert.equal(await page.title(), `${folder} - Orquestrador`);
+});
+
+scenario('modo sem projeto: painéis pedem pasta e o rascunho do menu volta ao recarregar', async ({ page }) => {
+  await openApp(page, '?project=none');
+  const nav = page.getByRole('navigation', { name: 'Telas' });
+  const prompt = async (description) => {
+    const text = page.getByText(description, { exact: true });
+    await text.waitFor();
+    assert.equal(await text.evaluate((el) => el.parentElement?.querySelector('button')?.textContent), 'Abrir pasta');
+  };
+  await nav.getByRole('button', { name: /^Git/ }).click();
+  await prompt('Abra uma pasta para usar o Git.');
+  await nav.getByRole('button', { name: /^Pesquisa/ }).click();
+  await prompt('Abra uma pasta para pesquisar nos arquivos.');
+  await prompt('Abra uma pasta para iniciar o Orquestrador.');
+
+  await button(page, 'Abrir menu').click();
+  await page.getByRole('menuitem', { name: 'Novo arquivo' }).click();
+  const editor = page.locator('.cm-content:visible').first();
+  await editor.waitFor();
+  await editor.click();
+  await page.keyboard.type('rascunho recuperado');
+  await page.waitForFunction(() => !!localStorage.getItem('orquestrador.editor:__sem-projeto__'));
+  await page.reload();
+  await page.locator('.cm-content:visible').first().waitFor();
+  assert.equal(await page.locator('.cm-content:visible').first().textContent(), 'rascunho recuperado');
 });
 
 scenario('estado normal: cor #CCCCCC, fundo transparente', async ({ page }) => {

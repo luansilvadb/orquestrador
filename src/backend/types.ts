@@ -144,13 +144,20 @@ export type Events = {
 export type NoArgs = Record<string, never>;
 export type Commands = {
   choose_project: { args: NoArgs; result: { project: string; subfolder: boolean } | null };
+  open_project: { args: { path: string }; result: { project: string; subfolder: boolean } };
+  close_project: { args: NoArgs; result: void };
+  pick_file: { args: NoArgs; result: string | null };
+  pick_save_path: { args: { directory: string | null; fileName: string }; result: string | null };
   get_options: { args: NoArgs; result: Options };
   list_dir: { args: { path: string }; result: DirEntry[] };
   read_file: { args: { path: string }; result: FileContent };
+  read_file_at: { args: { path: string }; result: FileContent };
   read_media: { args: { path: string }; result: ArrayBuffer };
+  read_media_at: { args: { path: string }; result: ArrayBuffer };
   formatter_info: { args: { path: string }; result: FormatterInfo };
   format_cli: { args: { path: string; text: string }; result: string };
   write_file_checked: { args: { path: string; text: string; base: string; bom: boolean }; result: void };
+  write_file_at_checked: { args: { path: string; text: string; base: string; bom: boolean }; result: void };
   rename_file: { args: { path: string; name: string }; result: string };
   delete_files: { args: { paths: string[] }; result: Batch<string> };
   move_files: { args: { paths: string[]; dest: string }; result: Batch<Moved> };

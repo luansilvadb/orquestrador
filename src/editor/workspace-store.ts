@@ -3,7 +3,7 @@
 // O texto gravado é `raw` (como veio do disco, sem BOM); `draft` é o que o CodeMirror mostra, com `\n`.
 // Sujo é `draft` diferente do `raw` normalizado. Conflito é sujo quando o texto difere do que foi carregado (`origin`).
 // Só usa sintaxe apagável (sem enum/namespace), para o check rodar direto no Node.
-import { asArray, isRecord, isSafePath, isWithin } from './workspace-model.ts';
+import { asArray, isRecord, isSafeFilePath, isSafePath, isWithin } from './workspace-model.ts';
 
 export const RECOVERY_VERSION = 1;
 // Limites da recuperação no localStorage: texto de um rascunho e total. Passou disso, rascunho grande fica de fora (com aviso).
@@ -47,7 +47,7 @@ export function hasDraftAt(data: EditorData, path: string): boolean {
 
 /** Rename ou movimento de pasta: troca o `path` dos buffers e dos conflitos dentro de `from`, sem tocar no texto nem no `docId`. */
 export function remapData(data: EditorData, from: string, to: string): EditorData {
-  if (!isSafePath(from) || !isSafePath(to)) return data;
+  if (!isSafeFilePath(from) || !isSafeFilePath(to)) return data;
   const move = (path: string) => (isWithin(path, from) ? to + path.slice(from.length) : path);
   const buffers: Record<string, Buffer> = {};
   for (const [id, buffer] of Object.entries(data.buffers)) buffers[id] = { ...buffer, path: move(buffer.path) };
@@ -127,7 +127,8 @@ export function decodeRecovery(text: string, project: string): Recovered {
   const buffers: RecoveryBuffer[] = [];
   const docIds = new Set<string>();
   for (const entry of asArray(raw.buffers).slice(0, MAX_BUFFERS)) {
-    if (!isRecord(entry) || typeof entry.docId !== 'string' || entry.docId === '' || entry.docId.length > 128 || docIds.has(entry.docId) || !isSafePath(entry.path)) {
+    if (!isRecord(entry) || typeof entry.docId !== 'string' || entry.docId === '' || entry.docId.length > 128 || docIds.has(entry.docId)
+      || (entry.path !== '' && !isSafeFilePath(entry.path)) || typeof entry.path !== 'string') {
       notes.push('Aba de arquivo inválida descartada.');
       continue;
     }

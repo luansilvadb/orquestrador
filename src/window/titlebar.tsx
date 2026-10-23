@@ -2,7 +2,8 @@
 // atributo data-tauri-drag-region, que vale só para o elemento que o tem; por isso botões e campos não o levam.
 import { Children, useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { Flexbox } from '@lobehub/ui';
-import { Text, Tooltip } from '@lobehub/ui/base-ui';
+import { ActionIcon, DropdownMenu, Text, Tooltip, type ContextMenuItem } from '@lobehub/ui/base-ui';
+import { Menu } from 'lucide-react';
 import { SECONDARY } from './text-style';
 import { host } from '../backend/backend';
 import { CloseIcon, MaximizeIcon, MinimizeIcon, RestoreIcon } from './window-icons';
@@ -29,12 +30,42 @@ export function folderName(path: string) {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
+export type TitleBarMenu = {
+  recentProjects: string[];
+  projectOpen: boolean;
+  onNewFile: () => void;
+  onOpenFile: () => void;
+  onOpenProject: () => void;
+  onOpenRecent: (path: string) => void;
+  onSave: () => void;
+  onSaveAs: () => void;
+  onCloseProject: () => void;
+  onExit: () => void;
+};
+
 /**
  * Identidade à esquerda; a pasta do projeto no meio (nome em destaque, caminho completo em secundário, copiável);
  * `children` são os contadores, agrupados à direita; os botões da janela ficam colados à borda direita.
  */
-export function TitleBar({ connected, project, children }: { connected: boolean; project?: string; children?: ReactNode }) {
+export function TitleBar({ connected, project, children, menu }: { connected: boolean; project?: string; children?: ReactNode; menu?: TitleBarMenu }) {
   const [maximized, setMaximized] = useState(false);
+  const menuItems: ContextMenuItem[] = menu ? [
+    { key: 'new-file', label: 'Novo arquivo', extra: <span>Ctrl+N</span>, onClick: menu.onNewFile },
+    { key: 'open-file', label: 'Abrir arquivo…', extra: <span>Ctrl+O</span>, onClick: menu.onOpenFile },
+    { key: 'open-project', label: 'Abrir pasta…', extra: <span>Ctrl+K Ctrl+O</span>, onClick: menu.onOpenProject },
+    {
+      key: 'recent-projects', type: 'submenu', label: 'Projetos recentes', openOnHover: true,
+      children: menu.recentProjects.length > 0
+        ? menu.recentProjects.slice(0, 10).map((path) => ({ key: path, label: folderName(path), desc: path, onClick: () => menu.onOpenRecent(path) }))
+        : [{ key: 'empty', label: 'Nenhum projeto recente', disabled: true }],
+    },
+    { type: 'divider' },
+    { key: 'save', label: 'Salvar', extra: <span>Ctrl+S</span>, onClick: menu.onSave },
+    { key: 'save-as', label: 'Salvar como…', extra: <span>Ctrl+Shift+S</span>, onClick: menu.onSaveAs },
+    { key: 'close-project', label: 'Fechar pasta', disabled: !menu.projectOpen, onClick: menu.onCloseProject },
+    { type: 'divider' },
+    { key: 'exit', label: 'Sair', onClick: menu.onExit },
+  ] : [];
 
   // O título nativo distingue as janelas na barra de tarefas.
   useEffect(() => {
@@ -64,6 +95,11 @@ export function TitleBar({ connected, project, children }: { connected: boolean;
   return (
     // data-tauri-drag-region: o arrasto e o duplo clique valem só nos elementos passivos e nas áreas vazias. O caminho não leva o atributo, para ficar selecionável.
     <Flexbox as="header" data-tauri-drag-region horizontal align="center" height={36} flex="none" className="whitespace-nowrap border-b bg-card">
+      {menu && (
+        <DropdownMenu items={menuItems} placement="bottomLeft">
+          <ActionIcon variant="borderless" size="small" icon={Menu} aria-label="Abrir menu" title="Menu" className="mx-1 shrink-0" />
+        </DropdownMenu>
+      )}
       <Flexbox data-tauri-drag-region horizontal align="center" paddingInline={12} flex="none">
         <Text as="span" data-tauri-drag-region fontSize={13} weight={600}>Orquestrador</Text>
       </Flexbox>

@@ -16,15 +16,16 @@ Uma linha por pasta; os arquivos não óbvios de cada uma vêm logo abaixo da ta
 | `src/git/` | A barra lateral do Git (alterações e histórico), o gráfico de commits e a trava das operações Git. |
 | `src/search/` | A pesquisa de texto nos arquivos, na faixa da árvore. |
 | `src/terminal/` | Os terminais (xterm), o painel do Orquestrador, o painel Terminal, a colagem de arquivo e imagem e o formulário de escolha. |
-| `src/window/` | A barra de título e seus controles, com o ícone dos controles da janela e o estilo de texto secundário. |
-| `src/shared/` | O que é usado por três ou mais áreas sem dono óbvio: caminhos, atualização periódica, faixa de abas, abas de arquivo e ícones de arquivo. |
+| `src/window/` | A barra de título, o menu principal e os controles da janela. |
+| `src/shared/` | O que é usado por três ou mais áreas sem dono óbvio: caminhos, atualização periódica, faixa de abas, abas de arquivo, ícones e aviso para abrir pasta. |
 
 Arquivos não óbvios:
 - src/editor/format.ts: carrega Prettier e os plugins oficiais sob demanda; combina as opções devolvidas pelo backend e formata com posição do cursor.
 - `src/backend/backend.ts`: o único ponto de contato com o Tauri, pela interface `Transport`. Fora do app (no navegador, em desenvolvimento), entra o simulado.
-- `src/backend/mock.ts` e `mock-fixtures.ts`: o backend simulado, só em `npm run dev` fora do Tauri. Ele simula os modos sem Git pela URL (`?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1`, ver [desenvolvimento](desenvolvimento.md)).
+- `src/backend/mock.ts` e `mock-fixtures.ts`: o backend simulado, só em `npm run dev` fora do Tauri. Simula o modo sem projeto por `?project=none` e os modos sem Git por `?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1` (ver [desenvolvimento](desenvolvimento.md)).
 - `src/backend/types.ts`: os tipos do contrato com o Rust e o mapa `Commands`, com cada comando do Tauri, seus argumentos e o resultado. `backend.ts` e `mock.ts` são tipados por ele, e `scripts/check-commands.mjs` confere as chaves com `generate_handler!` em `lib.rs`.
-- `src/editor/editor-workspace.tsx`: até dois grupos lado a lado, com abas de arquivo, diff, commit e conflito; a comparação com o disco antes de gravar; e a recuperação por projeto (rascunhos, cursor, rolagem e layout).
+- `src/shared/open-project.tsx`: aviso e botão `Abrir pasta` nos painéis que precisam de projeto.
+- `src/editor/editor-workspace.tsx`: até dois grupos lado a lado, com abas de arquivo, diff, commit e conflito; a comparação com o disco antes de gravar; recuperação por projeto e recuperação sem projeto, com arquivos soltos e rascunhos.
 - `src/editor/workspace-model.ts` e `workspace-store.ts`: modelos puros, sem React. O modelo cuida das abas e dos grupos (prévia, fixadas, fechamento com confirmação, reabertura e carga do estado salvo); o store cuida de buffers, rascunhos, conflitos e do texto da recuperação, validado ao ler, sem disco.
 - `src/editor/file-view.tsx`: o editor de texto (CodeMirror com as cores do app e as medidas do Monaco, guias de recuo e minimap). Não lê nem grava o disco; guarda o estado do CodeMirror por arquivo e reporta cursor e rolagem.
 - `src/editor/media-view.tsx`: a aba de mídia, com imagem (Ajustar e Tamanho real) e áudio (controles nativos). Os bytes vêm de `read_media` e entram num blob local; não lê texto e não grava.
@@ -63,10 +64,11 @@ Plano: cada módulo é uma unidade.
 
 | Caminho | Papel |
 | --- | --- |
-| `src-tauri/src/files.rs` | Os comandos de arquivos: `list_dir`, que lista uma pasta do projeto (com `ignored` por entrada, num `git check-ignore` por pasta), e `read_file`, que lê o arquivo (binário e acima de 1 MiB voltam sem texto), `read_media`, que devolve os bytes de imagem ou áudio para a aba de mídia (só as extensões de `MEDIA_EXTS`, sem SVG nem HTML, e até 32 MiB), e `write_file_checked`, que só grava se o arquivo não mudou desde a leitura. |
+| `src-tauri/src/lib.rs` | Registra os comandos Tauri. `open_project`/`close_project`, `pick_file`/`pick_save_path` e `read_file_at`/`read_media_at`/`write_file_at_checked` abrem projeto, escolhem caminhos e atendem arquivos absolutos do editor. |
+| `src-tauri/src/files.rs` | Comandos de arquivos do projeto e absolutos: `read_file_at`, `read_media_at` e `write_file_at_checked` atendem arquivos escolhidos pelo usuário, com limites, BOM e checagem de revisão. |
 | `src-tauri/src/search.rs` | O comando da pesquisa, `search`: os candidatos vêm de `git ls-files` (rastreados e não ignorados, sem `.git`) quando há repositório; sem repositório, vêm da pasta percorrida com a crate `ignore` (respeita `.gitignore` e `.ignore` da pasta e das subpastas, não os de pastas acima; inclui ocultos; não segue links; pula `.git` e `node_modules`), e o texto é casado em Rust pelo motor `regex`, o mesmo da prévia e da substituição. |
 | `src-tauri/src/git.rs` | Os comandos do painel Git: status, diff, preparar, commit, fetch, pull, push e branches. Também `git_commit_hover`, que lê os detalhes de um commit sob demanda, e os do editor: `git_file_base`, o texto do arquivo no HEAD e no índice para os marcadores de mudança, e `git_write_index`, que grava no índice o texto de um arquivo para preparar ou tirar do preparo um bloco. E o modo do projeto (com repositório, sem Git, sem repositório ou repositório acima) e o `git init` do botão Inicializar repositório. |
-| `src-tauri/src/core.rs` | O núcleo da sessão: PTYs, lotes, executores e a fila. Ver [delegação](delegacao.md). |
+| `src-tauri/src/core.rs` | O núcleo das sessões e projetos: abrir, fechar (com recusa durante sessão), PTYs, lotes, executores e fila. Sem projeto, shells usam a pasta pessoal. Ver [delegação](delegacao.md). |
 | `src-tauri/src/platform/` | O único lugar das chamadas ao sistema operacional: Job Objects, consulta de processo, COM e a Lixeira, o Explorer, a abertura de URLs do GitHub, o clipboard de arquivos, a memória física, as pastas do usuário e os nomes dos shells. `windows.rs` implementa; `other.rs` (macOS e Linux) responde "Ainda não suportado neste sistema." ou devolve `None`, conforme o chamador já trata a ausência. Fora daqui não há `windows_sys` nem `std::os::windows`. |
 | `src-tauri/src/capacity.rs` | A política automática de simultâneos: teto pela CPU e pela memória física (`platform::memoria`), com a reserva de 2 GiB e 1 GiB por executor. |
 | `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores e configuração. |
@@ -128,4 +130,6 @@ Agrupados por tipo.
 O `localStorage` do app guarda estas chaves (nada disso vai ao disco do projeto):
 
 - `orquestrador.editor:<projeto>`: a recuperação da área central (abas, grupos, rascunhos, cursor, rolagem e layout; ver [design system](design-system.md#recuperação-e-comparação)).
+- `orquestrador.editor:__sem-projeto__`: arquivos absolutos e rascunhos do modo sem projeto.
+- `orquestrador.project.last` e `orquestrador.project.recent`: último projeto e até 10 projetos recentes.
 - `orquestrador.search.history` e `orquestrador.search.view`: o histórico de consultas da pesquisa e a escolha entre lista e árvore.

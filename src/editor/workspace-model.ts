@@ -1,5 +1,5 @@
 // Modelo puro do espaço de trabalho do editor: um workspace com até dois grupos lado a lado, cada um com abas e prévia.
-// Sem React, sem armazenamento e sem drafts: quem chama guarda os buffers e diz quais documentos estão sujos.
+// Sem React ou armazenamento: quem chama guarda os buffers e diz quais documentos estão sujos.
 // Só usa sintaxe apagável (sem enum/namespace), para o check rodar direto no Node.
 //
 // Contratos (para quem integrar na UI):
@@ -8,8 +8,7 @@
 //   Por isso renomear/mover não desmonta o buffer, e duas abas com o mesmo docId (em grupos diferentes) compartilham o buffer.
 // - Diff é identificado por lado + path (`staged`/`unstaged`); histórico, por hash + path; conflito, por path.
 // - Rascunho (`draft`) é uma aba sem caminho: "Sem título-<num>", identificado pelo `docId` do buffer em memória. Não entra na pilha de
-//   fechadas, `remapPath` o ignora e `withoutDrafts` o tira antes de gravar o workspace (rascunho não volta ao reabrir). `promoteDraft`
-//   o transforma em aba de arquivo quando o usuário salva como dentro do projeto, mantendo o `docId`.
+//   fechadas e `remapPath` o ignora. `promoteDraft` o transforma em aba de arquivo quando salvo, mantendo o `docId`.
 // - Dentro de um grupo, uma identidade aparece no máximo uma vez: abrir de novo só ativa a que já existe.
 // - Ordem do grupo: fixadas primeiro, depois as demais. No máximo uma prévia por grupo. Fixada nunca é prévia.
 // - Cada operação devolve um estado novo; o argumento não muda. Operação inválida (grupo ou aba inexistente) devolve o mesmo estado.
@@ -18,7 +17,7 @@
 //   chame `planClose` de novo.
 // - Ativa: `active` é null só quando o grupo não tem abas; senão aponta para uma aba do grupo. `focus` é o grupo com o foco.
 // - Fechar a ativa passa a ativa para a vizinha da direita entre as que ficam; sem ela, a da esquerda.
-// - `loadWorkspace(texto)` valida o JSON salvo (versão, paths relativos seguros, até 2 grupos, ids, prévias, ativas) e conserta o
+// - `loadWorkspace(texto)` valida o JSON salvo (versão, caminhos seguros, até 2 grupos, ids, prévias, ativas) e conserta o
 //   que for inválido, descartando o que não couber. Nunca abre nem lê path nenhum: só confere texto.
 
 export const WORKSPACE_VERSION = 1;
@@ -79,15 +78,15 @@ export function openDraft(state: WorkspaceState, group: GroupId, docId: string):
   return openPermanent(state, group, { kind: 'draft', docId, num });
 }
 
-/** Salvar como dentro do projeto: a aba de rascunho vira aba de arquivo em `path`, com o mesmo `docId` (o buffer continua o mesmo). Recusa o que não for rascunho ou caminho seguro. */
+/** Salvar como: a aba de rascunho vira aba de arquivo em `path`, com o mesmo `docId` (o buffer continua o mesmo). */
 export function promoteDraft(state: WorkspaceState, tabId: string, path: string): WorkspaceState {
   const found = locate(state, tabId);
-  if (!found || found.tab.target.kind !== 'draft' || !isSafePath(path)) return state;
+  if (!found || found.tab.target.kind !== 'draft' || !isSafeFilePath(path)) return state;
   const { docId } = found.tab.target;
   return updateTab(state, tabId, (tab) => ({ ...tab, target: { kind: 'file', docId, path } }));
 }
 
-/** O workspace sem os rascunhos: é o que se grava. Rascunho não sobrevive ao reabrir (a janela pergunta antes de fechar). */
+/** Workspace sem os rascunhos abertos. */
 export function withoutDrafts(state: WorkspaceState): WorkspaceState {
   const drafts = new Set(state.groups.flatMap((g) => g.tabs.filter((t) => t.target.kind === 'draft').map((t) => t.id)));
   return tidy({ ...state, groups: state.groups.map((g) => dropFromGroup(g, drafts)) });
@@ -244,7 +243,7 @@ export function joinGroups(state: WorkspaceState): WorkspaceState {
  * abertas ou fechadas. Compara por pasta inteira e sem diferença de caixa: `src` não pega `src2`, e `SRC/x` vira `novo/x`.
  */
 export function remapPath(state: WorkspaceState, from: string, to: string): WorkspaceState {
-  if (!isSafePath(from) || !isSafePath(to)) return state;
+  if (!isSafeFilePath(from) || !isSafeFilePath(to)) return state;
   const move = (path: string) => (isWithin(path, from) ? to + path.slice(from.length) : path);
   // Histórico é imutável: o path de um commit é o do próprio commit e não muda. Abrir o arquivo atual sai de outro localizador.
   // Rascunho não tem caminho: fica como está.
@@ -257,7 +256,7 @@ export function remapPath(state: WorkspaceState, from: string, to: string): Work
 }
 
 /** Lê o JSON salvo e devolve um estado seguro. Versão desconhecida ou JSON quebrado começam vazios. `notes` diz o que foi descartado. */
-export function loadWorkspace(text: string): Loaded {
+export function loadWorkspace(text: string, allowDrafts = false): Loaded {
   const fresh = (note: string): Loaded => ({ state: createWorkspace(), notes: [note] });
   let raw: unknown;
   try {
@@ -278,7 +277,7 @@ export function loadWorkspace(text: string): Loaded {
     groupIds.add(group.id);
     const tabs: EditorTab[] = [];
     for (const tab of asArray(group.tabs)) {
-      if (!isRecord(tab) || typeof tab.id !== 'string' || tab.id === '' || tab.id.length > 64 || tabIds.has(tab.id) || !isSafeTarget(tab.target)) {
+      if (!isRecord(tab) || typeof tab.id !== 'string' || tab.id === '' || tab.id.length > 64 || tabIds.has(tab.id) || !isSafeTarget(tab.target, allowDrafts)) {
         notes.push('Aba inválida descartada.');
         continue;
       }
@@ -289,7 +288,7 @@ export function loadWorkspace(text: string): Loaded {
   }
   const closed: ClosedTab[] = [];
   for (const entry of asArray(raw.closed)) {
-    if (isRecord(entry) && isGroupId(entry.group) && isSafeTarget(entry.target)) closed.push({ group: entry.group, target: entry.target });
+    if (isRecord(entry) && isGroupId(entry.group) && isSafeTarget(entry.target, allowDrafts)) closed.push({ group: entry.group, target: entry.target });
     else notes.push('Aba fechada inválida descartada.');
   }
   const nextId = typeof raw.nextId === 'number' && Number.isSafeInteger(raw.nextId) && raw.nextId >= 1 && raw.nextId < Number.MAX_SAFE_INTEGER ? raw.nextId : 1;
@@ -414,13 +413,22 @@ export function isSafePath(path: unknown): path is string {
   return path.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..' && !/^\.git[. ]*$/i.test(seg));
 }
 
-function isSafeTarget(value: unknown): value is TabTarget {
-  if (!isRecord(value) || !isSafePath(value.path)) return false;
+/** Caminho de arquivo do projeto ou absoluto escolhido pelo usuário. */
+export function isSafeFilePath(path: unknown): path is string {
+  if (isSafePath(path)) return true;
+  if (typeof path !== 'string' || path.length === 0 || path.length > 32_768 || !/^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path)) return false;
+  return !/[\u0000-\u001f]/.test(path) && !path.split(/[\\/]/).some((part) => part === '.' || part === '..');
+}
+
+function isSafeTarget(value: unknown, allowDrafts: boolean): value is TabTarget {
+  if (!isRecord(value)) return false;
   switch (value.kind) {
-    case 'file': return typeof value.docId === 'string' && value.docId !== '' && value.docId.length <= 128;
-    case 'diff': return value.side === 'staged' || value.side === 'unstaged';
-    case 'commit': return typeof value.hash === 'string' && /^[0-9a-f]{4,64}$/i.test(value.hash);
-    case 'conflict': return true;
+    case 'file': return isSafeFilePath(value.path) && typeof value.docId === 'string' && value.docId !== '' && value.docId.length <= 128;
+    case 'diff': return isSafePath(value.path) && (value.side === 'staged' || value.side === 'unstaged');
+    case 'commit': return isSafePath(value.path) && typeof value.hash === 'string' && /^[0-9a-f]{4,64}$/i.test(value.hash);
+    case 'conflict': return isSafePath(value.path);
+    case 'draft': return allowDrafts && typeof value.docId === 'string' && value.docId !== '' && value.docId.length <= 128
+      && typeof value.num === 'number' && Number.isSafeInteger(value.num) && value.num > 0;
     default: return false;
   }
 }

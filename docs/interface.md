@@ -1,10 +1,12 @@
 # Interface
 
-A barra de título própria mostra o nome do projeto e o caminho. O título nativo da janela acompanha o projeto como `<pasta> - Orquestrador`, facilitando distinguir janelas na barra de tarefas, no Alt+Tab e ao passar o ponteiro; sem projeto aberto, é `Orquestrador`.
+A barra de título própria tem o menu `≡` à esquerda e mostra o nome do projeto e o caminho. O título nativo acompanha o projeto como `<pasta> - Orquestrador`; sem projeto aberto, é `Orquestrador`.
 
 ## Tela principal
 
-A tela principal tem, à esquerda, a coluna de ícones (Arquivos, Pesquisar e Git) e, ao lado dela, uma faixa com o conteúdo da tela escolhida: a árvore de pastas, a pesquisa ou a barra lateral do Git. A faixa abre com 280 px e a borda direita dela arrasta a largura, que é a mesma nas três telas. À direita da faixa fica a coluna central, sempre montada, com o editor (grupos, abas, diffs, commits e conflitos) em cima e o painel Terminal embaixo. À direita de tudo fica o painel do Orquestrador, que aparece em todas as telas e não muda de tamanho com a troca delas. Trocar de tela troca o conteúdo da faixa: nada é desmontado nem muda de tamanho, e as abas do editor ficam como estavam.
+A tela principal tem, à esquerda, a coluna de ícones (Arquivos, Pesquisar e Git) e, ao lado dela, uma faixa com o conteúdo da tela escolhida. Depois da atualização, o último projeto é reaberto se ainda existir; sem ele, o app inicia sem projeto. Nesse modo, Arquivos, Pesquisa, Git e Orquestrador mostram `Abrir pasta`; o Terminal abre no diretório pessoal. A área central mostra Novo arquivo, Abrir arquivo, Abrir pasta e projetos recentes. O editor também abre arquivos escolhidos por caminho absoluto; Git gutter, árvore e pesquisa consideram só arquivos do projeto. A barra de status não mostra branch. A faixa abre com 280 px e a borda direita dela arrasta a largura, que é a mesma nas três telas. À direita fica a coluna central, sempre montada, com o editor em cima e o painel Terminal embaixo. O painel do Orquestrador aparece em todas as telas. Trocar de tela não desmonta nem muda o tamanho das áreas.
+
+O menu `≡` mostra Novo arquivo (Ctrl+N), Abrir arquivo… (Ctrl+O), Abrir pasta… (Ctrl+K, Ctrl+O), Projetos recentes (até 10), Salvar (Ctrl+S), Salvar como… (Ctrl+Shift+S), Fechar pasta e Sair. Fechar pasta volta ao modo sem projeto. O projeto aberto e os recentes ficam no `localStorage` do app.
 
 ## Painel do Orquestrador
 

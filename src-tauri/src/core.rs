@@ -262,6 +262,16 @@ impl Core {
         Ok(Opened { project, subfolder })
     }
 
+    /// Fecha a pasta aberta; shells seguem vivos no diretório em que foram iniciados.
+    pub fn close_project(&self) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.session.is_some() {
+            return Err("Feche o orquestrador antes de trocar de projeto.".into());
+        }
+        inner.project = None;
+        Ok(())
+    }
+
     /// A pasta do projeto como caminho, para os comandos que a recebem.
     pub fn repo(&self) -> Result<PathBuf, String> {
         self.inner.lock().unwrap().project.clone().map(PathBuf::from).ok_or_else(|| SEM_PROJETO.into())
@@ -332,21 +342,26 @@ impl Core {
     }
 
     /// Abre o PowerShell do usuário no slot `id`, na pasta `cwd` do projeto (relativa, com "/"; `Some("")` é a raiz;
-    /// `None` é a própria raiz do projeto), e devolve o programa que abriu. Recusado se esse id já tiver um vivo;
-    /// outros shells não contam. Cada início tem buffer novo. Pasta que sai do projeto, não existe ou é `.git` é
-    /// recusada antes de o shell abrir.
+    /// `None` é a raiz do projeto ou, sem projeto, a pasta pessoal), e devolve o programa que abriu. Recusado se esse id
+    /// já tiver um vivo; outros shells não contam. Cada início tem buffer novo. Pasta que sai do projeto, não existe ou é
+    /// `.git` é recusada antes de o shell abrir.
     pub fn start_shell_in(&self, id: &str, cols: u16, rows: u16, cwd: Option<&str>) -> Result<String, String> {
         if !is_shell(id) {
             return Err("Id de shell inválido.".into());
         }
         let mut inner = self.inner.lock().unwrap();
-        let project = inner.project.clone().ok_or(SEM_PROJETO)?;
         if inner.slots.get(id).is_some_and(|s| s.term.is_some()) {
             return Err("Já há um shell aberto com este id.".into());
         }
-        let dir = match cwd {
-            Some(rel) => files::plain(Path::new(&project), rel, true)?.to_string_lossy().into_owned(),
-            None => project.clone(),
+        let dir = match (inner.project.as_deref(), cwd) {
+            (Some(project), Some(rel)) => files::plain(Path::new(project), rel, true)?.to_string_lossy().into_owned(),
+            (Some(project), None) => project.to_string(),
+            (None, None) => {
+                let home = crate::platform::pasta_pessoal();
+                let home = if home.as_os_str().is_empty() { std::env::current_dir().map_err(|e| e.to_string())? } else { home };
+                home.to_string_lossy().into_owned()
+            }
+            (None, Some(_)) => return Err(SEM_PROJETO.into()),
         };
         inner.slots.remove(id);
         let mut started = Err("Ainda não suportado neste sistema.".to_string());
@@ -840,6 +855,22 @@ mod tests {
         assert_eq!(core.set_project(&sumida).unwrap_err(), format!("A pasta {} não existe.", sumida.display()));
         assert!(core.set_project(&arquivo).unwrap_err().ends_with("não é uma pasta."));
         assert!(core.repo().is_err(), "nada foi aberto");
+    }
+
+    #[test]
+    fn fechar_projeto_sem_sessao_volta_ao_modo_sem_projeto() {
+        let (core, _root) = git_core("fechar-projeto");
+        core.close_project().unwrap();
+        assert_eq!(core.repo().unwrap_err(), SEM_PROJETO);
+    }
+
+    #[test]
+    fn fechar_projeto_com_sessao_aberta_recusa() {
+        let (core, root) = git_core("fechar-projeto-com-sessao");
+        let project = core.repo().unwrap();
+        core.inner.lock().unwrap().session = Some(session::Session { dir: root.0.join("sessao") });
+        assert_eq!(core.close_project().unwrap_err(), "Feche o orquestrador antes de trocar de projeto.");
+        assert_eq!(core.repo().unwrap(), project, "a recusa preserva a pasta atual");
     }
 
     #[test]

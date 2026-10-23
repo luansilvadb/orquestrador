@@ -741,13 +741,9 @@ scenario('conflito: rascunho parcial sobrevive a recarregar a janela (trecho res
   // Rascunho não salvo: a recuperação (localStorage do projeto) guarda o que já foi escolhido.
   await page.waitForTimeout(400);
   await page.reload();
-  // A janela voltou na tela de escolher a pasta. O simulado começa do zero: o disco volta igual ao de antes (mesma revisão)
-  // antes de o projeto abrir e a aba restaurada ler o conflito.
-  const picker = page.getByRole('button', { name: 'Escolher pasta do projeto' });
-  await picker.waitFor();
-  await addDois(page);
-  await picker.click();
+  // O último projeto reabre sozinho; o simulado começa do zero e o conflito volta com a mesma revisão.
   await nav(page).waitFor();
+  await addDois(page);
   await openGit(page);
   if (await conflictTab(page).count() === 0) await row(page, 'unstaged', 'src/dois.ts').dblclick();
   await conflictTab(page).waitFor();

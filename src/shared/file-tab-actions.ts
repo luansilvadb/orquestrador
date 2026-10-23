@@ -9,7 +9,17 @@ export type CopyKind = 'relative' | 'absolute' | 'navigation';
  * sem cursor, devolve null e quem chama não copia nada.
  */
 export function pathText(kind: CopyKind, path: string, project: string, cursor?: { line: number; col: number }): string | null {
-  const sep = project.includes('\\') ? '\\' : '/';
+  const absolutePath = /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path);
+  const sep = project.includes('\\') || (absolutePath && path.includes('\\')) ? '\\' : '/';
+  if (absolutePath) {
+    const absolute = path.replace(/[\\/]/g, sep);
+    const root = project.replace(/[\\/]+$/, '');
+    const comparable = absolute.replace(/[\\/]+/g, '/').toLowerCase();
+    const rootComparable = root.replace(/[\\/]+/g, '/').toLowerCase();
+    const relative = root && comparable.startsWith(`${rootComparable}/`) ? absolute.slice(root.length + 1) : null;
+    if (kind === 'relative') return relative?.replace(/[\\/]/g, sep) ?? null;
+    return kind === 'absolute' ? absolute : cursor ? `${absolute}:${cursor.line}:${cursor.col}` : null;
+  }
   // A raiz ('') é o próprio projeto: relativo é "." e absoluto é a pasta sem barra final (nunca texto vazio).
   if (path === '') {
     if (kind === 'relative') return '.';

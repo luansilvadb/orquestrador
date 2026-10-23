@@ -85,8 +85,12 @@ export async function session(browser) {
 /** Abre o app na URL dada (o simulado lê a query) e escolhe a pasta: a página recomeça do zero. */
 export async function openApp(page, query = '') {
   await page.goto(`${BASE}${query}`);
-  await page.getByRole('button', { name: 'Escolher pasta do projeto' }).click();
   await page.getByRole('navigation', { name: 'Telas' }).waitFor();
+  if (new URLSearchParams(query.replace(/^\?/, '')).get('project') !== 'none') {
+    await page.getByRole('button', { name: 'Abrir menu' }).click();
+    await page.getByRole('menuitem', { name: /Abrir pasta/ }).click();
+    await page.getByRole('navigation', { name: 'Telas' }).waitFor();
+  }
 }
 
 // Árvore: pasta só é aberta se estiver fechada (clicar de novo fecharia).
