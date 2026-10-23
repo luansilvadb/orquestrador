@@ -18,7 +18,7 @@ const COMPACT_WIDTH = 460;
 // Objeto constante: o DraggablePanel recalcula o tamanho quando `defaultSize` muda de identidade.
 const DEFAULT_SIZE = { height: SHELL_HEIGHT };
 
-// `title` é o completo (pasta e programa), para o tooltip; `program` é '' até o backend responder.
+// `title` é o completo (pasta e programa), para o tooltip; `program` é '' até o primeiro shell da sessão responder.
 export type ShellTab = { id: string; n: number; title: string; program: string; project: string | null };
 
 // Acha a aba pelo `data-shell` e a revela na faixa (a regra de rolagem está em tab-strip).

@@ -79,7 +79,7 @@ function storeProject(path: string | null) {
 }
 
 type Overlay = 'start' | 'executor' | null;
-// Um shell do painel Terminal: `program` fica '' até o backend responder com o nome do programa.
+// Um shell do painel Terminal: `program` nasce com o último que o backend devolveu (ou '' no primeiro) e é confirmado quando ele responde.
 // `cwd` é a pasta (relativa ao projeto) em que o shell abre; sem ela, a raiz do projeto.
 // `n` é o número exibido: o menor livre entre os shells abertos ao criar. O id segue único, para respostas atrasadas do backend não acharem outra aba.
 type ShellItem = { id: string; n: number; program: string; cwd?: string; project: string | null };
@@ -111,7 +111,7 @@ type Action =
   | { type: 'nodeState'; id: string; state: NodeState; choice: Choice | null }
   | { type: 'removed'; ids: string[] }
   | { type: 'reset'; notice: string }
-  | { type: 'shellAdd'; id: string; cwd?: string; project: string | null }
+  | { type: 'shellAdd'; id: string; program: string; cwd?: string; project: string | null }
   | { type: 'shellProgram'; id: string; program: string }
   | { type: 'shellRemove'; id: string }
   | { type: 'projectShellsClosed'; id: string }
@@ -165,7 +165,7 @@ function reducer(state: State, action: Action): State {
     case 'shellAdd': {
       let n = 1;
       while (state.shells.some((s) => s.n === n)) n += 1;
-      return { ...state, shells: [...state.shells, { id: action.id, n, program: '', cwd: action.cwd, project: action.project }], shellActive: action.id, shellOpen: true };
+      return { ...state, shells: [...state.shells, { id: action.id, n, program: action.program, cwd: action.cwd, project: action.project }], shellActive: action.id, shellOpen: true };
     }
     case 'shellProgram':
       return { ...state, shells: state.shells.map((s) => (s.id === action.id ? { ...s, program: action.program } : s)) };
@@ -421,6 +421,8 @@ export function App() {
 
 // A versão é conferida uma vez por abertura do app: um projeto aberto depois (o "+" das abas) nasce pronto e conectado, sem a tela de atualização.
 let updateChecked = false;
+// Programa do último shell aberto (vale para todos os projetos): a aba nova já nasce com ele e não muda de largura quando o backend responde.
+let lastShellProgram = '';
 
 function ProjectApp({ managed, initialProject, active = true, projects, onSelect, onClose, onMove, onOpen, recentProjects: sharedRecent }: {
   managed: boolean; initialProject?: ManagedProject; active?: boolean; projects?: ProjectTab[]; onSelect?: (id: string) => void;
@@ -923,7 +925,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   // Nova aba: id novo e ativo. O TermHost dela monta e chama startShell. `cwd` (relativo ao projeto) é a pasta em que ela abre.
   function openShellAt(cwd?: string) {
     shellSeq.current += 1;
-    dispatch({ type: 'shellAdd', id: `shell-${shellSeq.current}`, cwd, project: stateRef.current.projectId });
+    dispatch({ type: 'shellAdd', id: `shell-${shellSeq.current}`, program: lastShellProgram, cwd, project: stateRef.current.projectId });
   }
   // Sem argumento: o botão "+" passa o evento de clique para `onAdd`, então esta função não recebe nada.
   const addShell = () => openShellAt();
@@ -959,6 +961,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
         await backend.closeShell(id, shell?.project).catch(() => {});
         return;
       }
+      lastShellProgram = program;
       dispatch({ type: 'shellProgram', id, program });
       view.setLive();
       await view.attach();
@@ -1108,7 +1111,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   const { update, orchestrator, executors, options } = state;
   const ready = update.phase === 'ready';
   if (ready) updateChecked = true;
-  // Título da aba: nome da pasta do projeto (último segmento do caminho) e, depois que o backend responde, o programa.
+  // Título da aba: nome da pasta do projeto (último segmento do caminho) e o programa.
   const folder = folderName(state.project);
   const shellTabs = state.shells.map((s) => ({ id: s.id, title: s.program ? (folder ? `${folder} — ${s.program}` : s.program) : folder || 'Terminal', n: s.n, program: s.program, project: s.project }));
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
