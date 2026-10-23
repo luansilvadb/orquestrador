@@ -199,6 +199,20 @@ scenario('Markdown: fonte, medidas, fundo, medianiz, seleção e cores de markup
   await page.screenshot({ path: join(OUT, 'editor-style-markdown.png') });
 });
 
+scenario('cursor na coluna 0 inteiro à direita da medianiz, sem mover o texto', async ({ page }) => {
+  await open(page, 'cursor-coluna-0.md', '# x\n\nweb\n');
+  const line = await page.locator('.cm-content:visible .cm-line').nth(2).boundingBox();
+  await page.mouse.click(line.x + 1, line.y + 5);
+  await page.locator('.cm-cursor-primary').waitFor();
+  const g = await page.evaluate(() => ({
+    cursor: document.querySelector('.cm-cursor-primary').getBoundingClientRect().left,
+    gutter: document.querySelector('.cm-gutters').getBoundingClientRect().right,
+    content: document.querySelector('.cm-content').getBoundingClientRect().left,
+  }));
+  assert.ok(g.cursor >= g.gutter, `cursor em x ${g.cursor} sob a medianiz (até x ${g.gutter})`);
+  assert.equal(g.content, g.gutter, 'texto colado à medianiz, sem recuo');
+});
+
 scenario('TSX: pares coloridos pelo nível, fora de strings e comentários, `${` como par, e `)` sem par em vermelho', async ({ page }) => {
   await open(page, 'estilo-editor.tsx', TSX);
   await assertBrackets(page, EXPECTED_TSX);

@@ -55,6 +55,8 @@ const darkTheme = EditorView.theme({
     caretColor: '#AEAFAD',
   },
   '.cm-line': { padding: '0' },
+  // O cursor começa na borda esquerda do caractere, como no VS Code: com o recuo padrão (-0,6 px), na coluna 0 ele fica sob a medianiz.
+  '.cm-cursor': { marginLeft: '0' },
   '.cm-gutters': {
     color: '#6E7681',
     backgroundColor: '#1F1F1F',
