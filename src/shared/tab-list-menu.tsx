@@ -1,6 +1,6 @@
 // Lista "Todas as abas" das faixas do Orquestrador, do Terminal e do editor: um DropdownMenu com uma linha de 26 px por aba (medidas em
-// src/index.css), o ícone na margem, o rótulo que corta com reticências, o estado à direita e o check da ativa (invisível nas outras, para
-// o estado ficar na mesma coluna). Com `onClose`, o X toma o lugar do check na linha destacada (ponteiro ou teclado) e Delete fecha a aba
+// src/index.css), o ícone na margem, o rótulo que corta com reticências, o estado à direita e o check da ativa na margem direita, no
+// canto da linha. Com `onClose`, o X toma o lugar do check na linha destacada (ponteiro ou teclado) e Delete fecha a aba
 // destacada; o menu continua aberto, menos quando a aba tem alteração não salva (fechar pede confirmação num diálogo) ou quando a lista
 // esvazia: aí o menu desmonta na hora, pois o painel Terminal se esconde e a animação de saída, sem âncora, pulava para o canto da janela.
 import { type KeyboardEvent, type ReactNode, useState } from 'react';
@@ -49,7 +49,8 @@ export function TabListMenu({ items, active, placement = 'bottomRight', children
       <span className="flex h-[26px] items-center gap-1.5 whitespace-nowrap">
         {item.state}
         {item.dirty && <span aria-label="Alteração não salva">●</span>}
-        <span className="relative inline-flex size-4 items-center justify-center">
+        {/* Na margem direita de 26 px, espelhando o ícone da esquerda: o X fica no canto da linha. */}
+        <span className="absolute top-1/2 right-[5px] flex size-4 -translate-y-1/2 items-center justify-center">
           <Check className={`tab-list-check size-3.5${active === item.key ? '' : ' invisible'}`} />
           {item.onClose && (
             <button

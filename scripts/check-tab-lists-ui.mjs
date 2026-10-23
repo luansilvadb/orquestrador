@@ -122,6 +122,10 @@ scenario('lista do Terminal: o mesmo menu, sem cabeçalho; X na linha destacada 
     return [mid(item), mid(item.querySelector('.tab-list-close')), mid(item.querySelector('.tab-list-check'))];
   });
   assert.ok(centers.every((y) => Math.abs(y - centers[0]) <= 0.5), `X e check no centro da linha (${centers})`);
+  // O X fica no canto direito da linha, na margem de 26 px.
+  const gap = await page.locator('[role="menu"] > [role="menuitem"]').first().evaluate((item) =>
+    item.getBoundingClientRect().right - item.querySelector('.tab-list-close').getBoundingClientRect().right);
+  assert.ok(gap >= 4 && gap <= 6, `X a ${gap} px da borda direita`);
   await page.screenshot({ path: join(OUT, 'tab-lists-terminal.png') });
   await page.getByRole('menuitem').nth(2).hover();
   await page.waitForFunction(() => document.querySelectorAll('[role="menu"] > [role="menuitem"]')[2].hasAttribute('data-highlighted'));
