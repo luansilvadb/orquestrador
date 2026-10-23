@@ -3,13 +3,14 @@
 // campos de incluir e excluir. Cada ocorrência é uma linha da lista, agrupada por arquivo (ou por pasta, na árvore).
 // A busca roda no backend (comando `search`). Com texto no Substituir, a prévia (`replace_preview`, não grava) mostra na própria
 // lista o que sai riscado e o que entra; a troca por arquivo e o Substituir Tudo gravam com `replace_apply`, só nos arquivos da prévia.
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen, CaseSensitive, CaseUpper, ChevronRight, ChevronsDownUp, ChevronsUpDown, Ellipsis, List, ListTree, ListX,
   type LucideIcon, Regex, ReplaceAll, RotateCw, WholeWord, X,
 } from 'lucide-react';
 import { ActionIcon, Button, ContextMenuTrigger, Input, Modal, ScrollArea, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
+import { Virtualizer, type VirtualizerHandle } from 'virtua';
 import { backend, message } from '../backend/backend';
 import { FileIcon } from '../shared/file-icon';
 import { copy, join, splitPath } from '../shared/paths';
@@ -46,6 +47,7 @@ const REASON: Record<SkipReason, string> = {
 const INPUT_TOGGLE = { size: 16, blockSize: 20, borderRadius: 3 } as const;
 const INPUT_STYLE = { height: 26 };
 const INDENT = 8;
+const ROW_HEIGHT = 22;
 const FOCUS = 'focus-visible:ring-2 focus-visible:ring-ring/50';
 
 /** Tudo o que a busca e a substituição usam, do jeito que está nos campos. */
@@ -279,6 +281,15 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   // Trocar pelo histórico não deve reordená-lo: a busca feita por ele não entra de novo no histórico.
   const skipHistory = useRef(false);
   const resultsBox = useRef<HTMLDivElement>(null);
+  // A lista é virtual: só as linhas à vista (e a com foco) ficam montadas. O teclado anda pelo índice da linha, não pelo DOM.
+  const viewport = useRef<HTMLDivElement>(null);
+  const virtualizer = useRef<VirtualizerHandle>(null);
+  // Linha com o foco do teclado: fica montada fora da tela, para a roda do mouse não tirar o foco dela.
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  // Linha que recebe o foco assim que estiver montada (seta, Home/End ou a vizinha da dispensada).
+  const pendingFocus = useRef<string | null>(null);
+  const focusTries = useRef(0);
+  const [, setFocusTick] = useState(0);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -458,7 +469,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   }, [wantedKey, results]);
 
   const livePreview = preview && preview.key === wantedKey ? preview : null;
-  const pattern = highlighter(shown.query, shown.options);
+  const pattern = useMemo(() => highlighter(shown.query, shown.options), [shown]);
 
   // Substitutos por arquivo e linha, lidos da prévia: posição na linha inteira → texto que entra.
   const replacements = useMemo(() => {
@@ -520,19 +531,30 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
 
   // ---------- resultados ----------
 
+  // Derivados memoizados: com milhares de linhas, refazê-los a cada tecla nos campos trava a interface.
+  const allHits = useMemo(
+    () => (results?.files ?? []).map((f: SearchFile) => ({ path: f.path, all: f.matches.flatMap((m) => hitsOf(f.path, m, pattern)) })),
+    [results, pattern],
+  );
   // `files` é o que está na tela: sem os dispensados. Resumo, recolher e navegação contam só isto.
-  const gone = new Set(dismissedHits);
-  const scoped = (results?.files ?? []).filter((f) => !dismissedFiles.includes(f.path));
-  const allHits = (f: SearchFile) => f.matches.flatMap((m) => hitsOf(f.path, m, pattern));
-  const withHits = scoped.map((f) => ({ path: f.path, all: allHits(f) }));
-  const files = withHits.map(({ path, all }) => ({ path, hits: all.filter((h) => !gone.has(hitKey(h))) })).filter((f) => f.hits.length > 0);
-  // Arquivos com alguma ocorrência dispensada: a troca grava o arquivo inteiro, então eles ficam fora dela.
-  const partial = new Set(withHits.filter(({ all }) => all.some((h) => gone.has(hitKey(h)))).map(({ path }) => path));
+  // `partial`: arquivos com alguma ocorrência dispensada; a troca grava o arquivo inteiro, então eles ficam fora dela.
+  const { files, partial } = useMemo(() => {
+    const gone = new Set(dismissedHits);
+    const withHits = allHits.filter((f) => !dismissedFiles.includes(f.path));
+    return {
+      files: withHits.map(({ path, all }) => ({ path, hits: all.filter((h) => !gone.has(hitKey(h))) })).filter((f) => f.hits.length > 0),
+      partial: new Set(withHits.filter(({ all }) => all.some((h) => gone.has(hitKey(h)))).map(({ path }) => path)),
+    };
+  }, [allHits, dismissedFiles, dismissedHits]);
   const skipped = results?.skipped ?? [];
-  const hitCount = files.reduce((n, f) => n + f.hits.length, 0);
-  const collapsedSet = new Set(collapsed);
-  const rows = rowsOf(files, view, collapsedSet);
-  const collapsible = view === 'tree' ? rowsOf(files, view, new Set()).filter((r) => r.kind !== 'hit').map((r) => r.key) : files.map((f) => `f:${f.path}`);
+  const hitCount = useMemo(() => files.reduce((n, f) => n + f.hits.length, 0), [files]);
+  const collapsedSet = useMemo(() => new Set(collapsed), [collapsed]);
+  const rows = useMemo(() => rowsOf(files, view, collapsedSet), [files, view, collapsedSet]);
+  const collapsible = useMemo(
+    () => (view === 'tree' ? rowsOf(files, view, new Set()).filter((r) => r.kind !== 'hit').map((r) => r.key) : files.map((f) => `f:${f.path}`)),
+    [files, view],
+  );
+  const focusedIndex = focusedKey === null ? -1 : rows.findIndex((r) => r.key === focusedKey);
   const someOpen = collapsible.some((k) => !collapsedSet.has(k));
   const toggleAll = () => setCollapsed(someOpen ? collapsible : []);
   const toggleRow = (key: string) => setCollapsed((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
@@ -554,25 +576,57 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
 
   // Mantém o resultado atual à vista. `nearest` não mexe na lista quando ele já está visível.
   useEffect(() => {
-    resultsBox.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
+    const index = rows.findIndex((r) => r.kind === 'hit' && isCurrent(r.hit));
+    if (index >= 0) virtualizer.current?.scrollToIndex(index, { align: 'nearest' });
   }, [current]);
 
-  // Foco vai para a linha vizinha antes de a atual sair da tela; sem vizinha, volta ao campo.
-  const focusNeighbor = (leaving: Element) => {
-    const items = [...(resultsBox.current?.querySelectorAll<HTMLElement>('[data-result]') ?? [])];
-    const own = leaving.querySelector('[data-result]');
-    const idx = items.indexOf(own as HTMLElement);
-    const next = items.slice(idx + 1).find((el) => !leaving.contains(el)) ?? items.slice(0, Math.max(idx, 0)).findLast((el) => !leaving.contains(el));
-    if (next) next.focus();
-    else field()?.focus();
+  const resultEl = (key: string) =>
+    [...(resultsBox.current?.querySelectorAll<HTMLElement>('[data-result]') ?? [])].find((el) => el.dataset.key === key) ?? null;
+  // Pede o foco numa linha pela chave. Fora da tela, a lista rola até ela e o foco vem quando ela monta (efeito abaixo).
+  const focusRow = (key: string | null) => {
+    if (key === null) return field()?.focus();
+    pendingFocus.current = key;
+    focusTries.current = 0;
+    setFocusTick((n) => n + 1);
   };
-  // Dispensar só tira da tela. `row` vem do clique ou da tecla; pelo menu de contexto não há foco a mover.
-  const dismissHit = (h: Hit, row?: Element | null) => {
-    if (row) focusNeighbor(row);
+  // Depois de cada render: a linha pedida recebe o foco; fora da tela, a lista rola até ela e a mantém montada.
+  // Recém-montada, ela fica invisível até o virtua medi-la e o foco não pega: tenta de novo no quadro seguinte.
+  // Se ela saiu da lista, o foco volta ao campo.
+  useEffect(() => {
+    const key = pendingFocus.current;
+    if (key === null) return;
+    const index = rows.findIndex((r) => r.key === key);
+    if (index < 0) {
+      pendingFocus.current = null;
+      field()?.focus();
+      return;
+    }
+    virtualizer.current?.scrollToIndex(index, { align: 'nearest' });
+    const el = resultEl(key);
+    el?.focus();
+    if (el && document.activeElement === el) {
+      pendingFocus.current = null;
+      return;
+    }
+    setFocusedKey(key);
+    if (focusTries.current++ < 30) requestAnimationFrame(() => setFocusTick((n) => n + 1));
+    else pendingFocus.current = null;
+  });
+
+  // A linha seguinte à que sai (pulando as de dentro, se for arquivo ou pasta) ou, no fim, a anterior.
+  const neighborOf = (index: number) => {
+    const row = rows[index];
+    let end = index + 1;
+    if (row.kind !== 'hit') while (end < rows.length && rows[end].depth > row.depth) end++;
+    return rows[end]?.key ?? rows[index - 1]?.key ?? null;
+  };
+  // Dispensar só tira da tela. `index` vem do clique ou da tecla, e o foco passa à vizinha; pelo menu de contexto não há foco a mover.
+  const dismissHit = (h: Hit, index?: number) => {
+    if (index !== undefined) focusRow(neighborOf(index));
     setDismissedHits((prev) => [...prev, hitKey(h)]);
   };
-  const dismissFile = (path: string, row?: Element | null) => {
-    if (row) focusNeighbor(row);
+  const dismissFile = (path: string, index?: number) => {
+    if (index !== undefined) focusRow(neighborOf(index));
     setDismissedFiles((prev) => [...prev, path]);
   };
 
@@ -594,18 +648,24 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   // Campo preenchido sem resposta ainda (o debounce espera) mostra "Pesquisando…".
   const status = error || (pending ? 'Pesquisando…' : results ? summary(hitCount, files.length, results.truncated) : form.query ? 'Pesquisando…' : '');
 
-  // Setas sobem e descem entre as linhas; Início e Fim vão à primeira e à última.
+  // Setas sobem e descem entre as linhas; Início e Fim vão à primeira e à última, mesmo fora da tela.
   const onResultsKey = (e: ReactKeyboardEvent<HTMLElement>) => {
     const keys = ['ArrowDown', 'ArrowUp', 'Home', 'End'];
-    if (!keys.includes(e.key)) return;
-    const items = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('[data-result]')];
-    const idx = items.indexOf(e.target as HTMLButtonElement);
+    if (!keys.includes(e.key) || !rows.length) return;
+    const key = (e.target as HTMLElement).dataset.result === undefined ? undefined : (e.target as HTMLElement).dataset.key;
+    const idx = key === undefined ? -1 : rows.findIndex((r) => r.key === key);
     if (idx < 0 && e.key !== 'Home' && e.key !== 'End') return;
-    const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : e.key === 'ArrowDown' ? idx + 1 : idx - 1;
-    const target = items[Math.min(Math.max(next, 0), items.length - 1)];
-    if (!target) return;
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? rows.length - 1 : e.key === 'ArrowDown' ? idx + 1 : idx - 1;
     e.preventDefault();
-    target.focus();
+    focusRow(rows[Math.min(Math.max(next, 0), rows.length - 1)].key);
+  };
+  // A linha com foco fica montada; o foco que sai da lista para outro elemento a libera.
+  const onResultsFocus = (e: ReactFocusEvent<HTMLElement>) => {
+    const key = e.target.dataset.result === undefined ? undefined : e.target.dataset.key;
+    if (key !== undefined && key !== focusedKey) setFocusedKey(key);
+  };
+  const onResultsBlur = (e: ReactFocusEvent<HTMLElement>) => {
+    if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget)) setFocusedKey(null);
   };
 
   // Posição que o próximo ArrowUp alcança. A consulta atual já está no topo do histórico (entrou ao buscar), então, sem navegação,
@@ -613,8 +673,14 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   const upFrom = at < 0 && history[0] === form.query ? 1 : at + 1;
   const canClear = !!(form.query || form.replacement || form.include || form.exclude || results);
 
+  // As linhas ficam memoizadas (digitar nos campos não as renderiza de novo), então os eventos delas leem as ações da hora do evento.
+  const rowActions = useRef({ mark, onOpen, hitMenu, fileMenu, toggleRow, replaceIn, dismissHit, dismissFile });
+  useLayoutEffect(() => {
+    rowActions.current = { mark, onOpen, hitMenu, fileMenu, toggleRow, replaceIn, dismissHit, dismissFile };
+  });
+
   // Linha da lista. O recuo é de 8 px por nível e a seta ocupa 30 px (8 + 16 + 6), como o `monaco-tl-twistie`.
-  const renderRow = (row: Row) => {
+  const renderRow = (row: Row, index: number) => {
     const indent = { paddingLeft: row.depth * INDENT };
     if (row.kind === 'hit') {
       const h = row.hit;
@@ -625,23 +691,23 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
       const struck = showReplace && h.start >= 0;
       return (
         // Cada ocorrência tem o botão que abre (Enter abre de forma permanente, clique e Espaço abrem como prévia; duplo clique abre permanente) e o de dispensar.
-        <ContextMenuTrigger key={row.key} items={() => hitMenu(h)}>
+        <ContextMenuTrigger key={row.key} items={() => rowActions.current.hitMenu(h)}>
           <div className="group/row relative flex h-[22px] items-center hover:bg-[var(--ant-color-fill-tertiary)] has-[[aria-current=true]]:bg-[var(--ant-color-fill-secondary)]" style={indent} data-row>
             <button
-              type="button" data-result title={`${h.path}:${h.line}:${h.col}`} aria-current={isCurrent(h) ? 'true' : undefined}
+              type="button" data-result data-key={row.key} title={`${h.path}:${h.line}:${h.col}`} aria-current={isCurrent(h) ? 'true' : undefined}
               aria-label={`Linha ${h.line}: ${h.text.trim()}`}
-              onClick={() => { mark(h); onOpen(h.path, h.line, h.col); }}
-              onDoubleClick={() => onOpen(h.path, h.line, h.col, { permanent: true })}
+              onClick={() => { rowActions.current.mark(h); rowActions.current.onOpen(h.path, h.line, h.col); }}
+              onDoubleClick={() => rowActions.current.onOpen(h.path, h.line, h.col, { permanent: true })}
               onKeyDown={(e) => {
                 if (e.key === 'Delete') {
                   e.preventDefault();
-                  dismissHit(h, e.currentTarget.closest('[data-row]'));
+                  rowActions.current.dismissHit(h, index);
                   return;
                 }
                 if (e.key !== 'Enter') return;
                 e.preventDefault();
-                mark(h);
-                onOpen(h.path, h.line, h.col, { permanent: true });
+                rowActions.current.mark(h);
+                rowActions.current.onOpen(h.path, h.line, h.col, { permanent: true });
               }}
               className={`flex h-full min-w-0 flex-1 items-center pl-[30px] pr-2 text-left text-[13px] leading-[22px] outline-none ${FOCUS}`}
             >
@@ -657,7 +723,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
             <span className="hidden h-full shrink-0 items-center pr-2 group-hover/row:flex group-focus-within/row:flex">
               <ActionIcon
                 size="small" variant="borderless" icon={X} aria-label="Dispensar" title="Ignorar (Delete)"
-                onClick={(e) => dismissHit(h, e.currentTarget.closest('[data-row]'))} className={FOCUS}
+                onClick={() => rowActions.current.dismissHit(h, index)} className={FOCUS}
               />
             </span>
           </div>
@@ -676,7 +742,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
       return (
         <div key={row.key} className="group/file relative flex h-[22px] items-center hover:bg-[var(--ant-color-fill-tertiary)]" style={indent}>
           <button
-            type="button" data-result aria-expanded={open} title={row.path} onClick={() => toggleRow(row.key)}
+            type="button" data-result data-key={row.key} aria-expanded={open} title={row.path} onClick={() => rowActions.current.toggleRow(row.key)}
             className={`flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none ${FOCUS}`}
           >
             {twistie}
@@ -691,16 +757,16 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
     const draft = hasDraft(row.path);
     return (
       // O botão de dispensar fica ao lado do de abrir, não dentro dele: botão dentro de botão é HTML inválido. Mostra com o mouse ou o foco na linha.
-      <ContextMenuTrigger key={row.key} items={() => fileMenu(row.path, row.hits)}>
+      <ContextMenuTrigger key={row.key} items={() => rowActions.current.fileMenu(row.path, row.hits)}>
         <div className="group/file relative flex h-[22px] items-center hover:bg-[var(--ant-color-fill-tertiary)]" style={indent} data-file data-row>
           <button
-            type="button" data-result aria-expanded={open} title={row.path} onClick={() => toggleRow(row.key)}
+            type="button" data-result data-key={row.key} aria-expanded={open} title={row.path} onClick={() => rowActions.current.toggleRow(row.key)}
             aria-label={`${plural(row.hits.length, 'resultado', 'resultados')} em ${row.path}`}
             className={`flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none ${FOCUS}`}
             onKeyDown={(e) => {
               if (e.key !== 'Delete') return;
               e.preventDefault();
-              dismissFile(row.path, e.currentTarget.closest('[data-row]'));
+              rowActions.current.dismissFile(row.path, index);
             }}
           >
             {twistie}
@@ -716,18 +782,27 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
             {showReplace && (
               <ActionIcon
                 size="small" variant="borderless" icon={ReplaceAll} aria-label={`Substituir tudo em ${row.path}`} title="Substituir Tudo"
-                disabled={applying} onClick={() => void replaceIn([row.path])} className={FOCUS}
+                disabled={applying} onClick={() => void rowActions.current.replaceIn([row.path])} className={FOCUS}
               />
             )}
             <ActionIcon
               size="small" variant="borderless" icon={X} aria-label="Dispensar" title="Ignorar (Delete)"
-              onClick={(e) => dismissFile(row.path, e.currentTarget.closest('[data-row]'))} className={FOCUS}
+              onClick={() => rowActions.current.dismissFile(row.path, index)} className={FOCUS}
             />
           </span>
         </div>
       </ContextMenuTrigger>
     );
   };
+
+  // A lista só renderiza as linhas à vista. Memoizada, ela não renderiza de novo quando só os campos mudam (digitar com milhares de resultados).
+  const list = useMemo(() => (
+    <Virtualizer
+      ref={virtualizer} scrollRef={viewport} data={rows} itemSize={ROW_HEIGHT} keepMounted={focusedIndex >= 0 ? [focusedIndex] : undefined}
+    >
+      {renderRow}
+    </Virtualizer>
+  ), [rows, showReplace, replacements, current, collapsedSet, applying, hasDraft, focusedIndex]);
 
   const confirmFiles = confirming ? confirming.data.files.filter((f) => files.some((x) => x.path === f.path)) : [];
   const confirmCount = confirmFiles.reduce((n, f) => n + f.count, 0);
@@ -885,9 +960,11 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
       </div>
 
       <Flexbox flex={1} className="min-h-0">
-        <ScrollArea className="h-full" disableContentFit>
-          <div ref={resultsBox} role="tree" aria-label="Resultados da pesquisa" onKeyDown={onResultsKey}>
-            {rows.map(renderRow)}
+        <ScrollArea className="h-full" disableContentFit viewportProps={{ ref: viewport }}>
+          <div
+            ref={resultsBox} role="tree" aria-label="Resultados da pesquisa" onKeyDown={onResultsKey} onFocus={onResultsFocus} onBlur={onResultsBlur}
+          >
+            {list}
           </div>
         </ScrollArea>
       </Flexbox>
