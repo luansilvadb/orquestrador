@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font",
+        "value": "variable\",inter,sans-serif",
+        "createdAt": "2026-10-23T04:39:41.966Z",
+        "reason": "Claude: pilha idêntica à de DESIGN.md (Inter Variable, Inter, sans-serif); o detector lê a aspa do nome"
+      }
+    ]
+  }
+}
