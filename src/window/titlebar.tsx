@@ -2,6 +2,7 @@
 // atributo data-tauri-drag-region, que vale só para o elemento que o tem; por isso botões e campos não o levam.
 import { Children, useEffect, useRef, useState, type ComponentType, type ReactNode, type PointerEvent } from 'react';
 import { Flexbox } from '@lobehub/ui';
+import { Folder, Plus, X } from 'lucide-react';
 import { DropdownMenu, Text, Tooltip, type ContextMenuItem } from '@lobehub/ui/base-ui';
 import { SECONDARY } from './text-style';
 import { AppMark } from './app-mark';
@@ -155,20 +156,33 @@ function ProjectTabs({ projects, active, onSelect, onClose, onMove, onAdd }: Pro
       onDrop: (target) => { if (target !== null && target !== index) onMove(projects[index].id, target); setDrag(null); setFrom(-1); },
     });
   };
+  // Pílulas nas medidas do botão Arquivo ao lado: 26 px, raio de 6 px, hover branco a 10%. A ativa fica com o fundo e o texto claros;
+  // o X aparece nela, no hover e com o foco no botão.
   return (
-    <div ref={strip} role="tablist" aria-label="Projetos" data-tauri-drag-region onWheel={wheelToScroll} className="flex h-full min-w-0 flex-1 items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {projects.map((item, index) => (
-        <div key={item.id} ref={(el) => { if (el) tabs.current.set(item.id, el); else tabs.current.delete(item.id); }}
-          onPointerDown={(e) => begin(e, index)} onClick={() => onSelect(item.id)} title={item.path}
-          role="tab" aria-selected={active === item.id}
-          className={`group flex h-full max-w-48 min-w-24 shrink-0 cursor-default items-center gap-1 border-r px-2 text-xs ${active === item.id ? 'border-b-2 border-b-primary text-foreground' : 'border-b-2 border-b-transparent text-muted-foreground hover:bg-muted/50'} ${from === index ? 'z-10 opacity-80' : ''}`}
-          style={drag ? { transform: `translateX(${dragShift(drag, from, index)}px)` } : undefined}>
-          <span className="min-w-0 flex-1 truncate">{folderName(item.path)}</span>
-          {!!item.busy && <span className="size-1.5 shrink-0 rounded-full bg-[var(--ant-color-warning)]" aria-label={`${item.busy} executores ativos`} title={`${item.busy} executores ativos`} />}
-          <button type="button" aria-label={`Fechar ${folderName(item.path)}`} title="Fechar pasta" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(item.id); }} className="flex size-5 shrink-0 items-center justify-center rounded hover:bg-muted">×</button>
-        </div>
-      ))}
-      <button type="button" aria-label="Abrir pasta" title="Abrir pasta" onClick={onAdd} className="flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-muted">+</button>
+    <div ref={strip} role="tablist" aria-label="Projetos" data-tauri-drag-region onWheel={wheelToScroll} className="flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {projects.map((item, index) => {
+        const selected = active === item.id;
+        return (
+          <div key={item.id} ref={(el) => { if (el) tabs.current.set(item.id, el); else tabs.current.delete(item.id); }}
+            onPointerDown={(e) => begin(e, index)} onClick={() => onSelect(item.id)} title={item.path}
+            role="tab" aria-selected={selected}
+            className={`group flex h-[26px] max-w-52 min-w-24 shrink-0 cursor-default items-center gap-1.5 rounded-md pr-1 pl-2 text-[12px] ${selected ? 'bg-[#ffffff1a] text-[#ececec]' : 'text-[#999999] hover:bg-[#ffffff0f] hover:text-[#cccccc]'} ${from === index ? 'z-10 opacity-80' : ''}`}
+            style={drag ? { transform: `translateX(${dragShift(drag, from, index)}px)` } : undefined}>
+            <Folder className="size-3.5 shrink-0 opacity-70" aria-hidden />
+            <span className="min-w-0 flex-1 truncate">{folderName(item.path)}</span>
+            {!!item.busy && <span className="size-1.5 shrink-0 rounded-full bg-[var(--ant-color-warning)]" aria-label={`${item.busy} executores ativos`} title={`${item.busy} executores ativos`} />}
+            <button
+              type="button" aria-label={`Fechar ${folderName(item.path)}`} title="Fechar pasta" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(item.id); }}
+              className={`flex size-[18px] shrink-0 items-center justify-center rounded text-[#cccccc] outline-none hover:bg-[#ffffff1a] focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 ${selected ? '' : 'opacity-0 group-hover:opacity-100'}`}
+            >
+              <X className="size-3" aria-hidden />
+            </button>
+          </div>
+        );
+      })}
+      <button type="button" aria-label="Abrir pasta" title="Abrir pasta" onClick={onAdd} className="flex size-[26px] shrink-0 items-center justify-center rounded-md text-[#cccccc] outline-none hover:bg-[#ffffff1a] focus-visible:ring-2 focus-visible:ring-ring/50">
+        <Plus className="size-4" aria-hidden />
+      </button>
     </div>
   );
 }
