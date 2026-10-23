@@ -1254,6 +1254,9 @@ pub fn write_index(dir: &Path, rel: &str, text: &str, expected: &str) -> Result<
     }
     let mut novo = if atual.contains("\r\n") { text.replace("\r\n", "\n").replace('\n', "\r\n") } else { text.to_string() };
     let blob = proc::git_bytes(dir, &["cat-file", "blob", &antes])?;
+    if std::str::from_utf8(sem_bom_bytes(&blob)).is_err() {
+        return Err(format!("{rel} não está em UTF-8 no índice: prepare o arquivo inteiro."));
+    }
     if blob.starts_with(&files::BOM) {
         novo.insert(0, '\u{feff}');
     }
@@ -2723,6 +2726,21 @@ mod tests {
         let why = write_index(&dir, "a.txt", "outro\n", &texto(2)).unwrap_err();
         assert_eq!(why, "O índice de a.txt mudou desde que o editor o leu. Tente de novo.");
         assert_eq!(git(&dir, &["ls-files", "-s"]), antes, "o índice fica igual");
+    }
+
+    #[test]
+    fn write_index_recusa_blob_que_nao_e_utf8_sem_gravar() {
+        let tmp = Tmp::new("orq-git", "indice-nao-utf8");
+        let dir = repo(&tmp, "r");
+        write(&dir, "a.txt", b"a\xe7\xe3o\n");
+        commit_all(&dir, "base");
+        let antes = git(&dir, &["ls-files", "-s", "--", "a.txt"]);
+        write(&dir, "a.txt", b"b\xe7\xe3o\n");
+
+        let why = write_index(&dir, "a.txt", &visto(&dir, "a.txt"), &visto(&dir, "a.txt")).unwrap_err();
+
+        assert_eq!(why, "a.txt não está em UTF-8 no índice: prepare o arquivo inteiro.");
+        assert_eq!(git(&dir, &["ls-files", "-s", "--", "a.txt"]), antes, "o blob do índice fica igual");
     }
 
     #[test]

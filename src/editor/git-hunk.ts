@@ -184,7 +184,7 @@ class HunkWidget extends WidgetType {
       bar.append(b);
     };
     if (view.state.facet(gitIndexWriter)) {
-      const blocked = info.canStage ? undefined : 'Sem índice para este arquivo (conflito): não há como preparar.';
+      const blocked = info.readOnly ? 'O arquivo é somente leitura.' : info.canStage ? undefined : 'Sem índice para este arquivo (conflito): não há como preparar.';
       if (info.staged) button('cm-gitHunk-stage', 'Tirar do preparo', 'Tirar este bloco do preparo', 'minus', () => stageOpen(view), blocked, 'Tirar do preparo');
       else button('cm-gitHunk-stage', 'Preparar', 'Preparar este bloco (o texto do editor, mesmo não salvo)', 'plus', () => stageOpen(view), blocked, 'Preparar');
     }
