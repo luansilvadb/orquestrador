@@ -115,6 +115,7 @@ Agrupados por tipo.
 - `scripts/check-git-gutter-ui.mjs`: os marcadores de mudança do Git no editor (tipo, linha, cheio × vazado, geometria, barra de rolagem, minimap, digitação com Desfazer, leitura depois de salvar e a ausência em arquivo não rastreado e em rascunho) e o bloco aberto: linhas antigas, fechar, Restaurar com Ctrl+Z, Preparar e Tirar do preparo (o índice que o app simulado recebeu em `git_write_index`) e a navegação com as setas, Alt+F5 e o menu de contexto.
 - `scripts/check-shell-tabs-ui.mjs`: o arrasto das abas do painel Terminal: clique sem mover, nova ordem na faixa, na lista e na vizinha ao fechar, Esc e X sem reordenar, e a faixa rolando com a aba na borda.
 - `scripts/check-project-tabs-ui.mjs`: abrir, trocar, focar, fechar e restaurar abas de projeto.
+- `scripts/check-tab-lists-ui.mjs`: listas de abas em menu: a do Orquestrador numa linha por item (ícone na margem, título cortado, estado e check) e o `...` do editor com o rótulo alinhado; executores vêm de `__mock.addNode`.
 - `scripts/check-editor-tabs-ui.mjs`: o arrasto das abas do editor: clique sem mover, nova ordem, Esc e X sem reordenar, fixadas no começo, soltar no outro grupo e a faixa rolando com a aba na borda.
 
 **Release**

@@ -114,7 +114,7 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
     return () => observer.disconnect();
   }, []);
 
-  // Lista de todas as abas, com o Orquestrador; a marca de ativa é o check no rótulo. Só existe com executores.
+  // Lista de todas as abas, com o Orquestrador. Só existe com executores.
   const OrchestratorIcon = orchestrator?.choice ? TOOL_ICON[orchestrator.choice.tool] : SquareTerminal;
   const ExecutorToolIcon = executorChoice ? TOOL_ICON[executorChoice.tool] : SquareTerminal;
   // Rótulo e ícone de cada executor, calculados uma vez: o menu e a faixa usam os mesmos.
@@ -122,36 +122,32 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
     const info = STATES[e.state];
     return {
       e, Icon: info.icon, color: colorsPreset(info.color), spin: e.state === 'running' ? ' animate-spin' : '',
-      label: `Executor #${e.index + 1}, ${info.label}: ${e.title}`, desc: info.label,
+      label: `Executor #${e.index + 1}, ${info.label}: ${e.title}`, state: info.label,
     };
   });
+  // Uma linha por item, no menu de 26 px: ícone na margem, rótulo que corta com reticências em 288 px e, à direita, o estado e o check
+  // da ativa (invisível nas outras, para o estado ficar na mesma coluna).
+  const extra = (id: string, state?: string) => (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      {state}
+      <Check className={`size-3.5${active === id ? '' : ' invisible'}`} />
+    </span>
+  );
   const tabMenu = [
     {
       key: ORCHESTRATOR, title: 'Orquestrador',
       icon: <OrchestratorIcon className="size-3.5" />,
-      label: (
-        <Flexbox horizontal align="center" gap={6} className="min-w-0">
-          <Check className={`size-3.5 shrink-0${active === ORCHESTRATOR ? '' : ' invisible'}`} />
-          <Text as="span" ellipsis className="min-w-0">Orquestrador</Text>
-        </Flexbox>
-      ),
+      label: 'Orquestrador',
+      extra: extra(ORCHESTRATOR),
       onClick: () => choose(ORCHESTRATOR),
     },
-    ...rows.map(({ e, Icon, color, spin, label: title, desc }) => {
-      return {
-        key: e.id, title,
-        icon: <Icon className={`size-3.5${spin}`} style={{ color }} />,
-        desc,
-        label: (
-          <Flexbox horizontal align="center" gap={6} className="min-w-0">
-            <Check className={`size-3.5 shrink-0${active === e.id ? '' : ' invisible'}`} />
-            <Text as="span" className="shrink-0 tabular-nums">#{e.index + 1}</Text>
-            <Text as="span" ellipsis className="min-w-0">{e.title}</Text>
-          </Flexbox>
-        ),
-        onClick: () => choose(e.id),
-      };
-    }),
+    ...rows.map(({ e, Icon, color, spin, label: title, state }) => ({
+      key: e.id, title,
+      icon: <Icon className={`size-3.5${spin}`} style={{ color }} />,
+      label: <span className="block max-w-72 truncate"><span className="tabular-nums">#{e.index + 1}</span>&ensp;{e.title}</span>,
+      extra: extra(e.id, state),
+      onClick: () => choose(e.id),
+    })),
   ];
 
   // Sem padding nem cartão arredondado: o painel é a superfície inteira, separada do meio pela linha do DraggablePanel.

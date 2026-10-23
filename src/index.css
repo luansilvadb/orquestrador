@@ -121,6 +121,19 @@ body {
   padding-left: 0;
   opacity: 1;
 }
+/* Ícone do item: o slot do lobehub é o único span com `aria-hidden` (vazio quando outro item do menu tem ícone). Fica na margem de 26 px,
+   onde o VS Code põe o check, e o rótulo depois dele alinha com o dos itens sem ícone. */
+[role='menu'] > [role='menuitem'] > div > span[aria-hidden]:first-child {
+  position: absolute;
+  top: 50%;
+  left: 6px;
+  margin: 0;
+  transform: translateY(-50%);
+}
+[role='menu'] > [role='menuitem'] > div > span[aria-hidden]:first-child + span {
+  padding-left: 0;
+  opacity: 1;
+}
 [role='menu'] > [role='separator'] {
   margin: 5px 0;
 }
