@@ -138,6 +138,7 @@ export type Events = {
   'orchestrator-exit': { project: string; code: number | null };
   'shell-exit': { project: string | null; id: string; code: number | null };
   'update-status': UpdateStatus;
+  'open-paths': void;
 };
 
 // Contrato dos comandos do Tauri. A chave é o nome que vai ao `invoke` (snake_case); `args` são as chaves como o front-end envia
@@ -217,6 +218,7 @@ export type Commands = {
   has_running: { args: NoArgs; result: boolean };
   update_status: { args: NoArgs; result: UpdateStatus };
   retry_update: { args: NoArgs; result: UpdateStatus };
+  take_open_paths: { args: NoArgs; result: string[] };
 };
 export type CommandName = keyof Commands;
 

@@ -2,6 +2,8 @@
 
 A barra de título própria tem o menu `≡` à esquerda, a faixa rolável de projetos, contadores do projeto ativo e os controles da janela à direita. Cada aba mostra o nome da pasta, o caminho completo na dica, o `×` para fechar e o `+` abre outra pasta; arrastar reordena. Um ponto sinaliza executores em execução ou na fila. O título nativo acompanha o projeto ativo como `<pasta> - Orquestrador`; sem projeto, é `Orquestrador`.
 
+O instalador registra no Explorer `Abrir com Orquestrador` para arquivos e `Abrir pasta no Orquestrador` para pastas e o fundo da pasta. Também lista o app em Abrir com para extensões de texto e código, sem escolher padrão. Se já houver uma janela aberta, ela restaura e recebe o caminho.
+
 Cada aba mantém uma área completa do projeto, incluindo árvore, editor e recuperação, Pesquisa, Git, Orquestrador e shells. Trocar de aba esconde o workspace sem desmontá-lo; processos continuam rodando. O status Git e os polling do editor pausam nas abas inativas. Abrir uma pasta existente foca a aba dela. Fechar uma aba com sessão do Orquestrador ou executores ativos pede confirmação e encerra a sessão do projeto; fechar a última volta ao modo sem projeto. As abas abertas, a ordem e a ativa são salvas no `localStorage` e reabertas no início sem iniciar o Orquestrador.
 
 ## Tela principal

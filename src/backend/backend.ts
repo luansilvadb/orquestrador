@@ -69,6 +69,7 @@ export const host = (): Transport => transport;
 export const backend = {
   updateStatus: () => call('update_status'),
   retryUpdate: () => call('retry_update'),
+  takeOpenPaths: () => call('take_open_paths'),
 
   // Pasta escolhida: `subfolder` quer dizer que ela está dentro de um repositório e o projeto é a raiz dele.
   chooseProject: () => call('choose_project'),

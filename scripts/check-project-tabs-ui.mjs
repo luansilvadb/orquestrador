@@ -44,6 +44,22 @@ scenario('abrir pasta recente já aberta só foca a aba existente', async ({ pag
   assert.match(await selected(page).textContent(), /exemplo/i);
 });
 
+scenario('caminho externo abre pasta, arquivo do projeto e arquivo solto', async ({ page }) => {
+  await page.evaluate(() => window.__mock.openPath('C:\\projetos\\simulado-3'));
+  await page.waitForFunction(() => [...document.querySelectorAll('header [role="tab"]')].some((el) => el.textContent.includes('simulado-3')));
+  assert.match(await selected(page).textContent(), /simulado-3/i);
+
+  await page.evaluate(() => window.__mock.openPath('C:\\projetos\\exemplo\\src\\App.tsx'));
+  await page.locator('[data-tab]').filter({ hasText: 'App.tsx' }).waitFor();
+  assert.match(await page.locator('.cm-content:visible').first().textContent(), /Orquestrador/);
+  assert.match(await selected(page).textContent(), /exemplo/i);
+
+  await page.evaluate(() => window.__mock.openPath('C:\\arquivos\\solto.ts'));
+  await page.locator('[data-tab]').filter({ hasText: 'solto.ts' }).waitFor();
+  assert.match(await page.locator('.cm-content:visible').first().textContent(), /solto = true/);
+  assert.match(await selected(page).textContent(), /exemplo/i);
+});
+
 scenario('fechar projeto com orquestrador pede confirmação', async ({ page }) => {
   await twoProjects(page);
   await page.getByRole('button', { name: 'Abrir terminal', exact: true }).last().click();

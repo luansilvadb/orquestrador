@@ -7,12 +7,15 @@ Um app para Windows (Tauri) que põe CLIs de IA para trabalhar em papéis separa
 ## Como se usa
 
 1. Abra o app. Antes do uso, ele confere a versão e atualiza sozinho se houver uma nova ([atualização](atualizacao.md)). Depois, reabre os projetos da última vez, na mesma ordem e com a mesma aba ativa, se as pastas ainda existirem; sem projetos anteriores, abre sem projeto. Nenhum Orquestrador inicia sozinho. Use `+` na barra de título ou o menu `≡` para abrir outra pasta; uma pasta já aberta foca a aba existente. Uma pasta dentro de um repositório abre a raiz dele; se for subpasta, um aviso mostra a raiz. Uma pasta fora de repositório abre sem os recursos de Git (ver [interface](interface.md)).
+
 2. No painel do Orquestrador, à direita da tela principal, sem orquestrador aberto, clique em `Abrir terminal` e escolha ferramenta, modelo e esforço do orquestrador; a última escolha já vem marcada. Sem Git na pasta, a janela avisa que o que os executores mudarem não fica registrado e não pode ser desfeito pelo Git, e diz o que fazer conforme o caso: inicializar o repositório no painel Git, instalar o Git ou abrir a raiz do repositório. O aviso não bloqueia. Há um só orquestrador, e é no terminal dele que você conversa com ele; os executores só mostram o que fazem.
 3. Converse com o orquestrador e feche o objetivo.
 4. Na primeira delegação, uma aba de executor aparece e espera a escolha de ferramenta, modelo e esforço; a aba ativa não muda. Os executores seguintes abrem sozinhos com essa escolha. O botão `Executores`, na barra da aba do orquestrador, mostra a escolha e deixa trocá-la; a troca vale para os próximos.
 5. O orquestrador delega um lote e fica ocupado até todos voltarem. Cada executor tem uma aba com a tela completa do CLI, somente leitura, ligada ao orquestrador. Acima do teto de simultâneos, os excedentes ficam na fila. O teto não é ajustado à mão: o app o calcula (ver [configuração](#configuração)), e a fila anda sozinha quando a memória livre volta.
 6. Quando um executor termina a rodada, a resposta dele volta sozinha ao orquestrador e a aba dele fecha sozinha. O botão `parar` interrompe só aquele executor; o orquestrador recebe `interrompido pelo usuário` no lugar da resposta.
 7. Fechar o app com alterações não salvas abre a confirmação: Salvar, Descartar ou Cancelar. Com terminais vivos, a confirmação também encerra todos, inclusive os shells do painel Terminal. Shells e CLIs não voltam na próxima abertura; abas, layout e alterações do editor voltam. Os rascunhos sem projeto também são recuperados.
+
+No Explorer, `Abrir com Orquestrador` abre qualquer arquivo; `Abrir pasta no Orquestrador` abre a pasta selecionada ou a pasta atual. Em Propriedades > Abre com > Alterar, o app aparece para extensões de texto e código; escolha-o ali para torná-lo padrão. Se já estiver aberto, a solicitação chega à mesma janela.
 
 ## Configuração
 

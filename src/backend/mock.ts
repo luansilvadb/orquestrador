@@ -2,6 +2,7 @@
 // No painel Terminal (Ctrl+`), cada aba é um shell simulado: ecoa o que se digita, com a própria linha em edição. `exit` encerra só aquela aba (código 0);
 // o `+` abre outra, e o X fecha a aba sem evento. O programa simulado é sempre `pwsh.exe`.
 // No console: `__mock.close()` simula fechar a janela.
+// `__mock.openPath(path)` simula um pedido de abertura vindo do Explorer ou de outra instância.
 // `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto.
 // A árvore (`list_dir`) é em memória e muda com as ações do menu e com `__mock.remove`.
 // O Git tem estado só no que a mock modela: blocos (preparar, tirar do preparo, descartar), arquivo descartado, commit, histórico, gráfico e
@@ -196,7 +197,7 @@ const orchestrators = new Set<string>();
 let nextProjectId = 0;
 let chooseProjectCount = 0;
 let projectOpen = false;
-const absoluteFiles = new Map<string, string>([['C:/arquivos/solto.ts', 'const solto = true;\n']]);
+const absoluteFiles = new Map<string, string>([['c:/arquivos/solto.ts', 'const solto = true;\n']]);
 const absoluteKey = (path: string) => path.replace(/\\/g, '/').toLowerCase();
 const relOf = (abs: string) => {
   if (!abs.startsWith(`${MOCK_ROOT}\\`)) throw `Fora do projeto simulado: ${abs}`;
@@ -288,11 +289,12 @@ let closeHandler: (() => Promise<boolean>) | null = null;
 // Shells do painel Terminal: só `exit` ou `close_shell` os encerram.
 // Cada um guarda a própria linha em edição.
 const shells = new Map<string, { line: string; prompt: string; project: string | null }>();
+let pendingOpenPaths: string[] = [];
 const debug = { close: async () => {
   const closed = closeHandler ? await closeHandler() : true;
   if (closed) document.body.innerHTML = '<p style="padding:24px">Janela fechada (simulado).</p>';
   return closed;
-}, remove: (path: string) => removePath(path),
+}, openPath: (path: string) => { pendingOpenPaths.push(path); emit('open-paths', undefined); }, remove: (path: string) => removePath(path),
   // Clipboard simulado: o que as cópias e recortes do simulado puseram nele. Nunca toca no clipboard do Windows.
   clipboard: () => structuredClone(clip),
   // Edição externa: outro programa gravou o arquivo. Só troca o texto que o disco simulado devolve (o que `read_file` e `write_file_checked` comparam).
@@ -982,12 +984,16 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   },
   update_status: () => ({ phase: 'ready' }),
   retry_update: () => ({ phase: 'ready' }),
+  take_open_paths: () => pendingOpenPaths.splice(0),
   choose_project: () => {
     chooseProjectCount += 1;
     const path = chooseProjectCount === 1 ? MOCK_ROOT : MOCK_ROOT.replace(/exemplo$/i, `simulado-${chooseProjectCount}`);
     return openMockProject(path, debug.subfolder);
   },
-  open_project: ({ path }: { path: string }) => openMockProject(path, false),
+  open_project: ({ path }: { path: string }) => {
+    if (/\.[^\\/]+$/.test(path)) throw `Não é uma pasta: ${path}`;
+    return openMockProject(path, false);
+  },
   close_project: ({ project }: { project: string }) => {
     const closed = openProjects.get(project);
     openProjects.delete(project);

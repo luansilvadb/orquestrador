@@ -11,6 +11,7 @@ pub mod format;
 pub mod git;
 pub mod hook;
 pub mod mcp;
+pub mod open_paths;
 pub mod proc;
 pub mod pty;
 pub mod roles;
@@ -565,13 +566,35 @@ fn retry_update(app: tauri::AppHandle, gate: State<Gate>) -> Result<update::Stat
     Ok(gate.status())
 }
 
-pub fn run(context: tauri::Context) {
-    tauri::Builder::default()
+#[tauri::command(async)]
+fn take_open_paths(paths: State<open_paths::OpenPaths>) -> Vec<String> {
+    paths.take()
+}
+
+pub fn run(context: tauri::Context, initial_paths: Vec<std::path::PathBuf>) {
+    let builder = tauri::Builder::default();
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+        let args = args.into_iter().skip(1).collect::<Vec<_>>();
+        let paths = open_paths::extract_paths(&args, std::path::Path::new(&cwd));
+        if !paths.is_empty() {
+            app.state::<open_paths::OpenPaths>().push(paths);
+            let _ = app.emit("open-paths", ());
+        }
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
             let emit: core::Emit = Arc::new(move |event, payload| drop(handle.emit(event, payload)));
+            app.manage(open_paths::OpenPaths::new(initial_paths));
             // Sem LOCALAPPDATA o app abre mesmo assim; o erro aparece em `get_options`.
             let cfg_path = config::config_path().unwrap_or_default();
             app.manage(Projects::new(cli::Exes::real(), session::Places::real(), cfg_path, emit.clone()));
@@ -652,7 +675,8 @@ pub fn run(context: tauri::Context) {
             stop_executor,
             has_running,
             update_status,
-            retry_update
+            retry_update,
+            take_open_paths
         ]))
         .build(context)
         .expect("o app não pôde ser iniciado")

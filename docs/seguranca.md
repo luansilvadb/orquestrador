@@ -1,5 +1,7 @@
 # Limites de segurança
 
+Arquivos e pastas passados pelo Explorer ou pela linha de comando são abertos como caminhos para leitura no editor; recebê-los não executa o arquivo. O usuário ainda pode editar e salvar pelo editor. O registro do instalador fica em HKCU e não torna nenhuma extensão padrão.
+
 **Agentes sem trava.** Orquestrador e executores têm permissão total e o app aceita sozinho toda confirmação que o CLI ainda pedir: as permissões ficam em `src-tauri/src/cli.rs` e a regra de cada papel em `src-tauri/src/roles.rs`. As settings de usuário e de projeto do Claude continuam valendo, com os hooks e as regras `deny` delas. Escolher a pasta no app equivale a confiar nela.
 
 **Alçada.** A segurança dos agentes vem do prompt, em hierarquia: usuário, orquestrador, executores. A alçada do orquestrador é a pasta do projeto e o trabalho da sessão, inclusive stage e commit local e o que os executores fazem; push, deploy, publicação, o que estiver fora da pasta e o trabalho anterior à sessão ficam com o usuário, que ele consulta antes. A alçada do executor é a tarefa: o resto do working tree fica como ele encontrou, e uma ação que não se desfaz e que a tarefa não pede com todas as letras volta, relatada, ao orquestrador. O texto está em `src-tauri/src/roles.rs`.

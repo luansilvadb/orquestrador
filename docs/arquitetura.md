@@ -81,6 +81,7 @@ Plano: cada módulo é uma unidade.
 | `src-tauri/src/session.rs` | A sessão do orquestrador: a pasta do funcionamento interno (o orquestrador trabalha na pasta do projeto), `AGENTS.md` com o papel, `mcp.json` e `claude-settings.json` do Claude, e a limpeza das sobras, inclusive das regras do Codex que versões antigas deixavam em `CODEX_HOME` (até 2027-02-01). |
 | `src-tauri/src/roles.rs` | Os textos enviados ao orquestrador (no Claude, pelo `AGENTS.md` da sessão com `--append-system-prompt-file`; no Codex, por `developer_instructions`) e a cada executor, antes da tarefa: a única fonte da regra de cada papel, sem trava no app. O texto do orquestrador é o mesmo para Claude Code e Codex; o protocolo das ferramentas (marcadores e próxima chamada) fica nas saídas delas, em `mcp.rs`, `delegate.rs` e `core.rs`. |
 | `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a rodada pelo plugin oficial do Tauri e os testes do portão. |
+| `src-tauri/src/open_paths.rs` | Extrai caminhos dos argumentos e mantém a fila até o front pedir; `src-tauri/windows/hooks.nsh` registra e remove menus e extensões no HKCU. |
 
 O módulo src-tauri/src/format.rs escolhe o motor pela extensão, procura as configurações pelo caminho absoluto e executa os formatadores externos com timeout. Os comandos formatter_info e format_cli são registrados em lib.rs e tipados em src/backend/types.ts.
 

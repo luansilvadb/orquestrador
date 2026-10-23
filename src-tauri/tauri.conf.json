@@ -18,7 +18,7 @@
     "targets": ["nsis"],
     "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico"],
-    "windows": { "nsis": { "installMode": "currentUser" } }
+    "windows": { "nsis": { "installMode": "currentUser", "installerHooks": "./windows/hooks.nsh" } }
   },
   "plugins": {
     "updater": {

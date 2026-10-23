@@ -500,6 +500,19 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   }, [managed, initialProject?.id, state.projectId]);
 
   useEffect(() => {
+    if (!managed || !active) return;
+    let live = true;
+    const drain = async () => {
+      if (!live || stateRef.current.update.phase !== 'ready') return;
+      for (const path of await backend.takeOpenPaths()) {
+        await openAbsolutePath(path);
+      }
+    };
+    void host().listen('open-paths', () => { void drain(); }).then(drain);
+    return () => { live = false; };
+  }, [managed, active, state.update.phase]);
+
+  useEffect(() => {
     if (!managed || !initialProject) return;
     let live = true;
     void backend.getOptions().then((options) => {

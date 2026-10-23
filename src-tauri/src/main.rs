@@ -11,6 +11,10 @@ fn main() {
             println!("{}", orquestrador_lib::cli::ALLOW);
         }
         Some("--mcp") => std::process::exit(orquestrador_lib::mcp::serve(&args[1..])),
-        _ => orquestrador_lib::run(tauri::generate_context!()),
+        _ => {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let paths = orquestrador_lib::open_paths::extract_paths(&args, &cwd);
+            orquestrador_lib::run(tauri::generate_context!(), paths);
+        }
     }
 }

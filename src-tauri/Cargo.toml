@@ -19,6 +19,7 @@ base64 = "0.22"
 # Motor da pesquisa e da substituição (já estava na árvore via tauri/outras crates; declarado aqui para uso direto).
 regex = "1"
 tauri-plugin-updater = "2"
+tauri-plugin-single-instance = "2"
 ignore = "0.4.33"
 
 # As chamadas ao Windows ficam em `src/platform/windows.rs`; fora do Windows, esta dependência nem entra.
