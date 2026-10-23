@@ -19,6 +19,26 @@ scenario('abrir duas pastas cria duas abas', async ({ page }) => {
   assert.match(await selected(page).textContent(), /simulado-2/i);
 });
 
+scenario('sincronizar permanece no projeto de origem e a árvore escondida para de consultar', async ({ page }) => {
+  await twoProjects(page);
+  await tabs(page).first().click();
+  await page.waitForFunction(() => document.querySelector('footer button[aria-label^="Sincronizar as alterações"]') && !document.querySelector('footer button[aria-label^="Sincronizar as alterações"]').disabled);
+  await page.evaluate(() => { window.__mock.calls.length = 0; window.__mock.delay.git_pull = 900; });
+  await page.locator('footer:visible button[aria-label^="Sincronizar as alterações"]').first().click();
+  await page.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === 'git_pull'));
+  await tabs(page).last().click();
+  await page.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === 'git_push'));
+  await page.waitForTimeout(1700);
+  const calls = await page.evaluate(() => window.__mock.calls);
+  const pullIndex = calls.findIndex((c) => c.cmd === 'git_pull');
+  assert.equal(calls[pullIndex].project, 'project-1', 'pull usa o primeiro projeto');
+  const pullDoneAt = calls[pullIndex].completedAt;
+  const postPullStatus = calls.filter((c) => c.cmd === 'git_status' && c.startedAt >= pullDoneAt).sort((a, b) => a.startedAt - b.startedAt)[0];
+  assert.equal(postPullStatus?.project, 'project-1', 'status encadeado ao pull fica no projeto de origem');
+  assert.ok(calls.filter((c) => c.cmd === 'git_push').every((c) => c.project === 'project-1'), 'push fica no projeto de origem');
+  assert.equal(calls.filter((c) => c.cmd === 'list_dir' && c.project === 'project-1').length, 0, 'a árvore escondida não consulta list_dir');
+});
+
 scenario('trocar de projeto preserva árvore, editor e texto digitado', async ({ page }) => {
   await twoProjects(page);
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).click();

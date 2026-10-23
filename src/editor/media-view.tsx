@@ -5,7 +5,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { backend, message } from '../backend/backend';
+import { message } from '../backend/backend';
+import { useBackend } from '../backend/backend-context';
 import { fileName } from '../shared/file-tabs';
 
 export type MediaKind = 'image' | 'audio';
@@ -34,7 +35,9 @@ export function mediaOf(path: string): { kind: MediaKind; mime: string } | null 
 
 type Source = { url: string } | { error: string } | null;
 
-export function MediaView({ path, shown }: { path: string; shown: boolean }) {
+export function MediaView({
+  path, shown }: { path: string; shown: boolean }) {
+  const backend = useBackend();
   const media = mediaOf(path);
   const [source, setSource] = useState<Source>(null);
   // Uma leitura por caminho: a troca de caminho (renomear) descarta o blob anterior, e a resposta tardia de um caminho velho não entra.

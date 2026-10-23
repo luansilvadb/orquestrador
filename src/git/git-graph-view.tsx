@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, Popover, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, CloudDownload, Copy, ExternalLink, RefreshCw } from 'lucide-react';
-import { backend, message } from '../backend/backend';
+import { message } from '../backend/backend';
+import { useBackend } from '../backend/backend-context';
 import { CommitFileList, note, type OpenCommitTarget, PAGE, RefBadge, relativeDate, useCommitDetail, usePagedList, when } from './git-history';
 import { copy } from '../shared/paths';
 import { type GraphLine, type GraphRow, layoutGraph } from './git-graph';
@@ -28,7 +29,6 @@ const colorOf = (n: number) => PALETTE[n % PALETTE.length];
 // Fundo da barra lateral: o contorno dos pontos usa esta cor para cortar a linha em volta deles, como no VS Code.
 const BG = 'var(--ant-color-bg-layout)';
 // Busca de uma página do gráfico: o gráfico é do HEAD e do upstream, sem escopo de arquivo.
-const graphPage = (offset: number) => backend.gitGraph(PAGE, offset);
 
 export type GraphRemote = 'fetch' | 'pull' | 'push';
 export type GraphSectionProps = {
@@ -113,7 +113,9 @@ function coAuthors(messageText: string) {
   });
 }
 
-function CommitHoverCard({ commit, state }: { commit: GraphCommit; state?: CommitHoverState }) {
+function CommitHoverCard({
+  commit, state }: { commit: GraphCommit; state?: CommitHoverState }) {
+  const backend = useBackend();
   const detail = state?.kind === 'ready' ? state.detail : null;
   const coauthors = detail ? coAuthors(detail.message) : [];
   const refs = commit.refs.filter((ref) => ref.kind !== 'head');
@@ -182,8 +184,9 @@ function DetailNote({ row, text, danger = false }: { row: GraphRow; text: string
 export function GraphSection({
   open, onToggle, height, onHeight, head, stamp, active, selected, onOpenTarget, onRefresh, remote, running, onRemote,
 }: GraphSectionProps) {
+  const backend = useBackend();
   // Lista paginada (a anterior fica na tela até a nova chegar) e detalhe do commit aberto: os mesmos hooks do histórico.
-  const { items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList(graphPage, false);
+  const { items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList((offset) => backend.gitGraph(PAGE, offset), false);
   const { openHash, detail, detailError, open: openCommit, close: closeCommit } = useCommitDetail();
   const [hoverDetails, setHoverDetails] = useState<Record<string, CommitHoverState>>({});
   const requestedHover = useRef(new Set<string>());

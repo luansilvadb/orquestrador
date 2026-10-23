@@ -11,7 +11,8 @@ import {
 import { ActionIcon, Button, ContextMenuTrigger, Input, Modal, ScrollArea, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { Virtualizer, type VirtualizerHandle } from 'virtua';
-import { backend, message } from '../backend/backend';
+import { message } from '../backend/backend';
+import { useBackend } from '../backend/backend-context';
 import { FileIcon } from '../shared/file-icon';
 import { copy, join, splitPath } from '../shared/paths';
 import { action, DIVIDER } from '../shared/file-tabs';
@@ -242,7 +243,8 @@ type Preview = { key: string; query: ReplaceQuery; replacement: string; data: Re
 type Report = { replaced: number; files: number; replacement: string; errors: { path: string; error: string }[]; left: string[] };
 
 /** Pesquisa de texto e substituição no layout do Antigravity: cabeçalho, campos, detalhes, resumo e a lista de resultados. */
-export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKey, step, hasDraft, openPaths, onChanged }: {
+export function SearchScreen({
+  active, focusKey, onOpen, folder, seed, refreshKey, step, hasDraft, openPaths, onChanged }: {
   active: boolean;
   focusKey: number;
   /** Abre o arquivo na linha e na coluna (UTF-16, a partir de 1). Clique simples pede prévia; duplo clique ou Enter pedem permanente. */
@@ -262,6 +264,7 @@ export function SearchScreen({ active, focusKey, onOpen, folder, seed, refreshKe
   /** Chamado depois que a substituição gravou arquivos, para o App recarregar o que estiver aberto. */
   onChanged: () => void;
 }) {
+  const backend = useBackend();
   const [form, setForm] = useState<Form>(EMPTY_FORM);
   const [results, setResults] = useState<SearchResults | null>(null);
   // Consulta e opções da resposta que está na tela: o destaque usa estas, não as do campo.

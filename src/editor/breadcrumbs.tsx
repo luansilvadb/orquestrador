@@ -4,12 +4,15 @@
 import { useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Popover, ScrollArea } from '@lobehub/ui/base-ui';
-import { backend, message } from '../backend/backend';
+import { message } from '../backend/backend';
+import { useBackend } from '../backend/backend-context';
 import { FileIcon } from '../shared/file-icon';
 import { join, splitPath } from '../shared/paths';
 import type { DirEntry } from '../backend/types';
 
-export function Breadcrumbs({ path, onOpen }: { path: string; onOpen: (path: string) => void }) {
+export function Breadcrumbs({
+  path, onOpen }: { path: string; onOpen: (path: string) => void }) {
+  const backend = useBackend();
   const parts = path.split('/').filter(Boolean);
   // Item com o seletor aberto (índice em `parts`) e a pasta que o seletor mostra agora.
   const [open, setOpen] = useState<number | null>(null);

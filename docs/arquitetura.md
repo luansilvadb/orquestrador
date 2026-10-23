@@ -21,7 +21,7 @@ Uma linha por pasta; os arquivos não óbvios de cada uma vêm logo abaixo da ta
 
 Arquivos não óbvios:
 - src/editor/format.ts: carrega Prettier e os plugins oficiais sob demanda; combina as opções devolvidas pelo backend e formata com posição do cursor.
-- `src/backend/backend.ts`: o único ponto de contato com o Tauri, pela interface `Transport`. Fora do app (no navegador, em desenvolvimento), entra o simulado.
+- `src/backend/backend.ts`: o único ponto de contato com o Tauri, pela interface `Transport`; `projectBackend(id)` fixa o id das chamadas de projeto, fornecido aos workspaces por `backend-context.tsx`. Fora do app (no navegador, em desenvolvimento), entra o simulado.
 - `src/backend/mock.ts` e `mock-fixtures.ts`: o backend simulado, só em `npm run dev` fora do Tauri. Simula o modo sem projeto por `?project=none` e os modos sem Git por `?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1` (ver [desenvolvimento](desenvolvimento.md)).
 - `src/backend/types.ts`: os tipos do contrato com o Rust e o mapa `Commands`, com cada comando do Tauri, seus argumentos e o resultado. `backend.ts` e `mock.ts` são tipados por ele, e `scripts/check-commands.mjs` confere as chaves com `generate_handler!` em `lib.rs`.
 - `src/shared/open-project.tsx`: aviso e botão `Abrir pasta` nos painéis que precisam de projeto.

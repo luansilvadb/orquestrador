@@ -37,7 +37,8 @@ import { EditorView } from '@codemirror/view';
 import { FileIcon } from '../shared/file-icon';
 import { AppMark } from '../window/app-mark';
 import { Breadcrumbs } from './breadcrumbs';
-import { backend, message } from '../backend/backend';
+import { message } from '../backend/backend';
+import { useBackend } from '../backend/backend-context';
 import { usePolling } from '../shared/polling';
 import { CodeEditor, forgetEditorState, type EditorRestore, type Reveal } from './file-view';
 import { MediaView, mediaOf, Note } from './media-view';
@@ -169,7 +170,7 @@ const isAbsoluteFilePath = (path: string) => /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(pa
 
 // Grava `text` em `path` (relativo, dentro do projeto). Arquivo novo é criado; se já existe (o diálogo confirmou a sobrescrita), o texto
 // vai por cima da versão que está no disco agora, sem gravar às cegas.
-async function writeNewFile(path: string, text: string): Promise<void> {
+async function writeNewFile(backend: ReturnType<typeof useBackend>, path: string, text: string): Promise<void> {
   if (isAbsoluteFilePath(path)) {
     let base = '';
     let bom = false;
@@ -202,6 +203,7 @@ async function writeNewFile(path: string, text: string): Promise<void> {
 function emptyData(): EditorData { return { buffers: {}, conflicts: {} }; }
 
 export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(props, handle) {
+  const backend = useBackend();
   const { project, active = true, locked, guard, refreshGit, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
   const storageProject = project || NO_PROJECT;
   // Ref para que as gravações antigas (ainda em await) avisem com a prop atual.
@@ -535,7 +537,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         return false;
       }
       const sent = toDiskNewlines(buffer.draft, buffer.newline);
-      await writeNewFile(path, sent);
+      await writeNewFile(backend, path, sent);
       const saved = await backend.readFile(path);
       if (existing) {
         const next = activate(closeTabs(wsRef.current, [tab.id]), existing.id);
@@ -591,7 +593,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         toast.error({ title: `Salve ou descarte a edição aberta de ${fileName(path)} antes de salvar por cima dele.`, duration: 7000 });
         return false;
       }
-      await writeNewFile(path, toDiskNewlines(current.draft, current.newline));
+      await writeNewFile(backend, path, toDiskNewlines(current.draft, current.newline));
       const saved = await backend.readFile(path);
       if (existing) {
         const source = allTabs().filter((t) => t.target.kind === 'file' && t.target.docId === docId).map((t) => t.id);
@@ -1435,7 +1437,9 @@ function EmptyMark() {
 // (rascunho), `null` ou erro: sem marcadores e sem aviso. Os textos chegam com o fim de linha do checkout e o editor trabalha com `\n`,
 // então a base passa pela mesma normalização. O estado só muda quando a base de fato mudou; `undefined` é "ainda não lida". `reload` lê
 // na hora (depois de preparar um bloco no editor, o marcador fica vazado sem esperar a consulta).
-function useGitBase(path: string, raw: string, shown: boolean, active: boolean): { base: FileBase | null | undefined; reload: () => Promise<void> } {
+function useGitBase(path: string, raw: string, shown: boolean, active: boolean): {
+  base: FileBase | null | undefined; reload: () => Promise<void> } {
+  const backend = useBackend();
   const [base, setBase] = useState<FileBase | null | undefined>(undefined);
   const pathRef = useRef(path);
   useLayoutEffect(() => {
@@ -1460,7 +1464,8 @@ function useGitBase(path: string, raw: string, shown: boolean, active: boolean):
   return { base: path === '' || isAbsoluteFilePath(path) ? null : base, reload: load };
 }
 
-function FileBody({ project, active, buffer, shown, status, disk, reveal, restore, onChange, onFormatEol, onSave, onCursor, onCompare, onRetry, onScroll }: {
+function FileBody({
+  project, active, buffer, shown, status, disk, reveal, restore, onChange, onFormatEol, onSave, onCursor, onCompare, onRetry, onScroll }: {
   project: string; active: boolean;
   buffer: Buffer | undefined; shown: boolean; status: Status | undefined; disk: DiskVersion | undefined;
   reveal: Reveal | null; restore: () => EditorRestore; onChange: (value: string) => void; onSave: () => void;
@@ -1468,6 +1473,7 @@ function FileBody({ project, active, buffer, shown, status, disk, reveal, restor
   onCursor: (line: number, col: number) => void; onCompare: (mode: 'keep' | 'use') => void; onRetry: () => void;
   onScroll: (scroll: Scroll) => void;
 }) {
+  const backend = useBackend();
   const git = useGitBase(buffer?.path ?? '', buffer?.raw ?? '', shown, active);
   if (status?.binary) return <Note text="Arquivo binário: não há texto para mostrar aqui." />;
   if (status?.large) return <Note text="Arquivo grande demais para mostrar aqui." />;
@@ -1831,7 +1837,9 @@ const stepKey = (e: KeyboardEvent<HTMLElement>, step: (by: number) => void) => {
 
 // `shown`: a aba é a atual do grupo. As abas escondidas ficam montadas e não consultam o Git; ao voltar, leem o diff de novo,
 // porque a aba irmã pode ter mudado o índice (a revisão velha seria recusada pelo Git).
-function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind: 'diff' }>; common: Common; shown: boolean }) {
+function DiffTab({
+  target, common, shown }: { target: Extract<TabTarget, { kind: 'diff' }>; common: Common; shown: boolean }) {
+  const backend = useBackend();
   const staged = target.side === 'staged';
   const [review, setReview] = useState<ReviewDiff | null>(null);
   const [error, setError] = useState('');
@@ -2001,7 +2009,9 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
 // ---- Histórico (commit): leitura imutável, sem botões de mutação ----
 
 // O commit mostra o arquivo inteiro. Sem blocos do Git, a unidade é cada trecho de mudança; a navegação é só de leitura.
-function CommitTab({ target }: { target: Extract<TabTarget, { kind: 'commit' }> }) {
+function CommitTab({
+  target }: { target: Extract<TabTarget, { kind: 'commit' }> }) {
+  const backend = useBackend();
   const [diff, setDiff] = useState<GitDiff | null>(null);
   const [error, setError] = useState('');
   const [mode, setMode] = useState<ViewMode>('split');
@@ -2045,11 +2055,13 @@ function CommitTab({ target }: { target: Extract<TabTarget, { kind: 'commit' }> 
 // O rascunho é a fonte: os trechos são lidos do texto dele a cada render. O que já foi escolhido sai da lista, o que ainda tem
 // marcador continua com ação, e edição à mão não precisa ser descartada. Gravar (`save`) fica com o editor central.
 
-function ConflictTab({ path, common, shown, draft, putConflict, dropConflict, save, closeTab }: {
+function ConflictTab({
+  path, common, shown, draft, putConflict, dropConflict, save, closeTab }: {
   path: string; common: Common; shown: boolean; draft: ConflictDraft | undefined;
   putConflict: (draft: ConflictDraft) => void; dropConflict: (path: string) => void;
   save: (markResolved: boolean) => Promise<boolean>; closeTab: () => void;
 }) {
+  const backend = useBackend();
   const [conflict, setConflict] = useState<Conflict | null>(null);
   const [error, setError] = useState('');
   const [stale, setStale] = useState(false);

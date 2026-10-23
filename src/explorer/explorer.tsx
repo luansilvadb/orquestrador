@@ -12,7 +12,8 @@ import {
 } from '@lobehub/ui/base-ui';
 import { createPortal } from 'react-dom';
 import { Flexbox } from '@lobehub/ui';
-import { backend, message } from '../backend/backend';
+import { message } from '../backend/backend';
+import { useBackend } from '../backend/backend-context';
 import { decorations, IGNORED } from './explorer-decorations';
 import { FileIcon } from '../shared/file-icon';
 import { SourceControl } from './source-control-icon';
@@ -64,10 +65,10 @@ const where = (dest: string) => (dest ? `“${dest}”` : 'a raiz do projeto');
 // Ações que só chamam o backend: o erro vira toast aqui mesmo.
 const report = (e: unknown) => toast.error({ title: message(e), duration: 7000 });
 // Revelar no Explorer do Windows: a pasta (a raiz, '') abre nela; o arquivo abre a pasta dele com ele marcado.
-const revealPath = (path: string, folder: boolean) => void (folder ? backend.revealDir(path) : backend.revealFile(path)).catch(report);
+const revealPath = (backend: ReturnType<typeof useBackend>, path: string, folder: boolean) => void (folder ? backend.revealDir(path) : backend.revealFile(path)).catch(report);
 // Copiar e recortar põem os itens no clipboard do Windows: colar é no Explorer. Recortar não move nada agora.
 const pasted = (moved: number, place: string) => moved ? `Itens movidos ${place}` : `Itens colados ${place}`;
-const copyMany = (paths: string[], cut: boolean) => void backend.copyFiles(paths, cut).then(
+const copyMany = (backend: ReturnType<typeof useBackend>, paths: string[], cut: boolean) => void backend.copyFiles(paths, cut).then(
   () => toast.success({ title: cut ? `${paths.length} itens recortados. Cole no Explorer para mover.` : `${paths.length} itens copiados. Cole no Explorer.`, duration: 4000 }),
   report,
 );
@@ -331,14 +332,17 @@ function HeaderAction({ icon, label, onClick }: { icon: LucideIcon; label: strin
 /** Árvore de pastas do projeto, na faixa à esquerda da tela principal. Pasta abre e fecha; arquivo abre na área do meio (prévia no clique, permanente no duplo clique e no Enter).
  * `reveal` abre as pastas de um arquivo e o seleciona (um objeto novo a cada pedido). `project` é o nome da pasta do projeto, título da seção.
  * `git` é o status do repositório (null fora do modo `repo`): dá as cores e letras das linhas. */
-export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }: {
+export function FilesScreen({
+  openPath, onOpen, reveal, actions, project, git, active }: {
   openPath: string | null;
   onOpen: (path: string, options?: OpenOptions) => void;
   reveal?: { path: string } | null;
   actions: FileActions;
   project: string;
   git: GitStatus | null;
+  active: boolean;
 }) {
+  const backend = useBackend();
   const [tree, setTree] = useState<ExplorerTree>({ children: {}, expanded: [] });
   const [error, setError] = useState('');
   // Seleção própria da árvore. Vazia, o arquivo aberto aparece marcado.
@@ -398,7 +402,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
       });
       return next;
     });
-  });
+  }, 1500, active);
 
   async function openDir(path: string) {
     // A lista chega antes da pasta abrir, para o painel medir a altura já com o conteúdo.
@@ -529,7 +533,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
         single('open-with', 'Abrir com...', () => void backend.openWith(one).catch(report)),
         single('open-side', 'Abrir à Direita', () => onOpen(one, { side: true })),
       ]),
-      single('reveal', 'Revelar no Explorador', () => revealPath(one, folder), 'Shift+Alt+R'),
+      single('reveal', 'Revelar no Explorador', () => revealPath(backend, one, folder), 'Shift+Alt+R'),
       single('terminal', 'Abrir no Terminal', () => actions.openInTerminal(pasteDir)),
       ...(history ? [single('history', 'Histórico Git', () => history(one))] : []),
       ...(folder ? [single('find-in', 'Localizar na Pasta...', () => actions.search(one))] : []),
@@ -538,8 +542,8 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
       chat ? action('chat', chatLabel, () => paths.forEach((p) => chat(p))) : blocked('chat', chatLabel, chatReason),
     ]);
     sections.push([
-      action('cut', 'Recortar', () => copyMany(paths, true), 'Ctrl+X'),
-      action('copy', 'Copiar', () => copyMany(paths, false), 'Ctrl+C'),
+      action('cut', 'Recortar', () => copyMany(backend, paths, true), 'Ctrl+X'),
+      action('copy', 'Copiar', () => copyMany(backend, paths, false), 'Ctrl+C'),
       hasFiles
         ? action('paste', 'Colar', () => void pasteInto(pasteDir), 'Ctrl+V')
         : blocked('paste', 'Colar', 'Não há arquivo ou pasta copiado.'),
@@ -566,7 +570,7 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
       action('root-new-file', 'Novo Arquivo...', () => startCreate('file', '')),
       action('root-new-dir', 'Nova Pasta...', () => startCreate('dir', '')),
       DIVIDER,
-      action('root-reveal', 'Revelar no Explorador de Arquivos', () => revealPath('', true), 'Shift+Alt+R'),
+      action('root-reveal', 'Revelar no Explorador de Arquivos', () => revealPath(backend, '', true), 'Shift+Alt+R'),
       action('root-search', 'Pesquisar no Projeto', () => actions.search(''), 'Shift+Alt+F'),
       DIVIDER,
       chat ? action('root-chat', 'Adicionar Pasta ao Chat', () => chat(''))
@@ -673,12 +677,12 @@ export function FilesScreen({ openPath, onOpen, reveal, actions, project, git }:
     let handled = true;
     if (ctrl && !e.shiftKey && e.code === 'KeyK') beginChord();
     else if (ctrl && !e.shiftKey && e.code === 'KeyV') void pasteInto(dirFor);
-    else if (real && ctrl && !e.shiftKey && e.code === 'KeyX') copyMany(targets, true);
-    else if (real && ctrl && !e.shiftKey && e.code === 'KeyC') copyMany(targets, false);
+    else if (real && ctrl && !e.shiftKey && e.code === 'KeyX') copyMany(backend, targets, true);
+    else if (real && ctrl && !e.shiftKey && e.code === 'KeyC') copyMany(backend, targets, false);
     else if (real && plain && e.key === 'F2') startRename(path);
     else if (real && plain && e.key === 'Delete') startDelete(targets);
     else if (real && plain && e.key === 'Enter' && !folder) onOpen(path, { permanent: true });
-    else if (altShift && e.code === 'KeyR') revealPath(path, !real || folder);
+    else if (altShift && e.code === 'KeyR') revealPath(backend, path, !real || folder);
     else if (altShift && e.code === 'KeyF') actions.search(dirFor);
     else if (altShift && e.code === 'KeyC') actions.copyPaths('absolute', real ? targets : ['']);
     else handled = false;

@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Input, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
-import { backend, message } from '../backend/backend';
+import { message } from '../backend/backend';
+import { useBackend } from '../backend/backend-context';
 import { FileIcon } from '../shared/file-icon';
 import { splitPath } from '../shared/paths';
 import type { QuickOpen as QuickOpenResult } from '../backend/types';
@@ -13,10 +14,12 @@ const DELAY_MS = 120;
 
 export type QuickOpenChoice = { permanent: boolean; side: boolean };
 
-export function QuickOpen({ onClose, onOpen }: {
+export function QuickOpen({
+  onClose, onOpen }: {
   onClose: () => void;
   onOpen: (path: string, choice: QuickOpenChoice) => void;
 }) {
+  const backend = useBackend();
   const [term, setTerm] = useState('');
   const [result, setResult] = useState<QuickOpenResult | null>(null);
   const [error, setError] = useState('');

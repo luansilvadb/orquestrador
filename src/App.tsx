@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { Flexbox } from '@lobehub/ui';
 import { Alert, Button, DraggablePanel, Modal, Progress, setActiveScope, Text, toast } from '@lobehub/ui/base-ui';
-import { backend, connect, host, message, setProjectId } from './backend/backend';
+import { backend, connect, host, message, projectBackend } from './backend/backend';
+import { BackendProvider } from './backend/backend-context';
 import { ChoiceForm } from './terminal/choice-form';
 import { EditorWorkspace, type EditorWorkspaceHandle } from './editor/editor-workspace';
 import { FilesScreen, Nav, StatusBar, type FileActions, type OpenOptions, type Route } from './explorer/explorer';
@@ -300,7 +301,6 @@ export function App() {
   const persist = (next: ManagedProject[], activeId: string | null) => {
     setProjects(next);
     setActive(activeId);
-    setProjectId(activeId);
     if (activeId) setMounted((ids) => ids.includes(activeId) ? ids : [...ids, activeId]);
     const activePath = next.find((item) => item.id === activeId)?.project;
     try {
@@ -443,6 +443,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     const base: State = updateChecked ? { ...initial, update: { phase: 'ready' } } : initial;
     return managed && initialProject ? { ...base, projectId: initialProject.id, project: initialProject.project } : base;
   });
+  const backend = projectBackend(state.projectId);
   const stateRef = useRef(state);
   useLayoutEffect(() => {
     stateRef.current = state;
@@ -522,9 +523,6 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   // Layout que vai para a recuperação do editor (com o projeto). Mudou, o editor grava de novo.
   const layoutText = useMemo(() => JSON.stringify({ sideWidth, panelWidth, shellHeight }), [sideWidth, panelWidth, shellHeight]);
 
-  useLayoutEffect(() => {
-    if (managed && active && initialProject) setProjectId(initialProject.id);
-  }, [managed, active, initialProject?.id]);
 
   function openPath(path: string) {
     const absolute = path.replace(/\\/g, '/');
@@ -821,7 +819,6 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
         dropProjectShells(previous);
         resetOrchestrator();
       }
-      setProjectId(picked.id);
       const options = await backend.getOptions();
       rememberProject(picked.project);
       dispatch({ type: 'project', id: picked.id, project: picked.project, options });
@@ -866,7 +863,6 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
         return;
       }
       await backend.closeProject(id);
-      setProjectId(null);
       dropProjectShells(id);
       resetOrchestrator();
       storeProject(null);
@@ -1231,6 +1227,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
     setRoute(to);
   };
   return (
+    <BackendProvider projectId={state.projectId}>
     <Flexbox height="100dvh">
       <TitleBar connected={connected} project={state.project} titleActive={active} menu={titlebarMenu} projectTabs={projects ? {
         projects, active: initialProject?.id ?? null, onSelect: (id) => onSelect?.(id), onClose: (id) => void closeTab(id),
@@ -1259,7 +1256,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
                 <div className={shown('arquivos')}>
                   {state.project ? (
                     <FilesScreen openPath={activeTarget && activeTarget.kind !== 'draft' ? activeTarget.path : null} onOpen={openIn} reveal={treeReveal} actions={fileActions}
-                      project={folder} git={git.data?.kind === 'repo' ? git.data.status : null}
+                      project={folder} git={git.data?.kind === 'repo' ? git.data.status : null} active={active && route === 'arquivos'}
                     />
                   ) : <OpenProjectPrompt onOpen={chooseProject} description="Abra uma pasta para explorar os arquivos." />}
                 </div>
@@ -1444,6 +1441,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
         </Flexbox>
       </Modal>
     </Flexbox>
+    </BackendProvider>
   );
 }
 

@@ -8,7 +8,8 @@ import { ArrowLeft, Cloud, GitBranch, RefreshCw, Tag, Target } from 'lucide-reac
 import { FileIcon } from '../shared/file-icon';
 import { splitPath } from '../shared/paths';
 import { KIND_COLOR } from '../explorer/explorer-decorations';
-import { backend, message } from '../backend/backend';
+import { message } from '../backend/backend';
+import { useBackend } from '../backend/backend-context';
 import type { TabTarget } from '../editor/workspace-model';
 import type { CommitDetail, CommitFile, GitKind, GitRef } from '../backend/types';
 
@@ -125,6 +126,7 @@ export function usePagedList<T>(fetchPage: (offset: number, scope: string | null
  * Detalhe do commit aberto: o hash, os dados e o erro. Abrir outro troca o detalhe; a resposta de um pedido já trocado é descartada.
  */
 export function useCommitDetail() {
+  const backend = useBackend();
   const [openHash, setOpenHash] = useState<string | null>(null);
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [detailError, setDetailError] = useState('');
@@ -157,13 +159,13 @@ export function useCommitDetail() {
 }
 
 // Busca de uma página do histórico: do projeto (`scope` null) ou só dos commits que mexeram no caminho.
-const historyPage = (offset: number, scope: string | null) => backend.gitHistory(PAGE, offset, scope ?? undefined);
 
 /**
  * Arquivos de um commit, uma linha de 24 px cada. Clique prévia, duplo clique abre de vez; o arquivo aberto no editor fica marcado.
  * É a lista que abre embaixo do commit, no histórico e no gráfico. `gutter` põe algo antes de cada linha (o gráfico desenha as faixas ali).
  */
-export function CommitFileList({ hash, files, selected, onOpenTarget, gutter }: {
+export function CommitFileList({
+  hash, files, selected, onOpenTarget, gutter }: {
   hash: string;
   files: CommitFile[];
   selected: TabTarget | null | undefined;
@@ -211,9 +213,11 @@ export type HistoryPanelProps = {
 };
 
 /** Lista paginada de commits (do projeto ou do arquivo) e, ao escolher um, os arquivos dele. */
-export function HistoryPanel({ request, active, selected, onOpenTarget }: HistoryPanelProps) {
+export function HistoryPanel({
+  request, active, selected, onOpenTarget }: HistoryPanelProps) {
+  const backend = useBackend();
   // Lista e detalhe são os mesmos dos gráficos (ver os hooks acima). Aqui recarregar esvazia a lista e fecha o commit aberto.
-  const { scope, items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList(historyPage, true);
+  const { scope, items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList((offset, scope) => backend.gitHistory(PAGE, offset, scope ?? undefined), true);
   const { openHash, detail, detailError, open: openCommit, close: closeCommit } = useCommitDetail();
   // Último pedido que já foi carregado: voltar à tela não recarrega a lista à toa.
   const loaded = useRef<HistoryRequest | null>(null);

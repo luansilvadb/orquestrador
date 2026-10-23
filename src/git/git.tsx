@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, DropdownMenu, Input, Popover, TabsIndicator, TabsList, TabsRoot, TabsTab, Text, TextArea, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Ellipsis, GitBranch, LoaderCircle, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
-import { backend, message } from '../backend/backend';
+import { message } from '../backend/backend';
+import { useBackend } from '../backend/backend-context';
 import { FileIcon } from '../shared/file-icon';
 import { KIND_COLOR } from '../explorer/explorer-decorations';
 import { GraphSection, type GraphRemote } from './git-graph-view';
@@ -89,11 +90,6 @@ export type GitSidebarProps = {
 type Busy = GraphRemote | 'commit' | 'stage' | 'branch';
 type CommitMode = 'commit' | 'commit-push';
 type WithBusy = <T>(kind: Busy, task: () => Promise<T>) => Promise<T | undefined>;
-const REMOTE: Record<GraphRemote, { run: () => Promise<string>; done: string }> = {
-  fetch: { run: () => backend.gitFetch(), done: 'Busca concluída' },
-  pull: { run: () => backend.gitPull(), done: 'Commits recebidos' },
-  push: { run: () => backend.gitPush(), done: 'Enviado' },
-};
 const BUSY_TEXT: Record<Busy, string> = {
   fetch: 'Buscando…', pull: 'Recebendo…', push: 'Enviando…', commit: 'Commitando…', stage: 'Atualizando o preparo…', branch: 'Mudando de branch…',
 };
@@ -119,7 +115,8 @@ type RowActions = {
  * Controle de versão: cabeçalho com atualizar e o menu de Buscar, Receber e Enviar; a branch; o commit; e as duas seções.
  * Fica montado mesmo com o histórico na frente: a mensagem digitada e os recolhidos não se perdem.
  */
-function ChangesPanel({ status, error, refresh, locked, guard, active, selected, onOpenTarget, onOpenFile }: {
+function ChangesPanel({
+  status, error, refresh, locked, guard, active, selected, onOpenTarget, onOpenFile }: {
   status: GitStatus | null;
   error: string;
   refresh: () => Promise<void>;
@@ -132,6 +129,12 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
   /** `permanent` abre de vez (duplo clique) em vez de prévia. */
   onOpenFile: (path: string, options?: { permanent?: boolean }) => void;
 }) {
+  const backend = useBackend();
+  const remoteCalls: Record<GraphRemote, { run: () => Promise<string>; done: string }> = {
+    fetch: { run: () => backend.gitFetch(), done: 'Busca concluída' },
+    pull: { run: () => backend.gitPull(), done: 'Commits recebidos' },
+    push: { run: () => backend.gitPush(), done: 'Enviado' },
+  };
   const [busy, setBusy] = useState<Busy | null>(null);
   // O segundo clique chega antes de o estado (busy) mudar: a trava que vale é a do ref.
   const busyRef = useRef(false);
@@ -195,8 +198,8 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
   };
 
   const remote = (kind: GraphRemote) => withBusy(kind, () => run(async () => {
-    const out = await REMOTE[kind].run();
-    toast.success({ title: REMOTE[kind].done, description: lastLine(out), duration: 3000 });
+    const out = await remoteCalls[kind].run();
+    toast.success({ title: remoteCalls[kind].done, description: lastLine(out), duration: 3000 });
   }, refreshWithGraph));
 
   // Commit, e depois o push. O push só sai se o commit deu certo: commit com erro mantém a mensagem e não envia.
@@ -213,7 +216,7 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
           setBusy('push');
           const pushed = await run(async () => {
             const out = await backend.gitPush();
-            toast.success({ title: REMOTE.push.done, description: lastLine(out), duration: 3000 });
+            toast.success({ title: remoteCalls.push.done, description: lastLine(out), duration: 3000 });
           }, refreshWithGraph);
           if (!pushed) toast.warning({ title: 'Commit criado, mas o envio falhou', description: 'Use Enviar no menu para tentar de novo. Não precisa commitar outra vez.', duration: 7000 });
         } else {
@@ -362,7 +365,9 @@ function ChangesPanel({ status, error, refresh, locked, guard, active, selected,
  * Estado vazio do painel fora do modo `repo`, no padrão do VS Code: o título e, abaixo, o que fazer. Só `no-repo` tem botão (inicializa o repositório);
  * os outros dizem o motivo. Quando o Git muda por fora, a consulta seguinte troca o estado e o painel segue sem recarregar.
  */
-function NoRepoPanel({ state, refresh }: { state: Exclude<GitState, { kind: 'repo' }>; refresh: () => Promise<void> }) {
+function NoRepoPanel({
+  state, refresh }: { state: Exclude<GitState, { kind: 'repo' }>; refresh: () => Promise<void> }) {
+  const backend = useBackend();
   const [busy, setBusy] = useState(false);
   // Com sucesso, o status relido vem como `repo` e este painel some sozinho. Erro vai em toast (`run`).
   const init = async () => {
@@ -391,13 +396,15 @@ function NoRepoPanel({ state, refresh }: { state: Exclude<GitState, { kind: 'rep
 }
 
 /** Botão da branch atual e a escolha: lista das locais (a atual marcada) e um campo para criar e trocar. */
-function BranchPicker({ branch, locked, busy, withBusy, refresh }: {
+function BranchPicker({
+  branch, locked, busy, withBusy, refresh }: {
   branch: string;
   locked: boolean;
   busy: Busy | null;
   withBusy: WithBusy;
   refresh: () => Promise<void>;
 }) {
+  const backend = useBackend();
   // Trocar e criar também param com qualquer operação em curso (commit, envio, preparo); o executor segue o `locked` de sempre.
   const off = locked || busy !== null;
   const [open, setOpen] = useState(false);
@@ -599,7 +606,8 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
  * Os dois ficam montados: alternar não perde a mensagem do commit, os recolhidos, o escopo nem o commit aberto do histórico.
  * Fora do modo `repo` não há nada disso: o painel é só o estado vazio, sem abas, e nada consulta o Git.
  */
-export function GitSidebar({ git, locked, guard, active, selected, onOpenTarget, onOpenFile, historyRequest }: GitSidebarProps) {
+export function GitSidebar({
+  git, locked, guard, active, selected, onOpenTarget, onOpenFile, historyRequest }: GitSidebarProps) {
   const [view, setView] = useState<'changes' | 'history'>('changes');
   const [request, setRequest] = useState<HistoryRequest>({ path: null });
 

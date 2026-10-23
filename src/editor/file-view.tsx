@@ -14,7 +14,8 @@ import { showMinimap, type MinimapConfig } from '@replit/codemirror-minimap';
 import { bracketColors } from './bracket-colors';
 import { gitChanges, gitField, gitHunks, minimapGutter, sameGitBase, setGitBase } from './git-gutter';
 import { gitHunkView, gitIndexWriter, gotoGitHunk } from './git-hunk';
-import { backend, message } from '../backend/backend';
+import { message } from '../backend/backend';
+import { useBackend } from '../backend/backend-context';
 import type { FormatterInfo } from '../backend/types';
 import { action, blocked, DIVIDER } from '../shared/file-tabs';
 import type { Newline, Scroll } from './workspace-store';
@@ -217,7 +218,8 @@ export function parseGoto(value: string, lines: number, lineLength: (line: numbe
 }
 
 // Editor do arquivo (CodeMirror com o tema do app). Exportado para o editor central (src/editor/editor-workspace.tsx) reutilizar.
-export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll, autoFocus, restore, gitBase, onWriteIndex, onFormatEol }: {
+export function CodeEditor({
+  text, readOnly, path, reveal, onChange, onSave, onCursor, onScroll, cacheKey, start, scroll, autoFocus, restore, gitBase, onWriteIndex, onFormatEol }: {
   text: string; readOnly: boolean; path: string; reveal: Reveal | null; onChange: (text: string) => void; onSave: () => void;
   onCursor: (line: number, col: number) => void; onScroll?: (scroll: Scroll) => void; cacheKey?: string; start?: StartCursor | null;
   /** Rolagem a restaurar ao montar (ex.: a vista foi movida de grupo ou o app foi reaberto). */
@@ -235,6 +237,7 @@ export function CodeEditor({ text, readOnly, path, reveal, onChange, onSave, onC
   onWriteIndex?: (text: string, expected: string) => Promise<void>;
   onFormatEol?: (newline: Newline) => void;
 }) {
+  const backend = useBackend();
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const language = useRef(new Compartment());

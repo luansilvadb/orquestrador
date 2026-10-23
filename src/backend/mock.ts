@@ -328,7 +328,7 @@ const debug = { close: async () => {
   // `choose_project` devolve a pasta como dentro de um repositório (o projeto aberto é a raiz dele).
   subfolder: params.get('subfolder') === '1',
   // Chamadas de Git que chegaram ao simulado, com argumento, resultado e erro (só para o check conferir o payload).
-  calls: [] as { cmd: string; args: unknown; result: unknown; error: string | null }[] };
+  calls: [] as { cmd: string; args: unknown; project: string | null; result: unknown; error: string | null; startedAt: number; completedAt: number | null }[] };
 (window as unknown as { __mock: typeof debug }).__mock = debug;
 
 function openMockProject(project: string, subfolder: boolean) {
@@ -1196,19 +1196,22 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
 export const mock: Transport = {
   // O retrato é tirado aos 100 ms e entregue aos 200 ms: chegam eventos já contidos nele (a descartar)
   // e eventos posteriores a ele (a guardar) enquanto a resposta está a caminho.
-  invoke: (cmd, args) => new Promise((resolve, reject) => setTimeout(() => {
-    const log = cmd.startsWith('git_') || cmd === 'open_url' ? { cmd, args: structuredClone(args), result: null as unknown, error: null as string | null } : null;
+  invoke: (cmd, args) => new Promise((resolve, reject) => {
+    const log = cmd.startsWith('git_') || cmd === 'open_url' || typeof args === 'object' && args !== null && 'project' in args
+      ? { cmd, args: structuredClone(args), project: (args as { project?: string | null } | undefined)?.project ?? null, result: null as unknown, error: null as string | null, startedAt: performance.now(), completedAt: null as number | null } : null;
     if (log) debug.calls.push(log);
-    try {
-      const result = (commands as Record<string, (a: unknown) => unknown>)[cmd](args);
-      if (log) log.result = structuredClone(result ?? null);
-      if (cmd === 'term_snapshot') setTimeout(() => resolve(result), 100);
-      else resolve(result);
-    } catch (e) {
-      if (log) log.error = String(e);
-      reject(e);
-    }
-  }, (cmd === 'term_snapshot' ? 100 : 15) + (debug.delay[cmd] ?? 0))),
+    setTimeout(() => {
+      try {
+        const result = (commands as Record<string, (a: unknown) => unknown>)[cmd](args);
+        if (log) { log.result = structuredClone(result ?? null); log.completedAt = performance.now(); }
+        if (cmd === 'term_snapshot') setTimeout(() => resolve(result), 100);
+        else resolve(result);
+      } catch (e) {
+        if (log) { log.error = String(e); log.completedAt = performance.now(); }
+        reject(e);
+      }
+    }, (cmd === 'term_snapshot' ? 100 : 15) + (debug.delay[cmd] ?? 0));
+  }),
   listen: async (event, handler) => void handlers.set(event, [...(handlers.get(event) ?? []), handler as Handler]),
   onCloseRequested: async (mayClose) => { closeHandler = mayClose; },
   // Janela simulada: minimizar e maximizar não fazem nada; fechar segue o mesmo caminho de `__mock.close()`.
