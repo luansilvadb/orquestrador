@@ -63,7 +63,7 @@ export function usePolled<T>(read: () => Promise<T>, enabled: boolean) {
       setError(message(e));
     }
   };
-  usePolling(refresh);
+  usePolling(refresh, 1500, enabled);
   return { data, error, refresh };
 }
 

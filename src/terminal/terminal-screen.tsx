@@ -95,7 +95,7 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
   // Clicar na aba do orquestrador dá foco ao terminal dele, depois que a aba fica visível.
   const choose = (id: string) => {
     setPicked(id);
-    if (id === ORCHESTRATOR) requestAnimationFrame(() => terminals.get(ORCHESTRATOR)?.term.focus());
+    if (id === ORCHESTRATOR) requestAnimationFrame(() => terminals.get(ORCHESTRATOR, projectId)?.term.focus());
   };
 
   // A aba ativa é revelada ao escolher, ao chegar executor (lista de ids muda) e ao redimensionar o painel (a faixa muda de largura).

@@ -101,7 +101,7 @@ scenario('três controles: 46 px de largura, 35 px úteis, colados à direita, �
 });
 
 scenario('título nativo simulado acompanha o projeto aberto', async ({ page }) => {
-  const folder = await page.locator('header [title]').filter({ hasText: /.+/ }).first().textContent();
+  const folder = await page.locator('header [role="tab"][aria-selected="true"] > span').textContent();
   assert.ok(folder, 'nome da pasta do projeto visível');
   await page.waitForFunction((name) => document.title === `${name} - Orquestrador`, folder);
   assert.equal(await page.title(), `${folder} - Orquestrador`);

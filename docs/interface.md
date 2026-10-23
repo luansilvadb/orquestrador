@@ -1,12 +1,14 @@
 # Interface
 
-A barra de título própria tem o menu `≡` à esquerda e mostra o nome do projeto e o caminho. O título nativo acompanha o projeto como `<pasta> - Orquestrador`; sem projeto aberto, é `Orquestrador`.
+A barra de título própria tem o menu `≡` à esquerda, a faixa rolável de projetos, contadores do projeto ativo e os controles da janela à direita. Cada aba mostra o nome da pasta, o caminho completo na dica, o `×` para fechar e o `+` abre outra pasta; arrastar reordena. Um ponto sinaliza executores em execução ou na fila. O título nativo acompanha o projeto ativo como `<pasta> - Orquestrador`; sem projeto, é `Orquestrador`.
+
+Cada aba mantém uma área completa do projeto, incluindo árvore, editor e recuperação, Pesquisa, Git, Orquestrador e shells. Trocar de aba esconde o workspace sem desmontá-lo; processos continuam rodando. O status Git e os polling do editor pausam nas abas inativas. Abrir uma pasta existente foca a aba dela. Fechar uma aba com sessão do Orquestrador ou executores ativos pede confirmação e encerra a sessão do projeto; fechar a última volta ao modo sem projeto. As abas abertas, a ordem e a ativa são salvas no `localStorage` e reabertas no início sem iniciar o Orquestrador.
 
 ## Tela principal
 
-A tela principal tem, à esquerda, a coluna de ícones (Arquivos, Pesquisar e Git) e, ao lado dela, uma faixa com o conteúdo da tela escolhida. Depois da atualização, o último projeto é reaberto se ainda existir; sem ele, o app inicia sem projeto. Nesse modo, Arquivos, Pesquisa, Git e Orquestrador mostram `Abrir pasta`; o Terminal abre no diretório pessoal. A área central mostra Novo arquivo, Abrir arquivo, Abrir pasta e projetos recentes. O editor também abre arquivos escolhidos por caminho absoluto; Git gutter, árvore e pesquisa consideram só arquivos do projeto. A barra de status não mostra branch. A faixa abre com 280 px e a borda direita dela arrasta a largura, que é a mesma nas três telas. À direita fica a coluna central, sempre montada, com o editor em cima e o painel Terminal embaixo. O painel do Orquestrador aparece em todas as telas. Trocar de tela não desmonta nem muda o tamanho das áreas.
+A tela principal tem, à esquerda, a coluna de ícones (Arquivos, Pesquisar e Git) e, ao lado dela, uma faixa com o conteúdo da tela escolhida. Depois da atualização, os projetos da última vez são reabertos se ainda existirem; sem eles, o app inicia sem projeto. Nesse modo, Arquivos, Pesquisa, Git e Orquestrador mostram `Abrir pasta`; o Terminal abre no diretório pessoal. A área central mostra Novo arquivo, Abrir arquivo, Abrir pasta e projetos recentes. O editor também abre arquivos escolhidos por caminho absoluto; Git gutter, árvore e pesquisa consideram só arquivos do projeto ativo. A barra de status não mostra branch. A faixa abre com 280 px e a borda direita dela arrasta a largura, que é a mesma nas três telas. À direita fica a coluna central, sempre montada, com o editor em cima e o painel Terminal embaixo. O painel do Orquestrador aparece em todas as telas. Trocar de tela não desmonta nem muda o tamanho das áreas.
 
-O menu `≡` mostra Novo arquivo (Ctrl+N), Abrir arquivo… (Ctrl+O), Abrir pasta… (Ctrl+K, Ctrl+O), Projetos recentes (até 10), Salvar (Ctrl+S), Salvar como… (Ctrl+Shift+S), Fechar pasta e Sair. Fechar pasta volta ao modo sem projeto. O projeto aberto e os recentes ficam no `localStorage` do app.
+O menu `≡` mostra Novo arquivo (Ctrl+N), Abrir arquivo… (Ctrl+O), Abrir pasta… (Ctrl+K, Ctrl+O), Projetos recentes (até 10), Salvar (Ctrl+S), Salvar como… (Ctrl+Shift+S), Fechar pasta e Sair. Fechar pasta fecha a aba ativa; ao fechar a última, volta ao modo sem projeto. As abas abertas, a ordem, a ativa e os recentes ficam no `localStorage` do app.
 
 ## Painel do Orquestrador
 
@@ -38,7 +40,7 @@ O ícone Pesquisar põe a pesquisa de texto no lugar da árvore, na mesma faixa 
 
 ## Faixa lateral
 
-A faixa abre com 280 px. A borda direita dela arrasta para mudar a largura (a mesma para árvore, pesquisa e Git), e o duplo clique nela volta para 280 px. A largura vai de 200 px até o que deixa pelo menos 240 px para a coluna central, com o painel do Orquestrador na largura em que está.
+A faixa abre com 280 px. A borda direita dela arrasta para mudar a largura (a mesma para árvore, pesquisa e Git), e o duplo clique nela volta para 280 px. A largura vai de 200 px até o que deixa pelo menos 240 px para a coluna central, com o painel do Orquestrador na largura em que está. Os contadores na barra de título pertencem ao projeto ativo.
 
 ## Git
 

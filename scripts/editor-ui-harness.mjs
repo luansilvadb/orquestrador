@@ -89,7 +89,7 @@ export async function openApp(page, query = '') {
   if (new URLSearchParams(query.replace(/^\?/, '')).get('project') !== 'none') {
     await page.getByRole('button', { name: 'Abrir menu' }).click();
     await page.getByRole('menuitem', { name: /Abrir pasta/ }).click();
-    await page.getByRole('navigation', { name: 'Telas' }).waitFor();
+    await page.locator('header [role="tab"][aria-selected="true"]').waitFor();
   }
 }
 

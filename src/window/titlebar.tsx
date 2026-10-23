@@ -1,12 +1,13 @@
 // Barra de título própria: a janela não tem mais a barra nativa do Windows. Arrastar e o duplo clique vêm do
 // atributo data-tauri-drag-region, que vale só para o elemento que o tem; por isso botões e campos não o levam.
-import { Children, useEffect, useState, type ComponentType, type ReactNode } from 'react';
+import { Children, useEffect, useRef, useState, type ComponentType, type ReactNode, type PointerEvent } from 'react';
 import { Flexbox } from '@lobehub/ui';
 import { ActionIcon, DropdownMenu, Text, Tooltip, type ContextMenuItem } from '@lobehub/ui/base-ui';
 import { Menu } from 'lucide-react';
 import { SECONDARY } from './text-style';
 import { host } from '../backend/backend';
 import { CloseIcon, MaximizeIcon, MinimizeIcon, RestoreIcon } from './window-icons';
+import { dragShift, revealTab, trackTabDrag, wheelToScroll, type TabDrag } from '../shared/tab-strip';
 
 // O Tooltip clona o botão e entrega o ref; bottomRight alinha a dica à borda direita, então ela não corta na janela.
 // Referência do Antigravity: hover branco a 10% nos três, e o Fechar vai ao vermelho com o X branco. Sem transição nem estado ativo.
@@ -43,11 +44,21 @@ export type TitleBarMenu = {
   onExit: () => void;
 };
 
+export type ProjectTab = { id: string; path: string; busy?: number };
+export type ProjectTabsProps = {
+  projects: ProjectTab[];
+  active: string | null;
+  onSelect: (id: string) => void;
+  onClose: (id: string) => void;
+  onMove: (id: string, index: number) => void;
+  onAdd: () => void;
+};
+
 /**
  * Identidade à esquerda; a pasta do projeto no meio (nome em destaque, caminho completo em secundário, copiável);
  * `children` são os contadores, agrupados à direita; os botões da janela ficam colados à borda direita.
  */
-export function TitleBar({ connected, project, children, menu }: { connected: boolean; project?: string; children?: ReactNode; menu?: TitleBarMenu }) {
+export function TitleBar({ connected, project, children, menu, projectTabs, titleActive = true }: { connected: boolean; project?: string; children?: ReactNode; menu?: TitleBarMenu; projectTabs?: ProjectTabsProps; titleActive?: boolean }) {
   const [maximized, setMaximized] = useState(false);
   const menuItems: ContextMenuItem[] = menu ? [
     { key: 'new-file', label: 'Novo arquivo', extra: <span>Ctrl+N</span>, onClick: menu.onNewFile },
@@ -69,9 +80,9 @@ export function TitleBar({ connected, project, children, menu }: { connected: bo
 
   // O título nativo distingue as janelas na barra de tarefas.
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || !titleActive) return;
     void host().setTitle(project ? `${folderName(project)} - Orquestrador` : 'Orquestrador');
-  }, [connected, project]);
+  }, [connected, project, titleActive]);
 
   // Antes de connect() não há janela para consultar: a consulta e a escuta só começam com a conexão pronta.
   useEffect(() => {
@@ -100,21 +111,20 @@ export function TitleBar({ connected, project, children, menu }: { connected: bo
           <ActionIcon variant="borderless" size="small" icon={Menu} aria-label="Abrir menu" title="Menu" className="mx-1 shrink-0" />
         </DropdownMenu>
       )}
+      {projectTabs && <ProjectTabs {...projectTabs} />}
       <Flexbox data-tauri-drag-region horizontal align="center" paddingInline={12} flex="none">
         <Text as="span" data-tauri-drag-region fontSize={13} weight={600}>Orquestrador</Text>
       </Flexbox>
-      <Flexbox data-tauri-drag-region horizontal align="center" gap={8} flex={1} allowShrink className="min-w-0">
-        {project && (
-          <>
-            <Text as="span" data-tauri-drag-region fontSize={13} weight={500} ellipsis title={project} className="min-w-0 shrink">
-              {folderName(project)}
-            </Text>
-            <Text as="span" fontSize={12} code ellipsis title={project} className="min-w-0 shrink select-text" style={SECONDARY}>
-              {project}
-            </Text>
-          </>
-        )}
-      </Flexbox>
+      {!projectTabs && <Flexbox data-tauri-drag-region horizontal align="center" gap={8} flex={1} allowShrink className="min-w-0">
+        {project && <>
+          <Text as="span" data-tauri-drag-region fontSize={13} weight={500} ellipsis title={project} className="min-w-0 shrink">
+            {folderName(project)}
+          </Text>
+          <Text as="span" fontSize={12} code ellipsis title={project} className="min-w-0 shrink select-text" style={SECONDARY}>
+            {project}
+          </Text>
+        </>}
+      </Flexbox>}
       {/* Sem contadores, o grupo nem existe: não ocupa espaço nem padding. */}
       {Children.toArray(children).length > 0 && (
         <Flexbox data-tauri-drag-region horizontal align="center" gap={12} paddingInline={12} flex="0 1 auto" allowShrink className="min-w-0 max-w-1/2">{children}</Flexbox>
@@ -128,5 +138,39 @@ export function TitleBar({ connected, project, children, menu }: { connected: bo
         <WindowButton label="Fechar" icon={CloseIcon} danger disabled={!connected} onClick={() => host().close()} />
       </Flexbox>
     </Flexbox>
+  );
+}
+
+function ProjectTabs({ projects, active, onSelect, onClose, onMove, onAdd }: ProjectTabsProps) {
+  const strip = useRef<HTMLDivElement>(null);
+  const tabs = useRef(new Map<string, HTMLDivElement>());
+  const [drag, setDrag] = useState<TabDrag | null>(null);
+  const [from, setFrom] = useState(-1);
+  useEffect(() => { revealTab(strip.current!, tabs.current.get(active ?? '')); }, [active, projects]);
+  const begin = (e: PointerEvent<HTMLDivElement>, index: number) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    const box = strip.current;
+    if (!box) return;
+    const nodes = projects.map((item) => tabs.current.get(item.id)!).filter(Boolean);
+    trackTabDrag(e, box, nodes, index, {
+      onStart: () => setFrom(index), onDrag: setDrag,
+      onDrop: (target) => { if (target !== null && target !== index) onMove(projects[index].id, target); setDrag(null); setFrom(-1); },
+    });
+  };
+  return (
+    <div ref={strip} role="tablist" aria-label="Projetos" data-tauri-drag-region onWheel={wheelToScroll} className="flex h-full min-w-0 flex-1 items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {projects.map((item, index) => (
+        <div key={item.id} ref={(el) => { if (el) tabs.current.set(item.id, el); else tabs.current.delete(item.id); }}
+          onPointerDown={(e) => begin(e, index)} onClick={() => onSelect(item.id)} title={item.path}
+          role="tab" aria-selected={active === item.id}
+          className={`group flex h-full max-w-48 min-w-24 shrink-0 cursor-default items-center gap-1 border-r px-2 text-xs ${active === item.id ? 'border-b-2 border-b-primary text-foreground' : 'border-b-2 border-b-transparent text-muted-foreground hover:bg-muted/50'} ${from === index ? 'z-10 opacity-80' : ''}`}
+          style={drag ? { transform: `translateX(${dragShift(drag, from, index)}px)` } : undefined}>
+          <span className="min-w-0 flex-1 truncate">{folderName(item.path)}</span>
+          {!!item.busy && <span className="size-1.5 shrink-0 rounded-full bg-[var(--ant-color-warning)]" aria-label={`${item.busy} executores ativos`} title={`${item.busy} executores ativos`} />}
+          <button type="button" aria-label={`Fechar ${folderName(item.path)}`} title="Fechar pasta" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(item.id); }} className="flex size-5 shrink-0 items-center justify-center rounded hover:bg-muted">×</button>
+        </div>
+      ))}
+      <button type="button" aria-label="Abrir pasta" title="Abrir pasta" onClick={onAdd} className="flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-muted">+</button>
+    </div>
   );
 }

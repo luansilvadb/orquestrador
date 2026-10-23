@@ -83,6 +83,7 @@ export type EditorWorkspaceHandle = {
 };
 export type EditorWorkspaceProps = {
   project: string;
+  active?: boolean;
   recentProjects?: string[];
   onOpenFile?: () => void;
   onOpenProject?: () => void;
@@ -109,6 +110,7 @@ type Ask = { title: string; body: ReactNode; actions: { key: string; label: stri
 // Comparação antes de gravar sobre o disco (ou de usar o disco): as duas versões são as que a tela tinha quando o usuário pediu.
 type Compare = { docId: string; path: string; mode: 'keep' | 'use'; disk: DiskVersion; draft: string };
 type Common = {
+  active: boolean;
   locked: boolean;
   guard: GitGuard;
   refreshGit: () => void;
@@ -202,7 +204,7 @@ async function writeNewFile(path: string, text: string): Promise<void> {
 function emptyData(): EditorData { return { buffers: {}, conflicts: {} }; }
 
 export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(props, handle) {
-  const { project, recentProjects = [], onOpenFile, onOpenProject, onOpenRecent, locked, guard, refreshGit, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
+  const { project, active = true, recentProjects = [], onOpenFile, onOpenProject, onOpenRecent, locked, guard, refreshGit, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
   const storageProject = project || NO_PROJECT;
   // Ref para que as gravações antigas (ainda em await) avisem com a prop atual.
   const savedRef = useRef(onSaved);
@@ -666,7 +668,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   // Sincroniza só as abas de arquivo ativas; sem nenhuma (chave vazia), o polling fica desligado.
   usePolling(async () => {
     await Promise.all(activeKey.split('|').map((id) => syncFile(id)));
-  }, POLL_MS, activeKey);
+  }, POLL_MS, active && activeKey);
 
   // ---- Avisos e recuperação ----
   const dirtyList = (): string[] => {
@@ -981,7 +983,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
 
   // ---- Corpo das abas ----
   const common: Common = {
-    locked, guard, refreshGit,
+    active, locked, guard, refreshGit,
     openLine: (path, line) => openFile(path, { permanent: true, line }),
     hasDraft: (path) => hasDraftAt(dataRef.current, path),
     fileDirty: (path) => Object.values(dataRef.current.buffers).some((b) => isBufferDirty(b) && b.path.toLowerCase() === path.toLowerCase()),
@@ -1070,6 +1072,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     return (
       <FileBody
         project={project}
+        active={active}
         buffer={data.buffers[target.docId]}
         shown={shown}
         status={status[target.docId]}
@@ -1441,7 +1444,7 @@ function HomeScreen({ recentProjects, onNewFile, onOpenFile, onOpenProject, onOp
 // (rascunho), `null` ou erro: sem marcadores e sem aviso. Os textos chegam com o fim de linha do checkout e o editor trabalha com `\n`,
 // então a base passa pela mesma normalização. O estado só muda quando a base de fato mudou; `undefined` é "ainda não lida". `reload` lê
 // na hora (depois de preparar um bloco no editor, o marcador fica vazado sem esperar a consulta).
-function useGitBase(path: string, raw: string, shown: boolean): { base: FileBase | null | undefined; reload: () => Promise<void> } {
+function useGitBase(path: string, raw: string, shown: boolean, active: boolean): { base: FileBase | null | undefined; reload: () => Promise<void> } {
   const [base, setBase] = useState<FileBase | null | undefined>(undefined);
   const pathRef = useRef(path);
   pathRef.current = path;
@@ -1456,7 +1459,7 @@ function useGitBase(path: string, raw: string, shown: boolean): { base: FileBase
     if (pathRef.current !== path) return;
     setBase((prev) => (prev === next || (prev && next && prev.head === next.head && prev.index === next.index) ? prev : next));
   };
-  usePolling(load, POLL_MS, shown && path !== '' && !isAbsoluteFilePath(path) && path);
+  usePolling(load, POLL_MS, active && shown && path !== '' && !isAbsoluteFilePath(path) && path);
   const seenRaw = useRef(raw);
   useEffect(() => {
     if (seenRaw.current === raw) return;
@@ -1466,15 +1469,15 @@ function useGitBase(path: string, raw: string, shown: boolean): { base: FileBase
   return { base: path === '' || isAbsoluteFilePath(path) ? null : base, reload: load };
 }
 
-function FileBody({ project, buffer, shown, status, disk, reveal, autoFocus, cursor, onChange, onFormatEol, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
-  project: string;
+function FileBody({ project, active, buffer, shown, status, disk, reveal, autoFocus, cursor, onChange, onFormatEol, onSave, onCursor, onCompare, onRetry, scroll, onScroll }: {
+  project: string; active: boolean;
   buffer: Buffer | undefined; shown: boolean; status: Status | undefined; disk: DiskVersion | undefined;
   reveal: Reveal | null; autoFocus: boolean; cursor: StartCursor | null; onChange: (value: string) => void; onSave: () => void;
   onFormatEol: (newline: Newline) => void;
   onCursor: (line: number, col: number) => void; onCompare: (mode: 'keep' | 'use') => void; onRetry: () => void;
   scroll: Scroll | null; onScroll: (scroll: Scroll) => void;
 }) {
-  const git = useGitBase(buffer?.path ?? '', buffer?.raw ?? '', shown);
+  const git = useGitBase(buffer?.path ?? '', buffer?.raw ?? '', shown, active);
   if (status?.binary) return <Note text="Arquivo binário: não há texto para mostrar aqui." />;
   if (status?.large) return <Note text="Arquivo grande demais para mostrar aqui." />;
   if (!buffer) return <Note text={status?.error ?? 'Lendo o arquivo…'} danger={!!status?.error} onRetry={status?.error ? onRetry : undefined} />;
@@ -1855,7 +1858,7 @@ function DiffTab({ target, common, shown }: { target: Extract<TabTarget, { kind:
       setError(message(e));
     }
   };
-  usePolling(load, POLL_MS, shown && `${target.path}|${target.side}`);
+  usePolling(load, POLL_MS, common.active && shown && `${target.path}|${target.side}`);
 
   // Uma operação por vez: o clique duplo não dispara duas (o ref não espera o re-render).
   const run = async (work: () => Promise<void>) => {

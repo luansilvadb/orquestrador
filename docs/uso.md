@@ -6,7 +6,7 @@ Um app para Windows (Tauri) que põe CLIs de IA para trabalhar em papéis separa
 
 ## Como se usa
 
-1. Abra o app. Antes do uso, ele confere a versão e atualiza sozinho se houver uma nova ([atualização](atualizacao.md)). Depois, reabre o último projeto se a pasta ainda existir; senão, abre sem projeto. Nesse modo, use o menu `≡` ou a tela central para criar um arquivo, abrir um arquivo ou abrir uma pasta. Uma pasta dentro de um repositório abre a raiz dele; se for subpasta, um aviso mostra a raiz. Uma pasta fora de repositório abre sem os recursos de Git (ver [interface](interface.md)).
+1. Abra o app. Antes do uso, ele confere a versão e atualiza sozinho se houver uma nova ([atualização](atualizacao.md)). Depois, reabre os projetos da última vez, na mesma ordem e com a mesma aba ativa, se as pastas ainda existirem; sem projetos anteriores, abre sem projeto. Nenhum Orquestrador inicia sozinho. Use `+` na barra de título ou o menu `≡` para abrir outra pasta; uma pasta já aberta foca a aba existente. Uma pasta dentro de um repositório abre a raiz dele; se for subpasta, um aviso mostra a raiz. Uma pasta fora de repositório abre sem os recursos de Git (ver [interface](interface.md)).
 2. No painel do Orquestrador, à direita da tela principal, sem orquestrador aberto, clique em `Abrir terminal` e escolha ferramenta, modelo e esforço do orquestrador; a última escolha já vem marcada. Sem Git na pasta, a janela avisa que o que os executores mudarem não fica registrado e não pode ser desfeito pelo Git, e diz o que fazer conforme o caso: inicializar o repositório no painel Git, instalar o Git ou abrir a raiz do repositório. O aviso não bloqueia. Há um só orquestrador, e é no terminal dele que você conversa com ele; os executores só mostram o que fazem.
 3. Converse com o orquestrador e feche o objetivo.
 4. Na primeira delegação, uma aba de executor aparece e espera a escolha de ferramenta, modelo e esforço; a aba ativa não muda. Os executores seguintes abrem sozinhos com essa escolha. O botão `Executores`, na barra da aba do orquestrador, mostra a escolha e deixa trocá-la; a troca vale para os próximos.
@@ -16,7 +16,7 @@ Um app para Windows (Tauri) que põe CLIs de IA para trabalhar em papéis separa
 
 ## Configuração
 
-A última escolha de cada papel fica em `%LOCALAPPDATA%\orquestrador\config.json`. O último projeto e até 10 projetos recentes ficam no `localStorage` do app; `Fechar pasta` limpa o último projeto, mas mantém os recentes.
+A última escolha de cada papel fica em `%LOCALAPPDATA%\orquestrador\config.json`. As abas abertas, a aba ativa e até 10 projetos recentes ficam no `localStorage` do app; fechar a última aba limpa a lista aberta e mantém os recentes.
 
 ```json
 {

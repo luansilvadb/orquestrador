@@ -25,6 +25,7 @@ Arquivos não óbvios:
 - `src/backend/mock.ts` e `mock-fixtures.ts`: o backend simulado, só em `npm run dev` fora do Tauri. Simula o modo sem projeto por `?project=none` e os modos sem Git por `?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1` (ver [desenvolvimento](desenvolvimento.md)).
 - `src/backend/types.ts`: os tipos do contrato com o Rust e o mapa `Commands`, com cada comando do Tauri, seus argumentos e o resultado. `backend.ts` e `mock.ts` são tipados por ele, e `scripts/check-commands.mjs` confere as chaves com `generate_handler!` em `lib.rs`.
 - `src/shared/open-project.tsx`: aviso e botão `Abrir pasta` nos painéis que precisam de projeto.
+- `src/window/titlebar.tsx`: faixa de abas dos projetos; `src/App.tsx` mantém os workspaces montados, persiste ordem e seleção e exporta `openAbsolutePath` para resolver pastas e arquivos absolutos.
 - `src/editor/editor-workspace.tsx`: até dois grupos lado a lado, com abas de arquivo, diff, commit e conflito; a comparação com o disco antes de gravar; recuperação por projeto e recuperação sem projeto, com arquivos soltos e rascunhos.
 - `src/editor/workspace-model.ts` e `workspace-store.ts`: modelos puros, sem React. O modelo cuida das abas e dos grupos (prévia, fixadas, fechamento com confirmação, reabertura e carga do estado salvo); o store cuida de buffers, rascunhos, conflitos e do texto da recuperação, validado ao ler, sem disco.
 - `src/editor/file-view.tsx`: o editor de texto (CodeMirror com as cores do app e as medidas do Monaco, guias de recuo e minimap). Não lê nem grava o disco; guarda o estado do CodeMirror por arquivo e reporta cursor e rolagem.
@@ -47,6 +48,7 @@ Arquivos não óbvios:
 - `src/terminal/terminal-screen.tsx`: o painel do Orquestrador, à direita da tela principal: faixa de abas (orquestrador e um executor por aba), a barra da aba ativa e os terminais, com o da aba ativa visível.
 - `src/terminal/shell-panel.tsx`: o painel Terminal, com os shells do usuário embaixo da área do arquivo, na coluna central, com a faixa de abas (uma por shell, com o `×` de cada uma e o `+` para abrir outro), o botão de esconder e a borda que redimensiona.
 - `src/terminal/term.ts`: o tema dos terminais xterm (cores em `theme`).
+- `src/terminal/terminals.tsx`: registro de views e dados iniciais de xterm, chaveado por `(project, id)`.
 - `src/terminal/paste.ts`: a colagem de arquivo e imagem no terminal.
 - `src/terminal/choice-form.tsx`: o formulário de escolha de ferramenta, modelo e esforço.
 - `src/shared/file-icons.ts` e `file-icon.tsx`: a escolha do ícone do tema Symbols pela ordem do VS Code (nome, extensão, linguagem, padrão) e o componente `FileIcon`, usado na árvore, nas abas, no Git, na pesquisa e no arquivo rápido.
@@ -111,6 +113,7 @@ Agrupados por tipo.
 - `scripts/check-editor-style.mjs`: a paridade visual do editor central com o Antigravity (Dark Modern), por estilos computados e geometria, não por pixel. Os valores esperados vêm dos arquivos do Antigravity (ver [interface](interface.md), “Cores e fontes do editor”).
 - `scripts/check-git-gutter-ui.mjs`: os marcadores de mudança do Git no editor (tipo, linha, cheio × vazado, geometria, barra de rolagem, minimap, digitação com Desfazer, leitura depois de salvar e a ausência em arquivo não rastreado e em rascunho) e o bloco aberto: linhas antigas, fechar, Restaurar com Ctrl+Z, Preparar e Tirar do preparo (o índice que o app simulado recebeu em `git_write_index`) e a navegação com as setas, Alt+F5 e o menu de contexto.
 - `scripts/check-shell-tabs-ui.mjs`: o arrasto das abas do painel Terminal: clique sem mover, nova ordem na faixa, na lista e na vizinha ao fechar, Esc e X sem reordenar, e a faixa rolando com a aba na borda.
+- `scripts/check-project-tabs-ui.mjs`: abrir, trocar, focar, fechar e restaurar abas de projeto.
 - `scripts/check-editor-tabs-ui.mjs`: o arrasto das abas do editor: clique sem mover, nova ordem, Esc e X sem reordenar, fixadas no começo, soltar no outro grupo e a faixa rolando com a aba na borda.
 
 **Release**

@@ -16,7 +16,7 @@ import { SHELL_HEIGHT, SHELL_MIN, ShellPanel } from './terminal/shell-panel';
 import { FINISHED, PANEL_MIN, PANEL_WIDTH, STATES, TerminalsScreen } from './terminal/terminal-screen';
 import type { TermView } from './terminal/term';
 import { terminals } from './terminal/terminals';
-import { folderName, TitleBar, type TitleBarMenu } from './window/titlebar';
+import { folderName, TitleBar, type ProjectTab, type TitleBarMenu } from './window/titlebar';
 import { SECONDARY } from './window/text-style';
 import { pathText, relativeTo } from './shared/file-tab-actions';
 import { OpenProjectPrompt } from './shared/open-project';
@@ -47,6 +47,13 @@ const SIDE_DEFAULT_SIZE = { width: SIDE_WIDTH };
 const FILE_MIN_HEIGHT = 160;
 const LAST_PROJECT_KEY = 'orquestrador.project.last';
 const RECENT_PROJECTS_KEY = 'orquestrador.project.recent';
+const OPEN_PROJECTS_KEY = 'orquestrador.project.tabs';
+const ACTIVE_PROJECT_KEY = 'orquestrador.project.active';
+const projectOpeners = new Map<string, (path: string) => void>();
+const pendingProjectFiles = new Map<string, string[]>();
+let looseFileOpener: ((path: string) => void) | null = null;
+export let openAbsolutePath = async (_path: string) => {};
+let windowCloseRequest: (() => Promise<boolean>) | null = null;
 
 function readRecentProjects(): string[] {
   try {
@@ -55,10 +62,6 @@ function readRecentProjects(): string[] {
   } catch {
     return [];
   }
-}
-
-function readLastProject(): string | null {
-  try { return localStorage.getItem(LAST_PROJECT_KEY); } catch { return null; }
 }
 
 function storeProject(path: string | null) {
@@ -246,8 +249,167 @@ function useSize(axis: 'width' | 'height') {
 type CloseChoice = 'cancel' | 'discard' | 'save' | 'close';
 type CloseAsk = { files: string[]; terminals: boolean; projectWork?: ProjectSnapshot };
 
+type ManagedProject = { id: string; project: string };
+
+function readOpenProjects(): string[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(OPEN_PROJECTS_KEY) ?? 'null');
+    if (Array.isArray(raw)) return raw.filter((path): path is string => typeof path === 'string');
+    const last = localStorage.getItem(LAST_PROJECT_KEY);
+    return last ? [last] : [];
+  } catch { return []; }
+}
+
 export function App() {
-  const [state, dispatch] = useReducer(reducer, initial);
+  const [projects, setProjects] = useState<ManagedProject[]>([]);
+  const [active, setActive] = useState<string | null>(null);
+  const [mounted, setMounted] = useState<string[]>([]);
+  const [busyByProject, setBusyByProject] = useState<Record<string, number>>({});
+  const [recentProjects, setRecentProjects] = useState(readRecentProjects);
+  const [ready, setReady] = useState(false);
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
+  const persist = (next: ManagedProject[], activeId: string | null) => {
+    setProjects(next);
+    setActive(activeId);
+    setProjectId(activeId);
+    if (activeId) setMounted((ids) => ids.includes(activeId) ? ids : [...ids, activeId]);
+    try {
+      localStorage.setItem(OPEN_PROJECTS_KEY, JSON.stringify(next.map((item) => item.project)));
+      const activePath = next.find((item) => item.id === activeId)?.project;
+      if (activePath) {
+        localStorage.setItem(ACTIVE_PROJECT_KEY, activePath);
+        localStorage.setItem(LAST_PROJECT_KEY, activePath);
+      } else {
+        localStorage.removeItem(ACTIVE_PROJECT_KEY);
+        localStorage.removeItem(LAST_PROJECT_KEY);
+      }
+    } catch { /* A preferência local não impede abrir a pasta. */ }
+  };
+  const addProject = async (path?: string) => {
+    try {
+      await connect();
+      const opened = path ? await backend.openProject(path) : await backend.chooseProject();
+      if (!opened) return;
+      const current = projectsRef.current;
+      const found = current.find((item) => item.id === opened.id);
+      const next = found ? current : [...current, { id: opened.id, project: opened.project }];
+      const recents = [opened.project, ...readRecentProjects().filter((item) => item.toLowerCase() !== opened.project.toLowerCase())].slice(0, 10);
+      try {
+        localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(recents));
+        localStorage.setItem(LAST_PROJECT_KEY, opened.project);
+      } catch { /* A preferência local não impede abrir a pasta. */ }
+      setRecentProjects(recents);
+      persist(next, opened.id);
+      if (opened.subfolder) toast.info({ title: `Esta pasta está dentro do repositório ${opened.project}. O projeto aberto é a raiz dele.`, duration: 6000 });
+    } catch (e) {
+      if (path && /não existe|não é uma pasta/i.test(message(e))) {
+        const next = readRecentProjects().filter((item) => item.toLowerCase() !== path.toLowerCase());
+        try { localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next)); } catch { /* A preferência local é opcional. */ }
+        setRecentProjects(next);
+        toast.warning({ title: `Projeto removido dos recentes: ${path}`, duration: 6000 });
+      } else report(e);
+    }
+  };
+  const closeManagedProject = async (id: string) => {
+    try {
+      await backend.closeProject(id);
+      const next = projectsRef.current.filter((item) => item.id !== id);
+      setMounted((ids) => ids.filter((item) => item !== id));
+      const nextActive = activeRef.current === id ? next[Math.max(0, projectsRef.current.findIndex((item) => item.id === id) - 1)]?.id ?? next[0]?.id ?? null : activeRef.current;
+      persist(next, nextActive);
+      setBusyByProject((items) => { const rest = { ...items }; delete rest[id]; return rest; });
+    } catch (e) { report(e); }
+  };
+  const moveProject = (id: string, target: number) => {
+    const next = [...projectsRef.current];
+    const from = next.findIndex((item) => item.id === id);
+    if (from < 0) return;
+    const [item] = next.splice(from, 1);
+    next.splice(target, 0, item);
+    persist(next, activeRef.current);
+  };
+  const selectProject = (id: string) => persist(projectsRef.current, id);
+
+  openAbsolutePath = async (path: string) => {
+    try {
+      const opened = await backend.openProject(path);
+      const current = projectsRef.current;
+      const next = current.some((item) => item.id === opened.id) ? current : [...current, { id: opened.id, project: opened.project }];
+      const recents = [opened.project, ...readRecentProjects().filter((item) => item.toLowerCase() !== opened.project.toLowerCase())].slice(0, 10);
+      try {
+        localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(recents));
+        localStorage.setItem(LAST_PROJECT_KEY, opened.project);
+      } catch { /* A preferência local não impede abrir a pasta. */ }
+      setRecentProjects(recents);
+      persist(next, opened.id);
+      return;
+    } catch { /* Arquivo: procurar primeiro uma pasta já aberta. */ }
+    const containing = projectsRef.current.find((item) => relativeTo(item.project, path.replace(/\\/g, '/')) !== null);
+    const target = containing ?? projectsRef.current.find((item) => item.id === activeRef.current);
+    if (!target) { looseFileOpener?.(path); return; }
+    persist(projectsRef.current, target.id);
+    const open = projectOpeners.get(target.id);
+    if (open) open(path);
+    else pendingProjectFiles.set(target.id, [...(pendingProjectFiles.get(target.id) ?? []), path]);
+  };
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      await connect();
+      await host().onCloseRequested(async () => windowCloseRequest ? windowCloseRequest() : true);
+      const restored: ManagedProject[] = [];
+      const params = new URLSearchParams(window.location.search);
+      const mockCount = Number(params.get('projects'));
+      const saved = params.get('project') === 'none' ? [] : mockCount > 1
+        ? ['C:\\projetos\\exemplo', ...Array.from({ length: Math.min(8, mockCount) - 1 }, (_, i) => `C:\\projetos\\simulado-${i + 2}`)]
+        : readOpenProjects();
+      for (const path of saved) {
+        try {
+          const opened = await backend.openProject(path);
+          if (!restored.some((item) => item.id === opened.id)) restored.push({ id: opened.id, project: opened.project });
+        } catch { /* Pastas removidas não são reabertas. */ }
+      }
+      let selectedPath: string | null = null;
+      try { selectedPath = localStorage.getItem(ACTIVE_PROJECT_KEY) ?? localStorage.getItem(LAST_PROJECT_KEY); } catch { /* Sem preferência ativa, usa a primeira pasta. */ }
+      const selected = restored.find((item) => item.project.toLowerCase() === selectedPath?.toLowerCase()) ?? restored[0];
+      if (live) { persist(restored, selected?.id ?? null); setReady(true); }
+    })().catch((e) => { report(e); if (live) setReady(true); });
+    return () => { live = false; };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      for (const item of projectsRef.current) void backend.projectSnapshot(item.id).then((snapshot) => {
+        setBusyByProject((current) => ({ ...current, [item.id]: snapshot.executorsRunning + snapshot.executorsQueued }));
+      }).catch(() => {});
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  if (!ready) return <Screen connected={false} description={(
+    <Text as="p" fontSize={14} style={SECONDARY} role="status" aria-live="polite">Reabrindo projetos…</Text>
+  )}>{null}</Screen>;
+  const tabs: ProjectTab[] = projects.map((item) => ({ id: item.id, path: item.project, busy: busyByProject[item.id] }));
+  if (projects.length === 0) return <ProjectApp managed projects={tabs} onSelect={selectProject} onClose={closeManagedProject} onMove={moveProject} onOpen={addProject} recentProjects={recentProjects} />;
+  return <div className="relative h-dvh w-full overflow-hidden">
+    {projects.map((item) => <div key={item.id} className={`absolute inset-0 ${active === item.id ? '' : 'invisible'}`}>
+      {mounted.includes(item.id) && <ProjectApp managed initialProject={item} active={active === item.id} projects={tabs} onSelect={selectProject} onClose={closeManagedProject} onMove={moveProject} onOpen={addProject} recentProjects={recentProjects} />}
+    </div>)}
+  </div>;
+}
+
+function ProjectApp({ managed, initialProject, active = true, projects, onSelect, onClose, onMove, onOpen, recentProjects: sharedRecent }: {
+  managed: boolean; initialProject?: ManagedProject; active?: boolean; projects?: ProjectTab[]; onSelect?: (id: string) => void;
+  onClose?: (id: string) => void; onMove?: (id: string, index: number) => void; onOpen?: (path?: string) => void; recentProjects?: string[];
+}) {
+  const [state, dispatch] = useReducer(reducer, initial, () => managed && initialProject
+    ? { ...initial, projectId: initialProject.id, project: initialProject.project }
+    : initial);
   const stateRef = useRef(state);
   useLayoutEffect(() => {
     stateRef.current = state;
@@ -278,12 +440,12 @@ export function App() {
   const [quickOpen, setQuickOpen] = useState(false);
   // O status do Git roda com o projeto aberto, em qualquer tela: o contador da navegação precisa dele.
   // Status do Git, atualizado a cada 1,5 s. O estado só muda quando a resposta é diferente, para a lista não piscar. Sem projeto (`enabled` falso), não consulta.
-  const git = usePolled(() => backend.gitStatus(), state.update.phase === 'ready' && !!state.project);
+  const git = usePolled(() => backend.gitStatus(), active && state.update.phase === 'ready' && !!state.project);
   const [connected, setConnected] = useState(false);
   const [fatal, setFatal] = useState(false);
   const [retrying, setRetrying] = useState(false);
-  const [recentProjects, setRecentProjects] = useState(readRecentProjects);
-  const startupRestoreAttempted = useRef(false);
+  const [localRecentProjects, setLocalRecentProjects] = useState(readRecentProjects);
+  const recentProjects = sharedRecent ?? localRecentProjects;
   const projectChordTimer = useRef(0);
   const projectChordPending = useRef(false);
   // Fechamento da janela: alterações não salvas (salvar, descartar ou cancelar) e terminais trabalhando (encerrar ou cancelar).
@@ -320,10 +482,36 @@ export function App() {
   // Layout que vai para a recuperação do editor (com o projeto). Mudou, o editor grava de novo.
   const layoutText = useMemo(() => JSON.stringify({ sideWidth, panelWidth, shellHeight }), [sideWidth, panelWidth, shellHeight]);
 
+  useLayoutEffect(() => {
+    if (managed && active && initialProject) setProjectId(initialProject.id);
+  }, [managed, active, initialProject?.id]);
+
+  useEffect(() => {
+    if (!managed) return;
+    if (initialProject) {
+      if (state.projectId !== initialProject.id) return;
+      projectOpeners.set(initialProject.id, openPath);
+      for (const path of pendingProjectFiles.get(initialProject.id) ?? []) openPath(path);
+      pendingProjectFiles.delete(initialProject.id);
+      return () => { projectOpeners.delete(initialProject.id); };
+    }
+    looseFileOpener = openPath;
+    return () => { if (looseFileOpener === openPath) looseFileOpener = null; };
+  }, [managed, initialProject?.id, state.projectId]);
+
+  useEffect(() => {
+    if (!managed || !initialProject) return;
+    let live = true;
+    void backend.getOptions().then((options) => {
+      if (live) dispatch({ type: 'options', options });
+    }).catch(report);
+    return () => { live = false; };
+  }, [managed, initialProject?.id]);
+
   // ---------- ações ----------
 
   const resetOrchestrator = (notice = '') => {
-    for (const e of stateRef.current.executors) terminals.forget(e.id);
+    for (const e of stateRef.current.executors) terminals.forget(e.id, stateRef.current.projectId);
     dispatch({ type: 'reset', notice });
   };
 
@@ -343,6 +531,36 @@ export function App() {
     closeAnswer.current?.(choice);
     closeAnswer.current = null;
   };
+
+  useEffect(() => {
+    if (!active) return;
+    const mayClose = async () => {
+      try {
+        const running = await backend.hasRunning();
+        const unsaved = editor.current?.unsaved() ?? [];
+        if (unsaved.length > 0) {
+          let choice = await askClose(unsaved, running);
+          while (choice === 'save') {
+            const saved = await editor.current!.saveAll();
+            const left = editor.current!.unsaved();
+            if (saved && left.length === 0) break;
+            report(new Error('Não foi possível salvar tudo. Nada foi fechado.'));
+            setCloseSaving(false);
+            if (left.length === 0) { setCloseAsk(null); return false; }
+            choice = await askClose(left, running);
+          }
+          if (choice === 'cancel') return false;
+          if (choice === 'discard') editor.current!.discardAll();
+          setCloseSaving(false);
+          setCloseAsk(null);
+          editor.current?.flushRecovery();
+        } else if (running && (await askClose([], true)) !== 'close') return false;
+      } catch { /* Sem resposta do backend, deixa a janela fechar. */ }
+      return true;
+    };
+    windowCloseRequest = mayClose;
+    return () => { if (windowCloseRequest === mayClose) windowCloseRequest = null; };
+  }, [active]);
 
   // Copia o caminho (ou os caminhos), um por linha. Lista vazia não copia nada.
   const copyPaths = (kind: 'relative' | 'absolute', paths: string[]) => {
@@ -400,7 +618,7 @@ export function App() {
   }
   // Cola o caminho absoluto no rascunho do Orquestrador, sem Enter. O foco vai para o terminal, para a mensagem continuar dali.
   function addToChat(path: string) {
-    const view = terminals.get(ORCHESTRATOR);
+    const view = terminals.get(ORCHESTRATOR, stateRef.current.projectId);
     const text = pathText('absolute', path, stateRef.current.project);
     if (!view || !text) return report(new Error('O Orquestrador não está aberto.'));
     void view.pasteFiles([text]).then(() => view.term.focus()).catch(report);
@@ -425,10 +643,10 @@ export function App() {
           if (project !== stateRef.current.projectId) return;
           dispatch({ type: 'nodeState', id, state: next, choice });
           // O estado vivo: o PTY já existe, então setLive só reenvia o tamanho. Não recria nem zera o terminal.
-          if (next === 'running') terminals.get(id)?.setLive();
+          if (next === 'running') terminals.get(id, project)?.setLive();
           // Executor que terminou fecha a própria aba; a resposta dele já seguiu para o orquestrador.
           if (FINISHED.includes(next)) {
-            terminals.forget(id);
+            terminals.forget(id, project);
             dispatch({ type: 'removed', ids: [id] });
           }
         }),
@@ -439,38 +657,6 @@ export function App() {
         // `exit` num shell: o backend já o encerrou, então só a aba dele sai (a última fecha o painel).
         host().listen('shell-exit', ({ project, id }) => {
           if (stateRef.current.shells.some((shell) => shell.id === id && shell.project === project)) dropShell(id);
-        }),
-        host().onCloseRequested(async () => {
-          try {
-            const running = await backend.hasRunning();
-            const unsaved = editor.current?.unsaved() ?? [];
-            if (unsaved.length > 0) {
-              // Três respostas: salvar tudo (só fecha se tudo gravou e nada novo ficou sujo), descartar (a recuperação é gravada
-              // antes do encerramento), ou cancelar, que mantém a janela e tudo como está. Salvar que falha reabre a escolha com
-              // o que ficou sujo; a janela não fecha.
-              let choice = await askClose(unsaved, running);
-              while (choice === 'save') {
-                const saved = await editor.current!.saveAll();
-                const left = editor.current!.unsaved();
-                if (saved && left.length === 0) break;
-                report(new Error('Não foi possível salvar tudo. Nada foi fechado.'));
-                setCloseSaving(false);
-                if (left.length === 0) {
-                  setCloseAsk(null);
-                  return false;
-                }
-                choice = await askClose(left, running);
-              }
-              if (choice === 'cancel') return false;
-              if (choice === 'discard') editor.current!.discardAll();
-              setCloseSaving(false);
-              setCloseAsk(null);
-              editor.current?.flushRecovery();
-            } else if (running && (await askClose([], true)) !== 'close') {
-              return false;
-            }
-          } catch { /* sem backend para responder não há o que proteger: deixa fechar */ }
-          return true;
         }),
       ]);
       // Depois de escutar os eventos: o estado atual cobre o que saiu antes do registro. Se um evento chegou
@@ -503,28 +689,6 @@ export function App() {
     void boot();
   }, []);
 
-  useEffect(() => {
-    if (state.update.phase !== 'ready' || startupRestoreAttempted.current) return;
-    startupRestoreAttempted.current = true;
-    if (new URLSearchParams(window.location.search).get('project') === 'none') return;
-    const last = readLastProject();
-    if (!last) return;
-    dispatch({ type: 'projectBusy', busy: true });
-    void (async () => {
-      try {
-        const opened = await backend.openProject(last);
-        setProjectId(opened.id);
-        const options = await backend.getOptions();
-        rememberProject(opened.project);
-        dispatch({ type: 'project', id: opened.id, project: opened.project, options });
-      } catch (e) {
-        storeProject(null);
-        dispatch({ type: 'projectBusy', busy: false });
-        if (!/não existe|não é uma pasta/i.test(message(e))) report(e);
-      }
-    })();
-  }, [state.update.phase]);
-
   async function retryUpdate() {
     setRetrying(true);
     const seen = updateEvents.current;
@@ -541,17 +705,18 @@ export function App() {
   function rememberProject(path: string) {
     const next = [path, ...readRecentProjects().filter((item) => item.toLowerCase() !== path.toLowerCase())].slice(0, 10);
     try { localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next)); } catch { /* A lista é uma preferência local. */ }
-    setRecentProjects(next);
+    setLocalRecentProjects(next);
     storeProject(path);
   }
 
   function removeRecentProject(path: string) {
     const next = readRecentProjects().filter((item) => item.toLowerCase() !== path.toLowerCase());
     try { localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(next)); } catch { /* A lista é uma preferência local. */ }
-    setRecentProjects(next);
+    setLocalRecentProjects(next);
   }
 
   async function openProject(path?: string) {
+    if (managed) { onOpen?.(path); return; }
     if (stateRef.current.projectBusy) return;
     dispatch({ type: 'projectBusy', busy: true });
     try {
@@ -598,7 +763,7 @@ export function App() {
   async function chooseFile() {
     try {
       const path = await backend.pickFile();
-      if (path) openPath(path);
+      if (path) managed ? await openAbsolutePath(path) : openPath(path);
     } catch (e) {
       report(e);
     }
@@ -621,6 +786,7 @@ export function App() {
         dispatch({ type: 'projectBusy', busy: false });
         return;
       }
+      if (managed) { onClose?.(id); return; }
       await backend.closeProject(id);
       setProjectId(null);
       dropProjectShells(id);
@@ -635,6 +801,16 @@ export function App() {
     }
   }
 
+  async function closeTab(id: string) {
+    if (id === stateRef.current.projectId) return closeProject();
+    try {
+      const work = await backend.projectSnapshot(id);
+      if ((work.orchestratorOpen || work.executorsRunning > 0 || work.executorsQueued > 0)
+        && (await askClose([], true, work)) !== 'close') return;
+      onClose?.(id);
+    } catch (e) { report(e); }
+  }
+
   async function openOrchestrator() {
     if (stateRef.current.orchestrator) return;
     try {
@@ -645,7 +821,7 @@ export function App() {
   }
 
   async function startOrchestrator(choice: Choice) {
-    const view = terminals.get(ORCHESTRATOR)!;
+    const view = terminals.get(ORCHESTRATOR, stateRef.current.projectId)!;
     await backend.startOrchestrator(choice, view.term.cols, view.term.rows);
     dispatch({ type: 'started', choice });
     view.cli = choice.tool;
@@ -669,18 +845,19 @@ export function App() {
 
   // Foco das janelas de escolha: ao fechar, a janela não devolve o foco ao botão que as abriu.
   function focusOrchestrator() {
-    terminals.get(ORCHESTRATOR)?.term.focus();
+    terminals.get(ORCHESTRATOR, stateRef.current.projectId)?.term.focus();
   }
 
   // Tira a aba do estado e descarta o terminal dela. Não fala com o backend: quem chama decide se o shell morre.
   function dropShell(id: string) {
-    terminals.forget(id);
+    const shell = stateRef.current.shells.find((item) => item.id === id);
+    terminals.forget(id, shell?.project);
     dispatch({ type: 'shellRemove', id });
   }
 
   function dropProjectShells(id: string) {
     for (const shell of stateRef.current.shells) {
-      if (shell.project === id) terminals.forget(shell.id);
+      if (shell.project === id) terminals.forget(shell.id, shell.project);
     }
     dispatch({ type: 'projectShellsClosed', id });
   }
@@ -738,8 +915,8 @@ export function App() {
   // Num só lugar, pelo efeito. Escondido, não rouba o foco; e o xterm só recalcula o tamanho com o painel visível.
   useEffect(() => {
     if (!state.shellOpen || !state.shellActive) return;
-    terminals.get(state.shellActive)?.fit();
-    terminals.get(state.shellActive)?.term.focus();
+    terminals.get(state.shellActive, state.projectId)?.fit();
+    terminals.get(state.shellActive, state.projectId)?.term.focus();
   }, [state.shellOpen, state.shellActive]);
 
   // Atalhos de projeto (pesquisa, F4, arquivo rápido) valem só com o projeto aberto e o app pronto.
@@ -836,13 +1013,14 @@ export function App() {
     };
   });
   useEffect(() => {
+    if (!active) return;
     const listener = (e: KeyboardEvent) => windowKey.current(e);
     window.addEventListener('keydown', listener, true);
     return () => {
       window.removeEventListener('keydown', listener, true);
       window.clearTimeout(projectChordTimer.current);
     };
-  }, []);
+  }, [active]);
 
   // Sincronizar da barra de status, como o do VS Code: recebe e, havendo commits a enviar, envia. Com executores trabalhando o
   // backend recusa o recebimento, então nem começa; a trava compartilhada impede duas operações do Git ao mesmo tempo.
@@ -962,7 +1140,10 @@ export function App() {
   const shown = (to: Route) => `absolute inset-0${route === to ? '' : ' invisible'}`;
   return (
     <Flexbox height="100dvh">
-      <TitleBar connected={connected} project={state.project} menu={titlebarMenu}>
+      <TitleBar connected={connected} project={state.project} titleActive={active} menu={titlebarMenu} projectTabs={projects ? {
+        projects, active: initialProject?.id ?? null, onSelect: (id) => onSelect?.(id), onClose: (id) => void closeTab(id),
+        onMove: (id, index) => onMove?.(id, index), onAdd: () => onOpen?.(),
+      } : undefined}>
         {counts.map(([n, label]) => (
           <Text key={label} as="span" fontSize={12} style={SECONDARY} noWrap ellipsis title={`${n} ${label}`} data-tauri-drag-region>
             {`${n} ${label}`}
@@ -992,7 +1173,7 @@ export function App() {
                 </div>
                 <div className={shown('pesquisa')}>
                   {state.project ? <SearchScreen
-                    active={route === 'pesquisa'} focusKey={searchFocus} folder={scope} seed={seed} refreshKey={saveTick} step={step} hasDraft={hasDraft}
+                    active={active && route === 'pesquisa'} focusKey={searchFocus} folder={scope} seed={seed} refreshKey={saveTick} step={step} hasDraft={hasDraft}
                     openPaths={() => editor.current?.openPaths() ?? []}
                     onOpen={(path, line, col, options) => editor.current?.openFile(path, { permanent: options?.permanent, line, col })}
                     onChanged={() => { git.refresh(); editor.current?.refresh(); }}
@@ -1000,7 +1181,7 @@ export function App() {
                 </div>
                 <div className={shown('git')}>
                   {state.project ? <GitSidebar
-                    git={git} locked={busy} guard={gitGuard} active={route === 'git'} selected={activeTarget} historyRequest={historyRequest}
+                    git={git} locked={busy} guard={gitGuard} active={active && route === 'git'} selected={activeTarget} historyRequest={historyRequest}
                     onOpenTarget={(target, options) => editor.current?.openTarget(target, options)}
                     onOpenFile={(path, options) => editor.current?.openFile(path, options)}
                   /> : <OpenProjectPrompt onOpen={chooseProject} description="Abra uma pasta para usar o Git." />}
@@ -1014,7 +1195,7 @@ export function App() {
                   <Flexbox height="100%" flex={1} className="min-h-0">
                     {/* key por projeto: outro projeto remonta o editor (lê a recuperação dele); o anterior grava a sua ao sair. */}
                     <EditorWorkspace
-                      key={state.project} ref={editor} project={state.project} recentProjects={recentProjects}
+                      key={state.project} ref={editor} project={state.project} active={active} recentProjects={recentProjects}
                       onOpenFile={() => void chooseFile()} onOpenProject={chooseProject} onOpenRecent={openRecentProject}
                       locked={busy} guard={gitGuard}
                       refreshGit={() => git.refresh()} onSaved={() => setSaveTick((n) => n + 1)}

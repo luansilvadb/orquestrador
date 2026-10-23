@@ -7,7 +7,7 @@
 // Capturas em .playwright-mcp/git-ui-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { OUT, uiSuite, openApp, expand, treeItem, tabs, editorText, focusEditor } from './editor-ui-harness.mjs';
+import { BASE, OUT, uiSuite, openApp, expand, treeItem, tabs, editorText, focusEditor } from './editor-ui-harness.mjs';
 
 // Diagnóstico extra da falha: as chamadas Git que o simulado recusou explicam uma falha de fluxo melhor que a espera que estourou.
 const scenario = uiSuite('git-ui', {
@@ -740,10 +740,12 @@ scenario('conflito: rascunho parcial sobrevive a recarregar a janela (trecho res
   await trechos(page, 1).waitFor();
   // Rascunho não salvo: a recuperação (localStorage do projeto) guarda o que já foi escolhido.
   await page.waitForTimeout(400);
-  await page.reload();
-  // O último projeto reabre sozinho; o simulado começa do zero e o conflito volta com a mesma revisão.
-  await nav(page).waitFor();
+  await openApp(page, '?project=none');
+  // Semeia o mock antes de reabrir o projeto, que restaura a aba do conflito automaticamente.
   await addDois(page);
+  await page.getByRole('button', { name: 'Abrir menu' }).click();
+  await page.getByRole('menuitem', { name: /Abrir pasta/ }).click();
+  await page.locator('header [role="tab"][aria-selected="true"]').waitFor();
   await openGit(page);
   if (await conflictTab(page).count() === 0) await row(page, 'unstaged', 'src/dois.ts').dblclick();
   await conflictTab(page).waitFor();
@@ -1132,7 +1134,10 @@ scenario('janela do Orquestrador: o aviso sem Git aparece nos modos sem reposit�
 });
 
 scenario('pasta escolhida dentro de um repositório: toast informativo com o caminho do projeto aberto', async ({ page }) => {
-  await openApp(page, '?subfolder=1');
+  await page.goto(`${BASE}?project=none&subfolder=1`);
+  await nav(page).waitFor();
+  await page.getByRole('button', { name: 'Abrir menu' }).click();
+  await page.getByRole('menuitem', { name: /Abrir pasta/ }).click();
   await page.getByText('Esta pasta está dentro do repositório C:\\projetos\\exemplo. O projeto aberto é a raiz dele.').waitFor();
   await openGit(page);
   await section(page, 'Alterações').waitFor();

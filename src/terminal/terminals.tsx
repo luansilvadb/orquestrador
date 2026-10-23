@@ -3,19 +3,21 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import { TermView } from './term';
 import type { TermData } from '../backend/types';
 
+const key = (id: string, project?: string | null) => `${project ?? ''}\0${id}`;
 const views = new Map<string, TermView>();
 /** Dados que chegam antes de o terminal montar; sem isso o começo do fluxo se perderia. */
 const early = new Map<string, TermData[]>();
 
 export const terminals = {
-  get: (id: string) => views.get(id),
+  get: (id: string, project?: string | null) => views.get(key(id, project)),
   push(data: TermData) {
-    const view = views.get(data.id);
+    const k = key(data.id, data.project);
+    const view = views.get(k);
     if (view) view.push(data.seq, data.data);
-    else early.set(data.id, [...(early.get(data.id) ?? []), data]);
+    else early.set(k, [...(early.get(k) ?? []), data]);
   },
-  forget(id: string) {
-    early.delete(id);
+  forget(id: string, project?: string | null) {
+    early.delete(key(id, project));
   },
 };
 
@@ -28,12 +30,13 @@ export function TermHost({ id, project = null, writable, onReady }: { id: string
 
   useEffect(() => {
     const view = new TermView(id, host.current!, writable, project);
-    views.set(id, view);
-    for (const data of early.get(id) ?? []) view.push(data.seq, data.data);
-    early.delete(id);
+    const k = key(id, project);
+    views.set(k, view);
+    for (const data of early.get(k) ?? []) view.push(data.seq, data.data);
+    early.delete(k);
     ready.current?.(view);
     return () => {
-      if (views.get(id) === view) views.delete(id);
+      if (views.get(k) === view) views.delete(k);
       view.dispose();
     };
   }, [id, project, writable]);

@@ -194,6 +194,7 @@ let activeProject: string | null = null;
 const openProjects = new Map<string, { id: string; project: string; subfolder: boolean }>();
 const orchestrators = new Set<string>();
 let nextProjectId = 0;
+let chooseProjectCount = 0;
 let projectOpen = false;
 const absoluteFiles = new Map<string, string>([['C:/arquivos/solto.ts', 'const solto = true;\n']]);
 const absoluteKey = (path: string) => path.replace(/\\/g, '/').toLowerCase();
@@ -981,7 +982,11 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   },
   update_status: () => ({ phase: 'ready' }),
   retry_update: () => ({ phase: 'ready' }),
-  choose_project: () => openMockProject(MOCK_ROOT, debug.subfolder),
+  choose_project: () => {
+    chooseProjectCount += 1;
+    const path = chooseProjectCount === 1 ? MOCK_ROOT : MOCK_ROOT.replace(/exemplo$/i, `simulado-${chooseProjectCount}`);
+    return openMockProject(path, debug.subfolder);
+  },
   open_project: ({ path }: { path: string }) => openMockProject(path, false),
   close_project: ({ project }: { project: string }) => {
     const closed = openProjects.get(project);
