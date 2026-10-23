@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "video": "node scripts/onboarding-video.mjs",
     "build": "tsc && vite build",
     "check": "node --test --test-concurrency=1 scripts/check-workspace.mjs scripts/check-editor-store.mjs scripts/check-git-stage.mjs scripts/check-file-tabs.mjs scripts/check-explorer.mjs scripts/check-git-graph.mjs scripts/check-paste.mjs scripts/check-release.mjs scripts/check-commands.mjs",
     "check:ui": "node --test --test-global-setup=scripts/ui-setup.mjs --test-concurrency=4 scripts/check-editor-ui.mjs scripts/check-files-search-ui.mjs scripts/check-git-ui.mjs scripts/check-media-ui.mjs scripts/check-titlebar-ui.mjs scripts/check-editor-style.mjs scripts/check-git-gutter-ui.mjs scripts/check-shell-tabs-ui.mjs scripts/check-editor-tabs-ui.mjs scripts/check-project-tabs-ui.mjs scripts/check-tab-lists-ui.mjs",
