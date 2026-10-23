@@ -1,5 +1,6 @@
-// QA das listas de abas em menu (issue #15), em Chrome headless contra o app simulado: a lista "Todas as abas" do Orquestrador numa linha
-// por item, com o ícone na margem, o título cortado e o estado à direita; e o "..." do editor com o rótulo das abas alinhado aos outros itens.
+// QA das listas "Todas as abas" (issues #15, #16 e #17), em Chrome headless contra o app simulado: o mesmo menu no Orquestrador, no Terminal
+// e no editor, numa linha por item, com o ícone na margem, o título cortado, o estado à direita e o check na ativa; no Terminal e no editor,
+// o X na linha destacada e o Delete fecham a aba sem fechar o menu; o "..." do editor fica só com as ações.
 // Uso: node scripts/check-tab-lists-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
@@ -59,17 +60,91 @@ scenario('lista do Orquestrador: uma linha por item, ícone na margem, título c
   assert.equal(await page.getByRole('tab', { name: /^Executor #3/ }).getAttribute('aria-selected'), 'true');
 });
 
-scenario('"..." do editor: aba com ícone na margem e rótulo alinhado às ações', async ({ page }) => {
+// Confere a geometria comum das linhas: 26 px cada, sem sobrepor, ícone na margem e rótulo a 26 px.
+function assertRows(items) {
+  for (const [i, { item, icon, label }] of items.entries()) {
+    assert.equal(Math.round(item.h), 26, `altura do item ${i}`);
+    if (i > 0) assert.equal(Math.round(item.y - items[i - 1].item.y), 26, `item ${i} sem sobrepor o anterior`);
+    assert.ok(icon && icon.x - item.x >= 4 && icon.x + icon.w <= item.x + 26 + 1, `ícone do item ${i} na margem de 26 px`);
+    assert.equal(Math.round(label.x - item.x), 26, `rótulo do item ${i} a 26 px`);
+  }
+}
+// Visibilidade do X de cada linha.
+const closes = (page) => page.locator('[role="menu"] > [role="menuitem"]').evaluateAll((items) =>
+  items.map((item) => getComputedStyle(item.querySelector('.tab-list-close')).visibility));
+
+scenario('lista do Terminal: o mesmo menu, sem cabeçalho; X na linha destacada e Delete fecham sem fechar o menu', async ({ page }) => {
+  await page.keyboard.press('Control+Backquote');
+  await page.locator('[data-shell]').first().waitFor();
+  for (let n = 1; n < 3; n++) await page.getByRole('button', { name: 'Novo terminal' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-shell]').length === 3);
+  await page.getByRole('button', { name: /^Lista de abas: 3/ }).click();
+  await page.getByRole('menuitem').first().waitFor();
+  await menuOpen(page);
+
+  let items = await menuItems(page);
+  assert.equal(items.length, 3);
+  assertRows(items);
+  assert.ok(items.every((i) => i.text.startsWith('Terminal ')), 'sem cabeçalho, só os terminais');
+  // A ativa é a última aberta.
+  assert.deepEqual(items.map((i) => i.checks), [['hidden'], ['hidden'], ['visible']]);
+
+  // Com o ponteiro na primeira, o X aparece só nela; na ativa, o X toma o lugar do check.
+  await page.getByRole('menuitem').nth(0).hover();
+  await page.waitForFunction(() => document.querySelector('[role="menu"] > [role="menuitem"]').hasAttribute('data-highlighted'));
+  assert.deepEqual(await closes(page), ['visible', 'hidden', 'hidden']);
+  await page.screenshot({ path: join(OUT, 'tab-lists-terminal.png') });
+  await page.getByRole('menuitem').nth(2).hover();
+  await page.waitForFunction(() => document.querySelectorAll('[role="menu"] > [role="menuitem"]')[2].hasAttribute('data-highlighted'));
+  assert.deepEqual((await menuItems(page))[2].checks, ['hidden']);
+
+  // O X fecha aquele terminal; o menu continua aberto e a ativa não muda.
+  await page.getByRole('menuitem').nth(0).hover();
+  await page.getByRole('menuitem').nth(0).locator('.tab-list-close').click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-shell]').length === 2);
+  assert.equal(await page.getByRole('menuitem').count(), 2);
+  items = await menuItems(page);
+  assert.deepEqual(items.map((i) => i.checks), [['hidden'], ['visible']]);
+
+  // Delete fecha a linha destacada pelo teclado.
+  await page.getByRole('menuitem').nth(0).focus();
+  await page.keyboard.press('Delete');
+  await page.waitForFunction(() => document.querySelectorAll('[data-shell]').length === 1);
+  assert.equal(await page.getByRole('menuitem').count(), 1);
+
+  // Clicar no item troca de aba e fecha o menu.
+  await page.getByRole('menuitem').first().click();
+  await page.locator('[role="menu"]').waitFor({ state: 'detached' });
+});
+
+scenario('lista do editor: botão antes de Dividir, mesmo menu, X fecha a aba; o "..." só com ações', async ({ page }) => {
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
-  await page.getByRole('button', { name: 'Mais Ações...' }).first().click();
+  await page.getByRole('treeitem', { name: 'package.json', exact: true }).dblclick();
+  const toolbar = page.getByRole('toolbar', { name: 'Ações de editor' }).first();
+  const list = toolbar.getByRole('button', { name: /^Lista de abas: 2/ });
+  const split = toolbar.getByRole('button', { name: 'Dividir o Editor à Direita' });
+  assert.ok((await list.boundingBox()).x < (await split.boundingBox()).x, 'lista antes de Dividir');
+
+  await list.click();
   await page.getByRole('menuitem').first().waitFor();
   await menuOpen(page);
   await page.screenshot({ path: join(OUT, 'tab-lists-editor.png') });
-
   const items = await menuItems(page);
-  const tab = items.find((i) => i.text === 'README.md');
-  const action = items.find((i) => i.text.startsWith('Fechar Todas'));
-  assert.ok(tab.icon && tab.icon.x + tab.icon.w <= tab.item.x + 26 + 1, 'ícone da aba na margem');
-  assert.equal(Math.round(tab.label.x - tab.item.x), 26);
-  assert.equal(Math.round(action.label.x - action.item.x), 26);
+  assertRows(items);
+  assert.deepEqual(items.map((i) => i.text), ['README.md', 'package.json']);
+  assert.deepEqual(items.map((i) => i.checks), [['hidden'], ['visible']]);
+
+  await page.getByRole('menuitem').nth(0).hover();
+  await page.getByRole('menuitem').nth(0).locator('.tab-list-close').click();
+  await page.locator('[data-group="A"] [role="tab"]', { hasText: 'README.md' }).waitFor({ state: 'detached' });
+  assert.equal(await page.getByRole('menuitem').count(), 1);
+  await page.keyboard.press('Escape');
+
+  await toolbar.getByRole('button', { name: 'Mais Ações...' }).click();
+  await page.getByRole('menuitem').first().waitFor();
+  await menuOpen(page);
+  const actions = await menuItems(page);
+  assert.ok(actions[0].text.startsWith('Fechar Todas'), `"..." começa nas ações (${actions[0].text})`);
+  assert.ok(!actions.some((i) => i.text === 'package.json'), 'sem as abas no "..."');
+  assert.equal(Math.round(actions[0].label.x - actions[0].item.x), 26);
 });

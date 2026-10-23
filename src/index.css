@@ -137,6 +137,16 @@ body {
 [role='menu'] > [role='separator'] {
   margin: 5px 0;
 }
+/* X da lista de abas (src/shared/tab-list-menu.tsx): só na linha destacada, no lugar do check. */
+[role='menu'] > [role='menuitem'] .tab-list-close {
+  visibility: hidden;
+}
+[role='menu'] > [role='menuitem'][data-highlighted] .tab-list-close {
+  visibility: visible;
+}
+[role='menu'] > [role='menuitem'][data-highlighted]:has(.tab-list-close) .tab-list-check {
+  visibility: hidden;
+}
 
 /* Comparador do Git (DiffTab e CommitTab, em editor-workspace.tsx): o arquivo inteiro num fluxo só, sem separador entre as mudanças.
    Toolbar de 28 px numa linha. Fundo, números e cores das linhas ficam no `unsafeCSS` de COMPARE_DIFF_OPTIONS (Shadow DOM). */

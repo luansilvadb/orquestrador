@@ -1,12 +1,13 @@
 // O painel Terminal, embaixo da área do arquivo na coluna central da tela principal: uma aba por shell do usuário, redimensionável pela borda de cima.
 // Fica montado depois da primeira abertura; fechar só esconde (os shells seguem vivos no backend). Todos os TermHost ficam montados; só o da aba ativa aparece.
-import { type KeyboardEvent, type PointerEvent, useLayoutEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, List, Plus, SquareTerminal, X } from 'lucide-react';
-import { ActionIcon, Button, DraggablePanel, Popover, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
+import { type PointerEvent, useLayoutEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, Plus, SquareTerminal, X } from 'lucide-react';
+import { ActionIcon, Button, DraggablePanel, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import type { TermView } from './term';
 import { TermHost } from './terminals';
 import { dragShift, revealTab, trackTabDrag, type TabDrag, wheelToScroll } from '../shared/tab-strip';
+import { TabListMenu, type TabListItem } from '../shared/tab-list-menu';
 
 // Altura ao abrir o app (não se guarda entre aberturas); o mínimo mantém a barra e uma linha de terminal.
 export const SHELL_HEIGHT = 280;
@@ -51,8 +52,6 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
 }) {
   const header = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const [listOpen, setListOpen] = useState(false);
   const [compact, setCompact] = useState(false);
   // Se há aba escondida para cada lado: decide se as setas aparecem e se cada uma fica habilitada.
   const [edge, setEdge] = useState({ before: false, after: false });
@@ -104,26 +103,6 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
     return () => observer.disconnect();
   }, [compact]);
 
-  // Fechar um item pela lista: o foco vai para o item que ocupa o lugar dele (ou o último), em vez de se perder.
-  const focusAfterClose = useRef<number | null>(null);
-  useLayoutEffect(() => {
-    const index = focusAfterClose.current;
-    if (index === null) return;
-    focusAfterClose.current = null;
-    const items = listRef.current?.querySelectorAll<HTMLButtonElement>('button[data-shell-item]');
-    if (items?.length) items[Math.min(index, items.length - 1)].focus();
-  }, [tabs]);
-
-  function closeFromList(index: number, id: string) {
-    focusAfterClose.current = index;
-    onClose(id);
-  }
-
-  function changeListOpen(next: boolean) {
-    focusAfterClose.current = null;
-    setListOpen(next);
-  }
-
   // Setas: rolam a faixa em uma página (80% da largura visível).
   function page(direction: 1 | -1) {
     const box = strip.current;
@@ -147,49 +126,11 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
     });
   }
 
-  // Lista aberta: as setas do teclado andam entre os itens (sem passar pelos X); Escape fecha (o Popover cuida disso) e devolve o foco ao gatilho.
-  function moveFocus(e: KeyboardEvent<HTMLDivElement>) {
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-    const items = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button[data-shell-item]'));
-    const index = items.indexOf(document.activeElement as HTMLButtonElement);
-    const step = e.key === 'ArrowDown' ? 1 : -1;
-    // Sem foco nos itens, a primeira seta cai no começo (para baixo) ou no fim (para cima).
-    const from = index < 0 ? (step > 0 ? -1 : items.length) : index;
-    e.preventDefault();
-    items[(from + step + items.length) % items.length]?.focus();
-  }
-
-  // A mesma lista serve aos dois modos: todos os terminais, o ativo com check e um X por item.
-  const list = (
-    <Flexbox ref={listRef} gap={2} padding={8} className="w-56" onKeyDown={moveFocus}>
-      <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 4 }}>
-        {tabs.length} {tabs.length === 1 ? 'terminal' : 'terminais'}
-      </Text>
-      <Flexbox gap={2} className="max-h-72 overflow-y-auto">
-        {tabs.map((tab, index) => {
-          const isCurrent = tab.id === active;
-          return (
-            <Flexbox key={tab.id} horizontal align="center" gap={2}>
-              <Button
-                data-shell-item type="text" size="small" className="min-w-0 flex-1 justify-start! gap-2"
-                icon={<Check className={`shrink-0${isCurrent ? '' : ' invisible'}`} />}
-                aria-current={isCurrent ? 'true' : undefined}
-                title={tab.title}
-                onClick={() => { onSelect(tab.id); setListOpen(false); }}
-              >
-                <Text as="span" ellipsis className="min-w-0">{shellLabel(tab)}</Text>
-              </Button>
-              <ActionIcon
-                variant="borderless" size="small" icon={X} className="shrink-0"
-                aria-label={`Fechar o ${shellLabel(tab)}`} title={`Fechar o terminal ${tab.title}`}
-                onClick={() => closeFromList(index, tab.id)}
-              />
-            </Flexbox>
-          );
-        })}
-      </Flexbox>
-    </Flexbox>
-  );
+  // A mesma lista serve aos dois modos: todos os terminais, o ativo com check e o X na linha destacada.
+  const list: TabListItem[] = tabs.map((tab) => ({
+    key: tab.id, title: tab.title, icon: <SquareTerminal className="size-3.5" />, label: shellLabel(tab),
+    onSelect: () => onSelect(tab.id), onClose: () => onClose(tab.id),
+  }));
 
   const addButton = (
     <ActionIcon
@@ -215,7 +156,7 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
             {compact ? (
               <>
                 {/* Modo compacto: o terminal ativo, com o número sempre visível; o clique abre a mesma lista. */}
-                <Popover open={listOpen} onOpenChange={changeListOpen} trigger="click" placement="bottomLeft" content={list}>
+                <TabListMenu items={list} active={active} placement="bottomLeft">
                   <Button
                     type="text" size="small" icon={<SquareTerminal className="size-3.5" />} className="min-w-0 flex-1 justify-start! gap-1.5 self-center"
                     aria-label={`Terminal ativo: ${current ? shellLabel(current) : 'nenhum'}. Abrir a lista de terminais (${tabs.length})`}
@@ -225,7 +166,7 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
                     {current?.program && <Text as="span" ellipsis type="secondary" className="min-w-0">· {current.program}</Text>}
                     <ChevronsUpDown className="ml-auto size-3.5 shrink-0" />
                   </Button>
-                </Popover>
+                </TabListMenu>
                 <ActionIcon
                   variant="borderless" size="small" icon={X} className="shrink-0 self-center" disabled={!current}
                   aria-label={current ? `Fechar o ${shellLabel(current)}` : 'Fechar o terminal ativo'}
@@ -291,14 +232,7 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
                     onClick={() => page(1)}
                   />
                 )}
-                <Popover open={listOpen} onOpenChange={changeListOpen} trigger="click" placement="bottomRight" content={list}>
-                  <Button
-                    type="text" size="small" icon={<List className="size-3.5" />} className="shrink-0 self-center"
-                    aria-label={`Lista dos terminais: ${tabs.length}`} title={`Todos os terminais (${tabs.length})`}
-                  >
-                    {tabs.length}
-                  </Button>
-                </Popover>
+                <TabListMenu items={list} active={active} />
               </>
             )}
             <ActionIcon

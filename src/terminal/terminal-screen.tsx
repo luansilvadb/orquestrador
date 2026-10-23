@@ -1,8 +1,8 @@
 // O painel do Orquestrador, à direita da tela principal, em todas as telas: o orquestrador e um executor por aba. Todos os terminais ficam montados; só o da aba ativa aparece.
 // Redimensionável pela borda esquerda. Abre em 572 px; a largura que o usuário dá fica guardada por projeto, no layout que o App leva na recuperação do editor.
 import { useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
-import { Check, CircleCheck, CircleHelp, CircleX, Clock, List, LoaderCircle, SlidersHorizontal, Square, SquareTerminal } from 'lucide-react';
-import { Button, colorsPreset, DraggablePanel, DropdownMenu, Tag, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
+import { CircleCheck, CircleHelp, CircleX, Clock, LoaderCircle, SlidersHorizontal, Square, SquareTerminal } from 'lucide-react';
+import { Button, colorsPreset, DraggablePanel, Tag, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
 import { Center, Flexbox, type PresetColorKey } from '@lobehub/ui';
 import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
@@ -10,6 +10,7 @@ import { SECONDARY } from '../window/text-style';
 import { OpenProjectPrompt } from '../shared/open-project';
 import { TermHost, terminals } from './terminals';
 import { revealTab, wheelToScroll } from '../shared/tab-strip';
+import { TabListMenu, type TabListItem } from '../shared/tab-list-menu';
 import { ORCHESTRATOR, TOOL_NAME, type Choice, type ExecutorNode, type NodeState, type Tool } from '../backend/types';
 
 // Cada estado: rótulo e ícone com texto (regra do design system); a cor é um nome predefinido do Lobe UI, o mesmo para o Tag e para o ícone da aba.
@@ -125,28 +126,13 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
       label: `Executor #${e.index + 1}, ${info.label}: ${e.title}`, state: info.label,
     };
   });
-  // Uma linha por item, no menu de 26 px: ícone na margem, rótulo que corta com reticências em 288 px e, à direita, o estado e o check
-  // da ativa (invisível nas outras, para o estado ficar na mesma coluna).
-  const extra = (id: string, state?: string) => (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-      {state}
-      <Check className={`size-3.5${active === id ? '' : ' invisible'}`} />
-    </span>
-  );
-  const tabMenu = [
-    {
-      key: ORCHESTRATOR, title: 'Orquestrador',
-      icon: <OrchestratorIcon className="size-3.5" />,
-      label: 'Orquestrador',
-      extra: extra(ORCHESTRATOR),
-      onClick: () => choose(ORCHESTRATOR),
-    },
+  const tabMenu: TabListItem[] = [
+    { key: ORCHESTRATOR, title: 'Orquestrador', icon: <OrchestratorIcon className="size-3.5" />, label: 'Orquestrador', onSelect: () => choose(ORCHESTRATOR) },
     ...rows.map(({ e, Icon, color, spin, label: title, state }) => ({
-      key: e.id, title,
+      key: e.id, title, state,
       icon: <Icon className={`size-3.5${spin}`} style={{ color }} />,
-      label: <span className="block max-w-72 truncate"><span className="tabular-nums">#{e.index + 1}</span>&ensp;{e.title}</span>,
-      extra: extra(e.id, state),
-      onClick: () => choose(e.id),
+      label: <><span className="tabular-nums">#{e.index + 1}</span>&ensp;{e.title}</>,
+      onSelect: () => choose(e.id),
     })),
   ];
 
@@ -186,16 +172,9 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
               </TabsList>
             </TabsRoot>
           </Flexbox>
-          {/* Fora da rolagem: só com executores, e com a contagem de todas as abas, como o botão da lista nos painéis Arquivos e Terminal. */}
+          {/* Fora da rolagem: só com executores, e com a contagem de todas as abas, como o botão da lista no painel Terminal e no editor. */}
           {orchestrator && executors.length > 0 && (
-            <DropdownMenu items={tabMenu} placement="bottomRight">
-              <Button
-                type="text" size="small" icon={<List className="size-3.5" />} className="shrink-0 self-center"
-                aria-label={`Lista de abas: ${tabMenu.length}`} title={`Todas as abas (${tabMenu.length})`}
-              >
-                {tabMenu.length}
-              </Button>
-            </DropdownMenu>
+            <TabListMenu items={tabMenu} active={active} />
           )}
         </Flexbox>
 

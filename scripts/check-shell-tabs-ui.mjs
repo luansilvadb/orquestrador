@@ -45,8 +45,8 @@ scenario('clique seleciona sem mover; arrastar reordena a faixa, a lista e a viz
   assert.deepEqual(transforms, ['', '', '']);
 
   // A lista segue a mesma ordem.
-  await page.getByRole('button', { name: /^Lista dos terminais/ }).click();
-  const listed = await page.locator('button[data-shell-item]').allTextContents();
+  await page.getByRole('button', { name: /^Lista de abas/ }).click();
+  const listed = await page.locator('[role="menu"] [data-tab-key]').allTextContents();
   const labels = await Promise.all([b, c, a].map((id) => page.locator(`[data-shell="${id}"] [role="tab"]`).textContent()));
   // Sem espaços: a aba e a lista separam o programa de jeitos diferentes.
   const bare = (t) => t.replace(/\s+/g, '');

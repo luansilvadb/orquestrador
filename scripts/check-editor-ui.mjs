@@ -379,7 +379,7 @@ scenario('busca: resultado com emoji posiciona o cursor na coluna UTF-16 exata (
 
 
 
-scenario('breadcrumbs e Mais Ações: o caminho do arquivo abre o seletor da pasta; arquivo do seletor abre; pasta desce; o ... lista as abas do grupo', async ({ page }) => {
+scenario('breadcrumbs e lista de abas: o caminho do arquivo abre o seletor da pasta; arquivo do seletor abre; pasta desce; a lista mostra as abas do grupo', async ({ page }) => {
   await expand(page, ['src']);
   await treeItem(page, 'App.tsx').dblclick();
   await focusEditor(page);
@@ -400,10 +400,10 @@ scenario('breadcrumbs e Mais Ações: o caminho do arquivo abre o seletor da pas
   await page.getByRole('listbox', { name: 'Conteúdo de src' }).getByRole('option', { name: 'App.tsx', exact: true }).click();
   await crumbs.getByRole('button', { name: 'App.tsx', exact: true }).waitFor();
 
-  // Mais Ações lista as abas do grupo e ativa a escolhida.
+  // A lista de abas mostra as abas do grupo e ativa a escolhida.
   await treeItem(page, 'README.md').dblclick();
   await crumbs.getByRole('button', { name: 'README.md', exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Mais Ações...' }).first().click();
+  await page.getByRole('button', { name: /^Lista de abas/ }).first().click();
   await page.getByRole('menuitem', { name: /App\.tsx/ }).click();
   await crumbs.getByRole('button', { name: 'App.tsx', exact: true }).waitFor();
 });

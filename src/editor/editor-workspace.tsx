@@ -48,6 +48,7 @@ import {
   openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
 } from './workspace-model';
 import { dragShift, revealTab, trackTabDrag, type TabDrag, wheelToScroll } from '../shared/tab-strip';
+import { TabListMenu, type TabListItem } from '../shared/tab-list-menu';
 import {
   blockCount, type Buffer, type Choice, type ConflictDraft, decodeRecovery, dirtyKeys, encodeRecovery, hasDraftAt,
   hasMarkers, isBufferDirty, isConflictDirty, newlineOf, normalizeNewlines, parseConflict, patchHunks, type PatchHunk, type Recovery,
@@ -1152,7 +1153,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   });
 
   // Faixa de abas de cada grupo, nas medidas do Antigravity: abas de 30 px com divisor à direita; a ativa tem o fundo do editor e uma
-  // borda de 1 px em cima (na cor de destaque com o grupo em foco). À direita, Dividir à Direita e Mais Ações (`...`).
+  // borda de 1 px em cima (na cor de destaque com o grupo em foco). À direita, a lista de abas, Dividir à Direita e Mais Ações (`...`).
   const renderStrip = (groupId: GroupId) => {
     const group = ws.groups.find((g) => g.id === groupId);
     if (!group) return null;
@@ -1172,12 +1173,16 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       target.focus();
     };
     const pinnedFree = group.tabs.filter((t) => !t.pinned);
+    const tabList: TabListItem[] = group.tabs.map((tab) => {
+      const detail = tab.target.kind === 'draft' ? '' : (details.get(tab.target.path) ?? '');
+      return {
+        key: tab.id, title: labelOf(tab.target), dirty: isDirtyTab(tab.target),
+        icon: tab.pinned ? <Pin className="size-4 text-[var(--ant-color-text-secondary)]" /> : tabIcon(tab.target),
+        label: <>{titleOf(tab.target)}{detail && <span className="text-[12px] text-[var(--ant-color-text-secondary)]">&ensp;{detail}</span>}</>,
+        onSelect: () => activateTab(tab.id), onClose: () => void closeFlow({ kind: 'one', tabId: tab.id }),
+      };
+    });
     const groupMenu = (): ContextMenuItem[] => [
-      ...group.tabs.map((tab) => ({
-        key: `tab-${tab.id}`, label: labelOf(tab.target), icon: tabIcon(tab.target),
-        onClick: () => activateTab(tab.id),
-      })),
-      DIVIDER,
       pinnedFree.length > 0 ? action('close-all', 'Fechar Todas', () => void closeFlow({ kind: 'all', group: groupId }), 'Ctrl+K W')
         : blocked('close-all', 'Fechar Todas', 'Não há abas para fechar. As fixadas ficam abertas.'),
       pinnedFree.some((t) => !isDirtyTab(t.target)) ? action('close-saved', 'Fechar Salvas', () => void closeFlow({ kind: 'saved', group: groupId }))
@@ -1260,12 +1265,13 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           })}
         </div>
         <div className="flex flex-none items-center gap-0.5 pr-2 pl-1" role="toolbar" aria-label="Ações de editor">
+          {group.tabs.length > 0 && <TabListMenu items={tabList} active={current?.id ?? null} />}
           <ActionIcon
             variant="borderless" size="small" icon={Columns2} aria-label="Dividir o Editor à Direita" title="Dividir o Editor à Direita (Ctrl+\)"
             disabled={!current} onClick={() => { if (current) split_(current.id); }}
           />
           <DropdownMenu items={groupMenu} placement="bottomRight">
-            <ActionIcon variant="borderless" size="small" icon={Ellipsis} aria-label="Mais Ações..." title={`Mais Ações... (${group.tabs.length} ${group.tabs.length === 1 ? 'aba' : 'abas'})`} />
+            <ActionIcon variant="borderless" size="small" icon={Ellipsis} aria-label="Mais Ações..." title="Mais Ações..." />
           </DropdownMenu>
         </div>
       </div>
