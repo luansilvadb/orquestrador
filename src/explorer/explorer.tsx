@@ -839,7 +839,7 @@ export function FilesScreen({
         <span className="flex min-w-0 flex-1 items-center gap-2" style={deco ? { color: deco.color } : undefined}>
           <Text as="span" ellipsis title={deco ? `${entry.name} · ${deco.title}` : entry.name} data-tree-path={path} className="min-w-0 flex-1" style={{ color: 'inherit' }}>{entry.name}</Text>
           {/* Fora do nome acessível da linha (o estado vai no title do nome), para a linha se chamar só pelo nome do item. */}
-          {deco?.letter && <span aria-hidden="true" className="shrink-0 pr-1 text-xs font-medium tabular-nums">{deco.letter}</span>}
+          {deco?.letter && <span aria-hidden="true" className="shrink-0 text-xs font-medium tabular-nums">{deco.letter}</span>}
         </span>
       );
       const icon = <FileIcon path={entry.name} dir={entry.dir} />;
@@ -912,7 +912,7 @@ export function FilesScreen({
       {/* Seção do projeto, como a da pasta no VS Code: recolhe a árvore inteira. */}
       <button
         type="button" aria-expanded={!collapsed} onClick={() => setCollapsed((v) => !v)}
-        className="flex h-[22px] flex-none cursor-pointer items-center gap-1 px-1 text-left text-xs font-semibold text-foreground outline-none hover:bg-[var(--ant-color-fill-tertiary)] focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="flex h-[22px] flex-none cursor-pointer items-center gap-1 px-2 text-left text-xs font-semibold text-foreground outline-none hover:bg-[var(--ant-color-fill-tertiary)] focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <ChevronRight aria-hidden="true" className={`size-4 shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
         <span className="truncate" title={project}>{project}</span>
@@ -945,7 +945,9 @@ export function FilesScreen({
             <Tree
               treeData={nodes('')} expandedKeys={tree.expanded} selectedKeys={shown} multiple
               indent={8} size="small" showIcon blockNode
-              styles={{ node: { height: 22, borderRadius: 0 }, switcher: { width: 16, height: 22 }, title: { paddingInline: 0 } }}
+              // Respiro de 8 px dos dois lados, dentro da linha (o fundo vai de borda a borda). À esquerda fica na seta, porque o Tree
+              // põe o recuo do nível no padding-inline-start da linha.
+              styles={{ node: { height: 22, borderRadius: 0, paddingInlineEnd: 8 }, switcher: { width: 16, height: 22, marginInlineStart: 8 }, title: { paddingInline: 0 } }}
               onExpand={(keys) => {
                 // Abre o que entrou na lista e fecha o que saiu (a tecla * abre vários de uma vez).
                 keys.filter((k) => !tree.expanded.includes(k)).forEach((k) => toggle(k, false));
