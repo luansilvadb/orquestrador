@@ -120,9 +120,12 @@ fn invalid(path: &Path, why: &str) -> String {
 }
 
 pub fn save(path: &Path, cfg: &Config) -> Result<(), String> {
+    // Publicada por renomeação: uma queda no meio deixa a configuração anterior, não um JSON cortado.
+    let tmp = path.with_extension("json.tmp");
     let write = || {
         std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
-        std::fs::write(path, serde_json::to_string_pretty(cfg).unwrap())
+        std::fs::write(&tmp, serde_json::to_string_pretty(cfg).unwrap())?;
+        std::fs::rename(&tmp, path)
     };
     write().map_err(|e| format!("Não foi possível gravar a configuração em {}: {e}", path.display()))
 }
@@ -227,6 +230,7 @@ mod tests {
         assert_eq!(cfg.executor, Choice::new("claude", "", ""));
         save(&path, &cfg).unwrap();
         assert_eq!(read(&path).unwrap(), cfg);
+        assert!(!path.with_extension("json.tmp").exists(), "o temporário da renomeação não fica");
     }
 
     /// Uma chave `maxParallel` de versões antigas não dita teto, seja qual for o valor, e some ao salvar.

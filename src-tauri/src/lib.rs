@@ -52,7 +52,7 @@ fn gated(commands: impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static) -> impl
 fn choose_project(app: tauri::AppHandle, projects: State<Projects>) -> Result<Option<Opened>, String> {
     match app.dialog().file().set_title("Pasta do projeto").blocking_pick_folder() {
         None => Ok(None),
-        Some(folder) => projects.choose_project(&folder.into_path().map_err(|e| e.to_string())?).map(Some),
+        Some(folder) => projects.open_project(&folder.into_path().map_err(|e| e.to_string())?).map(Some),
     }
 }
 

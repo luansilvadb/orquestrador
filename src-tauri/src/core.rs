@@ -829,27 +829,29 @@ impl Core {
         let Some(pos) = inner.batches.iter().position(|b| b.id == batch && b.outcomes.iter().all(Option::is_some)) else { return };
         let done = inner.batches.remove(pos);
         let items: Vec<(String, Outcome)> = done.titles.into_iter().zip(done.outcomes.into_iter().flatten()).collect();
+        let Some(results) = inner.session.as_ref().map(|s| s.dir.join("results")) else { return };
         let project = inner.project.clone().unwrap_or_default();
-        let dir = Path::new(&project);
-        let git = match git::modo(dir) {
-            Ok(git::Modo::Repo) => proc::git_saida(dir, &["status", "--porcelain", "--untracked-files=all"]).map(GitLote::Status),
-            Ok(git::Modo::NoRepo) => Ok(GitLote::NoRepo),
-            Ok(git::Modo::NoGit) => Ok(GitLote::NoGit),
-            Ok(git::Modo::RepoAbove(root)) => Ok(GitLote::RepoAbove(root)),
-            Err(why) => Err(why),
-        };
-        let text = if items.is_empty() {
-            "wrapper_error: o lote chegou sem tarefas.\n--- FIM ---\n".to_string()
-        } else {
-            format_result(&items, &git)
-        };
-        if let Some(session) = &inner.session {
-            let results = session.dir.join("results");
+        let batch = batch.to_string();
+        // O `git status` leva segundos num repositório grande: roda fora do lock do Core, que segura teclado e terminais.
+        std::thread::spawn(move || {
+            let text = if items.is_empty() {
+                "wrapper_error: o lote chegou sem tarefas.\n--- FIM ---\n".to_string()
+            } else {
+                let dir = Path::new(&project);
+                let git = match git::modo(dir) {
+                    Ok(git::Modo::Repo) => proc::git_saida(dir, &["status", "--porcelain", "--untracked-files=all"]).map(GitLote::Status),
+                    Ok(git::Modo::NoRepo) => Ok(GitLote::NoRepo),
+                    Ok(git::Modo::NoGit) => Ok(GitLote::NoGit),
+                    Ok(git::Modo::RepoAbove(root)) => Ok(GitLote::RepoAbove(root)),
+                    Err(why) => Err(why),
+                };
+                format_result(&items, &git)
+            };
             let tmp = results.join(format!("{batch}.tmp"));
             if let Err(e) = std::fs::write(&tmp, &text).and_then(|_| std::fs::rename(&tmp, results.join(format!("{batch}.txt")))) {
                 eprintln!("Aviso: o resultado do lote {batch} não pôde ser gravado: {e}");
             }
-        }
+        });
     }
 }
 

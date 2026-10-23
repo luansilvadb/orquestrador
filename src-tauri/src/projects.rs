@@ -21,13 +21,7 @@ pub struct Opened {
     pub existing: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectSnapshot {
-    pub orchestrator_open: bool,
-    pub executors_running: usize,
-    pub executors_queued: usize,
-}
+pub type ProjectSnapshot = crate::core::CoreSnapshot;
 
 struct Entry {
     opened: Opened,
@@ -76,10 +70,6 @@ impl Projects {
             executor_choice: Mutex::new(None),
             no_project,
         }
-    }
-
-    pub fn choose_project(&self, folder: &Path) -> Result<Opened, String> {
-        self.open_project(folder)
     }
 
     pub fn open_project(&self, folder: &Path) -> Result<Opened, String> {
@@ -155,12 +145,7 @@ impl Projects {
     }
 
     pub fn snapshot(&self, id: &str) -> Result<ProjectSnapshot, String> {
-        let snapshot = self.core(id)?.snapshot()?;
-        Ok(ProjectSnapshot {
-            orchestrator_open: snapshot.orchestrator_open,
-            executors_running: snapshot.executors_running,
-            executors_queued: snapshot.executors_queued,
-        })
+        self.core(id)?.snapshot()
     }
 
     pub fn options(&self) -> Result<Options, String> {
