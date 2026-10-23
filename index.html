@@ -10,7 +10,9 @@
      Os atrasos descontam --t (ms desde a navegação), que o React define ao montar: a animação segue da mesma fase em vez de reiniciar. -->
 <style>
   html, body, #root { margin: 0; height: 100%; }
-  html, body { background: #000; color: #fff; font: 14px/1.5714 'Inter Variable', Inter, sans-serif; user-select: none; }
+  /* A fonte fica no body: no html, mudaria o rem (1rem = 16 px) e encolheria todas as medidas do Tailwind. */
+  html, body { background: #000; color: #fff; user-select: none; }
+  body { font: 14px/1.5714 'Inter Variable', Inter, sans-serif; }
   .boot { display: flex; flex-direction: column; height: 100%; }
   .boot > header { box-sizing: border-box; height: 36px; flex: none; background: #0d0d0d; border-bottom: 1px solid #202020; }
   .boot-main { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; }
