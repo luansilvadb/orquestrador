@@ -1,6 +1,6 @@
 //! O estado do app: o orquestrador, os lotes delegados, a fila e os executores. Não conhece o
 //! Tauri: os eventos saem por `Emit`, que os testes trocam por um canal.
-use crate::capacity::{self, Resources};
+use crate::capacity::{Global, Resources};
 use crate::cli::{self, Exes};
 use crate::config::{self, Choice, Options};
 use crate::files;
@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
@@ -23,6 +23,7 @@ pub const ORCHESTRATOR: &str = "orchestrator";
 pub const SHELL_PREFIX: &str = "shell-";
 const EXECUTOR_SIZE: (u16, u16) = (110, 30);
 const SEM_PROJETO: &str = "Escolha a pasta do projeto primeiro.";
+pub const INTERNAL_ERROR: &str = "Este projeto parou com um erro interno. Feche a aba e abra de novo.";
 /// Acima disto o prompt não vai na linha de comando (o limite do Windows é 32767 caracteres).
 const PROMPT_ARG_MAX: usize = 20_000;
 
@@ -62,6 +63,14 @@ pub struct ExecutorNode {
 pub struct Snapshot {
     pub seq: u64,
     pub data: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreSnapshot {
+    pub orchestrator_open: bool,
+    pub executors_running: usize,
+    pub executors_queued: usize,
 }
 
 /// Como uma tarefa terminou, do jeito que volta ao orquestrador.
@@ -161,6 +170,22 @@ struct Node {
     prompt: String,
 }
 
+#[cfg(test)]
+fn test_node(index: usize, state: NodeState) -> Node {
+    Node {
+        info: ExecutorNode {
+            id: format!("exec-{index}"),
+            batch: "test".into(),
+            index,
+            title: "test".into(),
+            state,
+            choice: None,
+        },
+        dir: PathBuf::new(),
+        prompt: String::new(),
+    }
+}
+
 struct Batch {
     id: String,
     titles: Vec<String>,
@@ -174,8 +199,6 @@ struct Inner {
     project: Option<String>,
     session: Option<Session>,
     choice: Option<Choice>,
-    /// CPU e memória de onde sai o teto de executores vivos (ver `capacity`). Não há ajuste manual.
-    resources: Resources,
     slots: HashMap<String, Slot>,
     nodes: Vec<Node>,
     batches: Vec<Batch>,
@@ -208,10 +231,27 @@ pub struct Opened {
 pub struct Core {
     inner: Arc<Mutex<Inner>>,
     emit: Emit,
+    capacity: Arc<Global>,
+    config_lock: Arc<Mutex<()>>,
+    owner: String,
 }
 
 impl Core {
     pub fn new(exes: Exes, places: Places, cfg_path: PathBuf, emit: Emit) -> Core {
+        Self::with_capacity(
+            exes, places, cfg_path, emit, Global::new(Resources::real()), "core".into(), Arc::new(Mutex::new(())),
+        )
+    }
+
+    pub fn with_capacity(
+        exes: Exes,
+        places: Places,
+        cfg_path: PathBuf,
+        emit: Emit,
+        capacity: Arc<Global>,
+        owner: String,
+        config_lock: Arc<Mutex<()>>,
+    ) -> Core {
         let inner = Inner {
             exes,
             places,
@@ -219,7 +259,6 @@ impl Core {
             project: None,
             session: None,
             choice: None,
-            resources: Resources::real(),
             slots: HashMap::new(),
             nodes: Vec::new(),
             batches: Vec::new(),
@@ -228,19 +267,25 @@ impl Core {
             epoch: 0,
             git_exclusive: false,
         };
-        Core { inner: Arc::new(Mutex::new(inner)), emit }
+        Core { inner: Arc::new(Mutex::new(inner)), emit, capacity, config_lock, owner }
     }
 
     /// Troca de onde vêm CPU e memória para o teto. O app usa `Resources::real()`, que `new` já põe; os testes
     /// põem recursos fixos, para o resultado não depender da máquina.
-    pub fn with_resources(self, resources: Resources) -> Core {
-        self.inner.lock().unwrap().resources = resources;
+    pub fn with_resources(mut self, resources: Resources) -> Core {
+        self.capacity = Global::new(resources);
         self
     }
 
-    /// `folder` passa a ser o projeto. Dentro de um repositório, o projeto é a raiz dele; fora (ou se o Git não abre a
-    /// pasta), é a própria pasta, no caminho em que veio. Erro se a pasta não existe ou não é pasta.
-    pub fn set_project(&self, folder: &Path) -> Result<Opened, String> {
+    fn lock(&self) -> Result<MutexGuard<'_, Inner>, String> {
+        self.inner.lock().map_err(|_| INTERNAL_ERROR.into())
+    }
+
+    fn config_lock(&self) -> MutexGuard<'_, ()> {
+        self.config_lock.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn resolve_project(folder: &Path) -> Result<Opened, String> {
         if !folder.exists() {
             return Err(format!("A pasta {} não existe.", folder.display()));
         }
@@ -254,17 +299,24 @@ impl Core {
             }
             None => (folder.display().to_string(), false),
         };
-        let mut inner = self.inner.lock().unwrap();
+        Ok(Opened { project, subfolder })
+    }
+
+    /// `folder` passa a ser o projeto. Dentro de um repositório, o projeto é a raiz dele; fora (ou se o Git não abre a
+    /// pasta), é a própria pasta, no caminho em que veio. Erro se a pasta não existe ou não é pasta.
+    pub fn set_project(&self, folder: &Path) -> Result<Opened, String> {
+        let opened = Self::resolve_project(folder)?;
+        let mut inner = self.lock()?;
         if inner.session.is_some() {
             return Err("Feche o orquestrador antes de trocar de projeto.".into());
         }
-        inner.project = Some(project.clone());
-        Ok(Opened { project, subfolder })
+        inner.project = Some(opened.project.clone());
+        Ok(opened)
     }
 
     /// Fecha a pasta aberta; shells seguem vivos no diretório em que foram iniciados.
     pub fn close_project(&self) -> Result<(), String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock()?;
         if inner.session.is_some() {
             return Err("Feche o orquestrador antes de trocar de projeto.".into());
         }
@@ -274,7 +326,7 @@ impl Core {
 
     /// A pasta do projeto como caminho, para os comandos que a recebem.
     pub fn repo(&self) -> Result<PathBuf, String> {
-        self.inner.lock().unwrap().project.clone().map(PathBuf::from).ok_or_else(|| SEM_PROJETO.into())
+        self.lock()?.project.clone().map(PathBuf::from).ok_or_else(|| SEM_PROJETO.into())
     }
 
     /// Roda `run` com a pasta do projeto, mas só se nenhum executor estiver pendente e nenhuma outra operação
@@ -285,7 +337,7 @@ impl Core {
     /// comando.
     pub fn git_idle<T>(&self, run: impl FnOnce(&Path) -> Result<T, String>) -> Result<T, String> {
         let project = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.lock()?;
             // Recusa enquanto algum executor não terminou (esperando escolha, na fila, rodando ou esperando o
             // orquestrador): a branch não muda e os commits não entram no meio de um lote.
             if inner.nodes.iter().any(|n| !n.info.state.is_final()) {
@@ -304,23 +356,26 @@ impl Core {
 
     pub fn options(&self) -> Result<Options, String> {
         let (path, codex) = {
-            let inner = self.inner.lock().unwrap();
+            let inner = self.lock()?;
             (inner.cfg_path.clone(), inner.exes.codex.clone())
         };
+        let _config = self.config_lock();
         let cfg = config::read(&path)?;
         Ok(config::options(&cfg, &codex))
     }
 
     pub fn start_orchestrator(&self, choice: Choice, cols: u16, rows: u16) -> Result<(), String> {
         config::check_choice("orchestrator", &choice)?;
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock()?;
         let project = inner.project.clone().ok_or(SEM_PROJETO)?;
         if inner.session.is_some() {
             return Err("Já há um orquestrador aberto.".into());
         }
+        let _config = self.config_lock();
         let mut cfg = config::read(&inner.cfg_path)?;
         cfg.orchestrator = choice.clone();
         config::save(&inner.cfg_path, &cfg)?;
+        drop(_config);
 
         session::recover_orphans(&inner.places);
         let (session, created) = Session::create(&inner.places, &inner.exes.app, &project, &cfg);
@@ -334,7 +389,6 @@ impl Core {
             return Err(e);
         }
         inner.session = Some(session);
-        inner.choice = None;
         inner.epoch += 1;
         let (core, epoch) = (self.clone(), inner.epoch);
         std::thread::spawn(move || core.pump(epoch));
@@ -349,7 +403,7 @@ impl Core {
         if !is_shell(id) {
             return Err("Id de shell inválido.".into());
         }
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock()?;
         if inner.slots.get(id).is_some_and(|s| s.term.is_some()) {
             return Err("Já há um shell aberto com este id.".into());
         }
@@ -379,15 +433,18 @@ impl Core {
 
     /// Fecha o shell `id`: tira o slot, e o processo morre com ele. Não emite evento. Id que não é de shell ou
     /// que não existe não faz nada.
-    pub fn close_shell(&self, id: &str) {
+    pub fn close_shell(&self, id: &str) -> Result<(), String> {
+        let mut inner = self.lock()?;
         if is_shell(id) {
-            self.inner.lock().unwrap().slots.remove(id);
+            inner.slots.remove(id);
         }
+        Ok(())
     }
 
     pub fn set_executor_choice(&self, choice: Choice) -> Result<(), String> {
         config::check_choice("executor", &choice)?;
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock()?;
+        let _config = self.config_lock();
         let mut cfg = config::read(&inner.cfg_path)?;
         cfg.executor = choice.clone();
         config::save(&inner.cfg_path, &cfg)?;
@@ -396,74 +453,127 @@ impl Core {
         Ok(())
     }
 
+    pub fn apply_executor_choice(&self, choice: Choice) -> Result<(), String> {
+        let mut inner = self.lock()?;
+        inner.choice = Some(choice);
+        self.schedule(&mut inner);
+        Ok(())
+    }
+
     /// Só o orquestrador e os shells recebem teclado; os executores são somente leitura e qualquer outro id é ignorado.
-    pub fn term_write(&self, id: &str, data: &str) {
+    pub fn term_write(&self, id: &str, data: &str) -> Result<(), String> {
+        let mut inner = self.lock()?;
         if id != ORCHESTRATOR && !is_shell(id) {
-            return;
+            return Ok(());
         }
-        let mut inner = self.inner.lock().unwrap();
         if let Some(term) = inner.slots.get_mut(id).and_then(|s| s.term.as_mut()) {
             term.write(data.as_bytes());
         }
+        Ok(())
     }
 
     /// O CLI (`claude` ou `codex`) que roda agora no terminal `id`, pelo processo, não pelo que foi digitado: num shell, ele
     /// muda quando o CLI abre e quando sai. Só o orquestrador e os shells, que recebem teclado; `None` para o resto.
-    pub fn term_cli(&self, id: &str) -> Option<&'static str> {
+    pub fn term_cli(&self, id: &str) -> Result<Option<&'static str>, String> {
+        let inner = self.lock()?;
         if id != ORCHESTRATOR && !is_shell(id) {
-            return None;
+            return Ok(None);
         }
-        self.inner.lock().unwrap().slots.get(id)?.term.as_ref()?.cli()
+        Ok(inner.slots.get(id).and_then(|s| s.term.as_ref()).and_then(Term::cli))
     }
 
     /// Vale também para um nó ainda sem PTY: o tamanho fica guardado para quando ele abrir.
-    pub fn term_resize(&self, id: &str, cols: u16, rows: u16) {
-        if let Some(slot) = self.inner.lock().unwrap().slots.get_mut(id) {
+    pub fn term_resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
+        if let Some(slot) = self.lock()?.slots.get_mut(id) {
             slot.size = (cols, rows);
             if let Some(term) = &slot.term {
                 term.resize(cols, rows);
             }
         }
+        Ok(())
     }
 
-    pub fn term_snapshot(&self, id: &str) -> Snapshot {
-        let buffer = self.inner.lock().unwrap().slots.get(id).map(|s| s.buffer.clone());
+    pub fn term_snapshot(&self, id: &str) -> Result<Snapshot, String> {
+        let buffer = self.lock()?.slots.get(id).map(|s| s.buffer.clone());
         match buffer {
             Some(buffer) => {
-                let buf = buffer.lock().unwrap();
-                Snapshot { seq: buf.seq, data: B64.encode(&buf.data) }
+                let buf = buffer.lock().map_err(|_| INTERNAL_ERROR.to_string())?;
+                Ok(Snapshot { seq: buf.seq, data: B64.encode(&buf.data) })
             }
-            None => Snapshot { seq: 0, data: String::new() },
+            None => Ok(Snapshot { seq: 0, data: String::new() }),
         }
     }
 
-    pub fn stop_executor(&self, id: &str) {
-        let mut inner = self.inner.lock().unwrap();
+    pub fn stop_executor(&self, id: &str) -> Result<(), String> {
+        let mut inner = self.lock()?;
         if let Some(i) = inner.nodes.iter().position(|n| n.info.id == id && !n.info.state.is_final()) {
             let outcome = Outcome { text: "interrompido pelo usuário".into(), exit: "interrompido".into(), ok: false };
             self.finish(&mut inner, i, NodeState::Stopped, outcome);
         }
+        Ok(())
     }
 
-    pub fn has_running(&self) -> bool {
-        let inner = self.inner.lock().unwrap();
-        inner.session.is_some() || inner.slots.iter().any(|(id, s)| !is_shell(id) && s.term.is_some())
+    pub fn has_running(&self) -> Result<bool, String> {
+        let inner = self.lock()?;
+        Ok(inner.session.is_some() || inner.nodes.iter().any(|n| !n.info.state.is_final()))
+    }
+
+    pub fn snapshot(&self) -> Result<CoreSnapshot, String> {
+        let inner = self.lock()?;
+        Ok(CoreSnapshot {
+            orchestrator_open: inner.session.is_some(),
+            executors_running: inner.nodes.iter().filter(|n| n.info.state == NodeState::Running).count(),
+            executors_queued: inner.nodes.iter()
+                .filter(|n| matches!(n.info.state, NodeState::AwaitingChoice | NodeState::Queued)).count(),
+        })
     }
 
     /// Mata tudo, os shells inclusive, e limpa a sessão e a regra.
     pub fn shutdown(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         self.teardown(&mut inner);
         inner.slots.clear();
     }
 
     /// A pasta da sessão viva, para os testes e para diagnóstico.
     pub fn session_dir(&self) -> Option<PathBuf> {
-        self.inner.lock().unwrap().session.as_ref().map(|s| s.dir.clone())
+        self.lock().ok()?.session.as_ref().map(|s| s.dir.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_state(&self, orchestrator: bool, running: usize, queued: usize) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.session = orchestrator.then(|| Session { dir: std::env::temp_dir().join("orq-test-session") });
+        inner.nodes.clear();
+        for n in 0..running {
+            inner.nodes.push(test_node(n, NodeState::Running));
+        }
+        for n in running..running + queued {
+            inner.nodes.push(test_node(n, NodeState::Queued));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_emit(&self) {
+        (self.emit)("test-event", json!({}));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_poison_lock(&self) {
+        let inner = self.inner.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = inner.lock().unwrap();
+            panic!("envenena só o Core deste projeto");
+        })
+        .join();
     }
 
     fn teardown(&self, inner: &mut Inner) {
         inner.epoch += 1;
+        self.capacity.cancel_owner(&self.owner);
+        for _ in 0..inner.nodes.iter().filter(|n| n.info.state == NodeState::Running).count() {
+            self.capacity.release();
+        }
         // Os shells não pertencem à sessão: saem daqui e só `shutdown` os mata.
         inner.slots.retain(|id, _| is_shell(id));
         inner.nodes.clear();
@@ -497,7 +607,7 @@ impl Core {
     }
 
     fn on_exit(&self, id: &str, gen: u64, code: Option<u32>) {
-        let mut inner = self.inner.lock().unwrap();
+        let Ok(mut inner) = self.lock() else { return };
         // Um processo de uma sessão anterior terminando agora não mexe na atual.
         match inner.slots.get_mut(id) {
             Some(slot) if slot.gen == gen => slot.term = None,
@@ -528,7 +638,7 @@ impl Core {
         let mut turns = 0u32;
         loop {
             std::thread::sleep(Duration::from_millis(200));
-            let mut inner = self.inner.lock().unwrap();
+            let Ok(mut inner) = self.lock() else { return };
             if inner.epoch != epoch {
                 return;
             }
@@ -604,37 +714,64 @@ impl Core {
         self.schedule_from(inner, 0, false);
     }
 
-    /// Abre os executores que cabem no teto, na ordem em que chegaram; o resto fica na fila.
+    /// Registra os executores na fila compartilhada; a admissão e a ordem são globais entre projetos.
     /// Sem escolha de executor ninguém abre. Os nós a partir de `new_from` são novos (quando
     /// `announce`): saem como `node-added` em vez de `node-state`.
-    /// O teto (`capacity`) é lido uma vez por passe e cada início consome uma vaga dele: os vivos nunca são
-    /// interrompidos, só deixa de abrir novo enquanto não houver vaga.
     fn schedule_from(&self, inner: &mut Inner, new_from: usize, announce: bool) {
-        let mut running = inner.nodes.iter().filter(|n| n.info.state == NodeState::Running).count();
-        let admission = capacity::admission(inner.resources.cpus, (inner.resources.memory)(), running);
         for i in 0..inner.nodes.len() {
             let is_new = announce && i >= new_from;
             let before = inner.nodes[i].info.state;
             if matches!(before, NodeState::AwaitingChoice | NodeState::Queued) {
-                if let Some(choice) = inner.choice.clone() {
-                    if running < admission {
-                        running += 1;
-                        inner.nodes[i].info.state = NodeState::Running;
-                        inner.nodes[i].info.choice = Some(choice.clone());
-                        self.announce(&inner.nodes[i].info, is_new);
-                        if let Err(why) = self.start(inner, i, &choice) {
-                            running -= 1;
-                            self.finish_quiet(inner, i, NodeState::Failed, Outcome { text: why, exit: "não iniciou".into(), ok: false });
-                        }
-                        continue;
-                    }
+                if inner.choice.is_some() {
                     inner.nodes[i].info.state = NodeState::Queued;
+                    let id = inner.nodes[i].info.id.clone();
+                    if is_new || before != NodeState::Queued {
+                        self.announce(&inner.nodes[i].info, is_new);
+                    }
+                    self.request_start(&id);
+                    continue;
                 }
             }
             if is_new || inner.nodes[i].info.state != before {
                 self.announce(&inner.nodes[i].info, is_new);
             }
         }
+    }
+
+    fn request_start(&self, id: &str) {
+        let inner = Arc::downgrade(&self.inner);
+        let emit = self.emit.clone();
+        let owner = self.owner.clone();
+        let capacity = Arc::downgrade(&self.capacity);
+        let config_lock = self.config_lock.clone();
+        let job = id.to_string();
+        self.capacity.request(&self.owner, id, move || {
+            let Some(inner) = inner.upgrade() else {
+                if let Some(capacity) = capacity.upgrade() { capacity.release(); }
+                return;
+            };
+            let Some(capacity) = capacity.upgrade() else { return };
+            let core = Core { inner, emit, capacity: capacity.clone(), config_lock, owner };
+            if !matches!(core.start_granted(&job), Ok(true)) {
+                capacity.release();
+            }
+        });
+    }
+
+    fn start_granted(&self, id: &str) -> Result<bool, String> {
+        let mut inner = self.lock()?;
+        let Some(i) = inner.nodes.iter()
+            .position(|n| n.info.id == id && n.info.state == NodeState::Queued) else { return Ok(false) };
+        let Some(choice) = inner.choice.clone() else { return Ok(false) };
+        inner.nodes[i].info.state = NodeState::Running;
+        inner.nodes[i].info.choice = Some(choice.clone());
+        self.announce(&inner.nodes[i].info, false);
+        if let Err(why) = self.start(&mut inner, i, &choice) {
+            self.finish_quiet(
+                &mut inner, i, NodeState::Failed, Outcome { text: why, exit: "não iniciou".into(), ok: false },
+            );
+        }
+        Ok(true)
     }
 
     fn announce(&self, node: &ExecutorNode, is_new: bool) {
@@ -672,11 +809,14 @@ impl Core {
     /// o resultado no lote e, se era o último, entrega o lote. Não mexe na fila (quem chama decide), nem tira o
     /// nó de `inner.nodes`: quem percorre os nós por índice é o laço do `pump`, que faz essa limpeza depois.
     fn finish_quiet(&self, inner: &mut Inner, i: usize, state: NodeState, outcome: Outcome) {
+        let was_running = inner.nodes[i].info.state == NodeState::Running;
         let node = &mut inner.nodes[i].info;
         node.state = state;
         let (id, batch, index) = (node.id.clone(), node.batch.clone(), node.index);
         self.announce(&inner.nodes[i].info, false);
         inner.slots.remove(&id);
+        self.capacity.cancel(&self.owner, &id);
+        if was_running { self.capacity.release(); }
         if let Some(b) = inner.batches.iter_mut().find(|b| b.id == batch) {
             b.outcomes[index] = Some(outcome);
         }
@@ -991,13 +1131,13 @@ mod tests {
         let programa = core.start_shell_in("shell-1", 80, 24, None).unwrap();
         assert!(crate::platform::SHELLS.contains(&programa.as_str()), "{programa} não está em platform::SHELLS");
         assert_eq!(core.start_shell_in("shell-1", 80, 24, None).unwrap_err(), "Já há um shell aberto com este id.");
-        assert!(!core.has_running(), "o shell vivo não faz o app pedir confirmação");
-        core.term_write("shell-1", "exit\r");
+        assert!(!core.has_running().unwrap(), "o shell vivo não faz o app pedir confirmação");
+        core.term_write("shell-1", "exit\r").unwrap();
         assert!(espera(|| eventos.lock().unwrap().iter().any(|(ev, _)| ev == "shell-exit")), "shell-exit não chegou");
         let saida = eventos.lock().unwrap().iter().find(|(ev, _)| ev == "shell-exit").unwrap().1.clone();
         assert_eq!(saida["id"], "shell-1", "o payload traz o id do shell: {saida}");
         assert!(saida.get("code").is_some(), "o payload traz o código: {saida}");
-        assert_eq!(core.term_snapshot("shell-1").seq, 0, "o slot saiu com o processo");
+        assert_eq!(core.term_snapshot("shell-1").unwrap().seq, 0, "o slot saiu com o processo");
         assert!(core.start_shell_in("shell-1", 80, 24, None).is_ok(), "depois da saída, o mesmo id volta a abrir");
         core.shutdown();
     }
@@ -1009,7 +1149,7 @@ mod tests {
         core.start_shell_in("shell-1", 80, 24, None).unwrap();
         core.start_shell_in("shell-2", 80, 24, None).unwrap();
         assert!(vivo(&core, "shell-1") && vivo(&core, "shell-2"), "cada id tem o seu processo");
-        assert!(!core.has_running(), "shells não fazem o app pedir confirmação");
+        assert!(!core.has_running().unwrap(), "shells não fazem o app pedir confirmação");
         core.shutdown();
     }
 
@@ -1023,14 +1163,14 @@ mod tests {
         std::fs::copy(r"C:\Windows\System32\PING.EXE", &fake).unwrap();
         core.start_shell_in("shell-1", 80, 24, None).unwrap();
         core.start_shell_in("shell-2", 80, 24, None).unwrap();
-        core.term_write("shell-1", "# codex\r");
+        core.term_write("shell-1", "# codex\r").unwrap();
         std::thread::sleep(Duration::from_secs(2));
-        assert_eq!(core.term_cli("shell-1"), None, "o nome digitado não é o CLI rodando");
-        core.term_write("shell-1", &format!("& '{}' -n 4 127.0.0.1\r", fake.display()));
-        assert!(espera(|| core.term_cli("shell-1") == Some("codex")), "o codex.exe rodando no shell não foi visto");
-        assert_eq!(core.term_cli("shell-2"), None, "a outra aba não tem CLI");
-        assert_eq!(core.term_cli("exec-1"), None);
-        assert!(espera(|| core.term_cli("shell-1").is_none()), "o CLI saiu e o shell continuou como CLI");
+        assert_eq!(core.term_cli("shell-1").unwrap(), None, "o nome digitado não é o CLI rodando");
+        core.term_write("shell-1", &format!("& '{}' -n 4 127.0.0.1\r", fake.display())).unwrap();
+        assert!(espera(|| core.term_cli("shell-1").unwrap() == Some("codex")), "o codex.exe rodando no shell não foi visto");
+        assert_eq!(core.term_cli("shell-2").unwrap(), None, "a outra aba não tem CLI");
+        assert_eq!(core.term_cli("exec-1").unwrap(), None);
+        assert!(espera(|| core.term_cli("shell-1").unwrap().is_none()), "o CLI saiu e o shell continuou como CLI");
         assert!(vivo(&core, "shell-1"), "o shell segue aberto depois do CLI");
         core.shutdown();
     }
@@ -1049,7 +1189,7 @@ mod tests {
         let (core, _root) = git_core_with("shell-exit-um", emit);
         core.start_shell_in("shell-1", 80, 24, None).unwrap();
         core.start_shell_in("shell-2", 80, 24, None).unwrap();
-        core.term_write("shell-1", "exit\r");
+        core.term_write("shell-1", "exit\r").unwrap();
         assert!(espera(|| eventos.lock().unwrap().iter().any(|(ev, _)| ev == "shell-exit")), "shell-exit não chegou");
         let saidas: Vec<Value> = eventos.lock().unwrap().iter().filter(|(ev, _)| ev == "shell-exit").map(|(_, p)| p.clone()).collect();
         assert_eq!(saidas.len(), 1, "um shell saiu, um evento: {saidas:?}");
@@ -1067,10 +1207,10 @@ mod tests {
         core.start_shell_in("shell-2", 80, 24, None).unwrap();
         core.inner.lock().unwrap().slots.insert("exec-1".into(), Slot::new(0));
         // Id que não é de shell, e id que não existe: nada acontece.
-        core.close_shell("exec-1");
-        core.close_shell("shell-9");
+        core.close_shell("exec-1").unwrap();
+        core.close_shell("shell-9").unwrap();
         assert!(core.inner.lock().unwrap().slots.contains_key("exec-1"), "close_shell não mexe em executor");
-        core.close_shell("shell-1");
+        core.close_shell("shell-1").unwrap();
         assert!(!core.inner.lock().unwrap().slots.contains_key("shell-1"), "o slot saiu");
         assert!(vivo(&core, "shell-2"), "o outro shell segue vivo");
         // Dá tempo para uma saída tardia do processo fechado chegar, se fosse emitir.

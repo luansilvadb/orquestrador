@@ -2,8 +2,11 @@
 //! física do computador, e do que está livre agora.
 //! ponytail: orçamento aproximado, não a medida do peso de cada tarefa. Cada executor conta como 1 GiB, e o
 //! sistema e o app ficam com 2 GiB antes disso.
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
+use std::time::Duration;
 
 const GIB: u64 = 1 << 30;
 /// Tirada da RAM antes de contar executores: sistema, outros programas e o próprio app.
@@ -27,6 +30,94 @@ pub struct Memory {
 pub struct Resources {
     pub cpus: Option<usize>,
     pub memory: Arc<dyn Fn() -> Option<Memory> + Send + Sync>,
+}
+
+struct Request {
+    owner: String,
+    id: String,
+    start: Box<dyn FnOnce() + Send>,
+}
+
+struct Queue {
+    live: usize,
+    waiting: VecDeque<Request>,
+}
+
+/// Admissão única para todos os projetos. A vaga fica ocupada até o Core liberar o executor.
+pub struct Global {
+    resources: Resources,
+    queue: Arc<(Mutex<Queue>, Condvar)>,
+}
+
+impl Global {
+    pub fn new(resources: Resources) -> Arc<Global> {
+        let global = Arc::new(Global {
+            resources,
+            queue: Arc::new((Mutex::new(Queue { live: 0, waiting: VecDeque::new() }), Condvar::new())),
+        });
+        let weak = Arc::downgrade(&global);
+        thread::spawn(move || schedule(weak));
+        global
+    }
+
+    /// Põe um executor no fim da fila global; chamadas repetidas para o mesmo nó não duplicam a vaga.
+    pub fn request(&self, owner: &str, id: &str, start: impl FnOnce() + Send + 'static) {
+        let (queue, wake) = &*self.queue;
+        let mut queue = queue.lock().unwrap_or_else(|e| e.into_inner());
+        if !queue.waiting.iter().any(|job| job.owner == owner && job.id == id) {
+            queue.waiting.push_back(Request { owner: owner.into(), id: id.into(), start: Box::new(start) });
+        }
+        wake.notify_one();
+    }
+
+    pub fn cancel(&self, owner: &str, id: &str) {
+        let (queue, wake) = &*self.queue;
+        queue.lock().unwrap_or_else(|e| e.into_inner()).waiting.retain(|job| job.owner != owner || job.id != id);
+        wake.notify_one();
+    }
+
+    pub fn cancel_owner(&self, owner: &str) {
+        let (queue, wake) = &*self.queue;
+        queue.lock().unwrap_or_else(|e| e.into_inner()).waiting.retain(|job| job.owner != owner);
+        wake.notify_one();
+    }
+
+    pub fn release(&self) {
+        let (queue, wake) = &*self.queue;
+        let mut queue = queue.lock().unwrap_or_else(|e| e.into_inner());
+        queue.live = queue.live.saturating_sub(1);
+        wake.notify_one();
+    }
+}
+
+fn schedule(weak: Weak<Global>) {
+    loop {
+        let Some(global) = weak.upgrade() else { return };
+        let memory = (global.resources.memory)();
+        let (queue, wake) = &*global.queue;
+        let mut queue = queue.lock().unwrap_or_else(|e| e.into_inner());
+        if queue.waiting.is_empty() {
+            let (next, _) = wake.wait_timeout(queue, Duration::from_millis(200)).unwrap_or_else(|e| e.into_inner());
+            queue = next;
+        }
+        let admission = admission(global.resources.cpus, memory, queue.live);
+        let count = admission.saturating_sub(queue.live);
+        let mut starts = Vec::new();
+        for _ in 0..count {
+            let Some(job) = queue.waiting.pop_front() else { break };
+            starts.push(job.start);
+            queue.live += 1;
+        }
+        drop(queue);
+        for start in starts {
+            let global = Arc::downgrade(&global);
+            if catch_unwind(AssertUnwindSafe(start)).is_err() {
+                if let Some(global) = global.upgrade() {
+                    global.release();
+                }
+            }
+        }
+    }
 }
 
 impl Resources {
@@ -106,6 +197,25 @@ mod tests {
     fn valores_extremos_nao_estouram() {
         let cheio = Some(Memory { total: u64::MAX, available: u64::MAX });
         assert_eq!(admission(Some(64), cheio, usize::MAX), 16);
+    }
+
+    #[test]
+    fn fila_global_libera_a_proxima_vaga_em_ordem_de_chegada() {
+        use std::sync::mpsc;
+
+        let global = Global::new(Resources { cpus: Some(4), memory: Arc::new(|| mem(64, 64)) });
+        let (tx, rx) = mpsc::channel();
+        for (owner, id) in [("A", "a1"), ("A", "a2"), ("B", "b1")] {
+            let tx = tx.clone();
+            global.request(owner, id, move || tx.send(format!("{owner}-{id}")).unwrap());
+        }
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), "A-a1");
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), "A-a2");
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err(), "B espera enquanto as duas vagas estão ocupadas");
+        global.release();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), "B-b1");
+        global.release();
+        global.release();
     }
 
     #[cfg(windows)]

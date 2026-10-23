@@ -612,7 +612,7 @@ scenario('histórico do projeto abre commit, arquivo e a aba de diff do commit (
   // A aba abre antes do conteúdo chegar, e o diff pode estar em shadow DOM (innerText não atravessa): espera pelo texto do locator.
   await page.getByText('depois', { exact: true }).first().waitFor();
   const detail = (await calls(page, 'git_commit_diff')).at(-1);
-  assert.deepEqual(detail.args, { id: '4b2e8d0a1c3f5e7b9d2a4c6e8f0b1d3a5c7e9f11', path: 'src/lib/utils.ts' }, 'o diff pede o caminho do commit');
+  assert.deepEqual(detail.args, { project: 'project-1', id: '4b2e8d0a1c3f5e7b9d2a4c6e8f0b1d3a5c7e9f11', path: 'src/lib/utils.ts' }, 'o diff pede o caminho do commit');
 
   // Sem botões de mutação na aba de commit nem na lista do histórico.
   const mutation = /^(Preparar|Tirar|Descartar|Salvar|Marcar|Aceitar|Restaurar|Recarregar|Commit)/;
@@ -672,7 +672,7 @@ scenario('conflito de 2 trechos: escolher Atual e Recebida, texto fora preservad
   await page.getByRole('button', { name: 'Salvar', exact: true }).click();
   await waitCount(page, 'git_write_resolution', 1);
   const save = (await calls(page, 'git_write_resolution')).at(-1);
-  assert.deepEqual(save.args, { path: 'src/dois.ts', content: text, revision: first.revision, markResolved: false });
+  assert.deepEqual(save.args, { path: 'src/dois.ts', content: text, revision: first.revision, markResolved: false, project: 'project-1' });
   assert.equal(await page.evaluate(() => window.__mock.disk('src/dois.ts')), text, 'o disco recebeu a resolução');
   const after = (await calls(page, 'git_conflict')).at(-1).result;
   assert.notEqual(after.revision, first.revision, 'a revisão mudou depois de salvar');
@@ -775,7 +775,7 @@ scenario('conflito modify/delete (um lado apagou, arquivo presente): Cancelar n�
   await dialogBtn(page, 'Aceitar a remoção do arquivo?', 'Aceitar remoção').click();
   await row(page, 'staged', 'docs/apagado.md').waitFor();
   const accept = (await calls(page, 'git_accept_deletion')).at(-1);
-  assert.deepEqual(accept.args, { path: 'docs/apagado.md', revision: seen.revision });
+  assert.deepEqual(accept.args, { path: 'docs/apagado.md', revision: seen.revision, project: 'project-1' });
   await page.getByRole('button', { name: /^(Preparadas|Alterações)/ }).first().waitFor().catch(() => {});
   assert.equal(await conflictTab(page, 'docs/apagado.md').count(), 0, 'a aba do conflito fechou');
   assert.ok((await row(page, 'staged', 'docs/apagado.md').getAttribute('title')).includes('apagado'), 'a remoção aparece como apagada');

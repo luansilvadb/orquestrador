@@ -56,12 +56,12 @@ const emit = <K extends keyof Events>(event: K, payload: Events[K]) =>
   handlers.get(event)?.forEach((h) => (h as (p: Events[K]) => void)(payload));
 
 const base64 = (text: string) => new TextEncoder().encode(text).toBase64();
-const terms = new Map<string, { seq: number; text: string }>();
-function out(id: string, text: string) {
-  const term = terms.get(id) ?? { seq: 0, text: '' };
+const terms = new Map<string, { seq: number; text: string; project: string | null }>();
+function out(id: string, text: string, project: string | null = null) {
+  const term = terms.get(id) ?? { seq: 0, text: '', project };
   terms.set(id, term);
   term.text += text;
-  emit('term-data', { id, seq: ++term.seq, data: base64(text) });
+  emit('term-data', { project: term.project, id, seq: ++term.seq, data: base64(text) });
 }
 
 // Árvore simulada do projeto, em memória. Pastas são `Folder`; arquivos são `{ dir: false }`.
@@ -190,6 +190,10 @@ function removePath(path: string) {
 // Pasta do projeto no simulado (a mesma que `choose_project` devolve) e a conversão de caminho relativo para o do Windows e de volta.
 const MOCK_ROOT = 'C:\\projetos\\exemplo';
 const absolute = (rel: string) => (rel ? `${MOCK_ROOT}\\${rel.split('/').join('\\')}` : MOCK_ROOT);
+let activeProject: string | null = null;
+const openProjects = new Map<string, { id: string; project: string; subfolder: boolean }>();
+const orchestrators = new Set<string>();
+let nextProjectId = 0;
 let projectOpen = false;
 const absoluteFiles = new Map<string, string>([['C:/arquivos/solto.ts', 'const solto = true;\n']]);
 const absoluteKey = (path: string) => path.replace(/\\/g, '/').toLowerCase();
@@ -282,7 +286,7 @@ function requireFile(path: string) {
 let closeHandler: (() => Promise<boolean>) | null = null;
 // Shells do painel Terminal: só `exit` ou `close_shell` os encerram.
 // Cada um guarda a própria linha em edição.
-const shells = new Map<string, { line: string; prompt: string }>();
+const shells = new Map<string, { line: string; prompt: string; project: string | null }>();
 const debug = { close: async () => {
   const closed = closeHandler ? await closeHandler() : true;
   if (closed) document.body.innerHTML = '<p style="padding:24px">Janela fechada (simulado).</p>';
@@ -321,6 +325,21 @@ const debug = { close: async () => {
   calls: [] as { cmd: string; args: unknown; result: unknown; error: string | null }[] };
 (window as unknown as { __mock: typeof debug }).__mock = debug;
 
+function openMockProject(project: string, subfolder: boolean) {
+  const normalized = project.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const found = [...openProjects.values()].find((p) => p.project.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === normalized);
+  if (found) {
+    activeProject = found.id;
+    projectOpen = true;
+    return { ...found, existing: true };
+  }
+  const opened = { id: `project-${++nextProjectId}`, project, subfolder, existing: false };
+  openProjects.set(opened.id, opened);
+  activeProject = opened.id;
+  projectOpen = true;
+  return opened;
+}
+
 const SHELL_PROMPT = 'PS C:\\projetos\\exemplo> ';
 function shellTyped(id: string, data: string) {
   const shell = shells.get(id)!;
@@ -332,7 +351,7 @@ function shellTyped(id: string, data: string) {
       if (command === 'exit') {
         shells.delete(id);
         terms.delete(id);
-        emit('shell-exit', { id, code: 0 });
+        emit('shell-exit', { project: shell.project, id, code: 0 });
         return;
       }
       if (command) out(id, `eco: ${command}\r\n`);
@@ -962,32 +981,47 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   },
   update_status: () => ({ phase: 'ready' }),
   retry_update: () => ({ phase: 'ready' }),
-  choose_project: () => { projectOpen = true; return { project: 'C:\\projetos\\exemplo', subfolder: debug.subfolder }; },
-  open_project: ({ path }: { path: string }) => { projectOpen = true; return { project: path, subfolder: false }; },
-  close_project: () => { projectOpen = false; return null; },
+  choose_project: () => openMockProject(MOCK_ROOT, debug.subfolder),
+  open_project: ({ path }: { path: string }) => openMockProject(path, false),
+  close_project: ({ project }: { project: string }) => {
+    const closed = openProjects.get(project);
+    openProjects.delete(project);
+    if (activeProject === project) activeProject = null;
+    if (closed) {
+      shells.forEach((shell, id) => {
+        if (shell.project === project) { shells.delete(id); terms.delete(id); }
+      });
+    }
+    orchestrators.delete(project);
+    projectOpen = openProjects.size > 0;
+    return null;
+  },
+  list_projects: () => [...openProjects.values()].map((p) => ({ ...p, existing: true })),
+  project_snapshot: ({ project }: { project: string }) => ({ orchestratorOpen: orchestrators.has(project), executorsRunning: 0, executorsQueued: 0 }),
   pick_file: () => 'C:\\arquivos\\solto.ts',
   pick_save_path: ({ directory, fileName }: { directory: string | null; fileName: string }) => `${(directory ?? 'C:\\Users\\Luan').replace(/[\\/]+$/, '')}\\${fileName}`,
   get_options: () => structuredClone(options),
-  start_orchestrator: ({ choice }: { choice: Choice }) => {
+  start_orchestrator: ({ project, choice }: { project: string; choice: Choice }) => {
+    orchestrators.add(project);
     options.last.orchestrator = choice;
   },
   set_executor_choice: ({ choice }: { choice: Choice }) => { options.last.executor = choice; },
-  start_shell: ({ id, cwd }: { id: string; cwd?: string }) => {
+  start_shell: ({ project, id, cwd }: { project: string | null; id: string; cwd?: string }) => {
     // Pasta do projeto (relativa); sem ela, ou com '', é a raiz, como no backend. Pasta que não existe é recusada antes de abrir.
     if (!projectOpen) {
       if (cwd) throw 'Não há pasta de projeto aberta.';
       const prompt = 'PS C:\\Users\\Luan> ';
       terms.delete(id);
-      shells.set(id, { line: '', prompt });
-      out(id, prompt);
+      shells.set(id, { line: '', prompt, project });
+      out(id, prompt, project);
       return 'pwsh.exe';
     }
     if (cwd && !folderAt(cwd)) throw `Pasta não encontrada: ${cwd}`;
     const prompt = cwd ? `PS C:\\projetos\\exemplo\\${cwd.split('/').join('\\')}> ` : SHELL_PROMPT;
     // Começa do zero: o terminal antigo (se houver) some, como no backend.
     terms.delete(id);
-    shells.set(id, { line: '', prompt });
-    out(id, prompt);
+    shells.set(id, { line: '', prompt, project });
+    out(id, prompt, project);
     return 'pwsh.exe';
   },
   // Arquivo ou pasta: a pasta leva os textos de dentro (o backend renomeia a pasta inteira).
@@ -1051,18 +1085,18 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   replace_preview: ({ query, replacement }: { query: ReplaceQuery; replacement: string }): ReplacePreview => replacePreview(query, replacement),
   replace_apply: ({ request }: { request: ReplaceRequest }): ReplaceApplied => replaceApply(request),
   // Mata o shell sem evento de saída: o terminal some e nenhum `shell-exit` chega.
-  close_shell: ({ id }: { id: string }) => {
+  close_shell: ({ id }: { project: string | null; id: string }) => {
     shells.delete(id);
     terms.delete(id);
   },
   // O simulado não roda CLI: todo terminal é shell comum.
   term_cli: () => null,
-  term_write: ({ id, data }: { id: string; data: string }) => {
+  term_write: ({ project, id, data }: { project: string | null; id: string; data: string }) => {
     // Marcas de colagem entre aspas (bracketed paste) não são texto: o simulado só põe o conteúdo no rascunho.
     const text = data.replace(/\x1b\[20[01]~/g, '');
     if (shells.has(id)) shellTyped(id, text);
     // O orquestrador simulado só mostra o que chega (a colagem, por exemplo), com as quebras de linha do texto (LF no bracketed paste, CR no paste do xterm).
-    else if (id === 'orchestrator') out(id, text.replace(/\r\n?|\n/g, '\r\n'));
+    else if (id === 'orchestrator') out(id, text.replace(/\r\n?|\n/g, '\r\n'), project);
   },
   list_dir: ({ path }: { path: string }) => {
     const dir = folderAt(path);
@@ -1137,12 +1171,12 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   git_write_index: ({ path, text, expected }: { path: string; text: string; expected: string }) => { writeIndex(path, text, expected); return null; },
   search: ({ query }: { query: ReplaceQuery }): SearchResults => searchText(query),
   term_resize: () => undefined,
-  term_snapshot: ({ id }: { id: string }) => {
+  term_snapshot: ({ id }: { project: string | null; id: string }) => {
     const term = terms.get(id);
     return { seq: term?.seq ?? 0, data: base64(term?.text ?? '') };
   },
   stop_executor: () => {},
-  has_running: () => false,
+  has_running: () => orchestrators.size > 0,
 };
 
 export const mock: Transport = {

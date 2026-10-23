@@ -212,6 +212,9 @@ impl Bench {
     }
 
     fn state(&self, id: &str, state: &str) -> Value {
+        if let Some((_, payload)) = self.seen.borrow().iter().rev().find(|(_, p)| p["id"] == id && p["state"] == state) {
+            return payload.clone();
+        }
         self.wait(&format!("{id} -> {state}"), |e, p| e == "node-state" && p["id"] == id && p["state"] == state)
     }
 
@@ -232,7 +235,11 @@ impl Bench {
     }
 
     fn added(&self, n: usize) -> Vec<Value> {
-        (0..n).map(|_| self.wait("node-added", |e, _| e == "node-added")).collect()
+        (0..n).map(|_| {
+            let node = self.wait("node-added", |e, _| e == "node-added");
+            self.seen.borrow_mut().push(("node-added".into(), node.clone()));
+            node
+        }).collect()
     }
 
     /// Um cliente MCP ligado à sessão do orquestrador aberta.
@@ -274,7 +281,7 @@ impl Bench {
 
     fn screen(&self, id: &str) -> String {
         let snap = self.core.term_snapshot(id);
-        String::from_utf8_lossy(&base64::engine::general_purpose::STANDARD.decode(snap.data).unwrap()).to_string()
+        String::from_utf8_lossy(&base64::engine::general_purpose::STANDARD.decode(snap.unwrap().data).unwrap()).to_string()
     }
 }
 
@@ -317,9 +324,10 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     assert_eq!(nodes[0]["title"], "Tarefa A: ação");
     // Nó ainda sem PTY: retrato vazio com seq 0, e o tamanho pedido fica guardado.
     let empty = b.core.term_snapshot(&a);
+    let empty = empty.unwrap();
     assert_eq!((empty.seq, empty.data.as_str()), (0, ""));
-    b.core.term_resize(&a, 90, 25);
-    assert_eq!(b.core.term_snapshot("não existe").seq, 0);
+    b.core.term_resize(&a, 90, 25).unwrap();
+    assert_eq!(b.core.term_snapshot("não existe").unwrap().seq, 0);
 
     // Teto 2 (das CPUs): A e B abrem, C fica na fila; quando A termina, C abre e falha sem sinal de fim.
     assert!(b.core.set_executor_choice(Choice::new("codex", "", "enorme")).is_err());
@@ -331,14 +339,14 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     b.state(&c, "running");
     b.state(&c, "failed");
     until("B desenhar", || b.screen(&bb).contains("dormindo"));
-    assert!(b.core.term_snapshot(&bb).seq >= 1);
+    assert!(b.core.term_snapshot(&bb).unwrap().seq >= 1);
 
     // Teclado só chega ao orquestrador.
-    b.core.term_write(&bb, "sair\r");
-    b.core.term_write(ORCHESTRATOR, "oi\r");
+    b.core.term_write(&bb, "sair\r").unwrap();
+    b.core.term_write(ORCHESTRATOR, "oi\r").unwrap();
     until("o eco do orquestrador", || b.screen(ORCHESTRATOR).contains("eco:oi"));
 
-    b.core.stop_executor(&bb);
+    b.core.stop_executor(&bb).unwrap();
     b.state(&bb, "stopped");
     let (out, is_error) = m.done(run);
     assert!(!is_error, "{out}");
@@ -349,13 +357,13 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
         ?? novo.txt\n--- FIM ---\n";
     assert_eq!(out, expected);
     // O executor concluído já saiu: o slot foi tirado junto com o estado final, e a tela não fica guardada.
-    assert_eq!(b.core.term_snapshot(&a).seq, 0, "o slot do executor concluído saiu");
+    assert_eq!(b.core.term_snapshot(&a).unwrap().seq, 0, "o slot do executor concluído saiu");
 
     // Com a escolha feita, o próximo lote abre sozinho; agora com executor Claude.
     b.core.set_executor_choice(Choice::new("claude", "", "")).unwrap();
     let run = m.start("delegar", json!({ "tarefas": ["Só uma: coração"] }));
     let node = &b.added(1)[0];
-    assert_eq!((node["state"].as_str(), node["choice"]["tool"].as_str()), (Some("running"), Some("claude")));
+    assert_eq!(b.state(&id(node), "running")["choice"]["tool"], "claude");
     let (out, is_error) = m.done(run);
     assert!(!is_error && out.starts_with("--- EXECUTOR 1/1 ---\nSó uma: coração\nfeito: Só uma: coração\nexecutor_exit: 0\n--- GIT ---\n"), "{out}");
 
@@ -368,7 +376,7 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     let mut m = b.mcp();
     let waiting = m.start("aguardar", json!({}));
     std::thread::sleep(Duration::from_millis(1500));
-    b.core.stop_executor(&d);
+    b.core.stop_executor(&d).unwrap();
     let (out, is_error) = m.done(waiting);
     assert!(!is_error && out.starts_with("--- EXECUTOR 1/1 ---\nDORMIR D\ninterrompido pelo usuário\n") && out.ends_with("--- FIM ---\n"), "{out}");
     assert_eq!(b.requests(), before, "aguardar não publica lote novo");
@@ -383,10 +391,10 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     assert!(is_error && text.starts_with("Nenhuma tarefa"), "{text}");
     assert_eq!(b.requests(), before, "tarefa vazia não chega a publicar lote");
 
-    assert!(b.core.has_running());
+    assert!(b.core.has_running().unwrap());
     let session = b.core.session_dir().unwrap();
     b.core.shutdown();
-    assert!(!b.core.has_running());
+    assert!(!b.core.has_running().unwrap());
     assert!(!session.exists(), "a pasta da sessão tem de sair no shutdown");
 }
 
@@ -450,9 +458,9 @@ fn saida_do_orquestrador_mata_os_executores_e_limpa_a_sessao() {
     let node = id(&b.added(1)[0]);
     until("o executor desenhar", || b.screen(&node).contains("dormindo"));
 
-    b.core.term_write(ORCHESTRATOR, "sair\r");
+    b.core.term_write(ORCHESTRATOR, "sair\r").unwrap();
     assert_eq!(b.wait("orchestrator-exit", |e, _| e == "orchestrator-exit")["code"], 7);
-    assert!(!b.core.has_running());
+    assert!(!b.core.has_running().unwrap());
     assert!(!session.exists());
     // A chamada que esperava percebe que a sessão acabou em vez de esperar para sempre.
     let (text, is_error) = m.done(run);
@@ -514,13 +522,14 @@ fn memoria_baixa_segura_a_fila_e_a_memoria_de_volta_abre_sem_matar_quem_roda() {
     let _run = m.start("delegar", json!({ "tarefas": ["DORMIR A", "DORMIR B"] }));
     let nodes = b.added(2);
     let (a, q) = (id(&nodes[0]), id(&nodes[1]));
-    assert_eq!((nodes[0]["state"].as_str(), nodes[1]["state"].as_str()), (Some("running"), Some("queued")));
+    assert!(nodes.iter().all(|n| n["state"] == "queued"));
+    b.state(&a, "running");
 
     // Passam-se várias reavaliações da fila e nada abre: sem vaga de memória, B fica parado.
     std::thread::sleep(Duration::from_millis(2500));
     b.drain();
     assert!(!b.passou(&q, &["running"]), "sem memória, B não abre");
-    assert_eq!(b.core.term_snapshot(&q).seq, 0, "B não tem processo");
+    assert_eq!(b.core.term_snapshot(&q).unwrap().seq, 0, "B não tem processo");
 
     // A memória voltou: B abre no próximo passe, e A continua vivo.
     b.memoria(64 * GIB, 64 * GIB);
@@ -540,7 +549,8 @@ fn reducao_de_memoria_nao_mata_vivos_e_a_retomada_abre_a_fila() {
     let _run = m.start("delegar", json!({ "tarefas": ["DORMIR A", "DORMIR B", "DORMIR C"] }));
     let nodes = b.added(3);
     let vivos: Vec<String> = nodes.iter().map(id).collect();
-    assert!(nodes.iter().all(|n| n["state"] == "running"), "com RAM de sobra, os três abrem: {nodes:?}");
+    assert!(nodes.iter().all(|n| n["state"] == "queued"), "os novos entram primeiro na fila global: {nodes:?}");
+    for vivo in &vivos { b.state(vivo, "running"); }
 
     // RAM total de 4 GiB: teto 2 com três vivos. O quarto espera e nenhum vivo cai.
     b.memoria(4 * GIB, 4 * GIB);
@@ -575,7 +585,8 @@ fn fila_sai_na_ordem_de_chegada_com_um_executor_por_vez() {
     let run = m.start("delegar", json!({ "tarefas": ["Tarefa A", "Tarefa B", "Tarefa C"] }));
     let nodes = b.added(3);
     let (a, bb, c) = (id(&nodes[0]), id(&nodes[1]), id(&nodes[2]));
-    assert_eq!((nodes[0]["state"].as_str(), nodes[1]["state"].as_str(), nodes[2]["state"].as_str()), (Some("running"), Some("queued"), Some("queued")));
+    assert!(nodes.iter().all(|n| n["state"] == "queued"));
+    b.state(&a, "running");
 
     b.state(&a, "done");
     b.state(&bb, "running");

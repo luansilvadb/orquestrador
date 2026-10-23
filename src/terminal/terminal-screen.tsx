@@ -67,6 +67,7 @@ const Cover = ({ children }: { children: ReactNode }) => (
 );
 
 type TerminalsProps = {
+  projectId: string | null;
   projectOpen: boolean;
   onOpenProject: () => void;
   orchestrator: { choice: Choice | null } | null;
@@ -84,7 +85,7 @@ type TerminalsProps = {
 };
 
 /** Painel à direita: abas em cima (orquestrador fixo, um executor por aba) e, embaixo, o terminal da aba ativa. */
-export function TerminalsScreen({ projectOpen, onOpenProject, orchestrator, executors, executorChoice, notice, width, maxWidth, onWidthChange, onOpen, onExecutorChoice, onStop }: TerminalsProps) {
+export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchestrator, executors, executorChoice, notice, width, maxWidth, onWidthChange, onOpen, onExecutorChoice, onStop }: TerminalsProps) {
   const [picked, setPicked] = useState<string>(ORCHESTRATOR);
   // Aba de executor que sumiu (executor que terminou, reset do orquestrador) volta para o orquestrador.
   const active = executors.some((e) => e.id === picked) ? picked : ORCHESTRATOR;
@@ -258,7 +259,7 @@ export function TerminalsScreen({ projectOpen, onOpenProject, orchestrator, exec
           <div className="relative min-h-0 flex-1 overflow-hidden bg-terminal">
             {orchestrator && (
               <div className={`absolute inset-0${active !== ORCHESTRATOR ? ' invisible' : ''}`}>
-                <TermHost id={ORCHESTRATOR} writable />
+                <TermHost id={ORCHESTRATOR} project={projectId} writable />
               </div>
             )}
             {orchestrator && executors.map((e) => (
@@ -266,7 +267,7 @@ export function TerminalsScreen({ projectOpen, onOpenProject, orchestrator, exec
                 key={e.id}
                 className={`absolute inset-0${active !== e.id ? ' invisible' : ''}`}
               >
-                <TermHost id={e.id} writable={false} onReady={(view) => { view.setLive(); void view.attach(); }} />
+                <TermHost id={e.id} project={projectId} writable={false} onReady={(view) => { view.setLive(); void view.attach(); }} />
                 {COVER_TEXT[e.state] && (
                   <Cover>
                     <Text as="p" type="secondary" fontSize={14} align="center" className="max-w-[300px]">{COVER_TEXT[e.state]}</Text>

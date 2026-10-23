@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { Block, Center, Flexbox } from '@lobehub/ui';
 import { Alert, Button, DraggablePanel, Modal, Progress, setActiveScope, Text, toast } from '@lobehub/ui/base-ui';
-import { backend, connect, host, message } from './backend/backend';
+import { backend, connect, host, message, setProjectId } from './backend/backend';
 import { ChoiceForm } from './terminal/choice-form';
 import { EditorWorkspace, type EditorWorkspaceHandle } from './editor/editor-workspace';
 import { FilesScreen, Nav, StatusBar, type FileActions, type OpenOptions, type Route } from './explorer/explorer';
@@ -22,7 +22,7 @@ import { pathText, relativeTo } from './shared/file-tab-actions';
 import { OpenProjectPrompt } from './shared/open-project';
 import { isWithin, type TabTarget } from './editor/workspace-model';
 import {
-  ORCHESTRATOR, type Choice, type ExecutorNode, type GitState, type NodeState, type Options, type UpdateStatus,
+  ORCHESTRATOR, type Choice, type ExecutorNode, type GitState, type NodeState, type Options, type ProjectSnapshot, type UpdateStatus,
 } from './backend/types';
 
 const MB = 1024 * 1024;
@@ -71,9 +71,10 @@ function storeProject(path: string | null) {
 type Overlay = 'start' | 'executor' | null;
 // Um shell do painel Terminal: `program` fica '' até o backend responder com o nome do programa.
 // `cwd` é a pasta (relativa ao projeto) em que o shell abre; sem ela, a raiz do projeto.
-type ShellItem = { id: string; program: string; cwd?: string };
+type ShellItem = { id: string; program: string; cwd?: string; project: string | null };
 type State = {
   update: UpdateStatus;
+  projectId: string | null;
   project: string;
   projectBusy: boolean;
   options: Options | null;
@@ -88,7 +89,7 @@ type State = {
 type Action =
   | { type: 'update'; status: UpdateStatus }
   | { type: 'projectBusy'; busy: boolean }
-  | { type: 'project'; project: string; options: Options }
+  | { type: 'project'; id: string; project: string; options: Options }
   | { type: 'projectClosed' }
   | { type: 'options'; options: Options }
   | { type: 'open'; options: Options }
@@ -99,15 +100,16 @@ type Action =
   | { type: 'nodeState'; id: string; state: NodeState; choice: Choice | null }
   | { type: 'removed'; ids: string[] }
   | { type: 'reset'; notice: string }
-  | { type: 'shellAdd'; id: string; cwd?: string }
+  | { type: 'shellAdd'; id: string; cwd?: string; project: string | null }
   | { type: 'shellProgram'; id: string; program: string }
   | { type: 'shellRemove'; id: string }
+  | { type: 'projectShellsClosed'; id: string }
   | { type: 'shellSelect'; id: string }
   | { type: 'shellMove'; id: string; index: number }
   | { type: 'shellOpen'; open: boolean };
 
 const initial: State = {
-  update: { phase: 'checking' }, project: '', projectBusy: false, options: null, orchestrator: null,
+  update: { phase: 'checking' }, projectId: null, project: '', projectBusy: false, options: null, orchestrator: null,
   executorChoice: null, executors: [], notice: '', shells: [], shellActive: '', shellOpen: false,
 };
 
@@ -118,9 +120,9 @@ function reducer(state: State, action: Action): State {
     case 'projectBusy':
       return { ...state, projectBusy: action.busy };
     case 'project':
-      return { ...state, project: action.project, options: action.options, projectBusy: false, orchestrator: null, executorChoice: null, executors: [], notice: '' };
+      return { ...state, projectId: action.id, project: action.project, options: action.options, projectBusy: false, orchestrator: null, executorChoice: null, executors: [], notice: '' };
     case 'projectClosed':
-      return { ...state, project: '', projectBusy: false, options: null, orchestrator: null, executorChoice: null, executors: [], notice: '' };
+      return { ...state, projectId: null, project: '', projectBusy: false, options: null, orchestrator: null, executorChoice: null, executors: [], notice: '' };
     case 'options':
       return { ...state, options: action.options };
     case 'open':
@@ -148,7 +150,7 @@ function reducer(state: State, action: Action): State {
     case 'reset':
       return { ...state, orchestrator: null, executorChoice: null, executors: [], notice: action.notice };
     case 'shellAdd':
-      return { ...state, shells: [...state.shells, { id: action.id, program: '', cwd: action.cwd }], shellActive: action.id, shellOpen: true };
+      return { ...state, shells: [...state.shells, { id: action.id, program: '', cwd: action.cwd, project: action.project }], shellActive: action.id, shellOpen: true };
     case 'shellProgram':
       return { ...state, shells: state.shells.map((s) => (s.id === action.id ? { ...s, program: action.program } : s)) };
     case 'shellRemove': {
@@ -159,6 +161,12 @@ function reducer(state: State, action: Action): State {
       if (shells.length === 0) return { ...state, shells, shellActive: '', shellOpen: false };
       // A aba ativa que sai passa para a vizinha: a da direita, ou a da esquerda se era a última.
       const shellActive = state.shellActive === action.id ? shells[index]?.id ?? shells[index - 1].id : state.shellActive;
+      return { ...state, shells, shellActive };
+    }
+    case 'projectShellsClosed': {
+      const shells = state.shells.filter((s) => s.project !== action.id);
+      if (shells.length === 0) return { ...state, shells, shellActive: '', shellOpen: false };
+      const shellActive = shells.some((s) => s.id === state.shellActive) ? state.shellActive : shells[0].id;
       return { ...state, shells, shellActive };
     }
     case 'shellSelect':
@@ -236,7 +244,7 @@ function useSize(axis: 'width' | 'height') {
 
 // Resposta do fechamento: cancelar, descartar as alterações, salvar tudo, ou (só com terminais) encerrar mesmo assim.
 type CloseChoice = 'cancel' | 'discard' | 'save' | 'close';
-type CloseAsk = { files: string[]; terminals: boolean };
+type CloseAsk = { files: string[]; terminals: boolean; projectWork?: ProjectSnapshot };
 
 export function App() {
   const [state, dispatch] = useReducer(reducer, initial);
@@ -320,11 +328,11 @@ export function App() {
   };
 
   // Com uma confirmação já na tela, o pedido novo não sobrescreve a resposta pendente: recusa, e a primeira continua valendo.
-  const askClose = (files: string[] = [], terminalsRunning = false) => {
+  const askClose = (files: string[] = [], terminalsRunning = false, projectWork?: ProjectSnapshot) => {
     if (closeAnswer.current) return Promise.resolve<CloseChoice>('cancel');
     return new Promise<CloseChoice>((resolve) => {
       closeAnswer.current = resolve;
-      setCloseAsk({ files, terminals: terminalsRunning });
+      setCloseAsk({ files, terminals: terminalsRunning, projectWork });
     });
   };
   // Com o salvar em curso, nenhuma resposta vale (nem Esc ou Cancelar): quem fecha o diálogo é o fluxo de fechamento.
@@ -407,9 +415,14 @@ export function App() {
           updateEvents.current++;
           dispatch({ type: 'update', status });
         }),
-        host().listen('term-data', (data) => terminals.push(data)),
-        host().listen('node-added', (node) => dispatch({ type: 'nodeAdded', node })),
-        host().listen('node-state', ({ id, state: next, choice }) => {
+        host().listen('term-data', (data) => {
+          if (data.project === stateRef.current.projectId || stateRef.current.shells.some((shell) => shell.id === data.id && shell.project === data.project)) terminals.push(data);
+        }),
+        host().listen('node-added', (node) => {
+          if (node.project === stateRef.current.projectId) dispatch({ type: 'nodeAdded', node });
+        }),
+        host().listen('node-state', ({ project, id, state: next, choice }) => {
+          if (project !== stateRef.current.projectId) return;
           dispatch({ type: 'nodeState', id, state: next, choice });
           // O estado vivo: o PTY já existe, então setLive só reenvia o tamanho. Não recria nem zera o terminal.
           if (next === 'running') terminals.get(id)?.setLive();
@@ -419,11 +432,14 @@ export function App() {
             dispatch({ type: 'removed', ids: [id] });
           }
         }),
-        host().listen('orchestrator-exit', ({ code }) => {
+        host().listen('orchestrator-exit', ({ project, code }) => {
+          if (project !== stateRef.current.projectId) return;
           resetOrchestrator(`O orquestrador terminou (${code === null ? 'sem código de saída' : `código de saída ${code}`}).`);
         }),
         // `exit` num shell: o backend já o encerrou, então só a aba dele sai (a última fecha o painel).
-        host().listen('shell-exit', ({ id }) => dropShell(id)),
+        host().listen('shell-exit', ({ project, id }) => {
+          if (stateRef.current.shells.some((shell) => shell.id === id && shell.project === project)) dropShell(id);
+        }),
         host().onCloseRequested(async () => {
           try {
             const running = await backend.hasRunning();
@@ -497,9 +513,10 @@ export function App() {
     void (async () => {
       try {
         const opened = await backend.openProject(last);
+        setProjectId(opened.id);
         const options = await backend.getOptions();
         rememberProject(opened.project);
-        dispatch({ type: 'project', project: opened.project, options });
+        dispatch({ type: 'project', id: opened.id, project: opened.project, options });
       } catch (e) {
         storeProject(null);
         dispatch({ type: 'projectBusy', busy: false });
@@ -543,10 +560,26 @@ export function App() {
         dispatch({ type: 'projectBusy', busy: false });
         return;
       }
+      const previous = stateRef.current.projectId;
+      if (previous === picked.id) {
+        rememberProject(picked.project);
+        dispatch({ type: 'projectBusy', busy: false });
+        return;
+      }
+      if (previous && previous !== picked.id) {
+        const work = await backend.projectSnapshot(previous);
+        if (work.orchestratorOpen || work.executorsRunning > 0 || work.executorsQueued > 0) {
+          if (!picked.existing) await backend.closeProject(picked.id);
+          throw new Error('Feche o orquestrador antes de trocar de projeto.');
+        }
+        await backend.closeProject(previous);
+        dropProjectShells(previous);
+        resetOrchestrator();
+      }
+      setProjectId(picked.id);
       const options = await backend.getOptions();
-      resetOrchestrator();
       rememberProject(picked.project);
-      dispatch({ type: 'project', project: picked.project, options });
+      dispatch({ type: 'project', id: picked.id, project: picked.project, options });
       if (picked.subfolder) toast.info({ title: `Esta pasta está dentro do repositório ${picked.project}. O projeto aberto é a raiz dele.`, duration: 6000 });
     } catch (e) {
       dispatch({ type: 'projectBusy', busy: false });
@@ -579,10 +612,18 @@ export function App() {
   }
 
   async function closeProject() {
-    if (!stateRef.current.project || stateRef.current.projectBusy) return;
+    const id = stateRef.current.projectId;
+    if (!id || stateRef.current.projectBusy) return;
     dispatch({ type: 'projectBusy', busy: true });
     try {
-      await backend.closeProject();
+      const work = await backend.projectSnapshot(id);
+      if ((work.orchestratorOpen || work.executorsRunning > 0 || work.executorsQueued > 0) && (await askClose([], true, work)) !== 'close') {
+        dispatch({ type: 'projectBusy', busy: false });
+        return;
+      }
+      await backend.closeProject(id);
+      setProjectId(null);
+      dropProjectShells(id);
       resetOrchestrator();
       storeProject(null);
       dispatch({ type: 'projectClosed' });
@@ -637,18 +678,26 @@ export function App() {
     dispatch({ type: 'shellRemove', id });
   }
 
+  function dropProjectShells(id: string) {
+    for (const shell of stateRef.current.shells) {
+      if (shell.project === id) terminals.forget(shell.id);
+    }
+    dispatch({ type: 'projectShellsClosed', id });
+  }
+
   // Nova aba: id novo e ativo. O TermHost dela monta e chama startShell. `cwd` (relativo ao projeto) é a pasta em que ela abre.
   function openShellAt(cwd?: string) {
     shellSeq.current += 1;
-    dispatch({ type: 'shellAdd', id: `shell-${shellSeq.current}`, cwd });
+    dispatch({ type: 'shellAdd', id: `shell-${shellSeq.current}`, cwd, project: stateRef.current.projectId });
   }
   // Sem argumento: o botão "+" passa o evento de clique para `onAdd`, então esta função não recebe nada.
   const addShell = () => openShellAt();
 
   // X da aba: mata o shell no backend e só depois tira a aba. Se o backend recusar, a aba fica para tentar de novo.
   async function closeShell(id: string) {
+    const shell = stateRef.current.shells.find((item) => item.id === id);
     try {
-      await backend.closeShell(id);
+      await backend.closeShell(id, shell?.project);
     } catch (e) {
       report(e);
       return;
@@ -667,11 +716,12 @@ export function App() {
   // Primeiro terminal de cada aba: inicia o shell com as colunas e linhas do xterm. Se falhar, mostra o erro e a aba sai.
   async function startShell(id: string, view: TermView) {
     try {
-      const cwd = stateRef.current.shells.find((s) => s.id === id)?.cwd;
-      const program = await backend.startShell(id, view.term.cols, view.term.rows, cwd);
+      const shell = stateRef.current.shells.find((s) => s.id === id);
+      const cwd = shell?.cwd;
+      const program = await backend.startShell(id, view.term.cols, view.term.rows, cwd, shell?.project);
       // A aba foi fechada enquanto o shell abria: o terminal já saiu, e o shell que acabou de nascer no backend fica sem aba. Mata de novo.
       if (!stateRef.current.shells.some((s) => s.id === id)) {
-        await backend.closeShell(id).catch(() => {});
+        await backend.closeShell(id, shell?.project).catch(() => {});
         return;
       }
       dispatch({ type: 'shellProgram', id, program });
@@ -823,7 +873,7 @@ export function App() {
   const ready = update.phase === 'ready';
   // Título da aba: nome da pasta do projeto (último segmento do caminho) e, depois que o backend responde, o programa.
   const folder = folderName(state.project);
-  const shellTabs = state.shells.map((s) => ({ id: s.id, title: s.program ? (folder ? `${folder} — ${s.program}` : s.program) : folder || 'Terminal', program: s.program }));
+  const shellTabs = state.shells.map((s) => ({ id: s.id, title: s.program ? (folder ? `${folder} — ${s.program}` : s.program) : folder || 'Terminal', program: s.program, project: s.project }));
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
   const busy = executors.some((e) => !FINISHED.includes(e.state));
   const count = (state: NodeState) => executors.filter((e) => e.state === state).length;
@@ -995,7 +1045,7 @@ export function App() {
         </main>
         {/* Painel do Orquestrador, à direita de tudo e em todas as telas: nenhuma rota o desmonta nem muda o tamanho dele. */}
         <TerminalsScreen
-          projectOpen={!!state.project} onOpenProject={chooseProject}
+          projectId={state.projectId} projectOpen={!!state.project} onOpenProject={chooseProject}
           orchestrator={orchestrator}
           executors={executors}
           executorChoice={state.executorChoice}
@@ -1053,7 +1103,7 @@ export function App() {
       {/* Borda e sombra neutras do tema. */}
       <Modal
         open={closeAsk !== null}
-        title={closeFiles.length > 0 ? 'Fechar com alterações não salvas?' : 'Fechar o Orquestrador?'}
+        title={closeFiles.length > 0 ? 'Fechar com alterações não salvas?' : closeAsk?.projectWork ? 'Fechar o projeto?' : 'Fechar o Orquestrador?'}
         width={480}
         closable={false}
         keyboard
@@ -1080,7 +1130,9 @@ export function App() {
                 </Button>
               </>
             ) : (
-              <Button size="large" type="fill" danger disabled={closeSaving} onClick={() => settleClose('close')}>Fechar e encerrar todos</Button>
+              <Button size="large" type="fill" danger disabled={closeSaving} onClick={() => settleClose('close')}>
+                {closeAsk?.projectWork ? 'Fechar projeto e encerrar' : 'Fechar e encerrar todos'}
+              </Button>
             )}
           </Flexbox>
         )}
@@ -1101,10 +1153,19 @@ export function App() {
               )}
             </>
           ) : (
-            <Text as="p" fontSize={14} lineHeight={1.6} style={{ ...SECONDARY, margin: 0, overflowWrap: 'anywhere' }}>
-              Há terminais do orquestrador ou de executores em execução. Fechar encerra todos os terminais, inclusive os shells: o trabalho
-              dos executores para no meio, e a conversa do orquestrador vai junto com o terminal dele.
-            </Text>
+            closeAsk?.projectWork ? (
+              <Text as="p" fontSize={14} lineHeight={1.6} style={{ ...SECONDARY, margin: 0, overflowWrap: 'anywhere' }}>
+                {closeAsk.projectWork.orchestratorOpen ? 'O orquestrador aberto será encerrado. ' : ''}
+                {closeAsk.projectWork.executorsRunning > 0 && `${closeAsk.projectWork.executorsRunning} executores em execução serão encerrados. `}
+                {closeAsk.projectWork.executorsQueued > 0 && `${closeAsk.projectWork.executorsQueued} executores na fila serão removidos. `}
+                Os shells deste projeto também serão fechados.
+              </Text>
+            ) : (
+              <Text as="p" fontSize={14} lineHeight={1.6} style={{ ...SECONDARY, margin: 0, overflowWrap: 'anywhere' }}>
+                Há terminais do orquestrador ou de executores em execução. Fechar encerra todos os terminais, inclusive os shells: o trabalho
+                dos executores para no meio, e a conversa do orquestrador vai junto com o terminal dele.
+              </Text>
+            )
           )}
         </Flexbox>
       </Modal>

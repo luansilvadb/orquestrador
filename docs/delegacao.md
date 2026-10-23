@@ -5,6 +5,8 @@ O orquestrador delega por duas ferramentas MCP de um servidor da própria sessã
 - `delegar { tarefas: [textos] }`: publica o lote e espera o resultado.
 - `aguardar {}`: volta a esperar o lote mais recente ainda não entregue, sem publicar nada.
 
+Cada pasta aberta tem um `Core` e uma sessão MCP/hook próprios. `open_project` devolve o id usado em todos os comandos e eventos daquela pasta; `list_projects` e `project_snapshot` permitem ao front restaurar as abas e confirmar o fechamento, e `close_project` encerra o Core inteiro. Reabrir uma raiz normalizada retorna o id existente. Os Cores compartilham a fila FIFO e o teto global de executores, mas não compartilham sessões nem resultados; um erro interno fica restrito ao Core afetado. Opções e escolhas padrão usam a configuração global. Sem projetos, shells seguem em um Core separado na pasta pessoal.
+
 Em qualquer CLI, o orquestrador e os executores iniciam na pasta do projeto, cada um na sua sessão independente, e carregam o contexto dele pelos mecanismos do próprio CLI (`AGENTS.md`/`CLAUDE.md`, skills, settings, MCPs e hooks). A pasta da sessão (`strategist-<id>`) guarda só o funcionamento interno: `mcp.json`, `claude-settings.json`, o `AGENTS.md` com o papel, os pedidos, os resultados, os executores e o dono. O papel do orquestrador chega por `--append-system-prompt-file` no Claude e por `developer_instructions` no Codex.
 
 Os argumentos vão em JSON. Cada tarefa chega ao executor como está: aspas duplas, barras, acentos, crases, `$`, apóstrofos e quebras de linha passam sem escape, e o canal não tem limite de tamanho. O canal e o texto do orquestrador (`src-tauri/src/roles.rs`) são os mesmos para o Claude Code e para o Codex.

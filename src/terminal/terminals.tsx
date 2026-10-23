@@ -19,7 +19,7 @@ export const terminals = {
   },
 };
 
-export function TermHost({ id, writable, onReady }: { id: string; writable: boolean; onReady?: (view: TermView) => void }) {
+export function TermHost({ id, project = null, writable, onReady }: { id: string; project?: string | null; writable: boolean; onReady?: (view: TermView) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const ready = useRef(onReady);
   useLayoutEffect(() => {
@@ -27,7 +27,7 @@ export function TermHost({ id, writable, onReady }: { id: string; writable: bool
   });
 
   useEffect(() => {
-    const view = new TermView(id, host.current!, writable);
+    const view = new TermView(id, host.current!, writable, project);
     views.set(id, view);
     for (const data of early.get(id) ?? []) view.push(data.seq, data.data);
     early.delete(id);
@@ -36,7 +36,7 @@ export function TermHost({ id, writable, onReady }: { id: string; writable: bool
       if (views.get(id) === view) views.delete(id);
       view.dispose();
     };
-  }, [id, writable]);
+  }, [id, project, writable]);
 
   // 12 px à esquerda: o texto do terminal começa na coluna dos cabeçalhos dos painéis (paddingInline 12).
   return <div ref={host} className="term absolute top-2 right-0.5 bottom-1 left-3 select-text" />;

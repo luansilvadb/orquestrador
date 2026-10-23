@@ -27,7 +27,7 @@ export class TermView {
   private live = false;
 
   /** `writable` liga o teclado ao backend; sem ele o terminal é só leitura por construção. */
-  constructor(readonly id: string, host: HTMLElement, writable: boolean) {
+  constructor(readonly id: string, host: HTMLElement, writable: boolean, readonly project: string | null) {
     this.term = new Terminal({
       theme, fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace',
       fontSize: 13, lineHeight: 1.15, scrollback: 10000, cursorBlink: writable, disableStdin: !writable,
@@ -39,7 +39,7 @@ export class TermView {
       const key = e.ctrlKey && !e.altKey ? e.key.toLowerCase() : '';
       return !((key === 'c' && this.term.hasSelection()) || key === 'v');
     });
-    if (writable) this.term.onData((data) => void backend.termWrite(id, data).catch(() => {}));
+    if (writable) this.term.onData((data) => void backend.termWrite(id, data, project).catch(() => {}));
     if (writable) this.term.element?.addEventListener('paste', this.onPaste, true);
     this.term.onResize(() => this.sendSize());
     this.observer = new ResizeObserver(() => {
@@ -69,13 +69,13 @@ export class TermView {
   };
 
   private async which(): Promise<Cli> {
-    return this.cli ?? backend.termCli(this.id);
+    return this.cli ?? backend.termCli(this.id, this.project);
   }
 
   private async put(out: Paste) {
     if ('error' in out) throw new Error(out.error);
     if ('paste' in out) this.term.paste(out.paste);
-    else await backend.termWrite(this.id, out.write);
+    else await backend.termWrite(this.id, out.write, this.project);
   }
 
   /** Cola caminhos como os arquivos copiados no Explorer: imagem vira anexo do CLI, o resto fica como caminho. Não manda Enter. */
@@ -94,12 +94,12 @@ export class TermView {
   }
 
   private sendSize() {
-    if (this.live) void backend.termResize(this.id, this.term.cols, this.term.rows).catch(() => {});
+    if (this.live) void backend.termResize(this.id, this.term.cols, this.term.rows, this.project).catch(() => {});
   }
 
   /** Busca o que já saiu e passa a aplicar o fluxo; o que chegou no meio do caminho está em `pending`. */
   async attach() {
-    const snapshot = await backend.termSnapshot(this.id).catch(() => ({ seq: -1, data: '' }));
+    const snapshot = await backend.termSnapshot(this.id, this.project).catch(() => ({ seq: -1, data: '' }));
     const waiting = this.pending ?? [];
     this.pending = null;
     this.seq = snapshot.seq;

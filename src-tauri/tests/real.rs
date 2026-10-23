@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn screen(core: &Core, id: &str) -> String {
-    let raw = base64::engine::general_purpose::STANDARD.decode(core.term_snapshot(id).data).unwrap();
+    let raw = base64::engine::general_purpose::STANDARD.decode(core.term_snapshot(id).unwrap().data).unwrap();
     String::from_utf8_lossy(&raw).to_string()
 }
 
@@ -46,14 +46,14 @@ fn lote_real() {
     std::thread::sleep(Duration::from_secs(8));
     if screen(&core, ORCHESTRATOR).contains("trust") {
         println!("diálogo de confiança no orquestrador: respondido");
-        core.term_write(ORCHESTRATOR, "\x1b[B");
+        core.term_write(ORCHESTRATOR, "\x1b[B").unwrap();
         std::thread::sleep(Duration::from_millis(300));
-        core.term_write(ORCHESTRATOR, "\r");
+        core.term_write(ORCHESTRATOR, "\r").unwrap();
         std::thread::sleep(Duration::from_secs(6));
     }
-    core.term_write(ORCHESTRATOR, "Sem perguntas e sem skills: use a ferramenta delegar agora, numa única chamada, com um lote de duas tarefas: (1) Crie o arquivo e2e-a.txt contendo a palavra maçã. (2) Conte os arquivos versionados do repositório com git ls-files e responda só o número, sem tentar alternativas. Quando a ferramenta voltar, responda so RECEBIDO e o executor_exit de cada uma.");
+    core.term_write(ORCHESTRATOR, "Sem perguntas e sem skills: use a ferramenta delegar agora, numa única chamada, com um lote de duas tarefas: (1) Crie o arquivo e2e-a.txt contendo a palavra maçã. (2) Conte os arquivos versionados do repositório com git ls-files e responda só o número, sem tentar alternativas. Quando a ferramenta voltar, responda so RECEBIDO e o executor_exit de cada uma.").unwrap();
     std::thread::sleep(Duration::from_millis(800));
-    core.term_write(ORCHESTRATOR, "\r");
+    core.term_write(ORCHESTRATOR, "\r").unwrap();
 
     // O slot do executor sai quando ele termina, então o log dele é montado dos `term-data` que chegam.
     let mut logs: HashMap<String, Vec<u8>> = HashMap::new();

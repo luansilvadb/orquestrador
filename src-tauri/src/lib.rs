@@ -4,6 +4,7 @@ pub mod cli;
 pub mod platform;
 pub mod config;
 pub mod core;
+pub mod projects;
 pub mod delegate;
 pub mod files;
 pub mod format;
@@ -20,7 +21,8 @@ pub mod update;
 mod testutil;
 
 use crate::config::{Choice, Options};
-use crate::core::{Core, Opened, Snapshot};
+use crate::core::Snapshot;
+use crate::projects::{Opened, ProjectSnapshot, Projects};
 use crate::update::Gate;
 use std::sync::Arc;
 use tauri::ipc::Invoke;
@@ -46,21 +48,31 @@ fn gated(commands: impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static) -> impl
 }
 
 #[tauri::command(async)]
-fn choose_project(app: tauri::AppHandle, core: State<Core>) -> Result<Option<Opened>, String> {
+fn choose_project(app: tauri::AppHandle, projects: State<Projects>) -> Result<Option<Opened>, String> {
     match app.dialog().file().set_title("Pasta do projeto").blocking_pick_folder() {
         None => Ok(None),
-        Some(folder) => core.set_project(&folder.into_path().map_err(|e| e.to_string())?).map(Some),
+        Some(folder) => projects.choose_project(&folder.into_path().map_err(|e| e.to_string())?).map(Some),
     }
 }
 
 #[tauri::command(async)]
-fn open_project(core: State<Core>, path: String) -> Result<Opened, String> {
-    core.set_project(std::path::Path::new(&path))
+fn open_project(projects: State<Projects>, path: String) -> Result<Opened, String> {
+    projects.open_project(std::path::Path::new(&path))
 }
 
 #[tauri::command(async)]
-fn close_project(core: State<Core>) -> Result<(), String> {
-    core.close_project()
+fn close_project(projects: State<Projects>, project: String) -> Result<(), String> {
+    projects.close_project(&project)
+}
+
+#[tauri::command(async)]
+fn list_projects(projects: State<Projects>) -> Vec<Opened> {
+    projects.list_projects()
+}
+
+#[tauri::command(async)]
+fn project_snapshot(projects: State<Projects>, project: String) -> Result<ProjectSnapshot, String> {
+    projects.snapshot(&project)
 }
 
 #[tauri::command(async)]
@@ -84,19 +96,21 @@ fn pick_save_path(app: tauri::AppHandle, directory: Option<String>, file_name: S
 }
 
 #[tauri::command(async)]
-fn get_options(core: State<Core>) -> Result<Options, String> {
-    core.options()
+fn get_options(projects: State<Projects>) -> Result<Options, String> {
+    projects.options()
 }
 
 /// Um nível de uma pasta do projeto para o explorador. `path` é relativo ao projeto ("" é a raiz).
 #[tauri::command(async)]
-fn list_dir(core: State<Core>, path: String) -> Result<Vec<files::Entry>, String> {
+fn list_dir(projects: State<Projects>, project: String, path: String) -> Result<Vec<files::Entry>, String> {
+    let core = projects.core(&project)?;
     files::list(&core.repo()?, &path)
 }
 
 /// O conteúdo de um arquivo do projeto para a tela. `path` é relativo ao projeto.
 #[tauri::command(async)]
-fn read_file(core: State<Core>, path: String) -> Result<files::Content, String> {
+fn read_file(projects: State<Projects>, project: String, path: String) -> Result<files::Content, String> {
+    let core = projects.core(&project)?;
     files::read(&core.repo()?, &path)
 }
 
@@ -109,7 +123,8 @@ fn read_file_at(path: String) -> Result<files::Content, String> {
 /// Bytes de uma imagem ou áudio do projeto para a aba de mídia. `path` é relativo ao projeto. Vai como bytes crus (o
 /// frontend recebe `ArrayBuffer`), sem JSON nem base64; o tipo é o da extensão, decidido na tela.
 #[tauri::command(async)]
-fn read_media(core: State<Core>, path: String) -> Result<tauri::ipc::Response, String> {
+fn read_media(projects: State<Projects>, project: String, path: String) -> Result<tauri::ipc::Response, String> {
+    let core = projects.core(&project)?;
     files::read_media(&core.repo()?, &path).map(tauri::ipc::Response::new)
 }
 
@@ -134,7 +149,10 @@ fn format_cli(path: String, text: String) -> Result<String, String> {
 /// Grava `text` só se o arquivo ainda é `base` (o texto lido, sem BOM) e ainda tem o BOM `bom`. Recusa sem gravar
 /// se mudou por fora.
 #[tauri::command(async)]
-fn write_file_checked(core: State<Core>, path: String, text: String, base: String, bom: bool) -> Result<(), String> {
+fn write_file_checked(
+    projects: State<Projects>, project: String, path: String, text: String, base: String, bom: bool,
+) -> Result<(), String> {
+    let core = projects.core(&project)?;
     files::write_checked(&core.repo()?, &path, &text, &base, bom)
 }
 
@@ -147,230 +165,295 @@ fn write_file_at_checked(path: String, text: String, base: String, bom: bool) ->
 /// Busca `query.text` nos arquivos do projeto (rastreados e não ignorados; sem binário, não UTF-8 nem link). Consulta
 /// vazia não busca nada; padrão inválido volta como erro em português.
 #[tauri::command(async)]
-fn search(core: State<Core>, query: search::Query) -> Result<search::Results, String> {
+fn search(projects: State<Projects>, project: String, query: search::Query) -> Result<search::Results, String> {
+    let core = projects.core(&project)?;
     search::search(&core.repo()?, &query)
 }
 
 /// Abertura rápida: os arquivos cujo caminho casa com `term` (termos separados por espaço).
 #[tauri::command(async)]
-fn quick_open(core: State<Core>, term: String) -> Result<search::Quick, String> {
+fn quick_open(projects: State<Projects>, project: String, term: String) -> Result<search::Quick, String> {
+    let core = projects.core(&project)?;
     search::quick_open(&core.repo()?, &term)
 }
 
 /// A prévia da substituição de `query` por `replacement`. Não grava nada.
 #[tauri::command(async)]
-fn replace_preview(core: State<Core>, query: search::Query, replacement: String) -> Result<search::Preview, String> {
+fn replace_preview(
+    projects: State<Projects>, project: String, query: search::Query, replacement: String,
+) -> Result<search::Preview, String> {
+    let core = projects.core(&project)?;
     search::preview(&core.repo()?, &query, &replacement)
 }
 
 /// Grava a substituição só nos arquivos escolhidos da prévia, com a revisão que ela mostrou. Erros são por arquivo.
 #[tauri::command(async)]
-fn replace_apply(core: State<Core>, request: search::ApplyRequest) -> Result<search::Applied, String> {
+fn replace_apply(
+    projects: State<Projects>, project: String, request: search::ApplyRequest,
+) -> Result<search::Applied, String> {
+    let core = projects.core(&project)?;
     search::apply(&core.repo()?, &request)
 }
 
 /// O estado do Git do projeto para o painel: com repositório, a branch, ahead/behind e os arquivos alterados; sem
 /// ele, só o motivo (sem repositório, sem Git, ou o repositório fica acima do projeto).
 #[tauri::command(async)]
-fn git_status(core: State<Core>) -> Result<git::Estado, String> {
+fn git_status(projects: State<Projects>, project: String) -> Result<git::Estado, String> {
+    let core = projects.core(&project)?;
     git::estado(&core.repo()?)
 }
 
 /// Cria o repositório na pasta do projeto, só quando ela não está em nenhum. Sem commit e sem stage.
 #[tauri::command(async)]
-fn git_init(core: State<Core>) -> Result<(), String> {
+fn git_init(projects: State<Projects>, project: String) -> Result<(), String> {
+    let core = projects.core(&project)?;
     git::init(&core.repo()?)
 }
 
 /// Prepara os caminhos. Lista vazia prepara tudo, inclusive o não rastreado e o apagado.
 #[tauri::command(async)]
-fn git_stage(core: State<Core>, paths: Vec<String>) -> Result<(), String> {
+fn git_stage(projects: State<Projects>, project: String, paths: Vec<String>) -> Result<(), String> {
+    let core = projects.core(&project)?;
     git::stage(&core.repo()?, &paths)
 }
 
 /// Tira os caminhos do índice. Lista vazia tira tudo.
 #[tauri::command(async)]
-fn git_unstage(core: State<Core>, paths: Vec<String>) -> Result<(), String> {
+fn git_unstage(projects: State<Projects>, project: String, paths: Vec<String>) -> Result<(), String> {
+    let core = projects.core(&project)?;
     git::unstage(&core.repo()?, &paths)
 }
 
 #[tauri::command(async)]
-fn git_commit(core: State<Core>, message: String) -> Result<(), String> {
+fn git_commit(projects: State<Projects>, project: String, message: String) -> Result<(), String> {
+    let core = projects.core(&project)?;
     git::commit(&core.repo()?, &message)
 }
 
 /// A saída do `git fetch`, para a tela mostrar.
 #[tauri::command(async)]
-fn git_fetch(core: State<Core>) -> Result<String, String> {
+fn git_fetch(projects: State<Projects>, project: String) -> Result<String, String> {
+    let core = projects.core(&project)?;
     git::fetch(&core.repo()?)
 }
 
 /// Diff de um arquivo com a revisão e os blocos (`hunks`). A tela devolve a revisão e o bloco nas ações por bloco.
 #[tauri::command(async)]
-fn git_review_diff(core: State<Core>, path: String, staged: bool) -> Result<git::ReviewDiff, String> {
+fn git_review_diff(
+    projects: State<Projects>, project: String, path: String, staged: bool,
+) -> Result<git::ReviewDiff, String> {
+    let core = projects.core(&project)?;
     git::review_diff(&core.repo()?, &path, staged)
 }
 
 /// O texto de um arquivo no HEAD e no índice, para os marcadores de mudança do editor. `path` é relativo ao projeto.
 /// `None` quando não há marcadores a mostrar (sem repositório, não rastreado, binário ou grande).
 #[tauri::command(async)]
-fn git_file_base(core: State<Core>, path: String) -> Result<Option<git::FileBase>, String> {
+fn git_file_base(projects: State<Projects>, project: String, path: String) -> Result<Option<git::FileBase>, String> {
+    let core = projects.core(&project)?;
     git::file_base(&core.repo()?, &path)
 }
 
 /// Grava no índice o texto de um arquivo, para preparar ou tirar do preparo um trecho pelo editor. `expected` é o texto
 /// do índice que o editor viu. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
-fn git_write_index(core: State<Core>, path: String, text: String, expected: String) -> Result<(), String> {
+fn git_write_index(
+    projects: State<Projects>, project: String, path: String, text: String, expected: String,
+) -> Result<(), String> {
+    let core = projects.core(&project)?;
     core.git_idle(|dir| git::write_index(dir, &path, &text, &expected))
 }
 
 /// Prepara um bloco da pasta de trabalho. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
-fn git_stage_hunk(core: State<Core>, hunk: git::HunkRef) -> Result<(), String> {
+fn git_stage_hunk(projects: State<Projects>, project: String, hunk: git::HunkRef) -> Result<(), String> {
+    let core = projects.core(&project)?;
     core.git_idle(|dir| git::stage_hunk(dir, &hunk))
 }
 
 /// Tira um bloco do índice. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
-fn git_unstage_hunk(core: State<Core>, hunk: git::HunkRef) -> Result<(), String> {
+fn git_unstage_hunk(projects: State<Projects>, project: String, hunk: git::HunkRef) -> Result<(), String> {
+    let core = projects.core(&project)?;
     core.git_idle(|dir| git::unstage_hunk(dir, &hunk))
 }
 
 /// Descarta um bloco da alteração não preparada. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
-fn git_discard_hunk(core: State<Core>, hunk: git::HunkRef) -> Result<(), String> {
+fn git_discard_hunk(projects: State<Projects>, project: String, hunk: git::HunkRef) -> Result<(), String> {
+    let core = projects.core(&project)?;
     core.git_idle(|dir| git::discard_hunk(dir, &hunk))
 }
 
 /// Descarta a alteração não preparada do arquivo, se ele ainda está na `revision` mostrada. Recusado com executor ativo.
 #[tauri::command(async)]
-fn git_discard_file(core: State<Core>, path: String, revision: String) -> Result<(), String> {
+fn git_discard_file(projects: State<Projects>, project: String, path: String, revision: String) -> Result<(), String> {
+    let core = projects.core(&project)?;
     core.git_idle(|dir| git::discard_file(dir, &path, &revision))
 }
 
 /// Uma página do histórico (`limit` até 200, `skip` os já mostrados); com `path`, só os commits que tocaram o arquivo.
 #[tauri::command(async)]
-fn git_history(core: State<Core>, limit: usize, skip: usize, path: Option<String>) -> Result<Vec<git::Commit>, String> {
+fn git_history(
+    projects: State<Projects>, project: String, limit: usize, skip: usize, path: Option<String>,
+) -> Result<Vec<git::Commit>, String> {
+    let core = projects.core(&project)?;
     git::history(&core.repo()?, limit, skip, path.as_deref())
 }
 
 /// Uma página do gráfico: os commits de HEAD e do upstream da branch atual (`limit` até 200, `skip` os já mostrados).
 #[tauri::command(async)]
-fn git_graph(core: State<Core>, limit: usize, skip: usize) -> Result<Vec<git::GraphCommit>, String> {
+fn git_graph(
+    projects: State<Projects>, project: String, limit: usize, skip: usize,
+) -> Result<Vec<git::GraphCommit>, String> {
+    let core = projects.core(&project)?;
     git::graph(&core.repo()?, limit, skip)
 }
 
 /// Cabeçalho do commit e os arquivos que ele mudou.
 #[tauri::command(async)]
-fn git_commit_detail(core: State<Core>, id: String) -> Result<git::CommitDetail, String> {
+fn git_commit_detail(projects: State<Projects>, project: String, id: String) -> Result<git::CommitDetail, String> {
+    let core = projects.core(&project)?;
     git::commit_detail(&core.repo()?, &id)
 }
 
 /// Detalhes do hover de um commit; só a chamada da interface ao abrir o hover executa esta leitura.
 #[tauri::command(async)]
-fn git_commit_hover(core: State<Core>, hash: String) -> Result<git::CommitHoverDetail, String> {
+fn git_commit_hover(
+    projects: State<Projects>, project: String, hash: String,
+) -> Result<git::CommitHoverDetail, String> {
+    let core = projects.core(&project)?;
     git::commit_hover(&core.repo()?, &hash)
 }
 
 /// O diff de um commit, ou só de um caminho dele.
 #[tauri::command(async)]
-fn git_commit_diff(core: State<Core>, id: String, path: Option<String>) -> Result<git::Diff, String> {
+fn git_commit_diff(
+    projects: State<Projects>, project: String, id: String, path: Option<String>,
+) -> Result<git::Diff, String> {
+    let core = projects.core(&project)?;
     git::commit_diff(&core.repo()?, &id, path.as_deref())
 }
 
 /// Os lados de um arquivo em conflito, o texto atual da pasta e a revisão.
 #[tauri::command(async)]
-fn git_conflict(core: State<Core>, path: String) -> Result<git::Conflict, String> {
+fn git_conflict(projects: State<Projects>, project: String, path: String) -> Result<git::Conflict, String> {
+    let core = projects.core(&project)?;
     git::conflict(&core.repo()?, &path)
 }
 
 /// Grava a resolução de um conflito se a pasta ainda está na `revision` lida. Com `markResolved`, prepara o arquivo.
 #[tauri::command(async)]
-fn git_write_resolution(core: State<Core>, path: String, content: String, revision: String, mark_resolved: bool) -> Result<(), String> {
+fn git_write_resolution(
+    projects: State<Projects>, project: String, path: String, content: String, revision: String, mark_resolved: bool,
+) -> Result<(), String> {
+    let core = projects.core(&project)?;
     core.git_idle(|dir| git::write_resolution(dir, &path, &content, &revision, mark_resolved))
 }
 
 /// Aceita a remoção de um arquivo em conflito que um lado apagou, se ainda está na `revision` lida.
 #[tauri::command(async)]
-fn git_accept_deletion(core: State<Core>, path: String, revision: String) -> Result<(), String> {
+fn git_accept_deletion(
+    projects: State<Projects>, project: String, path: String, revision: String,
+) -> Result<(), String> {
+    let core = projects.core(&project)?;
     core.git_idle(|dir| git::accept_deletion(dir, &path, &revision))
 }
 
 /// Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
-fn git_pull(core: State<Core>) -> Result<String, String> {
+fn git_pull(projects: State<Projects>, project: String) -> Result<String, String> {
+    let core = projects.core(&project)?;
     core.git_idle(git::pull)
 }
 
 /// A saída do `git push`, para a tela mostrar. Sem upstream, publica em origin.
 #[tauri::command(async)]
-fn git_push(core: State<Core>) -> Result<String, String> {
+fn git_push(projects: State<Projects>, project: String) -> Result<String, String> {
+    let core = projects.core(&project)?;
     git::push(&core.repo()?)
 }
 
 #[tauri::command(async)]
-fn git_branches(core: State<Core>) -> Result<git::Branches, String> {
+fn git_branches(projects: State<Projects>, project: String) -> Result<git::Branches, String> {
+    let core = projects.core(&project)?;
     git::branches(&core.repo()?)
 }
 
 /// Troca para uma branch local existente. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
-fn git_switch(core: State<Core>, name: String) -> Result<(), String> {
+fn git_switch(projects: State<Projects>, project: String, name: String) -> Result<(), String> {
+    let core = projects.core(&project)?;
     core.git_idle(|dir| git::switch(dir, &name))
 }
 
 /// Cria a branch a partir do HEAD e troca para ela. Recusado enquanto houver executor trabalhando.
 #[tauri::command(async)]
-fn git_create_branch(core: State<Core>, name: String) -> Result<(), String> {
+fn git_create_branch(projects: State<Projects>, project: String, name: String) -> Result<(), String> {
+    let core = projects.core(&project)?;
     core.git_idle(|dir| git::create_branch(dir, &name))
 }
 
 #[tauri::command(async)]
-fn start_orchestrator(core: State<Core>, choice: Choice, cols: u16, rows: u16) -> Result<(), String> {
+fn start_orchestrator(
+    projects: State<Projects>, project: String, choice: Choice, cols: u16, rows: u16,
+) -> Result<(), String> {
+    let core = projects.core(&project)?;
     core.start_orchestrator(choice, cols, rows)
 }
 
 /// Abre um shell do usuário, no slot `id` (`shell-<n>`), na pasta do projeto ou, com `cwd` (relativo ao projeto), na
 /// pasta dele. Recusado se esse id já tiver um aberto. Devolve o programa que abriu.
 #[tauri::command(async)]
-fn start_shell(core: State<Core>, id: String, cols: u16, rows: u16, cwd: Option<String>) -> Result<String, String> {
-    core.start_shell_in(&id, cols, rows, cwd.as_deref())
+fn start_shell(
+    projects: State<Projects>, project: Option<String>, id: String, cols: u16, rows: u16, cwd: Option<String>,
+) -> Result<String, String> {
+    projects.shell_core(project.as_deref())?.start_shell_in(&id, cols, rows, cwd.as_deref())
 }
 
 /// Renomeia o arquivo `path` para `name`, na mesma pasta. Devolve o caminho novo. Nunca sobrescreve.
 #[tauri::command(async)]
-fn rename_file(core: State<Core>, path: String, name: String) -> Result<String, String> {
+fn rename_file(projects: State<Projects>, project: String, path: String, name: String) -> Result<String, String> {
+    let core = projects.core(&project)?;
     files::rename(&core.repo()?, &path, &name)
 }
 
 /// Manda os itens `paths` para a Lixeira. Devolve os feitos e o erro do que parou (ver `Batch`).
 #[tauri::command(async)]
-fn delete_files(core: State<Core>, paths: Vec<String>) -> Result<files::Batch<String>, String> {
+fn delete_files(
+    projects: State<Projects>, project: String, paths: Vec<String>,
+) -> Result<files::Batch<String>, String> {
+    let core = projects.core(&project)?;
     Ok(files::recycle_many(&core.repo()?, &paths))
 }
 
 /// Move os itens `paths` para a pasta `dest` (vazio é a raiz). Devolve os movidos e o erro do que parou (ver `Batch`).
 #[tauri::command(async)]
-fn move_files(core: State<Core>, paths: Vec<String>, dest: String) -> Result<files::Batch<files::Moved>, String> {
+fn move_files(
+    projects: State<Projects>, project: String, paths: Vec<String>, dest: String,
+) -> Result<files::Batch<files::Moved>, String> {
+    let core = projects.core(&project)?;
     Ok(files::move_items(&core.repo()?, &paths, &dest))
 }
 
 /// Põe os itens `paths` no clipboard como copiados (`cut` false) ou recortados. Nada se move aqui.
 #[tauri::command(async)]
-fn copy_files(core: State<Core>, paths: Vec<String>, cut: bool) -> Result<(), String> {
+fn copy_files(projects: State<Projects>, project: String, paths: Vec<String>, cut: bool) -> Result<(), String> {
+    let core = projects.core(&project)?;
     files::copy_items(&core.repo()?, &paths, cut)
 }
 
 /// Mostra o arquivo `path` selecionado no Explorer do Windows.
 #[tauri::command(async)]
-fn reveal_file(core: State<Core>, path: String) -> Result<(), String> {
+fn reveal_file(projects: State<Projects>, project: String, path: String) -> Result<(), String> {
+    let core = projects.core(&project)?;
     files::reveal(&core.repo()?, &path)
 }
 
 /// Abre o diálogo "Abrir com..." do Windows para o arquivo `path`.
 #[tauri::command(async)]
-fn open_with(core: State<Core>, path: String) -> Result<(), String> {
+fn open_with(projects: State<Projects>, project: String, path: String) -> Result<(), String> {
+    let core = projects.core(&project)?;
     files::open_with(&core.repo()?, &path)
 }
 
@@ -385,19 +468,22 @@ fn open_url(url: String) -> Result<(), String> {
 
 /// Cria o arquivo `name` dentro da pasta `dir` do projeto (vazio é a raiz). Devolve o caminho relativo. Nunca sobrescreve.
 #[tauri::command(async)]
-fn create_file(core: State<Core>, dir: String, name: String) -> Result<String, String> {
+fn create_file(projects: State<Projects>, project: String, dir: String, name: String) -> Result<String, String> {
+    let core = projects.core(&project)?;
     files::create_file(&core.repo()?, &dir, &name)
 }
 
 /// Cria a pasta `name` dentro da pasta `dir` do projeto (vazio é a raiz). Devolve o caminho relativo. Nunca sobrescreve.
 #[tauri::command(async)]
-fn create_dir(core: State<Core>, dir: String, name: String) -> Result<String, String> {
+fn create_dir(projects: State<Projects>, project: String, dir: String, name: String) -> Result<String, String> {
+    let core = projects.core(&project)?;
     files::create_dir(&core.repo()?, &dir, &name)
 }
 
 /// Abre no Explorer do Windows a pasta `path` do projeto (vazio é a raiz).
 #[tauri::command(async)]
-fn reveal_dir(core: State<Core>, path: String) -> Result<(), String> {
+fn reveal_dir(projects: State<Projects>, project: String, path: String) -> Result<(), String> {
+    let core = projects.core(&project)?;
     files::reveal_dir(&core.repo()?, &path)
 }
 
@@ -411,7 +497,10 @@ fn clipboard_snapshot() -> Result<platform::Snapshot, String> {
 /// o erro do que parou, se parou. Ver `Batch`. Se um recorte moveu algo, esvazia o clipboard se ele ainda for `snap`; um
 /// clipboard trocado no meio fica como está.
 #[tauri::command(async)]
-fn paste_files_detailed(core: State<Core>, dest: String, snap: platform::Snapshot) -> Result<files::Batch<files::Moved>, String> {
+fn paste_files_detailed(
+    projects: State<Projects>, project: String, dest: String, snap: platform::Snapshot,
+) -> Result<files::Batch<files::Moved>, String> {
+    let core = projects.core(&project)?;
     let result = files::paste_detailed(&core.repo()?, &dest, &snap);
     if snap.cut && !result.done.is_empty() {
         platform::clear_if_same(&snap);
@@ -421,48 +510,46 @@ fn paste_files_detailed(core: State<Core>, dest: String, snap: platform::Snapsho
 
 /// Fecha o shell `id` e mata o processo dele.
 #[tauri::command(async)]
-fn close_shell(core: State<Core>, id: String) -> Result<(), String> {
-    core.close_shell(&id);
-    Ok(())
+fn close_shell(projects: State<Projects>, project: Option<String>, id: String) -> Result<(), String> {
+    projects.shell_core(project.as_deref())?.close_shell(&id)
 }
 
 #[tauri::command(async)]
-fn set_executor_choice(core: State<Core>, choice: Choice) -> Result<(), String> {
-    core.set_executor_choice(choice)
+fn set_executor_choice(projects: State<Projects>, choice: Choice) -> Result<(), String> {
+    projects.set_executor_choice(choice)
 }
 
 #[tauri::command(async)]
-fn term_write(core: State<Core>, id: String, data: String) -> Result<(), String> {
-    core.term_write(&id, &data);
-    Ok(())
+fn term_write(projects: State<Projects>, project: Option<String>, id: String, data: String) -> Result<(), String> {
+    projects.shell_core(project.as_deref())?.term_write(&id, &data)
 }
 
 /// O CLI que roda agora no terminal `id` (`claude`, `codex` ou nenhum), para a colagem de arquivo e imagem.
 #[tauri::command(async)]
-fn term_cli(core: State<Core>, id: String) -> Result<Option<&'static str>, String> {
-    Ok(core.term_cli(&id))
+fn term_cli(projects: State<Projects>, project: Option<String>, id: String) -> Result<Option<&'static str>, String> {
+    projects.shell_core(project.as_deref())?.term_cli(&id)
 }
 
 #[tauri::command(async)]
-fn term_resize(core: State<Core>, id: String, cols: u16, rows: u16) -> Result<(), String> {
-    core.term_resize(&id, cols, rows);
-    Ok(())
+fn term_resize(
+    projects: State<Projects>, project: Option<String>, id: String, cols: u16, rows: u16,
+) -> Result<(), String> {
+    projects.shell_core(project.as_deref())?.term_resize(&id, cols, rows)
 }
 
 #[tauri::command(async)]
-fn term_snapshot(core: State<Core>, id: String) -> Result<Snapshot, String> {
-    Ok(core.term_snapshot(&id))
+fn term_snapshot(projects: State<Projects>, project: Option<String>, id: String) -> Result<Snapshot, String> {
+    projects.shell_core(project.as_deref())?.term_snapshot(&id)
 }
 
 #[tauri::command(async)]
-fn stop_executor(core: State<Core>, id: String) -> Result<(), String> {
-    core.stop_executor(&id);
-    Ok(())
+fn stop_executor(projects: State<Projects>, project: String, id: String) -> Result<(), String> {
+    projects.core(&project)?.stop_executor(&id)
 }
 
 #[tauri::command(async)]
-fn has_running(core: State<Core>) -> Result<bool, String> {
-    Ok(core.has_running())
+fn has_running(projects: State<Projects>) -> Result<bool, String> {
+    Ok(projects.has_running())
 }
 
 /// Estado da atualização da abertura: a tela lê isto ao carregar e depois acompanha o evento.
@@ -487,7 +574,7 @@ pub fn run(context: tauri::Context) {
             let emit: core::Emit = Arc::new(move |event, payload| drop(handle.emit(event, payload)));
             // Sem LOCALAPPDATA o app abre mesmo assim; o erro aparece em `get_options`.
             let cfg_path = config::config_path().unwrap_or_default();
-            app.manage(Core::new(cli::Exes::real(), session::Places::real(), cfg_path, emit.clone()));
+            app.manage(Projects::new(cli::Exes::real(), session::Places::real(), cfg_path, emit.clone()));
             // Build de desenvolvimento libera o uso direto. O instalado confere a versão antes de liberar.
             let gate = Gate::new(cfg!(debug_assertions), emit);
             app.manage(gate.clone());
@@ -498,6 +585,8 @@ pub fn run(context: tauri::Context) {
             choose_project,
             open_project,
             close_project,
+            list_projects,
+            project_snapshot,
             pick_file,
             pick_save_path,
             get_options,
@@ -570,7 +659,7 @@ pub fn run(context: tauri::Context) {
         .run(|app, event| {
             // Fechar o app mata tudo e limpa a sessão.
             if let tauri::RunEvent::Exit = event {
-                app.state::<Core>().shutdown();
+                app.state::<Projects>().shutdown();
             }
         });
 }

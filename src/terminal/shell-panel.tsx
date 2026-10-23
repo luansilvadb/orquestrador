@@ -18,7 +18,7 @@ const COMPACT_WIDTH = 460;
 const DEFAULT_SIZE = { height: SHELL_HEIGHT };
 
 // `title` é o completo (pasta e programa), para o tooltip; `program` é '' até o backend responder.
-export type ShellTab = { id: string; title: string; program: string };
+export type ShellTab = { id: string; title: string; program: string; project: string | null };
 
 // Acha a aba pelo `data-shell` e a revela na faixa (a regra de rolagem está em tab-strip).
 const reveal = (box: HTMLDivElement, id: string) => revealTab(box, box.querySelector<HTMLElement>(`[data-shell="${id}"]`));
@@ -310,7 +310,7 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
           <div className="relative min-h-0 flex-1 overflow-hidden bg-terminal">
             {tabs.map((tab) => (
               <div key={tab.id} className={`absolute inset-0${tab.id !== active ? ' invisible' : ''}`}>
-                <TermHost id={tab.id} writable onReady={(view) => onReady(tab.id, view)} />
+                <TermHost id={tab.id} project={tab.project} writable onReady={(view) => onReady(tab.id, view)} />
               </div>
             ))}
           </div>

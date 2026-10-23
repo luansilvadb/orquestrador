@@ -64,13 +64,14 @@ Plano: cada módulo é uma unidade.
 
 | Caminho | Papel |
 | --- | --- |
-| `src-tauri/src/lib.rs` | Registra os comandos Tauri. `open_project`/`close_project`, `pick_file`/`pick_save_path` e `read_file_at`/`read_media_at`/`write_file_at_checked` abrem projeto, escolhem caminhos e atendem arquivos absolutos do editor. |
+| `src-tauri/src/lib.rs` | Registra os comandos Tauri. `open_project`/`close_project`/`list_projects`/`project_snapshot`, `pick_file`/`pick_save_path` e `read_file_at`/`read_media_at`/`write_file_at_checked` abrem projetos, escolhem caminhos e atendem arquivos absolutos do editor. |
 | `src-tauri/src/files.rs` | Comandos de arquivos do projeto e absolutos: `read_file_at`, `read_media_at` e `write_file_at_checked` atendem arquivos escolhidos pelo usuário, com limites, BOM e checagem de revisão. |
 | `src-tauri/src/search.rs` | O comando da pesquisa, `search`: os candidatos vêm de `git ls-files` (rastreados e não ignorados, sem `.git`) quando há repositório; sem repositório, vêm da pasta percorrida com a crate `ignore` (respeita `.gitignore` e `.ignore` da pasta e das subpastas, não os de pastas acima; inclui ocultos; não segue links; pula `.git` e `node_modules`), e o texto é casado em Rust pelo motor `regex`, o mesmo da prévia e da substituição. |
 | `src-tauri/src/git.rs` | Os comandos do painel Git: status, diff, preparar, commit, fetch, pull, push e branches. Também `git_commit_hover`, que lê os detalhes de um commit sob demanda, e os do editor: `git_file_base`, o texto do arquivo no HEAD e no índice para os marcadores de mudança, e `git_write_index`, que grava no índice o texto de um arquivo para preparar ou tirar do preparo um bloco. E o modo do projeto (com repositório, sem Git, sem repositório ou repositório acima) e o `git init` do botão Inicializar repositório. |
-| `src-tauri/src/core.rs` | O núcleo das sessões e projetos: abrir, fechar (com recusa durante sessão), PTYs, lotes, executores e fila. Sem projeto, shells usam a pasta pessoal. Ver [delegação](delegacao.md). |
+| `src-tauri/src/core.rs` | Um núcleo por projeto, com sua sessão, PTYs, lotes, executores, fila e trava Git. O Core sem projeto mantém os shells da pasta pessoal. Ver [delegação](delegacao.md). |
+| `src-tauri/src/projects.rs` | Registro dos Cores, ids estáveis durante a abertura, configuração compartilhada e eventos identificados pelo projeto. |
 | `src-tauri/src/platform/` | O único lugar das chamadas ao sistema operacional: Job Objects, consulta de processo, COM e a Lixeira, o Explorer, a abertura de URLs do GitHub, o clipboard de arquivos, a memória física, as pastas do usuário e os nomes dos shells. `windows.rs` implementa; `other.rs` (macOS e Linux) responde "Ainda não suportado neste sistema." ou devolve `None`, conforme o chamador já trata a ausência. Fora daqui não há `windows_sys` nem `std::os::windows`. |
-| `src-tauri/src/capacity.rs` | A política automática de simultâneos: teto pela CPU e pela memória física (`platform::memoria`), com a reserva de 2 GiB e 1 GiB por executor. |
+| `src-tauri/src/capacity.rs` | Política compartilhada de simultâneos: teto pela CPU e memória física (`platform::memoria`), com reserva de 2 GiB e 1 GiB por executor, e fila global FIFO. |
 | `src-tauri/src/` | Backend: PTYs, sessão e travas do orquestrador, lotes, executores e configuração. |
 | `src-tauri/src/delegate.rs` | A lógica de delegação: publica o lote na pasta da sessão, espera o resultado, imprime o lote e grava as respostas às perguntas de executor. |
 | `src-tauri/src/mcp.rs` | O servidor MCP da sessão, `orquestrador.exe --mcp <pasta da sessão>`: fala JSON-RPC pela entrada e saída padrão e expõe `delegar` e `aguardar`. |
@@ -80,6 +81,8 @@ Plano: cada módulo é uma unidade.
 | `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a rodada pelo plugin oficial do Tauri e os testes do portão. |
 
 O módulo src-tauri/src/format.rs escolhe o motor pela extensão, procura as configurações pelo caminho absoluto e executa os formatadores externos com timeout. Os comandos formatter_info e format_cli são registrados em lib.rs e tipados em src/backend/types.ts.
+
+Cada comando dependente de projeto recebe o id devolvido por `open_project` (ou `choose_project`); reabrir a mesma raiz normalizada devolve o id existente. Os eventos do Core também carregam `project`; ids de terminal são locais ao Core e o front deve chavear por `(project, id)`. O limite de executores é global, com fila FIFO entre projetos. Opções e escolhas padrão ficam na configuração global; cada sessão em execução, seus shells e sua trava Git pertencem ao Core do projeto. O Core sem projeto é separado e sobrevive à abertura e ao fechamento de projetos.
 
 ## Scripts
 
