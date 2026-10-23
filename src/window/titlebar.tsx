@@ -2,9 +2,9 @@
 // atributo data-tauri-drag-region, que vale só para o elemento que o tem; por isso botões e campos não o levam.
 import { Children, useEffect, useRef, useState, type ComponentType, type ReactNode, type PointerEvent } from 'react';
 import { Flexbox } from '@lobehub/ui';
-import { ActionIcon, DropdownMenu, Text, Tooltip, type ContextMenuItem } from '@lobehub/ui/base-ui';
-import { Menu } from 'lucide-react';
+import { DropdownMenu, Text, Tooltip, type ContextMenuItem } from '@lobehub/ui/base-ui';
 import { SECONDARY } from './text-style';
+import { AppMark } from './app-mark';
 import { host } from '../backend/backend';
 import { CloseIcon, MaximizeIcon, MinimizeIcon, RestoreIcon } from './window-icons';
 import { dragShift, revealTab, trackTabDrag, wheelToScroll, type TabDrag } from '../shared/tab-strip';
@@ -55,7 +55,7 @@ export type ProjectTabsProps = {
 };
 
 /**
- * Identidade à esquerda; a pasta do projeto no meio (nome em destaque, caminho completo em secundário, copiável);
+ * Marca e menu Arquivo à esquerda; a pasta do projeto no meio (nome em destaque, caminho completo em secundário, copiável);
  * `children` são os contadores, agrupados à direita; os botões da janela ficam colados à borda direita.
  */
 export function TitleBar({ connected, project, children, menu, projectTabs, titleActive = true }: { connected: boolean; project?: string; children?: ReactNode; menu?: TitleBarMenu; projectTabs?: ProjectTabsProps; titleActive?: boolean }) {
@@ -106,9 +106,10 @@ export function TitleBar({ connected, project, children, menu, projectTabs, titl
   return (
     // data-tauri-drag-region: o arrasto e o duplo clique valem só nos elementos passivos e nas áreas vazias. O caminho não leva o atributo, para ficar selecionável.
     <Flexbox as="header" data-tauri-drag-region horizontal align="center" height={36} flex="none" className="whitespace-nowrap border-b bg-card">
+      <AppMark className="pointer-events-none mx-2.5 size-4 shrink-0" />
       {menu && (
         <DropdownMenu items={menuItems} placement="bottomLeft">
-          <ActionIcon variant="borderless" size="small" icon={Menu} aria-label="Abrir menu" title="Menu" className="mx-1 shrink-0" />
+          <button type="button" className="mr-1 h-[22px] shrink-0 rounded px-2 text-[13px] text-[#cccccc] outline-none hover:bg-[#ffffff1a] focus-visible:ring-2 focus-visible:ring-ring/50">Arquivo</button>
         </DropdownMenu>
       )}
       {projectTabs && <ProjectTabs {...projectTabs} />}

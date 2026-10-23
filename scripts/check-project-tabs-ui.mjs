@@ -36,7 +36,7 @@ scenario('trocar de projeto preserva árvore, editor e texto digitado', async ({
 
 scenario('abrir pasta recente já aberta só foca a aba existente', async ({ page }) => {
   await twoProjects(page);
-  await page.getByRole('button', { name: 'Abrir menu' }).click();
+  await page.getByRole('button', { name: 'Arquivo', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Projetos recentes' }).hover();
   await page.getByRole('menuitem', { name: /exemplo/i }).click();
   assert.equal(await tabs(page).count(), 2);

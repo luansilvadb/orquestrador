@@ -122,7 +122,7 @@ scenario('modo sem projeto: painéis pedem pasta e o rascunho do menu volta ao r
   await prompt('Abra uma pasta para pesquisar nos arquivos.');
   await prompt('Abra uma pasta para iniciar o Orquestrador.');
 
-  await button(page, 'Abrir menu').click();
+  await button(page, 'Arquivo').click();
   await page.getByRole('menuitem', { name: 'Novo arquivo' }).click();
   const editor = page.locator('.cm-content:visible').first();
   await editor.waitFor();

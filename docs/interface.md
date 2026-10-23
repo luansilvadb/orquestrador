@@ -1,6 +1,6 @@
 # Interface
 
-A barra de título própria tem o menu `≡` à esquerda, a faixa rolável de projetos, contadores do projeto ativo e os controles da janela à direita. Cada aba mostra o nome da pasta, o caminho completo na dica, o `×` para fechar e o `+` abre outra pasta; arrastar reordena. Um ponto sinaliza executores em execução ou na fila. O título nativo acompanha o projeto ativo como `<pasta> - Orquestrador`; sem projeto, é `Orquestrador`.
+A barra de título própria tem a marca e o menu Arquivo à esquerda, a faixa rolável de projetos, contadores do projeto ativo e os controles da janela à direita. Cada aba mostra o nome da pasta, o caminho completo na dica, o `×` para fechar e o `+` abre outra pasta; arrastar reordena. Um ponto sinaliza executores em execução ou na fila. O título nativo acompanha o projeto ativo como `<pasta> - Orquestrador`; sem projeto, é `Orquestrador`.
 
 O instalador registra no Explorer `Abrir com Orquestrador` para arquivos e `Abrir pasta no Orquestrador` para pastas e o fundo da pasta. Também lista o app em Abrir com para extensões de texto e código, sem escolher padrão. Se já houver uma janela aberta, ela restaura e recebe o caminho.
 
@@ -10,7 +10,7 @@ Cada aba mantém uma área completa do projeto, incluindo árvore, editor e recu
 
 A tela principal tem, à esquerda, a coluna de ícones (Arquivos, Pesquisar e Git) e, ao lado dela, uma faixa com o conteúdo da tela escolhida. Depois da atualização, os projetos da última vez são reabertos se ainda existirem; sem eles, o app inicia sem projeto. Nesse modo, Arquivos, Pesquisa, Git e Orquestrador mostram `Abrir pasta`; o Terminal abre no diretório pessoal. A área central mostra Novo arquivo, Abrir arquivo, Abrir pasta e projetos recentes. O editor também abre arquivos escolhidos por caminho absoluto; Git gutter, árvore e pesquisa consideram só arquivos do projeto ativo. A barra de status não mostra branch. A faixa abre com 280 px e a borda direita dela arrasta a largura, que é a mesma nas três telas. À direita fica a coluna central, sempre montada, com o editor em cima e o painel Terminal embaixo. O painel do Orquestrador aparece em todas as telas. Trocar de tela não desmonta nem muda o tamanho das áreas.
 
-O menu `≡` mostra Novo arquivo (Ctrl+N), Abrir arquivo… (Ctrl+O), Abrir pasta… (Ctrl+K, Ctrl+O), Projetos recentes (até 10), Salvar (Ctrl+S), Salvar como… (Ctrl+Shift+S), Fechar pasta e Sair. Fechar pasta fecha a aba ativa; ao fechar a última, volta ao modo sem projeto. As abas abertas, a ordem, a ativa e os recentes ficam no `localStorage` do app.
+O menu Arquivo mostra Novo arquivo (Ctrl+N), Abrir arquivo… (Ctrl+O), Abrir pasta… (Ctrl+K, Ctrl+O), Projetos recentes (até 10), Salvar (Ctrl+S), Salvar como… (Ctrl+Shift+S), Fechar pasta e Sair. Fechar pasta fecha a aba ativa; ao fechar a última, volta ao modo sem projeto. As abas abertas, a ordem, a ativa e os recentes ficam no `localStorage` do app.
 
 ## Painel do Orquestrador
 

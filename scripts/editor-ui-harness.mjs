@@ -87,7 +87,7 @@ export async function openApp(page, query = '') {
   await page.goto(`${BASE}${query}`);
   await page.getByRole('navigation', { name: 'Telas' }).waitFor();
   if (new URLSearchParams(query.replace(/^\?/, '')).get('project') !== 'none') {
-    await page.getByRole('button', { name: 'Abrir menu' }).click();
+    await page.getByRole('button', { name: 'Arquivo', exact: true }).click();
     await page.getByRole('menuitem', { name: /Abrir pasta/ }).click();
     await page.locator('header [role="tab"][aria-selected="true"]').waitFor();
   }

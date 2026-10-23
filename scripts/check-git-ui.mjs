@@ -743,7 +743,7 @@ scenario('conflito: rascunho parcial sobrevive a recarregar a janela (trecho res
   await openApp(page, '?project=none');
   // Semeia o mock antes de reabrir o projeto, que restaura a aba do conflito automaticamente.
   await addDois(page);
-  await page.getByRole('button', { name: 'Abrir menu' }).click();
+  await page.getByRole('button', { name: 'Arquivo', exact: true }).click();
   await page.getByRole('menuitem', { name: /Abrir pasta/ }).click();
   await page.locator('header [role="tab"][aria-selected="true"]').waitFor();
   await openGit(page);
@@ -1136,7 +1136,7 @@ scenario('janela do Orquestrador: o aviso sem Git aparece nos modos sem reposit�
 scenario('pasta escolhida dentro de um repositório: toast informativo com o caminho do projeto aberto', async ({ page }) => {
   await page.goto(`${BASE}?project=none&subfolder=1`);
   await nav(page).waitFor();
-  await page.getByRole('button', { name: 'Abrir menu' }).click();
+  await page.getByRole('button', { name: 'Arquivo', exact: true }).click();
   await page.getByRole('menuitem', { name: /Abrir pasta/ }).click();
   await page.getByText('Esta pasta está dentro do repositório C:\\projetos\\exemplo. O projeto aberto é a raiz dele.').waitFor();
   await openGit(page);
