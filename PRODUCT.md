@@ -42,7 +42,7 @@ Orquestração local de CLIs de IA reais (`claude` e `codex`, cada um podendo se
 
 ## Evidence on Hand
 
-- Captura da interface: `docs/screenshot-v1.png`.
+- Captura da interface: `docs/screenshot-v2.png`.
 - Documentação: `README.md` e `docs/` (uso, interface, delegação, arquitetura, segurança, design system, notas de versão).
 - Não há depoimentos, usuários externos nem métricas de uso; não inventar.
 
