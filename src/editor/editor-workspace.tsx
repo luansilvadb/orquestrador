@@ -26,7 +26,7 @@
 // comparação, resolução de conflito).
 // Rascunho ("Sem título-N"): duplo clique na faixa vazia, na área do grupo sem abas ou Ctrl+N abrem um buffer em memória, sem caminho. Salvar
 // abre o diálogo "Salvar como"; depois de salvo, vira arquivo do projeto (caminho relativo) ou solto (absoluto).
-// Recuperação: localStorage por projeto (`orquestrador.editor:<project>`) e uma chave fixa no modo sem projeto.
+// Recuperação: localStorage por projeto (`orquestrador.editor:<project normalizado>`) e uma chave fixa no modo sem projeto.
 import {
   forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
 } from 'react';
@@ -54,7 +54,7 @@ import {
 import { dragShift, revealTab, trackTabDrag, type TabDrag, wheelToScroll } from '../shared/tab-strip';
 import { TabListMenu, type TabListItem } from '../shared/tab-list-menu';
 import {
-  type Buffer, type ConflictDraft, decodeRecovery, dirtyKeys, encodeRecovery, hasDraftAt,
+  type Buffer, type ConflictDraft, decodeRecovery, NO_PROJECT, readRecovery, recoveryKey, dirtyKeys, encodeRecovery, hasDraftAt,
   hasMarkers, isBufferDirty, isConflictDirty, newlineOf, normalizeNewlines, type Recovery,
   remapData, toDiskNewlines, conflictKey, type EditorData, type Cursor, type Newline, type Scroll,
 } from './workspace-store';
@@ -109,8 +109,6 @@ type DiskVersion = { text: string; bom: boolean; readOnly: boolean };
 // Comparação antes de gravar sobre o disco (ou de usar o disco): as duas versões são as que a tela tinha quando o usuário pediu.
 type Compare = { docId: string; path: string; mode: 'keep' | 'use'; disk: DiskVersion; draft: string };
 
-const STORAGE = (project: string) => `orquestrador.editor:${project}`;
-const NO_PROJECT = '__sem-projeto__';
 const DEFAULT_SPLIT = 0.5;
 const newDocId = () => `doc-${crypto.randomUUID()}`;
 // Mesmo nome em pastas diferentes: a pasta vira o detalhe da aba, para as duas não ficarem iguais. Sem repetição, não há detalhe.
@@ -207,7 +205,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     let readFailed = false;
     const notes: string[] = [];
     try {
-      text = localStorage.getItem(STORAGE(storageProject));
+      text = readRecovery(localStorage, project);
     } catch (e) {
       // Erro de leitura não é primeira abertura: avisa, e a edição começa vazia sem apagar a recuperação gravada.
       notes.push(`Não foi possível ler a recuperação (${message(e)}). Começou vazia.`);
@@ -736,11 +734,11 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     };
     try {
       if (!hasState) {
-        localStorage.removeItem(STORAGE(storageProject));
+        localStorage.removeItem(recoveryKey(project));
         return;
       }
       const encoded = encodeRecovery(storageProject, recovery);
-      localStorage.setItem(STORAGE(storageProject), encoded.text);
+      localStorage.setItem(recoveryKey(project), encoded.text);
       if (encoded.notes.length > 0) setNotice(encoded.notes.join(' '));
     } catch (e) {
       setNotice(`Não foi possível guardar a recuperação (${message(e)}). A edição continua, mas não será recuperada.`);

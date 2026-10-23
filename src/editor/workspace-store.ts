@@ -66,6 +66,44 @@ export type RecoveryBuffer = { docId: string; path: string; cursor: Cursor | nul
 export type Recovery = { workspace: string | null; layout: string | null; split: number | null; buffers: RecoveryBuffer[]; conflicts: ConflictDraft[] };
 export type Recovered = { recovery: Recovery; notes: string[] };
 
+const RECOVERY_PREFIX = 'orquestrador.editor:';
+export const NO_PROJECT = '__sem-projeto__';
+/** Grafia única do caminho do projeto: `D:\Proj`, `d:/proj` e `D:\Proj\.` dão o mesmo texto. */
+export const normalizeProject = (project: string) => project.toLowerCase().replace(/\//g, '\\').replace(/(\\\.?)+$/, '');
+/** Chave da recuperação no localStorage; sem projeto, a chave fixa. */
+export const recoveryKey = (project: string) => RECOVERY_PREFIX + (project ? normalizeProject(project) : NO_PROJECT);
+
+export type RecoveryStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>;
+
+/**
+ * Lê a recuperação pela chave normalizada. Sem ela, procura uma chave antiga (caminho cru, em qualquer grafia; a do
+ * caminho atual primeiro), copia para a nova e apaga a antiga. Erro de leitura sobe; erro na cópia mantém a antiga.
+ */
+export function readRecovery(storage: RecoveryStorage, project: string): string | null {
+  const key = recoveryKey(project);
+  const text = storage.getItem(key);
+  if (text !== null || !project) return text;
+  const target = normalizeProject(project);
+  const old = [RECOVERY_PREFIX + project];
+  for (let i = 0; i < storage.length; i++) {
+    const k = storage.key(i);
+    if (k?.startsWith(RECOVERY_PREFIX) && k !== key && normalizeProject(k.slice(RECOVERY_PREFIX.length)) === target) old.push(k);
+  }
+  for (const k of old) {
+    if (k === key) continue;
+    const found = storage.getItem(k);
+    if (found === null) continue;
+    try {
+      storage.setItem(key, found);
+      storage.removeItem(k);
+    } catch {
+      // Sem espaço para copiar: usa o texto e deixa a chave antiga como está.
+    }
+    return found;
+  }
+  return null;
+}
+
 /**
  * Monta o texto salvo. Só guarda texto de rascunho sujo; arquivo limpo volta do disco. Se passar do limite total,
  * descarta rascunhos a partir do fim e diz quantos ficaram de fora (`notes`).
@@ -122,7 +160,7 @@ export function decodeRecovery(text: string, project: string): Recovered {
     return empty('Recuperação ilegível: começou vazia.');
   }
   if (!isRecord(raw) || raw.version !== RECOVERY_VERSION) return empty('Recuperação de outra versão: começou vazia.');
-  if (raw.project !== project) return empty();
+  if (typeof raw.project !== 'string' || normalizeProject(raw.project) !== normalizeProject(project)) return empty();
   const notes: string[] = [];
   const buffers: RecoveryBuffer[] = [];
   const docIds = new Set<string>();

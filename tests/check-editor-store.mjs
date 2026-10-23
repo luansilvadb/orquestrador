@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import {
   blockCount, conflictKey, decodeRecovery, dirtyKeys, encodeRecovery, hasDraftAt, hasMarkers, isBufferDirty, MAX_DRAFT_CHARS,
-  MAX_RECOVERY_CHARS, newlineOf, parseConflict, patchHunks, remapData, renderConflict, toDiskNewlines,
+  MAX_RECOVERY_CHARS, newlineOf, normalizeProject, parseConflict, patchHunks, readRecovery, recoveryKey, remapData, renderConflict,
+  toDiskNewlines,
 } from '../src/editor/workspace-store.ts';
 
 const buffer = (over = {}) => ({
@@ -275,6 +276,44 @@ check('Recuperação: aba sem rascunho além de 50 não avisa (nada se perde)', 
   const buffers = Array.from({ length: 51 }, (_, i) => ({ docId: `d${i}`, path: `f${i}.ts`, cursor: null, dirty: null }));
   const { notes } = encodeRecovery('/p', { workspace: null, layout: null, split: null, buffers, conflicts: [] });
   assert.deepEqual(notes, []);
+});
+// localStorage em memória, com a mesma interface que readRecovery usa.
+const memoryStorage = (entries = {}) => {
+  const map = new Map(Object.entries(entries));
+  return {
+    map,
+    get length() { return map.size; },
+    key: (i) => [...map.keys()][i] ?? null,
+    getItem: (k) => map.get(k) ?? null,
+    setItem: (k, v) => { map.set(k, String(v)); },
+    removeItem: (k) => { map.delete(k); },
+  };
+};
+check('Recuperação: grafias do mesmo caminho dão a mesma chave e o mesmo projeto', () => {
+  const spellings = ['D:\\Proj', 'd:\\proj', 'D:\\Proj\\.', 'D:/Proj/'];
+  assert.deepEqual(new Set(spellings.map(recoveryKey)), new Set(['orquestrador.editor:d:\\proj']));
+  assert.equal(normalizeProject('D:\\Proj\\.\\'), 'd:\\proj');
+  assert.equal(recoveryKey(''), 'orquestrador.editor:__sem-projeto__');
+  const { text } = encodeRecovery('D:\\Proj\\.', dirtyRecovery);
+  assert.equal(decodeRecovery(text, 'd:\\proj').recovery.buffers.length, dirtyRecovery.buffers.length);
+});
+check('Recuperação: chave antiga (caminho cru, outra grafia) é lida e migrada para a normalizada', () => {
+  const storage = memoryStorage({ 'orquestrador.editor:D:\\Proj\\.': 'antigo', 'orquestrador.editor:E:\\outro': 'x' });
+  assert.equal(readRecovery(storage, 'D:\\Proj'), 'antigo');
+  assert.deepEqual([...storage.map.keys()].sort(), ['orquestrador.editor:d:\\proj', 'orquestrador.editor:E:\\outro'].sort());
+  assert.equal(storage.getItem('orquestrador.editor:d:\\proj'), 'antigo');
+  // A nova vence a antiga, que fica intocada.
+  const both = memoryStorage({ 'orquestrador.editor:d:\\proj': 'novo', 'orquestrador.editor:D:\\Proj': 'velho' });
+  assert.equal(readRecovery(both, 'D:\\Proj'), 'novo');
+  assert.equal(both.map.size, 2);
+  assert.equal(readRecovery(memoryStorage(), 'D:\\Proj'), null);
+  assert.equal(readRecovery(memoryStorage({ 'orquestrador.editor:__sem-projeto__': 's' }), ''), 's');
+});
+check('Recuperação: sem espaço para migrar, devolve o texto e mantém a chave antiga', () => {
+  const storage = memoryStorage({ 'orquestrador.editor:D:\\Proj': 'antigo' });
+  storage.setItem = () => { throw new Error('cheio'); };
+  assert.equal(readRecovery(storage, 'D:\\Proj'), 'antigo');
+  assert.deepEqual([...storage.map.keys()], ['orquestrador.editor:D:\\Proj']);
 });
 check('Recuperação: a proporção do divisor volta na leitura (não cai para 0,5)', () => {
   const { text } = encodeRecovery('/p', { workspace: null, layout: null, split: 0.3, buffers: [], conflicts: [] });

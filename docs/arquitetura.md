@@ -148,7 +148,7 @@ Ferramentas, sem testes.
 
 O `localStorage` do app guarda estas chaves (nada disso vai ao disco do projeto):
 
-- `orquestrador.editor:<projeto>`: a recuperação da área central (abas, grupos, rascunhos, cursor, rolagem e layout; ver [design system](design-system.md#recuperação-e-comparação)).
+- `orquestrador.editor:<projeto>`: com o caminho em minúsculas, `\` como separador e sem `.` nem separador no fim (a chave antiga, com o caminho cru, migra na abertura), a recuperação da área central (abas, grupos, rascunhos, cursor, rolagem e layout; ver [design system](design-system.md#recuperação-e-comparação)).
 - `orquestrador.editor:__sem-projeto__`: arquivos absolutos e rascunhos do modo sem projeto.
 - `orquestrador.project.last` e `orquestrador.project.recent`: último projeto e até 10 projetos recentes.
 - `orquestrador.search.history` e `orquestrador.search.view`: o histórico de consultas da pesquisa e a escolha entre lista e árvore.
