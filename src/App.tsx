@@ -81,7 +81,8 @@ function storeProject(path: string | null) {
 type Overlay = 'start' | 'executor' | null;
 // Um shell do painel Terminal: `program` fica '' até o backend responder com o nome do programa.
 // `cwd` é a pasta (relativa ao projeto) em que o shell abre; sem ela, a raiz do projeto.
-type ShellItem = { id: string; program: string; cwd?: string; project: string | null };
+// `n` é o número exibido: o menor livre entre os shells abertos ao criar. O id segue único, para respostas atrasadas do backend não acharem outra aba.
+type ShellItem = { id: string; n: number; program: string; cwd?: string; project: string | null };
 type State = {
   update: UpdateStatus;
   projectId: string | null;
@@ -159,8 +160,11 @@ function reducer(state: State, action: Action): State {
       return { ...state, executors: state.executors.filter((e) => !action.ids.includes(e.id)) };
     case 'reset':
       return { ...state, orchestrator: null, executorChoice: null, executors: [], notice: action.notice };
-    case 'shellAdd':
-      return { ...state, shells: [...state.shells, { id: action.id, program: '', cwd: action.cwd, project: action.project }], shellActive: action.id, shellOpen: true };
+    case 'shellAdd': {
+      let n = 1;
+      while (state.shells.some((s) => s.n === n)) n += 1;
+      return { ...state, shells: [...state.shells, { id: action.id, n, program: '', cwd: action.cwd, project: action.project }], shellActive: action.id, shellOpen: true };
+    }
     case 'shellProgram':
       return { ...state, shells: state.shells.map((s) => (s.id === action.id ? { ...s, program: action.program } : s)) };
     case 'shellRemove': {
@@ -1094,7 +1098,7 @@ function ProjectApp({ managed, initialProject, active = true, projects, onSelect
   const ready = update.phase === 'ready';
   // Título da aba: nome da pasta do projeto (último segmento do caminho) e, depois que o backend responde, o programa.
   const folder = folderName(state.project);
-  const shellTabs = state.shells.map((s) => ({ id: s.id, title: s.program ? (folder ? `${folder} — ${s.program}` : s.program) : folder || 'Terminal', program: s.program, project: s.project }));
+  const shellTabs = state.shells.map((s) => ({ id: s.id, title: s.program ? (folder ? `${folder} — ${s.program}` : s.program) : folder || 'Terminal', n: s.n, program: s.program, project: s.project }));
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
   const busy = executors.some((e) => !FINISHED.includes(e.state));
   const count = (state: NodeState) => executors.filter((e) => e.state === state).length;

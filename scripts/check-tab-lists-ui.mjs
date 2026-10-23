@@ -117,6 +117,36 @@ scenario('lista do Terminal: o mesmo menu, sem cabeçalho; X na linha destacada 
   await page.locator('[role="menu"]').waitFor({ state: 'detached' });
 });
 
+// Issue #25: o número exibido é o menor livre; fechar o último terminal pela lista esconde o painel e fecha o menu, sem sobrar menu vazio.
+scenario('lista do Terminal: número reaproveitado e menu fechado ao fechar o último', async ({ page }) => {
+  await page.keyboard.press('Control+Backquote');
+  await page.locator('[data-shell]').first().waitFor();
+  for (let n = 1; n < 3; n++) await page.getByRole('button', { name: 'Novo terminal' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-shell]').length === 3);
+  await page.getByRole('button', { name: 'Fechar o Terminal 2', exact: false }).click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-shell]').length === 2);
+  await page.getByRole('button', { name: 'Novo terminal' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-shell]').length === 3);
+  const numbers = await page.locator('[data-shell] [role="tab"]').evaluateAll((tabs) => tabs.map((t) => t.textContent.match(/Terminal (\d+)/)[1]));
+  assert.deepEqual(numbers, ['1', '3', '2']);
+
+  for (let left = 3; left > 0; left--) {
+    if (!await page.getByRole('menu').isVisible()) {
+      await page.getByRole('button', { name: /^Lista de abas/ }).click();
+      await menuOpen(page);
+    }
+    await page.getByRole('menuitem').nth(0).hover();
+    await page.getByRole('menuitem').nth(0).locator('.tab-list-close').click();
+    await page.waitForFunction((n) => document.querySelectorAll('[data-shell]').length === n, left - 1);
+  }
+  await page.locator('[role="menu"]').waitFor({ state: 'detached' });
+  await page.screenshot({ path: join(OUT, 'tab-lists-terminal-vazio.png') });
+
+  await page.keyboard.press('Control+Backquote');
+  await page.locator('[data-shell]').first().waitFor();
+  assert.match(await page.locator('[data-shell] [role="tab"]').first().textContent(), /^Terminal 1\b/);
+});
+
 scenario('lista do editor: botão antes de Dividir, mesmo menu, X fecha a aba; o "..." só com ações', async ({ page }) => {
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
   await page.getByRole('treeitem', { name: 'package.json', exact: true }).dblclick();

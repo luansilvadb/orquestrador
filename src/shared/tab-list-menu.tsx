@@ -1,7 +1,8 @@
 // Lista "Todas as abas" das faixas do Orquestrador, do Terminal e do editor: um DropdownMenu com uma linha de 26 px por aba (medidas em
 // src/index.css), o ícone na margem, o rótulo que corta com reticências, o estado à direita e o check da ativa (invisível nas outras, para
 // o estado ficar na mesma coluna). Com `onClose`, o X toma o lugar do check na linha destacada (ponteiro ou teclado) e Delete fecha a aba
-// destacada; o menu continua aberto, menos quando a aba tem alteração não salva (fechar pede confirmação num diálogo).
+// destacada; o menu continua aberto, menos quando a aba tem alteração não salva (fechar pede confirmação num diálogo) ou quando a lista
+// esvazia (o painel Terminal se esconde e o menu ficaria vazio, sem âncora).
 import { type KeyboardEvent, type ReactNode, useState } from 'react';
 import { Check, List, X } from 'lucide-react';
 import { Button, DropdownMenu } from '@lobehub/ui/base-ui';
@@ -64,7 +65,7 @@ export function TabListMenu({ items, active, placement = 'bottomRight', children
     onClick: item.onSelect,
   }));
   return (
-    <DropdownMenu items={menu} placement={placement} open={open} onOpenChange={setOpen} popupProps={{ onKeyDown }}>
+    <DropdownMenu items={menu} placement={placement} open={open && items.length > 0} onOpenChange={setOpen} popupProps={{ onKeyDown }}>
       {children ?? (
         <Button
           type="text" size="small" icon={<List className="size-3.5" />} className="shrink-0 self-center"

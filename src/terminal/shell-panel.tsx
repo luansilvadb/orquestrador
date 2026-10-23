@@ -19,14 +19,14 @@ const COMPACT_WIDTH = 460;
 const DEFAULT_SIZE = { height: SHELL_HEIGHT };
 
 // `title` é o completo (pasta e programa), para o tooltip; `program` é '' até o backend responder.
-export type ShellTab = { id: string; title: string; program: string; project: string | null };
+export type ShellTab = { id: string; n: number; title: string; program: string; project: string | null };
 
 // Acha a aba pelo `data-shell` e a revela na faixa (a regra de rolagem está em tab-strip).
 const reveal = (box: HTMLDivElement, id: string) => revealTab(box, box.querySelector<HTMLElement>(`[data-shell="${id}"]`));
 
-// O número vem do id `shell-N`, então não muda quando outra aba fecha; o programa é o que corta quando falta espaço.
+// O número é fixo na aba, então não muda quando outra fecha; o programa é o que corta quando falta espaço.
 function shellNumber(tab: ShellTab) {
-  return `Terminal ${tab.id.match(/(\d+)$/)?.[1] ?? ''}`;
+  return `Terminal ${tab.n}`;
 }
 
 function shellLabel(tab: ShellTab) {
