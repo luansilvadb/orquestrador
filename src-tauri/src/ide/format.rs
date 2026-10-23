@@ -3,7 +3,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use std::env;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -67,7 +67,21 @@ fn executable_in_path(name: &str) -> bool {
     })
 }
 
-fn config_file(path: &Path) -> Result<(Option<String>, &'static str), String> {
+#[derive(Debug, PartialEq)]
+enum Config {
+    Found(Option<String>, &'static str),
+    /// Configuração em JS, TS, JSON5 ou TOML: o Prettier do editor não a lê, e formatar sem ela mudaria o estilo.
+    Unsupported(PathBuf),
+}
+
+const UNSUPPORTED_CONFIGS: [&str; 14] = [
+    ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs", ".prettierrc.ts", ".prettierrc.cts", ".prettierrc.mts",
+    ".prettierrc.json5", ".prettierrc.toml",
+    "prettier.config.js", "prettier.config.cjs", "prettier.config.mjs", "prettier.config.ts", "prettier.config.cts",
+    "prettier.config.mts",
+];
+
+fn config_file(path: &Path) -> Result<Config, String> {
     for dir in path.ancestors() {
         for (name, kind) in [
             (".prettierrc", "auto"),
@@ -79,30 +93,75 @@ fn config_file(path: &Path) -> Result<(Option<String>, &'static str), String> {
             if file.is_file() {
                 let text = std::fs::read_to_string(&file)
                     .map_err(|e| format!("Não foi possível ler {}: {e}", file.display()))?;
-                return Ok((Some(text), kind));
+                return Ok(Config::Found(Some(text), kind));
             }
+        }
+        if let Some(file) = UNSUPPORTED_CONFIGS.iter().map(|name| dir.join(name)).find(|file| file.is_file()) {
+            return Ok(Config::Unsupported(file));
         }
         let package = dir.join("package.json");
         if package.is_file() {
             let text = std::fs::read_to_string(&package).map_err(|e| format!("Não foi possível ler {}: {e}", package.display()))?;
-            let value: Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", package.display()))?;
+            let value: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+                .map_err(|e| format!("{}: {e}", package.display()))?;
             if let Some(config) = value.get("prettier").filter(|config| !config.is_null()) {
-                return Ok((Some(config.to_string()), "json"));
+                return Ok(Config::Found(Some(config.to_string()), "json"));
             }
         }
     }
-    Ok((None, "json"))
+    Ok(Config::Found(None, "json"))
+}
+
+/// Troca cada `{a,b}` pelas alternativas; chaves sem vírgula ficam literais.
+fn expand_braces(pattern: &str) -> Vec<String> {
+    let Some(open) = pattern.find('{') else { return vec![pattern.to_string()] };
+    let mut depth = 0;
+    let mut commas = Vec::new();
+    let mut close = None;
+    for (i, c) in pattern.char_indices().skip_while(|(i, _)| *i < open) {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 { close = Some(i); break; }
+            }
+            ',' if depth == 1 => commas.push(i),
+            _ => {}
+        }
+    }
+    let Some(close) = close else { return vec![pattern.to_string()] };
+    let suffix = &pattern[close + 1..];
+    if commas.is_empty() {
+        return expand_braces(suffix).into_iter().map(|tail| format!("{}{tail}", &pattern[..=close])).collect();
+    }
+    let mut bounds = vec![open];
+    bounds.extend(commas);
+    bounds.push(close);
+    bounds.windows(2)
+        .flat_map(|w| expand_braces(&format!("{}{}{suffix}", &pattern[..open], &pattern[w[0] + 1..w[1]])))
+        .collect()
+}
+
+/// `*`, `**` e `?` sobre o nome do arquivo, sem diferenciar maiúsculas.
+fn glob_matches(pattern: &[char], name: &[char]) -> bool {
+    match pattern.split_first() {
+        None => name.is_empty(),
+        Some(('*', rest)) => (0..=name.len()).any(|skip| glob_matches(rest, &name[skip..])),
+        Some(('?', rest)) => !name.is_empty() && glob_matches(rest, &name[1..]),
+        Some((c, rest)) => name.first().is_some_and(|n| n.eq_ignore_ascii_case(c)) && glob_matches(rest, &name[1..]),
+    }
 }
 
 fn section_matches(section: &str, name: &str) -> bool {
-    if section == "*" {
-        return true;
-    }
-    let Some((_, ext)) = name.rsplit_once('.') else { return false };
-    if let Some(exts) = section.strip_prefix("*.{").and_then(|s| s.strip_suffix('}')) {
-        return exts.split(',').any(|candidate| candidate.trim().eq_ignore_ascii_case(ext));
-    }
-    section.strip_prefix("*.").is_some_and(|candidate| candidate.eq_ignore_ascii_case(ext))
+    let name: Vec<char> = name.chars().collect();
+    expand_braces(section).iter().any(|pattern| {
+        let pattern = pattern.strip_prefix("**/").unwrap_or(pattern);
+        // Padrões com pasta dependem do caminho relativo ao .editorconfig, que não é comparado aqui.
+        if pattern.contains('/') { return false; }
+        let mut chars: Vec<char> = pattern.chars().collect();
+        chars.dedup_by(|a, b| *a == '*' && *b == '*');
+        glob_matches(&chars, &name)
+    })
 }
 
 fn set_editor_option(options: &mut Map<String, Value>, key: &str, value: &str) {
@@ -227,8 +286,14 @@ pub fn info(path: &Path) -> Result<Info, String> {
     let directory = validate_path(path)?;
     match engine(path) {
         Some(Engine::Prettier) => {
-            let (config, config_kind) = config_file(directory)?;
-            Ok(Info::Prettier { config, config_kind, options: editorconfig_options(directory, path)? })
+            match config_file(directory)? {
+                Config::Found(config, config_kind) => {
+                    Ok(Info::Prettier { config, config_kind, options: editorconfig_options(directory, path)? })
+                }
+                Config::Unsupported(file) => Ok(Info::Unavailable {
+                    reason: format!("Configuração do Prettier em JS, TS, JSON5 ou TOML não é suportada: {}", file.display()),
+                }),
+            }
         }
         Some(Engine::Python) if executable_in_path("ruff") => Ok(Info::Cli { formatter: "ruff" }),
         Some(Engine::Python) if executable_in_path("black") => Ok(Info::Cli { formatter: "black" }),
@@ -244,29 +309,56 @@ pub fn info(path: &Path) -> Result<Info, String> {
     }
 }
 
+/// Pares chave e valor de uma seção do TOML, com a chave sem espaços (`edition . workspace` vira `edition.workspace`).
+fn toml_entries<'a>(text: &'a str, section: &str) -> Vec<(String, &'a str)> {
+    let mut inside = false;
+    let mut entries = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') && line.ends_with(']') {
+            inside = line == section;
+        } else if inside {
+            if let Some((key, value)) = line.split_once('=') {
+                entries.push((key.split_whitespace().collect(), value.trim()));
+            }
+        }
+    }
+    entries
+}
+
+fn edition_value(value: &str) -> Option<String> {
+    let edition = value.trim_matches('"').trim_matches('\'');
+    (!edition.is_empty()).then(|| edition.to_string())
+}
+
+fn workspace_edition(directory: &Path) -> Option<String> {
+    for dir in directory.ancestors() {
+        let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else { continue };
+        if !text.lines().map(str::trim).any(|line| line == "[workspace]" || line.starts_with("[workspace.")) { continue; }
+        return toml_entries(&text, "[workspace.package]").into_iter()
+            .find(|(key, _)| key == "edition")
+            .and_then(|(_, value)| edition_value(value));
+    }
+    None
+}
+
 fn cargo_edition(directory: &Path) -> String {
     for dir in directory.ancestors() {
-        let manifest = dir.join("Cargo.toml");
-        let Ok(text) = std::fs::read_to_string(manifest) else { continue };
-        let mut package = false;
-        for line in text.lines().map(str::trim) {
-            if line.starts_with('[') && line.ends_with(']') {
-                package = line == "[package]";
-            } else if package {
-                if let Some((key, value)) = line.split_once('=') {
-                    if key.trim() == "edition" {
-                        let edition = value.trim().trim_matches('"').trim_matches('\'');
-                        if !edition.is_empty() { return edition.to_string(); }
-                    }
-                }
-            }
+        let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else { continue };
+        for (key, value) in toml_entries(&text, "[package]") {
+            let edition = match key.as_str() {
+                "edition.workspace" => workspace_edition(dir),
+                "edition" if value.starts_with('{') => value.contains("workspace").then(|| workspace_edition(dir)).flatten(),
+                "edition" => edition_value(value),
+                _ => continue,
+            };
+            if let Some(edition) = edition { return edition; }
         }
         break;
     }
     "2021".into()
 }
 
-fn run(mut command: Command, input: &str) -> Result<String, String> {
+fn run(mut command: Command, input: &str, timeout: Duration) -> Result<String, String> {
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|e| format!("O formatador não pôde iniciar: {e}"))?;
     let stdin = child.stdin.take().unwrap();
@@ -280,7 +372,7 @@ fn run(mut command: Command, input: &str) -> Result<String, String> {
     let (status, timed_out) = loop {
         match child.try_wait() {
             Ok(Some(status)) => break (status, false),
-            Ok(None) if started.elapsed() < TIMEOUT => thread::sleep(Duration::from_millis(20)),
+            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(20)),
             Ok(None) => {
                 let _ = child.kill();
                 break (child.wait().map_err(|e| format!("Não foi possível encerrar o formatador: {e}"))?, true);
@@ -300,7 +392,7 @@ fn run(mut command: Command, input: &str) -> Result<String, String> {
     let stderr = String::from_utf8_lossy(&error).trim().to_string();
     if timed_out {
         let detail = if stderr.is_empty() { String::new() } else { format!(" {stderr}") };
-        return Err(format!("O formatador excedeu o limite de 15 s.{detail}"));
+        return Err(format!("O formatador excedeu o limite de {} s.{detail}", timeout.as_secs()));
     }
     if !status.success() {
         return Err(if stderr.is_empty() { format!("O formatador falhou (código {}).", status.code().unwrap_or(-1)) }
@@ -344,7 +436,7 @@ pub fn format_cli(path: &Path, text: &str) -> Result<String, String> {
         _ => return Err("Nenhum formatador de linha de comando para esta extensão.".into()),
     };
     command.current_dir(directory);
-    run(command, text)
+    run(command, text, TIMEOUT)
 }
 
 #[cfg(test)]
@@ -402,9 +494,122 @@ mod tests {
         write(&tmp.0, ".prettierrc.json", "{\"singleQuote\":true}");
         write(&nested, ".prettierrc.yaml", "singleQuote: false\n");
         let found = config_file(&nested).unwrap();
-        assert_eq!(found, (Some("singleQuote: false\n".into()), "yaml"));
+        assert_eq!(found, Config::Found(Some("singleQuote: false\n".into()), "yaml"));
         std::fs::remove_file(nested.join(".prettierrc.yaml")).unwrap();
-        assert_eq!(config_file(&nested).unwrap(), (Some("{\"singleQuote\":true}".into()), "json"));
+        assert_eq!(config_file(&nested).unwrap(), Config::Found(Some("{\"singleQuote\":true}".into()), "json"));
+    }
+
+    #[test]
+    fn configuracao_em_js_ts_json5_ou_toml_deixa_o_prettier_indisponivel() {
+        let tmp = Tmp::new("orq-format", "prettier-js");
+        let nested = tmp.0.join("src");
+        write(&tmp.0, ".prettierrc", "{\"singleQuote\":true}");
+        write(&nested, "a.ts", "let a = 1\n");
+        for name in UNSUPPORTED_CONFIGS {
+            write(&nested, name, "");
+            assert_eq!(config_file(&nested).unwrap(), Config::Unsupported(nested.join(name)), "{name}");
+            std::fs::remove_file(nested.join(name)).unwrap();
+        }
+        write(&nested, "prettier.config.mjs", "export default {};\n");
+        let Info::Unavailable { reason } = info(&nested.join("a.ts")).unwrap() else { panic!("deveria estar indisponível") };
+        assert!(reason.contains("não é suportada") && reason.contains("prettier.config.mjs"), "{reason}");
+        assert_eq!(std::fs::read_to_string(nested.join("a.ts")).unwrap(), "let a = 1\n");
+    }
+
+    #[test]
+    fn package_json_com_bom_e_lido() {
+        let tmp = Tmp::new("orq-format", "package-bom");
+        write(&tmp.0, "package.json", "\u{feff}{\"prettier\":{\"semi\":false}}");
+        assert_eq!(config_file(&tmp.0).unwrap(), Config::Found(Some("{\"semi\":false}".into()), "json"));
+    }
+
+    #[test]
+    fn secoes_do_editorconfig_aceitam_listas_nomes_e_dois_asteriscos() {
+        assert!(section_matches("{package.json,.travis.yml}", "package.json"));
+        assert!(section_matches("{package.json,.travis.yml}", ".travis.yml"));
+        assert!(!section_matches("{package.json,.travis.yml}", "other.json"));
+        assert!(section_matches("package.json", "package.json"));
+        assert!(!section_matches("package.json", "a.json"));
+        assert!(section_matches("**.js", "a.js"));
+        assert!(!section_matches("**.js", "a.ts"));
+        assert!(section_matches("*", "Makefile"));
+        assert!(section_matches("*.{md,markdown}", "README.MD"));
+        assert!(section_matches("*.{js,{ts,tsx}}", "a.tsx"));
+        assert!(!section_matches("*.js", "a.json"));
+        assert!(section_matches("**/*.rs", "lib.rs"));
+
+        let tmp = Tmp::new("orq-format", "editorconfig-secoes");
+        write(&tmp.0, ".editorconfig", "root = true\n[*]\nindent_size = 4\n[{package.json,.travis.yml}]\nindent_size = 2\n");
+        let options = editorconfig_options(&tmp.0, &tmp.0.join("package.json")).unwrap();
+        assert_eq!(options.get("tabWidth"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn edicao_herdada_do_workspace() {
+        let tmp = Tmp::new("orq-format", "cargo-workspace");
+        let member = tmp.0.join("crates").join("app");
+        let src = member.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        write(&tmp.0, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.package]\nedition = \"2024\"\n");
+        write(&member, "Cargo.toml", "[package]\nname = \"app\"\nedition.workspace = true\n");
+        assert_eq!(cargo_edition(&src), "2024");
+        write(&member, "Cargo.toml", "[package]\nname = \"app\"\nedition = { workspace = true }\n");
+        assert_eq!(cargo_edition(&src), "2024");
+        write(&member, "Cargo.toml", "[package]\nname = \"app\"\nedition = \"2018\"\n");
+        assert_eq!(cargo_edition(&src), "2018");
+        write(&member, "Cargo.toml", "[package]\nname = \"app\"\n");
+        assert_eq!(cargo_edition(&src), "2021");
+    }
+
+    #[cfg(windows)]
+    fn print_file(file: &Path) -> Command {
+        let mut cmd = crate::proc::quiet("cmd");
+        cmd.arg("/C").arg("type").arg(file);
+        cmd
+    }
+
+    #[cfg(not(windows))]
+    fn print_file(file: &Path) -> Command {
+        let mut cmd = crate::proc::quiet("cat");
+        cmd.arg(file);
+        cmd
+    }
+
+    #[test]
+    fn run_encerra_o_processo_que_passa_do_prazo() {
+        #[cfg(windows)]
+        let cmd = {
+            let mut cmd = crate::proc::quiet("ping");
+            cmd.args(["-n", "30", "127.0.0.1"]);
+            cmd
+        };
+        #[cfg(not(windows))]
+        let cmd = {
+            let mut cmd = crate::proc::quiet("sleep");
+            cmd.arg("30");
+            cmd
+        };
+        let started = Instant::now();
+        let error = run(cmd, "", Duration::from_millis(300)).unwrap_err();
+        assert!(error.contains("excedeu o limite"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn run_le_a_saida_grande_inteira() {
+        let tmp = Tmp::new("orq-format", "saida-grande");
+        let line = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ\n";
+        let text = line.repeat(1024 * 1024 / line.len() + 1);
+        write(&tmp.0, "grande.txt", &text);
+        assert_eq!(run(print_file(&tmp.0.join("grande.txt")), "", TIMEOUT).unwrap(), text);
+    }
+
+    #[test]
+    fn run_recusa_saida_fora_do_utf8() {
+        let tmp = Tmp::new("orq-format", "saida-binaria");
+        write(&tmp.0, "binario.txt", b"abc\xff\x80def");
+        let error = run(print_file(&tmp.0.join("binario.txt")), "", TIMEOUT).unwrap_err();
+        assert!(error.contains("UTF-8"), "{error}");
     }
 
     #[test]
