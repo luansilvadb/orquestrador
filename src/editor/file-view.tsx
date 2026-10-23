@@ -520,7 +520,11 @@ export function CodeEditor({
     const current = view.current;
     if (!current) return;
     const old = current.state.doc.toString();
-    if (old === text) return;
+    // Eco do documento atual: os anteriores já não valem, e um deles não pode esconder um texto de fora igual a ele.
+    if (old === text) {
+      echoes.current = [];
+      return;
+    }
     const echo = echoes.current.lastIndexOf(text);
     if (echo >= 0) {
       // Eco de uma digitação já feita aqui: o documento está à frente, então só descarta os ecos já vistos.

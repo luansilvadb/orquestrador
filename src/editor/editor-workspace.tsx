@@ -629,6 +629,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const path = tab.target.path;
     // Mídia não tem texto: a aba lê o próprio arquivo (`MediaView`) e não cria buffer, então nada aqui a grava ou a torna suja.
     if (mediaOf(path)) return;
+    const raw = dataRef.current.buffers[docId]?.raw;
     let file: FileContent;
     try {
       file = await backend.readFile(path);
@@ -638,6 +639,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       return;
     }
     if (!allTabs().some((t) => t.target.kind === 'file' && t.target.docId === docId)) return;
+    // Gravação durante a leitura: a resposta pode ser de antes dela e trocaria o buffer recém-salvo.
+    if (saving.current.has(docId) || dataRef.current.buffers[docId]?.raw !== raw) return;
     if (file.binary || file.tooLarge) {
       setStatusOf(docId, file.binary ? { binary: true } : { large: true });
       return;
@@ -975,11 +978,11 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     }
     if (saving.current.has(choice.docId)) return;
     saving.current.add(choice.docId);
-    const sent = toDiskNewlines(choice.draft, newlineOf(choice.disk.text));
+    const sent = toDiskNewlines(choice.draft, buffer.newline);
     const failed = await backend.writeFileChecked(buffer.path, sent, choice.disk.text, choice.disk.bom)
       .then(() => {
         // Quem digitou durante o await continua sujo: o `raw` vira o texto gravado, e o `draft` atual fica como está.
-        patchBuffer(choice.docId, (b) => ({ ...b, raw: sent, bom: choice.disk.bom, newline: newlineOf(choice.disk.text) }));
+        patchBuffer(choice.docId, (b) => ({ ...b, raw: sent, bom: choice.disk.bom }));
         clearDisk(choice.docId);
         setStatusOf(choice.docId, {});
         refreshGit();

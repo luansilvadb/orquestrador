@@ -1,6 +1,6 @@
 // QA de interface do editor central, em Chrome headless contra o app simulado (src/backend/mock.ts, só no `vite` de desenvolvimento).
 // Cada cenário roda com contexto de navegador próprio (localStorage e clipboard fakes limpos) e interage pela UI. O mock só entra
-// na fronteira de I/O: fixtures (`__mock.addFile`), edição externa (`__mock.external`), latência (`__mock.delay`) e o disco (`__mock.disk`).
+// na fronteira de I/O: fixtures (`__mock.addFile`), edição externa (`__mock.external`), latência (`__mock.delay`, `__mock.lateRead`) e o disco (`__mock.disk`).
 // Loader compartilhado em editor-ui-harness.mjs: Vite na porta 1421 (SMOKE_PORT), encerrado só aqui, e o browser deste teste. Não instala nada.
 // Uso: node tests/check-editor-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 // Capturas em .playwright-mcp/editor-ui-*.png: evidência para leitura humana, não asserção.
@@ -320,6 +320,39 @@ scenario('edição externa: modal mostra disco e rascunho; Cancelar não grava; 
   const onDisk = await page.evaluate(() => window.__mock.disk('README.md'));
   assert.ok(onDisk.endsWith(' local') && !onDisk.includes('EXTERNO'), `Salvar gravou o rascunho sobre a base revista (${JSON.stringify(onDisk.slice(-40))})`);
   assert.equal(await page.locator('[aria-label="Alteração não salva"]').count(), 0, 'sem alteração pendente depois de gravar');
+});
+
+scenario('disco revertido por fora ao texto que já passou pelo editor: o editor mostra o disco e não grava por cima', async ({ page }) => {
+  const original = await page.evaluate(() => window.__mock.disk('README.md'));
+  await treeItem(page, 'README.md').dblclick();
+  await focusEditor(page);
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('x');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.type('y');
+  await page.keyboard.press('Control+s');
+  await page.waitForFunction((o) => window.__mock.disk('README.md') === `${o}y`, original);
+  await page.evaluate((o) => window.__mock.external('README.md', o), original);
+  // A sincronização do disco roda a cada 2,5 s.
+  await page.waitForFunction(() => !document.querySelector('.cm-content:not([aria-hidden])')?.textContent.endsWith('y'), null, { timeout: 7000 });
+  assert.equal(await page.locator('[aria-label="Alteração não salva"]').count(), 0, 'sem alteração pendente depois da reversão');
+  assert.equal(await page.evaluate(() => window.__mock.disk('README.md')), original, 'o disco segue revertido');
+});
+
+scenario('leitura do disco que chega depois do Ctrl+S não troca o texto recém-salvo', async ({ page }) => {
+  await treeItem(page, 'README.md').dblclick();
+  await focusEditor(page);
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type(' salvo');
+  // Espera uma leitura da sincronização já feita no disco e ainda a caminho, e salva antes de ela chegar.
+  await page.evaluate(() => { window.__mock.lateRead = 1500; window.__readsBefore = window.__mock.calls.filter((c) => c.cmd === 'read_file').length; });
+  await page.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === 'read_file' && c.completedAt !== null).length > window.__readsBefore, null, { timeout: 5000 });
+  await page.keyboard.press('Control+s');
+  await page.waitForFunction(() => window.__mock.disk('README.md').endsWith(' salvo'));
+  await page.waitForTimeout(2000);
+  assert.ok((await editorText(page)).endsWith(' salvo'), 'o editor mantém o texto salvo');
+  assert.equal(await page.locator('[aria-label="Alteração não salva"]').count(), 0, 'sem alteração pendente depois de salvar');
+  assert.ok((await page.evaluate(() => window.__mock.disk('README.md'))).endsWith(' salvo'), 'o disco mantém o texto salvo');
 });
 
 scenario('fechar a janela: Cancelar mantém a janela e o rascunho; nada é gravado', async ({ page }) => {
