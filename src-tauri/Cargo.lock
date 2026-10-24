@@ -2559,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "orquestrador"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "base64 0.22.1",
  "ignore",
