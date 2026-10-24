@@ -1,6 +1,6 @@
 # Arquitetura
 
-O front-end (React) fica em `src/` e o backend (Rust, Tauri) em `src-tauri/src/`. O mesmo `orquestrador.exe` atende também os modos `--mcp`, `--hook`, `--memoria` e `--allow`, que os CLIs chamam. Os caminhos são relativos à raiz do repositório.
+O front-end (React) fica em `src/` e o backend (Rust, Tauri) em `src-tauri/src/`. O mesmo `orquestrador.exe` atende também os modos `--mcp`, `--hook` e `--allow`, que os CLIs chamam. Os caminhos são relativos à raiz do repositório.
 
 ## Front-end (`src/`)
 
@@ -80,8 +80,7 @@ A raiz guarda a infraestrutura (comandos Tauri, configuração, processos, atual
 | `src-tauri/src/platform/` | O único lugar das chamadas ao sistema operacional: Job Objects, consulta de processo, COM e a Lixeira, o Explorer, a abertura de URLs do GitHub, o clipboard de arquivos, a memória física, as pastas do usuário e os nomes dos shells. `windows.rs` implementa; `other.rs` (macOS e Linux) responde "Ainda não suportado neste sistema." ou devolve `None`, conforme o chamador já trata a ausência. Fora daqui não há `windows_sys` nem `std::os::windows`. |
 | `src-tauri/src/core/capacity.rs` | Política compartilhada de simultâneos: teto pela CPU e memória física (`platform::memoria`), com reserva de 2 GiB e 1 GiB por executor, e fila global FIFO. |
 | `src-tauri/src/agents/delegate.rs` | A lógica de delegação: publica o lote na pasta da sessão, espera o resultado, imprime o lote e grava as respostas às perguntas de executor. |
-| `src-tauri/src/agents/mcp.rs` | O servidor MCP da sessão, `orquestrador.exe --mcp <pasta da sessão>`: fala JSON-RPC pela entrada e saída padrão e expõe `delegar`, `aguardar` e `memoria`. |
-| `src-tauri/src/agents/memory.rs` | A memória de contexto do orquestrador, em `<sessão>\memoria\`: o modo `--memoria` (hooks do Claude e do Codex), a lembrança pós-compactação, a busca e a ferramenta `memoria`. Ver [delegação](delegacao.md). |
+| `src-tauri/src/agents/mcp.rs` | O servidor MCP da sessão, `orquestrador.exe --mcp <pasta da sessão>`: fala JSON-RPC pela entrada e saída padrão e expõe `delegar` e `aguardar`. |
 | `src-tauri/src/agents/hook.rs` | O modo `--hook` do executável, chamado pelos CLIs dos executores no fim de cada rodada. O `--allow` imprime `cli::ALLOW` direto do `main.rs`; o `--mcp`, do orquestrador, está em `mcp.rs`. |
 | `src-tauri/src/agents/session.rs` | A sessão do orquestrador: a pasta do funcionamento interno (o orquestrador trabalha na pasta do projeto), `AGENTS.md` com o papel, `mcp.json` e `claude-settings.json` do Claude, e a limpeza das sobras, inclusive das regras do Codex que versões antigas deixavam em `CODEX_HOME` (até 2027-02-01). |
 | `src-tauri/src/agents/roles.rs` | Os textos enviados ao orquestrador (no Claude, pelo `AGENTS.md` da sessão com `--append-system-prompt-file`; no Codex, por `developer_instructions`) e a cada executor, antes da tarefa: a única fonte da regra de cada papel, sem trava no app. O texto do orquestrador é o mesmo para Claude Code e Codex; o protocolo das ferramentas (marcadores e próxima chamada) fica nas saídas delas, em `mcp.rs`, `delegate.rs` e `core.rs`. |

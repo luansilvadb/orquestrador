@@ -29,7 +29,7 @@ pub fn unique() -> String {
 }
 
 /// Publica `bytes` como `dir\name`, por renomeação: quem lê a pasta nunca pega o arquivo pela metade.
-pub fn put(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+fn put(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = dir.join(format!("{name}.tmp"));
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, dir.join(name))

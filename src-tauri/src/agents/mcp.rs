@@ -1,10 +1,7 @@
 //! O servidor MCP do orquestrador: `orquestrador.exe --mcp <pasta da sessão>`. O CLI do orquestrador o abre como
 //! servidor stdio e fala com ele em JSON-RPC 2.0, uma mensagem por linha, pela entrada e pela saída padrão. As
-//! ferramentas são `delegar` e `aguardar`, que agem sobre o lote da sessão (`delegate.rs`), e `memoria`, que
-//! consulta o que o app guardou da conversa (`memory.rs`). Os lotes publicados e os resultados entregues também
-//! viram entradas dessa memória.
+//! ferramentas são `delegar` e `aguardar`, e cada uma age sobre o lote da sessão (`delegate.rs`).
 use crate::agents::delegate::{self, Waited};
-use crate::agents::memory;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -55,25 +52,16 @@ pub fn serve_io<W: Write + Send + 'static>(input: impl BufRead, output: W, sessi
         let (out, session) = (Arc::clone(&out), session.clone());
         calls.push(std::thread::spawn(move || {
             // Erro vira resposta com `isError`; a marca do lote só vem com o resultado.
-            let (text, is_error, marker) = if name == "memoria" {
-                match recall(&session, &args) {
-                    Ok(text) => (text, false, None),
-                    Err(why) => (why, true, None),
-                }
-            } else {
-                match dispatch(&session, &name, &args, window) {
-                    Ok(Waited::Result { text, marker }) => (text, false, Some(marker)),
-                    Ok(Waited::Running) => (RUNNING.into(), false, None),
-                    Err(why) => (why, true, None),
-                }
+            let (text, is_error, marker) = match dispatch(&session, &name, &args, window) {
+                Ok(Waited::Result { text, marker }) => (text, false, Some(marker)),
+                Ok(Waited::Running) => (RUNNING.into(), false, None),
+                Err(why) => (why, true, None),
             };
             let reply = json!({ "jsonrpc": "2.0", "id": id, "result": { "content": [{ "type": "text", "text": text }], "isError": is_error } });
-            // A marca só entra depois que a resposta saiu inteira: se a saída falhar, o lote segue pendente. O resultado
-            // entregue vira entrada da memória no mesmo ponto; falhar ao gravar não muda a resposta, que já saiu.
+            // A marca só entra depois que a resposta saiu inteira: se a saída falhar, o lote segue pendente.
             if write(&out, &reply) {
                 if let Some(marker) = marker {
                     let _ = std::fs::write(marker, "");
-                    memory::record(&session, memory::RESULTADO, &text);
                 }
             }
         }));
@@ -100,7 +88,7 @@ fn error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// As três ferramentas do orquestrador, com o que cada uma recebe.
+/// As duas ferramentas do orquestrador, com o que cada uma recebe.
 fn tools() -> Value {
     json!([
         {
@@ -124,43 +112,17 @@ fn tools() -> Value {
             "description": "Espera de novo o lote mais recente que ainda não foi entregue, sem publicar nada.",
             "inputSchema": { "type": "object", "properties": {} },
         },
-        {
-            "name": "memoria",
-            "description": "Busca no texto literal que o app guardou desta conversa (pedidos, respostas, lotes, resultados e o transcript, inclusive o que o resumo da compactação deixou de fora) e abre entradas inteiras. Sem argumentos, lista as entradas mais recentes.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "consulta": { "type": "string", "description": "Termos a buscar (palavras de 3 ou mais letras, sem distinção de maiúsculas e acentos). Devolve até 8 trechos com o id de cada um." },
-                    "entrada": { "type": "string", "description": "Id de uma entrada (como e12) ou de uma linha do transcript (como t345), para ler o texto integral." },
-                    "parte": { "type": "integer", "minimum": 1, "description": "Com `entrada`: a parte do texto, quando ele passa de 20000 caracteres. Padrão: 1." },
-                },
-            },
-        },
     ])
 }
 
-/// Roda a ferramenta `name` sobre a sessão e espera o lote por até `window`. O lote publicado vira entrada `lote` da
-/// memória.
+/// Roda a ferramenta `name` sobre a sessão e espera o lote por até `window`.
 fn dispatch(session: &Path, name: &str, args: &Value, window: Duration) -> Result<Waited, String> {
     if !matches!(name, "delegar" | "aguardar") {
         return Err(format!("Ferramenta desconhecida: {name}."));
     }
     delegate::check_session(session)?;
-    let id = if name == "delegar" {
-        let tasks = tasks(args)?;
-        let id = delegate::publish(session, &tasks)?;
-        memory::record(session, memory::LOTE, &memory::batch_text(&tasks));
-        id
-    } else {
-        delegate::resume(session)?
-    };
+    let id = if name == "delegar" { delegate::publish(session, &tasks(args)?)? } else { delegate::resume(session)? };
     delegate::wait(session, &id, window)
-}
-
-/// A ferramenta `memoria`: só lê, e nunca espera lote.
-fn recall(session: &Path, args: &Value) -> Result<String, String> {
-    delegate::check_session(session)?;
-    memory::tool(session, args)
 }
 
 fn tasks(args: &Value) -> Result<Vec<String>, String> {
@@ -246,20 +208,15 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_traz_as_tres_ferramentas_com_esquema() {
+    fn tools_list_traz_as_duas_ferramentas_com_esquema() {
         let s = &session("orq-mcp", "list", true).0;
         let got = talk("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\"}\n", &s);
         let tools = got[0]["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["delegar", "aguardar", "memoria"]);
+        assert_eq!(names, ["delegar", "aguardar"]);
         assert!(tools.iter().all(|t| t["description"].is_string() && t["inputSchema"]["type"] == "object"));
         assert_eq!(tools[0]["inputSchema"]["required"], json!(["tarefas"]));
         assert_eq!(tools[0]["inputSchema"]["properties"]["tarefas"]["minItems"], 1);
-        let props = tools[2]["inputSchema"]["properties"].as_object().unwrap();
-        assert_eq!(props.keys().collect::<Vec<_>>(), ["consulta", "entrada", "parte"]);
-        assert!(tools[2]["inputSchema"].get("required").is_none(), "todos os argumentos são opcionais");
-        assert_eq!(props["parte"]["type"], "integer");
-        assert_eq!(props["parte"]["minimum"], 1);
     }
 
     #[test]
@@ -360,68 +317,6 @@ mod tests {
             assert!(is_error && text == "A pasta não é uma sessão ativa do orquestrador.", "{text}");
         }
         assert_eq!(std::fs::read_dir(s.join("requests")).unwrap().count(), 0, "nada publicado");
-    }
-
-    #[test]
-    fn delegar_grava_o_lote_a_entrega_grava_o_resultado_e_em_andamento_nao_grava() {
-        let s = &session("orq-mcp", "mem-lote", true).0;
-        let got = talk(&call(30, "delegar", json!({ "tarefas": ["Tarefa \"A\"\nlinha 2 d'água", "B"] })), &s);
-        assert_eq!(text_of(&got[0]).0, RUNNING);
-        let kinds = |s: &Path| memory::list(s).into_iter().map(|e| (e.kind, e.text)).collect::<Vec<_>>();
-        let lote = ("lote".to_string(), "--- TAREFA 1/2 ---\nTarefa \"A\"\nlinha 2 d'água\n--- TAREFA 2/2 ---\nB\n".to_string());
-        assert_eq!(kinds(&s), [lote.clone()], "o lote entra; a janela vencida não grava nada");
-        let got = talk(&call(31, "aguardar", json!({})), &s);
-        assert_eq!(text_of(&got[0]).0, RUNNING);
-        assert_eq!(kinds(&s), [lote.clone()], "aguardar em andamento também não grava");
-        let id = std::fs::read_dir(s.join("requests")).unwrap().next().unwrap().unwrap().file_name().to_string_lossy().into_owned();
-        let result = "--- EXECUTOR 1/2 ---\nação \"ok\"\n--- FIM ---\n";
-        std::fs::write(s.join("results").join(format!("{id}.txt")), result).unwrap();
-        let got = talk(&call(32, "aguardar", json!({})), &s);
-        assert_eq!(text_of(&got[0]).0, result);
-        assert_eq!(kinds(&s), [lote, ("resultado".to_string(), result.to_string())]);
-    }
-
-    #[test]
-    fn memoria_falhar_ao_gravar_nao_muda_a_resposta() {
-        let s = &session("orq-mcp", "mem-falha", true).0;
-        std::fs::write(s.join("memoria"), "arquivo no lugar da pasta").unwrap();
-        let got = talk(&call(33, "delegar", json!({ "tarefas": ["A"] })), &s);
-        let (text, is_error) = text_of(&got[0]);
-        assert!(!is_error && text == RUNNING, "{text}");
-    }
-
-    #[test]
-    fn memoria_busca_abre_entrada_e_recusa_id_inexistente() {
-        let s = &session("orq-mcp", "mem-tool", true).0;
-        let hook = json!({ "hook_event_name": "UserPromptSubmit", "session_id": "c1", "prompt": "Decisão: o cadastro usa PostgreSQL" });
-        memory::handle(s, hook.to_string().as_bytes());
-        let input = [
-            call(40, "memoria", json!({ "consulta": "decisao postgresql" })),
-            call(41, "memoria", json!({ "entrada": "e1" })),
-            call(42, "memoria", json!({ "entrada": "e9" })),
-            call(43, "memoria", json!({})),
-            call(44, "memoria", json!({ "parte": "x", "entrada": "e1" })),
-        ]
-        .join("\n");
-        let got = talk(&input, &s);
-        let by_id = |id: u64| text_of(got.iter().find(|r| r["id"] == id).unwrap());
-        let (text, is_error) = by_id(40);
-        assert!(!is_error && text.contains("e1 pedido: Decisão: o cadastro usa PostgreSQL"), "{text}");
-        assert_eq!(by_id(41), ("e1 pedido, parte 1/1\nDecisão: o cadastro usa PostgreSQL".to_string(), false));
-        let (text, is_error) = by_id(42);
-        assert!(is_error && text.contains("inexistente"), "{text}");
-        let (text, is_error) = by_id(43);
-        assert!(!is_error && text.contains("e1 pedido: Decisão"), "{text}");
-        assert!(by_id(44).1, "`parte` que não é inteiro é erro da ferramenta");
-    }
-
-    #[test]
-    fn memoria_em_sessao_sem_dono_e_erro() {
-        let s = &session("orq-mcp", "mem-sem-dono", false).0;
-        std::fs::remove_file(s.join("owner")).unwrap();
-        let got = talk(&call(45, "memoria", json!({})), &s);
-        let (text, is_error) = text_of(&got[0]);
-        assert!(is_error && text == "A pasta não é uma sessão ativa do orquestrador.", "{text}");
     }
 
     #[test]

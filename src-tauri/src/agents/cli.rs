@@ -85,17 +85,8 @@ fn claude_settings(app: &str, mut extra: Value) -> String {
 /// PowerShell no Windows com Git Bash (medido com um stub que mostra a lista de ferramentas enviada ao modelo), e o
 /// orquestrador ficaria no Git Bash. `MCP_TOOL_TIMEOUT` dá às chamadas ao servidor do orquestrador os 15 minutos
 /// da espera de um lote. As duas entram só por este arquivo: o ambiente do usuário e o dos executores não mudam.
-/// Os hooks `SessionStart`, `UserPromptSubmit`, `Stop` e `PreCompact` chamam o app em `--memoria <pasta da sessão>`
-/// (`memory.rs`); só o orquestrador os recebe.
-pub fn orchestrator_settings(app: &str, session: &str) -> String {
-    let memory = json!([app_hook(app, &["--memoria", session])]);
-    claude_settings(
-        app,
-        json!({
-            "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" },
-            "hooks": { "SessionStart": memory, "UserPromptSubmit": memory, "Stop": memory, "PreCompact": memory },
-        }),
-    )
+pub fn orchestrator_settings(app: &str) -> String {
+    claude_settings(app, json!({ "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" } }))
 }
 
 /// O servidor MCP do orquestrador pela configuração do Codex, só para este processo: o app em modo `--mcp`, com a
@@ -115,30 +106,8 @@ fn codex_mcp(app: &str, dir: &str) -> Vec<String> {
     .collect()
 }
 
-/// Texto como literal do PowerShell: aspas simples, com `'` dobrado.
-fn pwsh(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
-}
-
-/// Os hooks da memória do orquestrador Codex, só para este processo: `SessionStart`, `UserPromptSubmit`, `Stop` e
-/// `PreCompact` chamam o app em `--memoria <pasta da sessão>` (`memory.rs`). Medido no Codex 0.163 (Windows): o
-/// `-c hooks.<Evento>=[{hooks=[{type="command",command="..."}]}]` vale no TUI e no `exec`, soma-se aos hooks do
-/// usuário e do projeto e só roda com `--dangerously-bypass-hook-trust` (em `codex_base`; sem ele o TUI abre "Hooks
-/// need review"). O Codex roda o `command` como `pwsh.exe -NoProfile -Command "<command>"` no cwd da sessão do
-/// CLI, então o comando é um literal PowerShell com o `&` (sem ele o caminho entre aspas é só uma string), e
-/// caminho com espaço, acento e apóstrofo passa se for citado em duas camadas: para o PowerShell (`pwsh`) e, sobre
-/// a string inteira, para o TOML (`toml`). O stdout do `pwsh` usa a codepage ibm850, por isso o `--memoria` imprime
-/// só ASCII. Sem `timeout`: o hook só grava um arquivo. Os executores não recebem nada disso.
-fn codex_memory(app: &str, dir: &str) -> Vec<String> {
-    let command = format!("& {} --memoria {}", pwsh(app), pwsh(dir));
-    ["SessionStart", "UserPromptSubmit", "Stop", "PreCompact"]
-        .into_iter()
-        .flat_map(|event| ["-c".to_string(), format!("hooks.{event}=[{{hooks=[{{type=\"command\",command={}}}]}}]", toml(&command))])
-        .collect()
-}
-
 /// O orquestrador: o CLI interativo com a mesma permissão dos executores, mais o servidor MCP do próprio app
-/// (`delegar`, `aguardar` e `memoria`) e, no Codex, os hooks da memória. Em qualquer CLI, inicia na pasta do projeto, como os executores, e carrega o contexto
+/// (`delegar` e `aguardar`). Em qualquer CLI, inicia na pasta do projeto, como os executores, e carrega o contexto
 /// dele pelo próprio CLI (instruções, skills, settings, MCPs e hooks); a pasta da sessão guarda só o funcionamento
 /// interno, e o papel vai pela linha de comando.
 pub fn orchestrator(exes: &Exes, choice: &Choice, project: &str, session: &Session) -> Spawn {
@@ -146,7 +115,6 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, project: &str, session: &Sessi
     let (program, mut args, env) = if choice.tool == "codex" {
         let mut args = codex_base(project);
         args.extend(codex_mcp(&exes.app, &dir));
-        args.extend(codex_memory(&exes.app, &dir));
         // O AGENTS.md lido é o do projeto; o papel entra como instrução de desenvolvedor, chave de topo do config.
         args.extend(["-c".to_string(), format!("developer_instructions={}", toml(&roles::orchestrator(project)))]);
         (exes.codex.clone(), args, vec![])
@@ -243,9 +211,6 @@ mod tests {
         let mcp_args = format!("mcp_servers.orquestrador.args=[\"--mcp\",{}]", serde_json::to_string(&dir).unwrap());
         let role = std::fs::read_to_string(s.dir.join("AGENTS.md")).unwrap();
         let instructions = format!("developer_instructions={}", serde_json::to_string(&role).unwrap());
-        let command = serde_json::to_string(&format!("& 'C:\\Program Files\\Orq\\o''rq.exe' --memoria '{dir}'")).unwrap();
-        let hook = |event: &str| format!("hooks.{event}=[{{hooks=[{{type=\"command\",command={command}}}]}}]");
-        let (start, prompt, stop, compact) = (hook("SessionStart"), hook("UserPromptSubmit"), hook("Stop"), hook("PreCompact"));
         assert_eq!(
             got.args,
             [
@@ -256,10 +221,6 @@ mod tests {
                 "-c", &mcp_args,
                 "-c", r#"mcp_servers.orquestrador.default_tools_approval_mode="approve""#,
                 "-c", "mcp_servers.orquestrador.tool_timeout_sec=900",
-                "-c", &start,
-                "-c", &prompt,
-                "-c", &stop,
-                "-c", &compact,
                 "-c", &instructions,
                 "-m", "gpt-5.5", "-c", "model_reasoning_effort=high",
             ]
@@ -287,22 +248,6 @@ mod tests {
         assert!(!got.args.iter().any(|a| a == "--plugin-dir" || a == "--add-dir"), "as skills vêm do carregamento nativo");
     }
 
-    #[test]
-    fn settings_do_orquestrador_claude_chamam_a_memoria_na_forma_args() {
-        let v: serde_json::Value = serde_json::from_str(&orchestrator_settings(&exes().app, r"C:\tmp\s p'ão")).unwrap();
-        for event in ["SessionStart", "UserPromptSubmit", "Stop", "PreCompact"] {
-            let groups = v["hooks"][event].as_array().unwrap();
-            assert_eq!(groups.len(), 1, "{event}");
-            assert!(groups[0].get("matcher").is_none(), "{event}: sem matcher");
-            assert_eq!(
-                groups[0]["hooks"],
-                json!([{ "type": "command", "command": r"C:\Program Files\Orq\o'rq.exe", "args": ["--memoria", r"C:\tmp\s p'ão"] }]),
-                "{event}"
-            );
-        }
-        assert_eq!(v["hooks"]["PermissionRequest"][0]["hooks"][0]["args"], json!(["--allow"]));
-    }
-
     /// Caminho do app, do projeto e da sessão com espaço, acento e apóstrofo: cada um entra como um argumento só, e
     /// no `-c` do Codex vai como texto TOML.
     #[test]
@@ -324,12 +269,6 @@ mod tests {
         assert!(got.args.contains(&format!("mcp_servers.orquestrador.command={}", toml(app))));
         assert!(got.args.contains(&format!("mcp_servers.orquestrador.args=[{},{}]", toml("--mcp"), toml(&dir))));
         assert!(got.args.contains(&format!("developer_instructions={}", toml(&roles::orchestrator(project)))));
-        let command = format!("& 'C:\\Users\\Maria Silva\\it''s\\ação\\orquestrador.exe' --memoria '{}'", dir.replace('\'', "''"));
-        assert!(command.contains("it''s") && command.contains("temp com espaço, açaí e it''s"));
-        for event in ["SessionStart", "UserPromptSubmit", "Stop", "PreCompact"] {
-            let hook = format!("hooks.{event}=[{{hooks=[{{type=\"command\",command={}}}]}}]", toml(&command));
-            assert_eq!(got.args.iter().filter(|a| **a == hook).count(), 1, "{event}");
-        }
         assert!(dir.contains("temp com espaço, açaí e it's"));
         let claude = orchestrator(&exes, &Choice::new("claude", "", ""), project, &s);
         assert_eq!(claude.cwd, project);
@@ -349,17 +288,12 @@ mod tests {
             ["--permission-mode", "bypassPermissions", "--settings", r"C:\tmp\s\exec\exec-1\settings.json", "--model", "sonnet", "--effort", "low", "PROMPT\nlinha 2"]
         );
         assert_eq!(got.env, [("CLAUDE_CODE_SANDBOXED".to_string(), "1".to_string())]);
-        let settings = settings.unwrap();
-        assert!(!settings.contains("--memoria"), "o executor não recebe a memória");
-        let v: serde_json::Value = serde_json::from_str(&settings).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&settings.unwrap()).unwrap();
         assert_eq!(v["skipDangerousModePermissionPrompt"], true);
         assert!(v.get("permissions").is_none() && v["hooks"].get("PreToolUse").is_none(), "nenhum comando barrado pelo app");
         let stop = &v["hooks"]["Stop"][0]["hooks"][0];
         assert_eq!(stop["command"], r"C:\Program Files\Orq\o'rq.exe");
         assert_eq!(stop["args"], serde_json::json!(["--hook", r"C:\tmp\s\exec\exec-1\hook"]));
-        let hooks = v["hooks"].as_object().unwrap();
-        assert!(["SessionStart", "UserPromptSubmit", "PreCompact"].iter().all(|e| !hooks.contains_key(*e)), "o executor não recebe os hooks da memória");
-        assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 1);
         let allow = &v["hooks"]["PermissionRequest"][0];
         assert_eq!(allow["hooks"][0]["command"], r"C:\Program Files\Orq\o'rq.exe");
         assert_eq!(allow["hooks"][0]["args"], serde_json::json!(["--allow"]));
@@ -386,7 +320,6 @@ mod tests {
         );
         assert!(!got.args.iter().any(|a| a.contains("PermissionRequest")), "o Codex não recebe o hook PermissionRequest");
         assert!(!got.args.iter().any(|a| a.contains("mcp_servers")), "o executor não recebe o servidor do orquestrador");
-        assert!(!got.args.iter().any(|a| a.contains("--memoria") || a.contains("hooks.")), "o executor não recebe a memória");
     }
 
     #[test]

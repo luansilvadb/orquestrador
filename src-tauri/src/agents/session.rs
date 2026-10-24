@@ -83,7 +83,7 @@ impl Session {
         if cfg.orchestrator.tool != "codex" {
             let mcp = json!({ "mcpServers": { "orquestrador": { "command": app, "args": ["--mcp", d.to_string_lossy()] } } });
             std::fs::write(d.join("mcp.json"), serde_json::to_string_pretty(&mcp).unwrap())?;
-            std::fs::write(d.join("claude-settings.json"), cli::orchestrator_settings(app, &d.to_string_lossy()))?;
+            std::fs::write(d.join("claude-settings.json"), cli::orchestrator_settings(app))?;
         }
         Ok(())
     }
@@ -236,27 +236,20 @@ pub mod tests {
         let (s, r) = Session::create(&p, APP, r"C:\proj", &cfg("claude"));
         r.unwrap();
         let agents = std::fs::read_to_string(s.dir.join("AGENTS.md")).unwrap();
-        assert!(!agents.contains("{{") && agents.contains("`delegar`") && agents.contains("`memoria`"), "{agents}");
+        assert!(!agents.contains("{{") && agents.contains("`delegar`"), "{agents}");
         let mcp: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("mcp.json")).unwrap()).unwrap();
         assert_eq!(mcp["mcpServers"]["orquestrador"]["command"], APP);
         assert_eq!(mcp["mcpServers"]["orquestrador"]["args"], json!(["--mcp", s.dir.to_string_lossy()]));
         assert_eq!(mcp["mcpServers"].as_object().unwrap().len(), 1, "só o orquestrador");
         let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.dir.join("claude-settings.json")).unwrap()).unwrap();
-        let memory = json!({ "hooks": [{ "type": "command", "command": APP, "args": ["--memoria", s.dir.to_string_lossy()] }] });
         assert_eq!(
             settings,
             json!({
                 "skipDangerousModePermissionPrompt": true,
                 "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" },
-                "hooks": {
-                    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": APP, "args": ["--allow"] }] }],
-                    "SessionStart": [memory.clone()],
-                    "UserPromptSubmit": [memory.clone()],
-                    "Stop": [memory.clone()],
-                    "PreCompact": [memory],
-                },
+                "hooks": { "PermissionRequest": [{ "hooks": [{ "type": "command", "command": APP, "args": ["--allow"] }] }] },
             }),
-            "sem lista de permissões: o aviso do bypass desligado, o PowerShell, o prazo do lote, o aceite do que o bypass pergunta e os hooks da memória"
+            "sem lista de permissões: o aviso do bypass desligado, o PowerShell, o prazo do lote e o aceite do que o bypass pergunta"
         );
         assert!(!p.codex_rules.exists());
         assert_eq!(remove_dir(&s.dir), None);

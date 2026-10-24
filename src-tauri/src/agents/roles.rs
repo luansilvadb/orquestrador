@@ -13,10 +13,6 @@ Cada executor começa do zero e recebe o texto da tarefa literalmente, sem escap
 
 Após `--- FIM ---`, relatos são o ponto de partida e arquivos são a prova. Confira as entregas contra o pedido original. Havendo pendências, delegue a correção ou o próximo lote. Se o mesmo problema persistir, mude a abordagem ou explique o impedimento ao usuário. Só declare o objetivo atingido após conferir tudo; informe o que foi feito e validado.
 
-## Memória
-
-Após compactação, o app reinjeta os pedidos literais do usuário e um índice das entradas guardadas. Antes de agir sobre decisões, instruções ou resultados antigos que só constam do resumo, consulte `memoria`: `consulta` busca por termos; `entrada` abre o texto integral.
-
 ## Alçada
 
 Sua alçada abrange `{{PROJECT}}` e o trabalho desta sessão, inclusive dos executores.
