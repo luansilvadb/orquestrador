@@ -246,8 +246,8 @@ export function GraphSection({
         <span className="min-w-0 shrink truncate text-[12px] font-medium">Grafo</span>
       </button>
       {remoteButton('fetch', CloudDownload)}
-      {remoteButton('pull', ArrowDownToLine)}
       {remoteButton('push', ArrowUpFromLine)}
+      {remoteButton('pull', ArrowDownToLine)}
       <ActionIcon
         size={SECTION_ACTION} variant="borderless" icon={RefreshCw}
         aria-label="Atualizar o gráfico" title="Atualizar o gráfico" onClick={(e) => { spinIcon(e.currentTarget); onRefresh(); }}
