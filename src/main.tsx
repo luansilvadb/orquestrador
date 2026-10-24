@@ -3,6 +3,7 @@ import { ConfigProvider, ThemeProvider } from '@lobehub/ui';
 import { closeContextMenu, ContextMenuHost, ModalHost, ToastHost } from '@lobehub/ui/base-ui';
 import { motion } from 'motion/react';
 import { App } from './App';
+import { DiffWorkerPool } from './editor/diff-worker';
 import { showFieldMenu } from './shared/field-menu';
 import './index.css';
 
@@ -61,7 +62,9 @@ const antdTheme = { token: { fontFamily: "'Inter Variable', Inter, sans-serif", 
 createRoot(document.getElementById('root')!).render(
   <ThemeProvider themeMode="dark" appearance="dark" enableCustomFonts={false} theme={antdTheme}>
     <ConfigProvider motion={motion}>
-      <App />
+      <DiffWorkerPool>
+        <App />
+      </DiffWorkerPool>
       <ToastHost className="app-toasts" position="top" swipeDirection="up" />
       <ModalHost />
       <ContextMenuHost />

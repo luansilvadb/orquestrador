@@ -80,7 +80,8 @@ type ViewMode = 'split' | 'unified';
 // Comparador: lado a lado por padrão, com a fonte e as cores do editor (docs/interface.md). Linhas longas quebram dentro das colunas;
 // o motor alinha os lados. A geometria é medida nos elementos de linha do shadow DOM depois de cada render.
 type DiffOptions = NonNullable<ComponentProps<typeof PatchDiff>['diffOptions']>;
-// A grade tem cinco trilhas: número, texto, vão de 40 px, número e texto.
+// A grade tem cinco trilhas: número, texto, vão de 40 px, número e texto. Com o worker, tema e `lineDiffType` valem do pool
+// (`diff-worker.tsx`); os daqui ficam para quando o worker falha e o realce volta à thread principal.
 const COMPARE_DIFF_OPTIONS: DiffOptions = {
   theme: { dark: 'dark-plus', light: 'dark-plus' },
   overflow: 'wrap',
@@ -231,7 +232,13 @@ function Continuous({ patch, compare, mode: asked, current, unitName, onPick, ce
   // Um clique numa linha de mudança escolhe a unidade dela, pelo número e pelo lado que o motor deu.
   const engine = useMemo<DiffOptions>(() => ({
     ...COMPARE_DIFF_OPTIONS,
-    onPostRender: () => measure(),
+    // O realce do worker chega depois e troca as linhas do motor; a âncora de rolagem do navegador some com elas e o arraste do divisor
+    // perderia a linha do topo. Um passo de rolagem faz o navegador escolher a âncora de novo.
+    onPostRender: () => {
+      const el = body.current;
+      if (el && el.scrollTop > 0) { el.scrollTop -= 1; el.scrollTop += 1; }
+      measure();
+    },
     onLineClick: (props) => {
       const t = props.lineType;
       const unit = latest.current.unitOfKey.get((t === 'change-deletion' ? 'd' : t === 'change-addition' ? 'a' : '') + props.lineNumber);

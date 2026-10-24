@@ -10,4 +10,6 @@ export default defineConfig({
   clearScreen: false,
   server: { port: 1420, strictPort: true, watch: { ignored: ['**/src-tauri/**'] } },
   build: { target: 'es2022' },
+  // O worker do realce do diff (@pierre/diffs) importa o WASM do shiki sob demanda: só o formato ES divide o worker em chunks.
+  worker: { format: 'es' },
 });
