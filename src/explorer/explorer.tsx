@@ -4,21 +4,22 @@
 // Seleção com Ctrl e Shift; arrastar e soltar move para pasta ou para a raiz, com o destino mostrado e validado. As ações que mexem no App (abas,
 // rascunhos, telas) vêm pelo `actions`; as que só chamam o backend a árvore chama direto.
 // O visual segue o Explorer do Antigravity/VS Code: ícones do tema Symbols, decorações do Git (cor, letra e "•" na pasta; cinza no ignorado),
-// barra com as ações da view e a seção recolhível com o nome do projeto.
-import { type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
+// barra com as ações da view e a seção recolhível com o nome do projeto. As linhas são virtuais (explorer-tree.tsx): pasta grande abre na hora.
+import { type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, ChevronsDownUp, FilePlus, FolderPlus, Info, LoaderCircle, type LucideIcon, RefreshCw, X } from 'lucide-react';
 import {
-  ActionIcon, Alert, type ContextMenuItem, Modal, ScrollArea, showContextMenu, Text, toast, Tree, type TreeDataNode,
+  ActionIcon, Alert, type ContextMenuItem, Modal, ScrollArea, showContextMenu, Text, toast,
 } from '@lobehub/ui/base-ui';
 import { createPortal } from 'react-dom';
 import { Flexbox } from '@lobehub/ui';
 import { message } from '../backend/backend';
 import { useBackend } from '../backend/backend-context';
 import { decorations, IGNORED } from './explorer-decorations';
+import { FileTree, type FileTreeHandle, type Mods, treeRows, type TreeRow } from './explorer-tree';
 import { FileIcon } from '../shared/file-icon';
 import { fileNameError } from '../shared/file-tab-actions';
 import { action, blocked, DIVIDER, fileName, useChord } from '../shared/file-tabs';
-import { join, splitPath } from '../shared/paths';
+import { splitPath } from '../shared/paths';
 import { usePolling } from '../shared/polling';
 import type { Batch, DirEntry, GitStatus, Moved } from '../backend/types';
 
@@ -95,17 +96,6 @@ function dropProblem(paths: string[], dest: string): string | null {
 
 // Sem arquivo aberto nem seleção, nada fica marcado. Pasta abre e fecha sem ficar marcada.
 const NONE: string[] = [];
-const NO_MODS = { ctrl: false, shift: false };
-
-// Rola só o viewport do ScrollArea (o elemento com overflow: scroll), sem scrollIntoView: ele rolaria também o painel e os ancestrais.
-function scrollToNode(box: HTMLElement | null, path: string) {
-  const node = box?.querySelector<HTMLElement>(`[data-tree-path="${CSS.escape(path)}"]`);
-  if (!box || !node) return;
-  const item = node.getBoundingClientRect();
-  const area = box.getBoundingClientRect();
-  if (item.top < area.top) box.scrollTop -= area.top - item.top;
-  else if (item.bottom > area.bottom) box.scrollTop += item.bottom - area.bottom;
-}
 
 type Renaming = { path: string; name: string; error: string; busy: boolean };
 type Deleting = { paths: string[]; error: string; busy: boolean };
@@ -320,12 +310,11 @@ export function FilesScreen({
   // Seção do projeto recolhida: a árvore some, a barra fica.
   const [collapsed, setCollapsed] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
-  // Viewport do ScrollArea (o elemento que rola de fato): o Revelar rola este, não os ancestrais.
+  // Viewport do ScrollArea (o elemento que rola de fato): a lista virtual rola este, não os ancestrais.
   const viewport = useRef<HTMLDivElement>(null);
+  const fileTree = useRef<FileTreeHandle>(null);
   const expanded = useRef<string[]>([]);
   const dragging = useRef<string[] | null>(null);
-  // Modificadores do último clique ou tecla. O Tree não entrega o evento ao `onSelect`, então ele é lido aqui.
-  const mods = useRef(NO_MODS);
   // Acorde Ctrl+K, como nas abas: vale por 1,5 s, cancela ao sair da árvore e some com o componente.
   const { pending: chordPending, begin: beginChord, end: endChord } = useChord();
   useLayoutEffect(() => {
@@ -333,16 +322,6 @@ export function FilesScreen({
   });
   // Trocar de aba limpa a seleção: a marcação volta a ser a do arquivo aberto.
   useEffect(() => setSelection([]), [openPath]);
-  // Linhas: arrastáveis quando há como mover, e a pasta que recebe o arraste ganha a moldura (vermelha se não pode). Roda a cada render, porque o Tree recria as linhas.
-  useLayoutEffect(() => {
-    panel.current?.querySelectorAll<HTMLElement>('[role="treeitem"][data-id]').forEach((row) => {
-      const key = row.dataset.id ?? '';
-      const hit = !!dragOver && !provisional(key) && dragOver.dest === key;
-      row.draggable = !provisional(key) && renaming?.path !== key;
-      row.style.setProperty('--depth', String(Number(row.getAttribute('aria-level') ?? 1) - 1));
-      row.style.boxShadow = hit ? `inset 0 0 0 1px var(--ant-color-${dragOver?.problem ? 'error' : 'primary'})` : '';
-    });
-  });
 
   // Uma rodada consulta a raiz e cada pasta aberta. O estado só muda quando a resposta é diferente.
   // Pasta aberta que não lista mais sai da árvore sem erro na tela; falha na raiz aparece como texto, não como toast.
@@ -369,7 +348,7 @@ export function FilesScreen({
   }, 1500, active);
 
   async function openDir(path: string) {
-    // A lista chega antes da pasta abrir, para o painel medir a altura já com o conteúdo.
+    // A lista chega antes da pasta abrir: ela abre já com o conteúdo, sem o nó provisório.
     try {
       const list = await backend.listDir(path);
       setTree((prev) => ({
@@ -383,7 +362,7 @@ export function FilesScreen({
   }
 
   async function toggle(path: string, isOpen: boolean) {
-    // Fechar só tira a pasta (e as de dentro) da lista de abertas: o conteúdo fica até a animação terminar.
+    // Fechar só tira a pasta (e as de dentro) da lista de abertas: a lista guardada fica para a próxima abertura.
     if (isOpen) return setTree((prev) => ({ ...prev, expanded: prev.expanded.filter((p) => !under(path, p)) }));
     await openDir(path);
   }
@@ -426,8 +405,8 @@ export function FilesScreen({
       }
       if (!live) return;
       setSelection([reveal.path]);
-      // Depois da renderização que trouxe os nós abertos.
-      requestAnimationFrame(() => scrollToNode(viewport.current, reveal.path));
+      // A linha pode estar fora da tela (e não montada): a lista rola pelo índice dela, assim que ela entra.
+      fileTree.current?.scrollTo(reveal.path);
     })();
     return () => {
       live = false;
@@ -592,7 +571,7 @@ export function FilesScreen({
     }
   }
 
-  // Clique direito no painel inteiro: suprime o menu do WebView. Linha da árvore (arquivo ou pasta) fica com o `onRightClick` do Tree;
+  // Clique direito no painel inteiro: suprime o menu do WebView. Linha da árvore (arquivo ou pasta) fica com o `onRightClick` da linha;
   // só a área vazia abre o menu da raiz.
   const onPanelContextMenu = (e: ReactMouseEvent<HTMLElement>) => {
     e.preventDefault();
@@ -656,19 +635,13 @@ export function FilesScreen({
     e.stopPropagation();
   };
 
-  // Mouse: o modificador do clique fica guardado para o `onSelect` saber se é seleção (Ctrl/Shift) ou abertura.
-  const onPointerMods = (e: ReactMouseEvent<HTMLElement>) => {
-    mods.current = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
-  };
-
-  // Seleção do Tree. Ctrl ou Shift só seleciona (não abre nem recolhe). Clique simples abre prévia; pasta abre e fecha.
-  const onSelect = (keys: string[], node: TreeDataNode) => {
-    const m = mods.current;
-    mods.current = NO_MODS;
-    setSelection(keys);
-    if (m.ctrl || m.shift) return;
-    if (node.isLeaf) onOpen(node.key);
-    else toggle(node.key, tree.expanded.includes(node.key));
+  // Seleção da árvore (clique, Enter ou espaço). Ctrl ou Shift só seleciona (não abre nem recolhe). Clique simples abre prévia; pasta abre e fecha.
+  const onSelect = (keys: string[], row: TreeRow, mods: Mods) => {
+    // A mesma seleção não redesenha o painel (clicar de novo na pasta marcada só a abre ou fecha).
+    setSelection((prev) => (prev.length === keys.length && prev.every((k, i) => k === keys[i]) ? prev : keys));
+    if (mods.ctrl || mods.shift) return;
+    if (row.kind === 'file') onOpen(row.key);
+    else void toggle(row.key, tree.expanded.includes(row.key));
   };
 
   // Duplo clique (e Enter, no teclado) abre o arquivo como permanente. Pasta não tem o que abrir.
@@ -729,10 +702,10 @@ export function FilesScreen({
     const clash = (tree.children[splitPath(r.path).dir] ?? []).some((e) => e.name !== fileName(r.path) && e.name.toLowerCase() === r.name.toLowerCase());
     return fileNameError(r.name) || (clash ? `Um arquivo ou pasta ${r.name} já existe nesta localização. Escolha um nome diferente.` : '');
   };
-  // Foco na linha da árvore (ou no painel, se a linha não aceita foco): depois do menu, do Enter ou do Esc, a tecla volta ao item.
+  // Foco na linha da árvore (ou no painel, se ela não está na lista): depois do menu, do Enter ou do Esc, a tecla volta ao item.
+  // Fora da tela, a lista rola até ela.
   const focusRow = (path: string) => {
-    const row = panel.current?.querySelector<HTMLElement>(`[role="treeitem"][data-id="${CSS.escape(path)}"]`);
-    (row ?? panel.current)?.focus({ preventScroll: true });
+    if (!fileTree.current?.focus(path)) panel.current?.focus({ preventScroll: true });
   };
   // Sai do campo sem renomear. `leaving`: foi clique fora, então o foco não volta à linha.
   const endRename = (path: string, leaving: boolean) => {
@@ -784,67 +757,57 @@ export function FilesScreen({
     }
   }
 
-  // O Tree só mostra seta e abre uma pasta que tem filhos. Por isso toda pasta ainda sem lista guardada recebe
-  // um filho provisório (não selecionável), e a pasta não parece folha. Ele some quando a lista chega.
+  // Linhas à vista: só mudam quando a árvore muda ou a linha do item novo entra, sai ou troca de pasta (digitar o nome não as refaz).
+  const rows = useMemo(() => treeRows(tree.children, tree.expanded, creating), [tree, creating?.dir, creating?.kind]);
   // Linha: nome na cor da decoração e, à direita, a letra (arquivo) ou "•" (pasta). Ignorado fica cinza e sem letra.
-  const decos = decorations(git?.files ?? []);
-  const nodes = (dir: string): TreeDataNode[] => withNewItem(dir, (tree.children[dir] ?? []).map((entry): TreeDataNode => {
-      const path = join(dir, entry.name);
-      const deco = decos.get(path) ?? (entry.ignored ? IGNORED : null);
-      const title = renaming?.path === path ? (
+  // O nó provisório e a linha do item novo têm chave terminada em "/": sem seleção, menu nem atalhos da árvore.
+  const decos = useMemo(() => decorations(git?.files ?? []), [git]);
+  // As linhas são memoizadas (selecionar não redesenha as outras): `rowTitle` e `rowIcon` só mudam com o que elas mostram, e os eventos
+  // dos campos leem as ações da hora do evento.
+  const rowActions = useRef({ submitCreate, submitRename, endRename });
+  useLayoutEffect(() => {
+    rowActions.current = { submitCreate, submitRename, endRename };
+  });
+  const rowTitle = useCallback((row: TreeRow): ReactNode => {
+    if (row.kind === 'wait') return <Text as="span" type="secondary" fontSize={12}>Lendo a pasta…</Text>;
+    if (row.kind === 'new') {
+      return creating && (
+        <NewItemInput
+          kind={creating.kind} name={creating.name} busy={creating.busy} error={creating.error || (creating.name.trim() && fileNameError(creating.name.trim())) || ''}
+          onChange={(name) => setCreating((prev) => prev && { ...prev, name, error: '' })}
+          onSubmit={() => void rowActions.current.submitCreate()}
+          onCancel={() => setCreating(null)}
+        />
+      );
+    }
+    const entry = row.entry!;
+    const path = row.key;
+    if (renaming?.path === path) {
+      return (
         <NewItemInput
           kind={entry.dir ? 'dir' : 'file'} label="Novo nome" selectBase={!entry.dir}
           name={renaming.name} busy={renaming.busy} error={renaming.error || renameIssue(renaming)}
           onChange={(name) => setRenaming((prev) => prev && { ...prev, name, error: '' })}
-          onSubmit={(leaving) => void submitRename(leaving)}
-          onCancel={(leaving) => endRename(path, !!leaving)}
+          onSubmit={(leaving) => void rowActions.current.submitRename(leaving)}
+          onCancel={(leaving) => rowActions.current.endRename(path, !!leaving)}
         />
-      ) : (
-        <span className="flex min-w-0 flex-1 items-center gap-2" style={deco ? { color: deco.color } : undefined}>
-          <Text as="span" ellipsis title={deco ? `${entry.name} · ${deco.title}` : entry.name} data-tree-path={path} className="min-w-0 flex-1" style={{ color: 'inherit' }}>{entry.name}</Text>
-          {/* Fora do nome acessível da linha (o estado vai no title do nome), para a linha se chamar só pelo nome do item. */}
-          {deco?.letter && <span aria-hidden="true" className="shrink-0 text-xs font-medium tabular-nums">{deco.letter}</span>}
-        </span>
       );
-      const icon = <FileIcon path={entry.name} dir={entry.dir} />;
-      if (!entry.dir) {
-        return { key: path, title, isLeaf: true, icon };
-      }
-      const list = tree.children[path];
-      return {
-        key: path,
-        title,
-        icon,
-        children: list ? nodes(path) : [{
-          key: `${path}/`,
-          title: <Text as="span" type="secondary" fontSize={12}>Lendo a pasta…</Text>,
-          isLeaf: true,
-          selectable: false,
-        }],
-      };
-    }));
-
-  // A linha do nome do item novo, na pasta de destino já lida: pasta nova no topo, arquivo novo depois das pastas (a ordem do VS Code).
-  // A chave termina em "/", como a do nó provisório: sem seleção, menu nem atalhos da árvore.
-  function withNewItem(dir: string, list: TreeDataNode[]): TreeDataNode[] {
-    if (!creating || creating.dir !== dir || (dir && !tree.children[dir])) return list;
-    const row: TreeDataNode = {
-      key: `${join(dir, ' novo')}/`,
-      isLeaf: true,
-      selectable: false,
-      icon: <FileIcon path={creating.name.trim() || (creating.kind === 'dir' ? 'pasta' : 'arquivo')} dir={creating.kind === 'dir'} />,
-      title: (
-        <NewItemInput
-          kind={creating.kind} name={creating.name} busy={creating.busy} error={creating.error || (creating.name.trim() && fileNameError(creating.name.trim())) || ''}
-          onChange={(name) => setCreating((prev) => prev && { ...prev, name, error: '' })}
-          onSubmit={() => void submitCreate()}
-          onCancel={() => setCreating(null)}
-        />
-      ),
-    };
-    const at = creating.kind === 'dir' ? 0 : (tree.children[dir] ?? []).filter((e) => e.dir).length;
-    return [...list.slice(0, at), row, ...list.slice(at)];
-  }
+    }
+    const deco = decos.get(path) ?? (entry.ignored ? IGNORED : null);
+    const color = deco ? { color: deco.color } : undefined;
+    return (
+      <>
+        <span title={deco ? `${entry.name} · ${deco.title}` : entry.name} data-tree-path={path} className="min-w-0 flex-1 truncate" style={color}>{entry.name}</span>
+        {/* Fora do nome acessível da linha (o estado vai no title do nome), para a linha se chamar só pelo nome do item. */}
+        {deco?.letter && <span aria-hidden="true" className="shrink-0 text-xs font-medium tabular-nums" style={color}>{deco.letter}</span>}
+      </>
+    );
+  }, [tree, creating, renaming, decos]);
+  // O nó provisório fica sem ícone próprio (a árvore põe o de arquivo genérico).
+  const rowIcon = useCallback((row: TreeRow) => {
+    if (row.kind === 'new') return creating && <FileIcon path={creating.name.trim() || (creating.kind === 'dir' ? 'pasta' : 'arquivo')} dir={creating.kind === 'dir'} className="mr-1.5 size-4" />;
+    return row.entry && <FileIcon path={row.entry.name} dir={row.entry.dir} className="mr-1.5 size-4" />;
+  }, [creating]);
 
   // Novo Arquivo e Nova Pasta da barra: na pasta selecionada (ou na do arquivo selecionado); sem seleção única, na raiz.
   const barDir = () => {
@@ -890,8 +853,6 @@ export function FilesScreen({
         style={collapsed ? { display: 'none' } : undefined}
         className="explorer-tree relative min-h-0 outline-none"
         onKeyDown={onTreeKey}
-        onKeyDownCapture={(e) => { mods.current = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey }; }}
-        onMouseDownCapture={onPointerMods}
         onContextMenu={onPanelContextMenu}
         onDoubleClick={onDoubleClick}
         onDragStart={onDragStart}
@@ -901,34 +862,26 @@ export function FilesScreen({
         onDragEnd={onDragEnd}
         onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) endChord(); }}
       >
-        <ScrollArea className="h-full" disableContentFit viewportProps={{ ref: viewport }}>
-          <Flexbox paddingBlock={2}>
-            {error && <Text as="p" role="status" type="secondary" fontSize={12} className="px-3 py-1">{error}</Text>}
-            {!tree.children[''] && !error && (
-              <Text as="p" type="secondary" fontSize={12} className="px-3 py-1">Lendo a pasta…</Text>
-            )}
-            <Tree
-              treeData={nodes('')} expandedKeys={tree.expanded} selectedKeys={shown} multiple
-              indent={8} size="small" showIcon blockNode
-              // Respiro de 8 px dos dois lados, dentro da linha (o fundo vai de borda a borda). À esquerda fica na seta, porque o Tree
-              // põe o recuo do nível no padding-inline-start da linha.
-              styles={{ node: { height: 22, borderRadius: 0, paddingInlineEnd: 8 }, switcher: { width: 16, height: 22, marginInlineStart: 8 }, title: { paddingInline: 0 } }}
-              onExpand={(keys) => {
-                // Abre o que entrou na lista e fecha o que saiu (a tecla * abre vários de uma vez).
-                keys.filter((k) => !tree.expanded.includes(k)).forEach((k) => toggle(k, false));
-                tree.expanded.filter((k) => !keys.includes(k)).forEach((k) => toggle(k, true));
-              }}
-              onSelect={(keys, { node }) => onSelect(keys, node)}
-              onRightClick={({ event, node }) => {
-                // Sem o menu do navegador. Clique direito fora da seleção seleciona só o item; o menu age sobre a seleção.
-                event.preventDefault();
-                if (provisional(node.key)) return;
-                const targets = shown.includes(node.key) && selection.length ? selection : [node.key];
-                if (targets !== selection) setSelection(targets);
-                void openItemMenu(targets);
-              }}
-            />
-          </Flexbox>
+        {/* Fora da área que rola: a lista virtual conta as linhas a partir do topo dela. */}
+        {error && <Text as="p" role="status" type="secondary" fontSize={12} className="px-3 py-1">{error}</Text>}
+        {!tree.children[''] && !error && (
+          <Text as="p" type="secondary" fontSize={12} className="px-3 py-1">Lendo a pasta…</Text>
+        )}
+        <ScrollArea className="min-h-0 flex-1" disableContentFit viewportProps={{ ref: viewport }}>
+          <FileTree
+            ref={fileTree} viewport={viewport} rows={rows} expanded={tree.expanded} selected={shown}
+            renaming={renaming?.path ?? null} drop={dragOver} title={rowTitle} icon={rowIcon}
+            onSelect={onSelect}
+            onToggle={(row) => void toggle(row.key, tree.expanded.includes(row.key))}
+            onRightClick={(event, row) => {
+              // Sem o menu do navegador. Clique direito fora da seleção seleciona só o item; o menu age sobre a seleção.
+              event.preventDefault();
+              if (provisional(row.key)) return;
+              const targets = shown.includes(row.key) && selection.length ? selection : [row.key];
+              if (targets !== selection) setSelection(targets);
+              void openItemMenu(targets);
+            }}
+          />
         </ScrollArea>
         {/* Destino do arraste, visível mesmo com a árvore rolada: a pasta sob o ponteiro, ou a raiz; em vermelho, o motivo de não poder soltar. */}
         {dragOver && (

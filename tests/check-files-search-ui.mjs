@@ -765,3 +765,63 @@ scenario('visual do Explorer: ícones do tema Symbols, cores e letras do Git (pa
   await section.click();
   await treeItem(page, 'docs').waitFor();
 });
+
+scenario('pasta grande na árvore: abre com só as linhas à vista no DOM; rolar e End alcançam o fim; Revelar rola até item que não estava montado', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__mock.addFolder('grande');
+    for (let i = 0; i < 420; i++) window.__mock.addFile(`grande/item-${String(i).padStart(3, '0')}.md`, `${i}\n`);
+  });
+  await page.getByRole('button', { name: 'Atualizar', exact: true }).click();
+  await treeItem(page, 'grande').waitFor();
+  // A última linha da árvore com a pasta aberta: o último item da raiz (as pastas vêm antes dos arquivos).
+  const lastRoot = await page.locator('[role="treeitem"][aria-level="1"]').last().getAttribute('data-id');
+  const firstRoot = await page.locator('[role="treeitem"]').first().getAttribute('data-id');
+  const inView = (path) => at(page, path).evaluate((el) => {
+    const box = el.closest('.explorer-tree').getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return r.top >= box.top && r.bottom <= box.bottom;
+  });
+
+  await expand(page, ['grande']);
+  await at(page, 'grande/item-000.md').waitFor();
+  const mounted = await page.locator('[role="treeitem"]').count();
+  assert.ok(mounted < 100, `só as linhas à vista ficam no DOM (${mounted})`);
+  assert.equal(await at(page, 'grande/item-419.md').count(), 0, 'o fim da pasta não está montado');
+
+  // A roda do mouse leva a lista até o fim e mostra o último item da pasta.
+  await treeItem(page, 'grande').hover();
+  for (let i = 0; i < 60 && !(await at(page, 'grande/item-419.md').count()); i++) await page.mouse.wheel(0, 2000);
+  await at(page, 'grande/item-419.md').waitFor();
+  assert.ok(await inView('grande/item-419.md'), 'o último item aparece na área visível');
+  // O virtua desliga o ponteiro da lista enquanto ela rola: o clique espera a rolagem parar.
+  await page.waitForTimeout(400);
+
+  // Teclado: Home volta ao topo (o fim sai do DOM) e End foca a última linha da árvore, rolando até ela.
+  await treeItem(page, 'item-419.md').click();
+  await page.keyboard.press('Home');
+  await page.waitForFunction((id) => document.activeElement?.dataset.id === id, firstRoot);
+  await at(page, 'grande/item-419.md').waitFor({ state: 'detached' });
+  await page.keyboard.press('End');
+  await page.waitForFunction((id) => document.activeElement?.dataset.id === id, lastRoot);
+  // Subindo pelos arquivos da raiz, a seta entra no fim da pasta grande.
+  const focusedId = () => page.evaluate(() => document.activeElement?.dataset.id ?? '');
+  for (let i = 0; i < 10 && !(await focusedId()).startsWith('grande/'); i++) await page.keyboard.press('ArrowUp');
+  assert.equal(await focusedId(), 'grande/item-419.md', 'ArrowUp a partir da raiz chega ao último item da pasta');
+  assert.equal(await page.locator('[role="treeitem"]').count() < 100, true, 'o teclado não monta a pasta inteira');
+
+  // Revelar no Explorer com a árvore no topo: a lista rola até o item, que estava fora do DOM, e o marca.
+  await page.keyboard.press('Home');
+  await at(page, 'grande/item-419.md').waitFor({ state: 'detached' });
+  await tabs(page).filter({ hasText: 'item-419.md' }).first().click({ button: 'right' });
+  await menu(page, 'Revelar no Explorer').click();
+  await at(page, 'grande/item-419.md').waitFor();
+  await page.waitForFunction(() => {
+    const el = document.querySelector('[data-tree-path="grande/item-419.md"]');
+    if (!el) return false;
+    const box = el.closest('.explorer-tree').getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return r.top >= box.top && r.bottom <= box.bottom;
+  });
+  assert.equal(await selected(page, 'item-419.md'), true, 'Revelar marca o item');
+  await page.screenshot({ path: join(OUT, 'files-search-pasta-grande.png') });
+});
