@@ -41,6 +41,21 @@ const COLOR = { g: 'rgb(255, 215, 0)', o: 'rgb(218, 112, 214)', b: 'rgb(23, 159,
 //  linha 3: `)` sobra sem abertura: u.
 const EXPECTED_TSX = 'gobgo-ogboobbog--' + 'gggobbbbog' + 'u';
 const EXPECTED_JSON = 'gobggbooog';
+// Sem nós de par na gramática, os pares vêm do texto. TXT: ( g · [ o · { b · } b · ] o · ) g · `)` solto u.
+const TXT = 'pares (a [b {c}]) e ) solto\n';
+const EXPECTED_TXT = 'gobbogu';
+// Markdown: ( g ) g no título; ( g · [ o · ] o · ) g · { g · } g no parágrafo.
+const MD_PAIRS = '# Título (x)\n\nTexto (a [b] c) e {d}.\n';
+const EXPECTED_MD = 'gg' + 'googgg';
+// .env.example (Properties): os pares do comentário e do valor (string) ficam sem cor; os da seção `[secao]` são coloridos.
+const DOTENV = '# comentário (a [b])\n[secao]\nCHAVE=valor (x)\n';
+const EXPECTED_DOTENV = '----' + 'gg' + '--';
+// Cor de `tags.string` no darkHighlight (src/editor/file-view.tsx), em rgb().
+const STRING_COLOR = (() => {
+  const src = readFileSync(join(ROOT, 'src', 'editor', 'file-view.tsx'), 'utf8');
+  const hex = src.match(/\{ tag: \[tags\.string,[^\]]*\], color: '#([0-9a-f]{6})' \}/i)[1];
+  return `rgb(${[0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
+})();
 const EXPECTED_LONG_TOP = 'go'; // `{` e `(` na primeira tela
 const EXPECTED_LONG_END = 'og'; // `)` (profundidade 1, o) e `}` (profundidade 0, g) depois de Ctrl+End
 
@@ -223,6 +238,29 @@ scenario('JSON: pares aninhados coloridos pelo nível', async ({ page }) => {
   await open(page, 'estilo-editor.json', JSON_TEXT);
   await assertBrackets(page, EXPECTED_JSON);
   await page.screenshot({ path: join(OUT, 'editor-style-json.png') });
+});
+
+scenario('texto puro: pares do texto coloridos pelo nível, e `)` sem par em vermelho', async ({ page }) => {
+  await open(page, 'estilo-pares.txt', TXT);
+  await assertBrackets(page, EXPECTED_TXT);
+});
+
+scenario('Markdown: pares do texto coloridos pelo nível', async ({ page }) => {
+  await open(page, 'estilo-pares.md', MD_PAIRS);
+  await assertBrackets(page, EXPECTED_MD);
+});
+
+scenario('.env.example: realce de Properties e pares fora do comentário e do valor', async ({ page }) => {
+  await open(page, '.env.example', DOTENV);
+  await assertBrackets(page, EXPECTED_DOTENV);
+  await eventually(async () => {
+    assert.equal((await styleOf(page, '# comentário')).color, 'rgb(106, 153, 85)', 'comentário (#6A9955)');
+    assert.equal((await styleOf(page, 'CHAVE')).color, 'rgb(156, 220, 254)', 'chave (#9CDCFE)');
+    const valor = (await styleOf(page, 'valor')).color;
+    assert.equal(valor, STRING_COLOR, 'valor com a cor de string');
+    assert.notEqual(valor, 'rgb(106, 153, 85)', 'valor com cor diferente da do comentário');
+  });
+  await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'editor-style-dotenv.png') });
 });
 
 scenario('par sob o cursor: caixa do Antigravity sem mudar a geometria do texto; digitar recolore o arquivo', async ({ page }) => {

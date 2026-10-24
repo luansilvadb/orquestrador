@@ -7,7 +7,7 @@ import { Compartment, EditorSelection, EditorState, Prec, StateEffect, Text, Tra
 import { EditorView, keymap } from '@codemirror/view';
 import { copyLineDown, deleteLine, indentWithTab, moveLineDown, moveLineUp, redo, selectAll, toggleComment, undo } from '@codemirror/commands';
 import { openSearchPanel, selectNextOccurrence } from '@codemirror/search';
-import { LanguageDescription, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
+import { LanguageDescription, LanguageSupport, StreamLanguage, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
 import { showMinimap, type MinimapConfig } from '@replit/codemirror-minimap';
@@ -25,9 +25,18 @@ import { formatPrettier } from './format';
 
 // ponytail: acima de 200 mil caracteres, carregar parser e colorir custa mais que a leitura simples.
 const COLOR_LIMIT = 200_000;
-// Linguagem pelo nome do arquivo; o pacote de linguagens só carrega quando um arquivo é colorido.
-const loadLanguage = (path: string) => import('@codemirror/language-data')
-  .then(({ languages }) => LanguageDescription.matchFilename(languages, path)?.load() ?? null);
+// Linguagem pelo nome do arquivo; o pacote de linguagens só carrega quando um arquivo é colorido. `.env`, `.env.*` e `*.env` (sem
+// descrição própria) usam o modo de Properties (comentário com `#` e `chave=valor`) com o valor como string; o token `quote` do modo
+// viraria `tags.quote`, verde como o comentário.
+const DOTENV = /^\.env(\..+)?$|\.env$/i;
+let dotenv: Promise<LanguageSupport> | undefined;
+const loadDotenv = () => dotenv ??= import('@codemirror/legacy-modes/mode/properties')
+  .then(({ properties }) => new LanguageSupport(StreamLanguage.define({ ...properties, tokenTable: { quote: tags.string } })));
+const loadLanguage = (path: string) => {
+  const name = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
+  if (DOTENV.test(name)) return loadDotenv();
+  return import('@codemirror/language-data').then(({ languages }) => LanguageDescription.matchFilename(languages, path)?.load() ?? null);
+};
 // Sem a API (contexto inseguro), a ação vira toast como qualquer outra falha.
 const clipboard = () => {
   if (!navigator.clipboard) throw new Error('A área de transferência não está disponível aqui.');
@@ -146,7 +155,7 @@ const basicExtensions = [
   keymap.of([indentWithTab]),
   darkTheme,
   syntaxHighlighting(darkHighlight),
-  bracketColors,
+  bracketColors(COLOR_LIMIT),
   // Quebra visual das linhas longas, sem rolagem horizontal; a continuação fica no recuo da linha.
   EditorView.lineWrapping,
   wrapIndent,
