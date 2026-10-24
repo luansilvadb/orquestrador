@@ -124,14 +124,11 @@ fn pwsh(s: &str) -> String {
 /// `PreCompact` chamam o app em `--memoria <pasta da sessão>` (`memory.rs`). Medido no Codex 0.163 (Windows): o
 /// `-c hooks.<Evento>=[{hooks=[{type="command",command="..."}]}]` vale no TUI e no `exec`, soma-se aos hooks do
 /// usuário e do projeto e só roda com `--dangerously-bypass-hook-trust` (em `codex_base`; sem ele o TUI abre "Hooks
-/// need review"). O Codex roda o `command` no cwd da sessão do CLI, num shell escolhido nesta ordem (0.163,
-/// `shell_detect.rs`): `pwsh` no PATH, `C:\Program Files\PowerShell\7\pwsh.exe`, `powershell` no PATH,
-/// `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` e, sem nenhum, `cmd.exe` (`COMSPEC /C`). O comando é
-/// um literal PowerShell com o `&` (sem ele o caminho entre aspas é só uma string); a forma funciona no PowerShell 7
-/// e no Windows PowerShell 5.1 e falha só no `cmd.exe` ("& foi inesperado"). Caminho com espaço, acento e apóstrofo
-/// passa se for citado em duas camadas: para o PowerShell (`pwsh()`) e, sobre a string inteira, para o TOML
-/// (`toml`). O stdout do PowerShell usa a codepage ibm850, por isso o `--memoria` imprime só ASCII. Sem `timeout`:
-/// o hook só grava um arquivo. Os executores não recebem nada disso.
+/// need review"). O Codex roda o `command` como `pwsh.exe -NoProfile -Command "<command>"` no cwd da sessão do
+/// CLI, então o comando é um literal PowerShell com o `&` (sem ele o caminho entre aspas é só uma string), e
+/// caminho com espaço, acento e apóstrofo passa se for citado em duas camadas: para o PowerShell (`pwsh`) e, sobre
+/// a string inteira, para o TOML (`toml`). O stdout do `pwsh` usa a codepage ibm850, por isso o `--memoria` imprime
+/// só ASCII. Sem `timeout`: o hook só grava um arquivo. Os executores não recebem nada disso.
 fn codex_memory(app: &str, dir: &str) -> Vec<String> {
     let command = format!("& {} --memoria {}", pwsh(app), pwsh(dir));
     ["SessionStart", "UserPromptSubmit", "Stop", "PreCompact"]
