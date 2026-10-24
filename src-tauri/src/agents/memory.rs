@@ -53,7 +53,7 @@ pub fn run(args: &[String]) -> i32 {
 }
 
 /// O JSON só com bytes ASCII: todo caractere não ASCII vira `\uXXXX` (par substituto acima do BMP). Medido no Codex
-/// 0.163 (Windows): o stdout do hook passa pelo `pwsh`, que o lê na codepage ibm850, e texto não ASCII chega
+/// 0.163 (Windows): o stdout do hook passa pelo PowerShell, que o lê na codepage ibm850, e texto não ASCII chega
 /// corrompido; o stdin do hook chega correto. Os dois CLIs decodificam o escape igual, então a saída é a mesma.
 /// Fora de strings o JSON do `serde_json` já é ASCII, então o escape não altera a estrutura.
 fn ascii(value: &Value) -> String {
