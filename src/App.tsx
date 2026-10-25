@@ -1174,7 +1174,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
               <div className="relative h-full">
                 <div className={shown('arquivos')}>
                   {state.project ? (
-                    <FilesScreen openPath={activeTarget && activeTarget.kind !== 'draft' ? activeTarget.path : null} onOpen={openIn} reveal={treeReveal} actions={fileActions}
+                    <FilesScreen openPath={activeTarget && activeTarget.kind !== 'draft' ? activeTarget.path : null} onOpen={openIn} onPrefetch={(path) => editor.current?.prefetch(path)} reveal={treeReveal} actions={fileActions}
                       project={folder} git={git.data?.kind === 'repo' ? git.data.status : null} active={active && route === 'arquivos'}
                     />
                   ) : <OpenProjectPrompt onOpen={chooseProject} description="Abra uma pasta para explorar os arquivos." />}

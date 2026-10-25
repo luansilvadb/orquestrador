@@ -67,6 +67,7 @@ export type EditorWorkspaceHandle = {
   saveActive(): Promise<boolean>;
   saveActiveAs(): Promise<boolean>;
   openFile(path: string, options?: OpenOptions): void;
+  prefetch(path: string): void;
   openTarget(target: TabTarget, options?: Pick<OpenOptions, 'permanent' | 'side'>): void;
   /** Abre à direita: com dois grupos, o segundo na ordem visual (mesmo com o foco nele); com um grupo só, o outro id, que entra depois dele (à direita). */
   openBeside(path: string, options?: Pick<OpenOptions, 'permanent' | 'line' | 'col'>): void;
@@ -104,6 +105,7 @@ export type EditorWorkspaceProps = {
 };
 
 type Status = { error?: string; binary?: boolean; large?: boolean };
+type CachedRead = { promise: Promise<FileContent>; language?: Promise<void>; timer: number };
 // Versão do disco que difere de um rascunho sujo: a tela oferece usar o disco ou salvar sobre ele, nunca troca sozinha.
 type DiskVersion = { text: string; bom: boolean; readOnly: boolean };
 // Comparação antes de gravar sobre o disco (ou de usar o disco): as duas versões são as que a tela tinha quando o usuário pediu.
@@ -247,6 +249,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const untouched = useRef(boot.readFailed);
   const [compare, setCompare] = useState<Compare | null>(null);
   const saving = useRef(new Set<string>());
+  const reads = useRef(new Map<string, CachedRead>());
+  const openSequence = useRef(0);
   const askOpen = useRef(false);
   const revealSeq = useRef(0);
   const layoutRef = useRef(layout ?? boot.layout);
@@ -319,6 +323,30 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     return tab && tab.target.kind === 'file' ? tab.target.docId : newDocId();
   };
 
+  const readFor = (path: string): CachedRead => {
+    const key = path.toLowerCase();
+    const cached = reads.current.get(key);
+    if (cached) return cached;
+    const entry: CachedRead = { promise: Promise.resolve().then(() => backend.readFile(path)), timer: 0 };
+    const expire = () => {
+      if (reads.current.get(key) === entry) reads.current.delete(key);
+    };
+    entry.timer = window.setTimeout(expire, 5000);
+    reads.current.set(key, entry);
+    const keepBriefly = () => {
+      window.clearTimeout(entry.timer);
+      entry.timer = window.setTimeout(expire, 3000);
+    };
+    void entry.promise.then(keepBriefly, keepBriefly);
+    return entry;
+  };
+
+  const prefetch = (path: string) => {
+    if (mediaOf(path) || Object.values(dataRef.current.buffers).some((buffer) => buffer.path.toLowerCase() === path.toLowerCase())) return;
+    const entry = readFor(path);
+    entry.language ??= preloadLanguage(path);
+  };
+
   const openTarget = (target: TabTarget, options: Pick<OpenOptions, 'permanent' | 'side'> = {}) => {
     const dirty = dirtyNow();
     const group: GroupId = options.side ?? wsRef.current.focus;
@@ -327,11 +355,82 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   };
 
   const openFile = (path: string, options: OpenOptions = {}) => {
+    const sequence = ++openSequence.current;
     const docId = docIdFor(path);
-    // A gramática carrega junto com a leitura: o texto chega já colorido.
-    if (!mediaOf(path)) preloadLanguage(path);
-    openTarget({ kind: 'file', docId, path }, options);
-    if (options.line !== undefined) setReveal({ docId, line: options.line, col: options.col, id: ++revealSeq.current });
+    const target = { kind: 'file' as const, docId, path };
+    const revealLine = () => {
+      if (options.line !== undefined) setReveal({ docId, line: options.line, col: options.col, id: ++revealSeq.current });
+    };
+    const open = () => {
+      if (sequence !== openSequence.current) return;
+      openTarget(target, options);
+      revealLine();
+    };
+    const buffer = dataRef.current.buffers[docId];
+    if (mediaOf(path) || buffer) {
+      if (!mediaOf(path)) {
+        const entry = reads.current.get(path.toLowerCase());
+        if (entry) entry.language ??= preloadLanguage(path);
+        else void preloadLanguage(path);
+      }
+      open();
+      return;
+    }
+
+    const entry = readFor(path);
+    entry.language ??= preloadLanguage(path);
+    const result = entry.promise.then((file) => ({ file } as const), (error: unknown) => ({ error } as const));
+    const ready = Promise.all([result, entry.language]).then(([read]) => read);
+    let timedOut = false;
+    let lateReadHandled = false;
+    const applyRead = (read: Awaited<typeof result>, opening: boolean) => {
+      if (!opening && !allTabs().some((tab) => tab.target.kind === 'file' && tab.target.docId === docId && tab.target.path.toLowerCase() === path.toLowerCase())) return;
+      if ('error' in read) {
+        setStatusOf(docId, { error: message(read.error) });
+        return;
+      }
+      const file = read.file;
+      if (file.binary || file.tooLarge) {
+        setStatusOf(docId, file.binary ? { binary: true } : { large: true });
+        return;
+      }
+      if (saving.current.has(docId) || dataRef.current.buffers[docId]) return;
+      setStatusOf(docId, {});
+      setData({
+        ...dataRef.current,
+        buffers: {
+          ...dataRef.current.buffers,
+          [docId]: {
+            docId, path, raw: file.text, bom: file.bom, newline: newlineOf(file.text), draft: normalizeNewlines(file.text),
+            readOnly: file.readOnly,
+          },
+        },
+      });
+    };
+    const applyLateRead = (read: Awaited<typeof result>) => {
+      if (!timedOut || lateReadHandled) return;
+      lateReadHandled = true;
+      applyRead(read, false);
+    };
+    void result.then(applyLateRead);
+    void (async () => {
+      let timer = 0;
+      const timeout = Symbol('timeout');
+      const outcome = await Promise.race([
+        ready,
+        new Promise<typeof timeout>((resolve) => { timer = window.setTimeout(() => resolve(timeout), 150); }),
+      ]);
+      window.clearTimeout(timer);
+      if (sequence !== openSequence.current) return;
+      if (outcome === timeout) {
+        timedOut = true;
+        open();
+        void result.then(applyLateRead);
+        return;
+      }
+      applyRead(outcome, true);
+      open();
+    })();
   };
   // À direita, pela ordem visual: com dois grupos, o segundo (groups[1]), mesmo quando o foco já está nele. Com um só,
   // vai para o outro id, que entra depois do existente (à direita dele).
@@ -634,12 +733,18 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (mediaOf(path)) return;
     const raw = dataRef.current.buffers[docId]?.raw;
     let file: FileContent;
+    const entry = readFor(path);
     try {
-      file = await backend.readFile(path);
+      file = await entry.promise;
     } catch (e) {
       // Arquivo apagado ou inacessível: o buffer (e o rascunho) continuam; a aba mostra o erro.
       setStatusOf(docId, { error: message(e) });
       return;
+    } finally {
+      if (reads.current.get(path.toLowerCase()) === entry) {
+        window.clearTimeout(entry.timer);
+        reads.current.delete(path.toLowerCase());
+      }
     }
     if (!allTabs().some((t) => t.target.kind === 'file' && t.target.docId === docId)) return;
     // Gravação durante a leitura: a resposta pode ser de antes dela e trocaria o buffer recém-salvo.
@@ -916,6 +1021,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     saveActive,
     saveActiveAs,
     openFile,
+    prefetch,
     openTarget,
     openBeside,
     remap,

@@ -95,10 +95,14 @@ scenario('faixa de abas em 1040px: aba ativa visível com 1 e 2 grupos, nomes re
   await treeItem(page, 'index.ts', 1).waitFor();
   const long = 'relatorio-com-nome-bem-longo-para-a-faixa-de-abas-estreita.md';
   await treeItem(page, long).waitFor();
-  for (const name of ['App.tsx', 'index.css', 'longo.ts', 'main.tsx', 'conflito.ts']) await treeItem(page, name).dblclick();
-  await treeItem(page, 'index.ts', 0).dblclick();
-  await treeItem(page, 'index.ts', 1).dblclick();
-  await treeItem(page, long).dblclick();
+  const openAndWait = async (row, count) => {
+    await row.dblclick();
+    await page.waitForFunction((n) => document.querySelectorAll('[data-group="A"] [data-tab]').length === n, count);
+  };
+  for (const [i, name] of ['App.tsx', 'index.css', 'longo.ts', 'main.tsx', 'conflito.ts'].entries()) await openAndWait(treeItem(page, name), i + 1);
+  await openAndWait(treeItem(page, 'index.ts', 0), 6);
+  await openAndWait(treeItem(page, 'index.ts', 1), 7);
+  await openAndWait(treeItem(page, long), 8);
   assert.equal(await tabs(page).count(), 8, `8 abas abertas (${JSON.stringify(await tabTitles(page))})`);
   const titles = await tabTitles(page);
   assert.equal(titles.filter((t) => t.includes('index.ts')).length, 2, 'dois index.ts abertos');
@@ -195,7 +199,9 @@ scenario('só o grupo B (aba do A movida/fechada) + Abrir à Direita e Dividir: 
 scenario('atalhos de arquivo: Ctrl+K W, Ctrl+K Shift+Enter, Ctrl+K Ctrl+Shift+C, Shift+Alt+C, prefixo de 1,5 s, tecla sem acorde vai ao editor', async ({ page }) => {
   await expand(page, ['src']);
   await treeItem(page, 'App.tsx').dblclick();
+  await page.locator('[data-pane="A"] .cm-content').waitFor();
   await treeItem(page, 'main.tsx').dblclick();
+  await page.waitForFunction(() => document.querySelectorAll('[data-group="A"] [data-tab]').length === 2);
   assert.equal(await tabs(page).count(), 2, 'duas abas permanentes');
   const pinnedOf = (i) => tabs(page).nth(i).locator('.sr-only', { hasText: '(fixada)' }).count();
 
@@ -452,6 +458,7 @@ scenario('breadcrumbs e lista de abas: o caminho do arquivo abre o seletor da pa
 scenario('rascunho: duplo clique na área vazia da faixa cria "Sem título-1" ativa, e o próximo é "Sem título-2"', async ({ page }) => {
   await expand(page, ['src']);
   await treeItem(page, 'App.tsx').dblclick();
+  await page.locator('[data-pane="A"] .cm-content').waitFor();
   const activeTitle = () => page.locator('[data-group="A"] [role="tab"][aria-selected="true"]').textContent();
 
   const first = await emptyStripPoint(page);
@@ -480,6 +487,7 @@ scenario('rascunho: duplo clique em cima de uma aba existente não cria rascunho
 scenario('rascunho: logo após criar, digitar sem clicar escreve no rascunho e a aba fica suja', async ({ page }) => {
   await expand(page, ['src']);
   await treeItem(page, 'App.tsx').dblclick();
+  await page.locator('[data-pane="A"] .cm-content').waitFor();
   const point = await emptyStripPoint(page);
   await page.mouse.dblclick(point.x, point.y);
   const draft = tabs(page).filter({ hasText: 'Sem título-1' });
@@ -495,6 +503,7 @@ scenario('rascunho: logo após criar, digitar sem clicar escreve no rascunho e a
 scenario('rascunho: fechar outra aba mantém o rascunho com o mesmo texto', async ({ page }) => {
   await expand(page, ['src']);
   await treeItem(page, 'App.tsx').dblclick();
+  await page.locator('[data-pane="A"] .cm-content').waitFor();
   const point = await emptyStripPoint(page);
   await page.mouse.dblclick(point.x, point.y);
   await page.keyboard.type('texto preservado');
@@ -588,4 +597,73 @@ scenario('abrir segundo arquivo da mesma linguagem: o primeiro quadro do editor 
   const frames = await page.evaluate(() => window.__frames);
   assert.ok(frames[0] > 0, `primeiro quadro com o texto sem realce (trechos coloridos por quadro: ${JSON.stringify(frames)})`);
   assert.ok(frames.every((n) => n > 0), `algum quadro sem realce (${JSON.stringify(frames)})`);
+});
+
+scenario('explorador: a troca da aba nunca aparece sem o CodeMirror e o texto do arquivo', async ({ page }) => {
+  const source = 'export const ATOMIC = 1;\n';
+  await page.evaluate((text) => window.__mock.addFile('atomic.ts', text), source);
+  await page.evaluate(() => {
+    window.__atomicFrames = [];
+    const inspect = () => {
+      const tab = [...document.querySelectorAll('[data-group="A"] [role="tab"][aria-selected="true"]')]
+        .find((item) => item.textContent.includes('atomic.ts'));
+      if (!tab) return;
+      const id = tab.closest('[data-tab]')?.getAttribute('data-tab');
+      const body = [...document.querySelectorAll('[data-body]')].find((item) => item.getAttribute('data-body') === id);
+      window.__atomicFrames.push({ editor: !!body?.querySelector('.cm-editor'), text: body?.querySelector('.cm-content')?.textContent ?? '' });
+    };
+    new MutationObserver(inspect).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-selected', 'style'] });
+  });
+  await treeItem(page, 'atomic.ts').click();
+  await page.locator('[data-pane="A"] .cm-content').filter({ hasText: 'ATOMIC' }).waitFor();
+  await page.waitForTimeout(30);
+  const frames = await page.evaluate(() => window.__atomicFrames);
+  assert.ok(frames.length > 0, 'o observador registrou a aba ativa');
+  assert.ok(frames.every((frame) => frame.editor && frame.text.includes('ATOMIC')), `houve quadro vazio ao trocar a aba (${JSON.stringify(frames)})`);
+});
+
+scenario('explorador: leitura lenta troca em até 600 ms, mostra a espera e lê uma vez', async ({ page }) => {
+  const source = 'export const LATE = 1;\n';
+  await page.evaluate((text) => {
+    window.__mock.addFile('late.ts', text);
+    window.__mock.lateRead = 1000;
+    window.__readsBefore = window.__mock.calls.filter((call) => call.cmd === 'read_file' && call.args.path === 'late.ts').length;
+  }, source);
+  const row = treeItem(page, 'late.ts');
+  await row.waitFor();
+  const bounds = await row.boundingBox();
+  await row.evaluate((el) => el.addEventListener('click', () => { window.__clickStarted = performance.now(); }, { once: true }));
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.waitForFunction(() => window.__mock.calls.some((call) => call.cmd === 'read_file' && call.args.path === 'late.ts'));
+  const beforeRelease = await page.evaluate(() => document.querySelector('[data-group="A"] [role="tab"][aria-selected="true"]')?.textContent ?? '');
+  assert.ok(!beforeRelease.includes('late.ts'), `a aba trocou antes do clique ser solto (${beforeRelease})`);
+  await page.mouse.up();
+  await page.waitForFunction(() => document.querySelector('[data-group="A"] [role="tab"][aria-selected="true"]')?.textContent.includes('late.ts'));
+  const elapsed = await page.evaluate(() => performance.now() - window.__clickStarted);
+  assert.ok(elapsed <= 600, `fallback da aba levou ${elapsed.toFixed(0)} ms`);
+  await page.waitForFunction(() => document.body.textContent.includes('Lendo o arquivo…'));
+  await page.locator('[data-pane="A"] .cm-content').filter({ hasText: 'LATE' }).waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('[data-pane="A"] [role="alert"]').count(), 0, 'leitura lenta não deixou erro');
+  const reads = await page.evaluate(() => window.__mock.calls.filter((call) => call.cmd === 'read_file' && call.args.path === 'late.ts').length - window.__readsBefore);
+  assert.equal(reads, 1, `uma leitura para late.ts (${reads})`);
+});
+
+scenario('explorador: dois cliques enquanto a primeira abertura espera deixam aberto o último arquivo', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__mock.addFile('primeiro-pendente.ts', 'export const PRIMEIRO = 1;\n');
+    window.__mock.addFile('ultimo-pronto.ts', 'export const ULTIMO = 2;\n');
+    window.__mock.lateRead = 1000;
+  });
+  const first = treeItem(page, 'primeiro-pendente.ts');
+  await first.click();
+  await page.waitForFunction(() => window.__mock.calls.some((call) => call.cmd === 'read_file' && call.args.path === 'primeiro-pendente.ts'));
+  await page.waitForTimeout(30);
+  await page.evaluate(() => { window.__mock.lateRead = 0; });
+  await treeItem(page, 'ultimo-pronto.ts').click();
+  await page.waitForFunction(() => document.querySelector('[data-group="A"] [role="tab"][aria-selected="true"]')?.textContent.includes('ultimo-pronto.ts'));
+  await page.waitForTimeout(180);
+  const active = await page.locator('[data-group="A"] [role="tab"][aria-selected="true"]').textContent();
+  assert.ok(active.includes('ultimo-pronto.ts'), `a primeira abertura pendente roubou o foco (${active})`);
+  await page.locator('[data-pane="A"] .cm-content').filter({ hasText: 'ULTIMO' }).waitFor();
 });

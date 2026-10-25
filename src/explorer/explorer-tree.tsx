@@ -65,7 +65,7 @@ const real = (row: TreeRow) => row.kind === 'file' || row.kind === 'dir';
  * (index.css); `frame` é a moldura do destino do arraste. Memoizada: o virtua renderiza a lista de novo ao medir as linhas novas, e
  * essas não mudam.
  */
-const Row = memo(function Row({ row, isOpen, selected, active, draggable, frame, title, icon, onSelect, onToggle, onRightClick, onFocus }: {
+const Row = memo(function Row({ row, isOpen, selected, active, draggable, frame, title, icon, onSelect, onPrefetch, onToggle, onRightClick, onFocus }: {
   row: TreeRow;
   isOpen: boolean;
   selected: boolean;
@@ -75,6 +75,7 @@ const Row = memo(function Row({ row, isOpen, selected, active, draggable, frame,
   title: (row: TreeRow) => ReactNode;
   icon: (row: TreeRow) => ReactNode;
   onSelect: (row: TreeRow, mods: Mods) => void;
+  onPrefetch: (path: string) => void;
   onToggle: (row: TreeRow) => void;
   onRightClick: (event: ReactMouseEvent<HTMLElement>, row: TreeRow) => void;
   onFocus: (key: string) => void;
@@ -89,6 +90,7 @@ const Row = memo(function Row({ row, isOpen, selected, active, draggable, frame,
       role="treeitem" data-id={row.key} aria-level={row.depth + 1} aria-selected={selected}
       aria-expanded={row.expandable ? isOpen : undefined} tabIndex={active ? 0 : -1} draggable={draggable} style={style}
       className="relative flex h-[22px] cursor-pointer items-center pr-2 text-[var(--ant-color-text)] outline-none hover:bg-[var(--ant-color-fill-tertiary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ant-color-info)] aria-selected:bg-[var(--ant-color-fill-secondary)]"
+      onMouseDown={(e) => { if (row.kind === 'file' && e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) onPrefetch(row.key); }}
       onClick={(e) => onSelect(row, { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey })}
       onContextMenu={(e) => onRightClick(e, row)}
       onFocus={() => onFocus(row.key)}
@@ -124,7 +126,7 @@ export type FileTreeHandle = {
  * vermelha se não pode). `title` e `icon` desenham o conteúdo da linha; o ícone vem com a margem dele (6 px) e, sem ele, a linha põe o de
  * arquivo genérico.
  */
-export function FileTree({ ref, viewport, rows, expanded, selected, renaming, drop, title, icon, onSelect, onToggle, onRightClick }: {
+export function FileTree({ ref, viewport, rows, expanded, selected, renaming, drop, title, icon, onSelect, onPrefetch, onToggle, onRightClick }: {
   ref: Ref<FileTreeHandle>;
   /** O elemento que rola (o viewport do ScrollArea). */
   viewport: RefObject<HTMLElement | null>;
@@ -136,6 +138,7 @@ export function FileTree({ ref, viewport, rows, expanded, selected, renaming, dr
   title: (row: TreeRow) => ReactNode;
   icon: (row: TreeRow) => ReactNode;
   onSelect: (keys: string[], row: TreeRow, mods: Mods) => void;
+  onPrefetch: (path: string) => void;
   onToggle: (row: TreeRow) => void;
   onRightClick: (event: ReactMouseEvent<HTMLElement>, row: TreeRow) => void;
 }) {
@@ -201,12 +204,13 @@ export function FileTree({ ref, viewport, rows, expanded, selected, renaming, dr
     onSelect(next, row, mods);
   };
   // As linhas são memoizadas: os eventos delas leem as funções da hora do evento, e só a linha que mudou redesenha.
-  const latest = useRef({ select, onToggle, onRightClick });
+  const latest = useRef({ select, onPrefetch, onToggle, onRightClick });
   useLayoutEffect(() => {
-    latest.current = { select, onToggle, onRightClick };
+    latest.current = { select, onPrefetch, onToggle, onRightClick };
   });
   const events = useMemo(() => ({
     select: (row: TreeRow, mods: Mods) => latest.current.select(row, mods),
+    prefetch: (path: string) => latest.current.onPrefetch(path),
     toggle: (row: TreeRow) => latest.current.onToggle(row),
     menu: (event: ReactMouseEvent<HTMLElement>, row: TreeRow) => latest.current.onRightClick(event, row),
   }), []);
@@ -249,7 +253,7 @@ export function FileTree({ ref, viewport, rows, expanded, selected, renaming, dr
     <Row
       key={row.key} row={row} isOpen={row.expandable && open.has(row.key)} selected={marked.has(row.key)} active={row.key === activeKey}
       draggable={real(row) && renaming !== row.key} frame={!!drop && real(row) && drop.dest === row.key ? (drop.problem ? 'error' : 'primary') : null}
-      title={title} icon={icon} onSelect={events.select} onToggle={events.toggle} onRightClick={events.menu} onFocus={setActive}
+      title={title} icon={icon} onSelect={events.select} onPrefetch={events.prefetch} onToggle={events.toggle} onRightClick={events.menu} onFocus={setActive}
     />
   );
 

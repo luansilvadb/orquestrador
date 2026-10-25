@@ -287,9 +287,10 @@ function HeaderAction({ icon, label, onClick }: { icon: LucideIcon; label: strin
  * `reveal` abre as pastas de um arquivo e o seleciona (um objeto novo a cada pedido). `project` é o nome da pasta do projeto, título da seção.
  * `git` é o status do repositório (null fora do modo `repo`): dá as cores e letras das linhas. */
 export function FilesScreen({
-  openPath, onOpen, reveal, actions, project, git, active }: {
+  openPath, onOpen, onPrefetch, reveal, actions, project, git, active }: {
   openPath: string | null;
   onOpen: (path: string, options?: OpenOptions) => void;
+  onPrefetch: (path: string) => void;
   reveal?: { path: string } | null;
   actions: FileActions;
   project: string;
@@ -872,6 +873,7 @@ export function FilesScreen({
             ref={fileTree} viewport={viewport} rows={rows} expanded={tree.expanded} selected={shown}
             renaming={renaming?.path ?? null} drop={dragOver} title={rowTitle} icon={rowIcon}
             onSelect={onSelect}
+            onPrefetch={onPrefetch}
             onToggle={(row) => void toggle(row.key, tree.expanded.includes(row.key))}
             onRightClick={(event, row) => {
               // Sem o menu do navegador. Clique direito fora da seleção seleciona só o item; o menu age sobre a seleção.

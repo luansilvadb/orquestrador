@@ -43,7 +43,7 @@ const loadLanguage = (path: string) => {
   });
 };
 // Pré-carga (ao abrir a aba): a vista já nasce colorida se a gramática estiver pronta quando o texto chegar.
-export const preloadLanguage = (path: string) => { loadLanguage(path).catch(() => {}); };
+export const preloadLanguage = (path: string) => loadLanguage(path).then(() => {}, () => {});
 // Linguagem de `path` se já estiver carregada (`null`: sem gramática para ele); `undefined` quando ainda falta carregar.
 const readyLanguage = (path: string) => {
   if (DOTENV.test(fileName(path))) return dotenvReady;
@@ -442,7 +442,7 @@ export function CodeEditor({
     ];
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!host.current) return;
     const cached = cacheKey ? savedStates.get(cacheKey) : undefined;
     const initial: EditorRestore = restore ? restore() : { cursor: start ?? null, scroll: scroll ?? null, focus: !!autoFocus };

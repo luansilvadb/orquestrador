@@ -193,7 +193,9 @@ scenario('lista do Terminal: número reaproveitado e menu fechado ao fechar o ú
 
 scenario('lista do editor: botão antes de Dividir, mesmo menu, X fecha a aba; o "..." só com ações', async ({ page }) => {
   await page.getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
+  await page.locator('[data-pane="A"] .cm-content').waitFor();
   await page.getByRole('treeitem', { name: 'package.json', exact: true }).dblclick();
+  await page.getByRole('button', { name: /^Lista de abas: 2/ }).waitFor();
   const toolbar = page.getByRole('toolbar', { name: 'Ações de editor' }).first();
   const list = toolbar.getByRole('button', { name: /^Lista de abas: 2/ });
   const split = toolbar.getByRole('button', { name: 'Dividir o Editor à Direita' });
