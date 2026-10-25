@@ -213,7 +213,12 @@ struct Lido {
 /// Lê o diff de `rel` uma vez só, para a tela e para a revisão saírem do mesmo snapshot. Pasta é recusada: o patch
 /// dela junta arquivos, e um bloco desse patch cairia no cabeçalho do primeiro arquivo.
 fn snapshot(dir: &Path, rel: &str, staged: bool) -> Result<Lido, String> {
-    let registros = index_registros(dir, rel)?;
+    let (registros, raw) = std::thread::scope(|scope| {
+        let registros = scope.spawn(|| index_registros(dir, rel));
+        let raw = scope.spawn(|| raw_diff(dir, rel, staged, CONTEXTO_BLOCO));
+        (registros.join(), raw.join())
+    });
+    let registros = registros.map_err(|_| "Falha interna ao ler o índice do Git.".to_string())??;
     if folder_em(dir, &registros, rel) {
         return Err(format!("{rel} é uma pasta: o diff é de um arquivo por vez."));
     }
@@ -221,7 +226,7 @@ fn snapshot(dir: &Path, rel: &str, staged: bool) -> Result<Lido, String> {
         let diff = untracked(&guarded(dir, rel)?, rel)?;
         return Ok(Lido { raw: diff.patch.clone().into_bytes(), diff, untracked: true });
     }
-    let raw = raw_diff(dir, rel, staged, CONTEXTO_BLOCO)?;
+    let raw = raw.map_err(|_| "Falha interna ao ler o diff do Git.".to_string())??;
     Ok(Lido { diff: read_diff(&raw), raw, untracked: false })
 }
 
@@ -2105,6 +2110,7 @@ mod tests {
         assert_eq!(split_hunks(&r.display.patch).1.len(), 1, "o arquivo inteiro é um bloco só");
         // Os blocos seguem o -U3: as duas mudanças são blocos separados e a linha 15 fica fora deles.
         assert_eq!(split_hunks(&r.diff.patch).1.len(), 2);
+        assert_eq!(r.revision, revisao(&raw_diff(&dir, "f.txt", false, CONTEXTO_BLOCO).unwrap()));
         assert!(!r.diff.patch.contains("linha 15
 "));
         // Não rastreado: o arquivo inteiro já é o patch, e não há bloco.

@@ -39,10 +39,11 @@ import { AppMark } from '../window/app-mark';
 import { Breadcrumbs } from './breadcrumbs';
 import { message } from '../backend/backend';
 import { useBackend } from '../backend/backend-context';
+import { useWorkerPool } from '@pierre/diffs/react';
 import { usePolling } from '../shared/polling';
 import { CodeEditor, forgetEditorState, preloadLanguage, type EditorRestore, type Reveal } from './file-view';
 import { MediaView, mediaOf, Note } from './media-view';
-import { CommitTab, CompareView, DiffTab, POLL_MS, type Ask, type Common } from './diff-view';
+import { canHighlightGitTabDiff, CommitTab, CompareView, DiffTab, gitTabFileDiff, POLL_MS, Reading, type Ask, type Common, type GitTabRead, type GitTabReadResult } from './diff-view';
 import { ConflictTab } from './conflict-view';
 import { action, blocked, DIVIDER, fileName, useChord } from '../shared/file-tabs';
 import { isAbsolutePath, pathText, relativeTo } from '../shared/file-tab-actions';
@@ -68,6 +69,7 @@ export type EditorWorkspaceHandle = {
   saveActiveAs(): Promise<boolean>;
   openFile(path: string, options?: OpenOptions): void;
   prefetch(path: string): void;
+  prefetchTarget(target: TabTarget): void;
   openTarget(target: TabTarget, options?: Pick<OpenOptions, 'permanent' | 'side'>): void;
   /** Abre à direita: com dois grupos, o segundo na ordem visual (mesmo com o foco nele); com um grupo só, o outro id, que entra depois dele (à direita). */
   openBeside(path: string, options?: Pick<OpenOptions, 'permanent' | 'line' | 'col'>): void;
@@ -189,6 +191,7 @@ function keepDocs<T>(record: Record<string, T>, ids: ReadonlySet<string>): Recor
 
 export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(props, handle) {
   const backend = useBackend();
+  const workerPool = useWorkerPool();
   const { project, active = true, locked, guard, refreshGit, onActiveTarget, layout, onRestoreLayout, onReveal, onGroupCount, onSaved } = props;
   const storageProject = project || NO_PROJECT;
   // Ref para que as gravações antigas (ainda em await) avisem com a prop atual.
@@ -250,6 +253,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const [compare, setCompare] = useState<Compare | null>(null);
   const saving = useRef(new Set<string>());
   const reads = useRef(new Map<string, CachedRead>());
+  const gitReads = useRef(new Map<string, GitTabRead>());
   const openSequence = useRef(0);
   const askOpen = useRef(false);
   const revealSeq = useRef(0);
@@ -347,11 +351,110 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     entry.language ??= preloadLanguage(path);
   };
 
-  const openTarget = (target: TabTarget, options: Pick<OpenOptions, 'permanent' | 'side'> = {}) => {
+  const openTargetNow = (target: TabTarget, options: Pick<OpenOptions, 'permanent' | 'side'> = {}, background = false) => {
     const dirty = dirtyNow();
     const group: GroupId = options.side ?? wsRef.current.focus;
+    if (background && options.permanent) {
+      const current = wsRef.current;
+      const focus = current.focus;
+      const active = current.groups.find((item) => item.id === focus)?.active;
+      let next = openPermanent(groupWithDefault(current, group), group, target);
+      if (active) next = activate(next, active);
+      if (next.focus !== focus) next = { ...next, focus };
+      setWs(next);
+      return;
+    }
     const base = groupWithDefault(wsRef.current, group);
     setWs(options.permanent ? openPermanent(base, group, target) : openPreview(base, group, target, dirty));
+  };
+
+  const gitReadFor = (target: Extract<TabTarget, { kind: 'diff' | 'commit' }>): GitTabRead => {
+    const key = targetKey(target);
+    const cached = gitReads.current.get(key);
+    if (cached) return cached;
+    const request = target.kind === 'diff'
+      ? backend.gitReviewDiff(target.path, target.side === 'staged').then((review) => ({ review } as const))
+      : backend.gitCommitDiff(target.hash, target.path).then((diff) => ({ diff } as const));
+    let consumed = false;
+    const promise = request.then((result): GitTabReadResult => {
+      entry.result = result;
+      const patch = 'review' in result ? result.review.display.patch : result.diff.patch;
+      const invalid = 'review' in result
+        ? result.review.diff.binary || result.review.diff.tooLarge || result.review.display.binary || result.review.display.tooLarge
+        : result.diff.binary || result.diff.tooLarge;
+      entry.patch = patch;
+      if (patch && !invalid) {
+        entry.fileDiff = gitTabFileDiff(target, patch, 'review' in result ? result.review.revision : undefined) ?? undefined;
+        if (entry.fileDiff && workerPool && canHighlightGitTabDiff(entry.fileDiff)) workerPool.primeDiffHighlightCache(entry.fileDiff);
+      }
+      return result;
+    }).catch((e: unknown) => ({ error: message(e) } as const));
+    const entry: GitTabRead = {
+      promise,
+      timer: 0,
+      consume: () => {
+        consumed = true;
+        window.clearTimeout(entry.timer);
+        if (gitReads.current.get(key) === entry) gitReads.current.delete(key);
+      },
+    };
+    const expire = () => { if (gitReads.current.get(key) === entry) gitReads.current.delete(key); };
+    entry.timer = window.setTimeout(expire, 5000);
+    gitReads.current.set(key, entry);
+    void entry.promise.then(() => {
+      if (consumed || gitReads.current.get(key) !== entry) return;
+      window.clearTimeout(entry.timer);
+      entry.timer = window.setTimeout(expire, 3000);
+    });
+    return entry;
+  };
+
+  const prefetchTarget = (target: TabTarget) => {
+    if (target.kind === 'diff' || target.kind === 'commit') {
+      gitReadFor(target).prefetchAt = performance.now();
+    }
+  };
+
+  const openTarget = (target: TabTarget, options: Pick<OpenOptions, 'permanent' | 'side'> = {}) => {
+    const sequence = ++openSequence.current;
+    const open = () => {
+      if (sequence === openSequence.current) openTargetNow(target, options);
+      else if (options.permanent) openTargetNow(target, options, true);
+    };
+    if (target.kind !== 'diff' && target.kind !== 'commit') { open(); return; }
+    const key = targetKey(target);
+    if (allTabs().some((tab) => targetKey(tab.target) === key)) { gitReads.current.get(key)?.consume(); open(); return; }
+    const entry = gitReadFor(target);
+    const startedAt = entry.prefetchAt ?? performance.now();
+    entry.prefetchAt = undefined;
+    void (async () => {
+      const deadline = startedAt + 500;
+      let timer = 0;
+      const timeout = new Promise<void>((resolve) => { timer = window.setTimeout(resolve, Math.max(0, deadline - performance.now())); });
+      const waitForHighlight = (fileDiff: NonNullable<GitTabRead['fileDiff']>) => new Promise<void>((resolve) => {
+        let frame = 0;
+        const finish = () => {
+          window.clearTimeout(highlightTimer);
+          if (frame) window.cancelAnimationFrame(frame);
+          resolve();
+        };
+        const highlightTimer = window.setTimeout(finish, Math.max(0, deadline - performance.now()));
+        const poll = () => {
+          if (!workerPool || !workerPool.isWorkingPool() || workerPool.getDiffResultCache(fileDiff) || performance.now() >= deadline) finish();
+          else frame = window.requestAnimationFrame(poll);
+        };
+        poll();
+      });
+      try {
+        await Promise.race([entry.promise, timeout]);
+        if (entry.fileDiff && canHighlightGitTabDiff(entry.fileDiff) && performance.now() < deadline) {
+          await Promise.race([waitForHighlight(entry.fileDiff), timeout]);
+        }
+      } finally {
+        window.clearTimeout(timer);
+        open();
+      }
+    })();
   };
 
   const openFile = (path: string, options: OpenOptions = {}) => {
@@ -1022,6 +1125,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     saveActiveAs,
     openFile,
     prefetch,
+    prefetchTarget,
     openTarget,
     openBeside,
     remap,
@@ -1183,8 +1287,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
 
   const bodyOf = (tab: EditorTab, groupActive: boolean, shown: boolean): ReactNode => {
     const target = tab.target;
-    if (target.kind === 'diff') return <DiffTab target={target} common={common} shown={shown} />;
-    if (target.kind === 'commit') return <CommitTab target={target} />;
+    if (target.kind === 'diff') return <DiffTab key={targetKey(target)} target={target} common={common} shown={shown} read={gitReads.current.get(targetKey(target))} />;
+    if (target.kind === 'commit') return <CommitTab key={targetKey(target)} target={target} read={gitReads.current.get(targetKey(target))} />;
     if (target.kind === 'conflict') {
       return (
         <ConflictTab
@@ -1571,16 +1675,6 @@ function useGitBase(path: string, raw: string, shown: boolean, active: boolean):
   return { base: path === '' || isAbsolutePath(path) ? null : base, reload: load };
 }
 
-// Espera da leitura: corpo na cor do editor (#1F1F1F, de `darkTheme`), sem texto; o aviso só aparece se a leitura demorar.
-function Reading() {
-  const [late, setLate] = useState(false);
-  useEffect(() => {
-    const timer = setTimeout(() => setLate(true), 200);
-    return () => clearTimeout(timer);
-  }, []);
-  return <Flexbox flex={1} className="min-h-0 bg-[#1F1F1F]">{late && <Note text="Lendo o arquivo…" />}</Flexbox>;
-}
-
 function FileBody({
   project, active, buffer, shown, status, disk, reveal, restore, onChange, onFormatEol, onSave, onCursor, onCompare, onRetry, onScroll }: {
   project: string; active: boolean;
@@ -1594,7 +1688,7 @@ function FileBody({
   const git = useGitBase(buffer?.path ?? '', buffer?.raw ?? '', shown, active);
   if (status?.binary) return <Note text="Arquivo binário: não há texto para mostrar aqui." />;
   if (status?.large) return <Note text="Arquivo grande demais para mostrar aqui." />;
-  if (!buffer) return status?.error ? <Note text={status.error} danger onRetry={onRetry} /> : <Reading />;
+  if (!buffer) return status?.error ? <Note text={status.error} danger onRetry={onRetry} /> : <Reading text="Lendo o arquivo…" />;
   const notes: string[] = [];
   if (buffer.readOnly) notes.push('Arquivo não está em UTF-8; somente leitura.');
   if (status?.error) notes.push(status.error);

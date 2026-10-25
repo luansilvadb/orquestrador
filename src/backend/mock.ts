@@ -308,6 +308,7 @@ const debug = { close: async () => {
   disk: (rel: string) => TEXTS[rel] ?? '',
   // Arquivo novo no disco simulado (fixture de teste): aparece na árvore com o texto dado.
   addFile: (rel: string, text = '') => { const { dir, name } = splitPath(rel); addFile(dir, name); TEXTS[rel] = text; },
+  addGitFile: (rel: string, base: string, text: string) => addGitFile(rel, base, text),
   // Pasta nova no disco simulado (fixture de teste): aparece na árvore. Pasta-mãe que não existe é ignorada.
   addFolder: (rel: string) => { const { dir, name } = splitPath(rel); const parent = folderAt(dir); if (parent && !parent.children[name]) parent.children[name] = folder(); },
   // Falha de I/O simulada: colar ou mover para quando chega num destes caminhos de origem (relativos), como um disco que recusa um item.
@@ -400,6 +401,13 @@ const GIT_TEXT: Record<string, { head: string; index: string }> = {
   // Marcadores do editor: um bloco preparado e três só na pasta (ver mock-fixtures.ts).
   'src/marcadores.ts': { head: MARCADORES_HEAD, index: MARCADORES_INDEX },
 };
+function addGitFile(rel: string, base: string, text: string) {
+  const { dir, name } = splitPath(rel);
+  addFile(dir, name);
+  TEXTS[rel] = text;
+  GIT_TEXT[rel] = { head: base, index: base };
+  files.push(entry(rel, null, 'modified'));
+}
 type Hunk = { header: string; body: string[]; oldAt: number; oldLen: number; newAt: number; newLen: number; oldLines: string[]; newLines: string[] };
 const textLines = (text: string) => (text === '' ? [] : text.replace(/\n$/, '').split('\n'));
 const joinLines = (ls: string[]) => ls.map((l) => l + '\n').join('');

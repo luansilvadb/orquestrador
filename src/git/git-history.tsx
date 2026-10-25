@@ -166,11 +166,12 @@ export function useCommitDetail() {
  * É a lista que abre embaixo do commit, no histórico e no gráfico. `gutter` põe algo antes de cada linha (o gráfico desenha as faixas ali).
  */
 export function CommitFileList({
-  hash, files, selected, onOpenTarget, gutter }: {
+  hash, files, selected, onOpenTarget, onPrefetchTarget, gutter }: {
   hash: string;
   files: CommitFile[];
   selected: TabTarget | null | undefined;
   onOpenTarget: OpenCommitTarget;
+  onPrefetchTarget: (target: TabTarget) => void;
   gutter?: (index: number) => ReactNode;
 }) {
   // A coluna não pode crescer com o nome longo: sem o minmax(0,1fr), o texto empurra a lista para fora.
@@ -186,6 +187,7 @@ export function CommitFileList({
             {gutter?.(index)}
             <button
               type="button"
+              onMouseDown={(e) => { if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) onPrefetchTarget({ kind: 'commit', hash, path: f.path }); }}
               onClick={() => onOpenTarget({ kind: 'commit', hash, path: f.path })}
               onDoubleClick={() => onOpenTarget({ kind: 'commit', hash, path: f.path }, { permanent: true })}
               aria-current={isOpen ? 'true' : undefined}
@@ -211,11 +213,12 @@ export type HistoryPanelProps = {
   active: boolean;
   selected: TabTarget | null | undefined;
   onOpenTarget: OpenCommitTarget;
+  onPrefetchTarget: (target: TabTarget) => void;
 };
 
 /** Lista paginada de commits (do projeto ou do arquivo) e, ao escolher um, os arquivos dele. */
 export function HistoryPanel({
-  request, active, selected, onOpenTarget }: HistoryPanelProps) {
+  request, active, selected, onOpenTarget, onPrefetchTarget }: HistoryPanelProps) {
   const backend = useBackend();
   // Lista e detalhe são os mesmos dos gráficos (ver os hooks acima). Aqui recarregar esvazia a lista e fecha o commit aberto.
   const { scope, items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList((offset, scope) => backend.gitHistory(PAGE, offset, scope ?? undefined), true);
@@ -259,7 +262,7 @@ export function HistoryPanel({
               <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 12, paddingBlock: 4 }}>
                 {files.length === 1 ? '1 arquivo' : `${files.length} arquivos`}
               </Text>
-              <CommitFileList hash={commit.hash} files={files} selected={selected} onOpenTarget={onOpenTarget} />
+              <CommitFileList hash={commit.hash} files={files} selected={selected} onOpenTarget={onOpenTarget} onPrefetchTarget={onPrefetchTarget} />
             </>
           )}
         </>

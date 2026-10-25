@@ -1191,6 +1191,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
                   {state.project ? <GitSidebar
                     git={git} locked={busy} guard={gitGuard} active={active && route === 'git'} selected={activeTarget} historyRequest={historyRequest}
                     onOpenTarget={(target, options) => editor.current?.openTarget(target, options)}
+                    onPrefetchTarget={(target) => editor.current?.prefetchTarget(target)}
                     onOpenFile={(path, options) => editor.current?.openFile(path, options)}
                   /> : <OpenProjectPrompt onOpen={chooseProject} description="Abra uma pasta para usar o Git." />}
                 </div>

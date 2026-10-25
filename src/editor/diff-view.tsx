@@ -2,13 +2,15 @@
 // leitura), ambos com o arquivo inteiro num comparador contínuo. `Common` e `Ask` são o que o workspace entrega às abas de Git.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type KeyboardEvent, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { ActionIcon, Button, Text, toast } from '@lobehub/ui/base-ui';
-import { Flexbox, PatchDiff } from '@lobehub/ui';
+import { Flexbox } from '@lobehub/ui';
+import { getFiletypeFromFileName, parsePatchFiles } from '@pierre/diffs';
+import { FileDiff, type FileDiffMetadata } from '@pierre/diffs/react';
 import { ArrowRight, ChevronDown, ChevronUp, Columns2, FileText, Minus, Plus, Rows2, Undo2 } from 'lucide-react';
 import { message } from '../backend/backend';
 import { useBackend } from '../backend/backend-context';
 import { usePolling } from '../shared/polling';
 import { Note } from './media-view';
-import type { TabTarget } from './workspace-model';
+import { targetKey, type TabTarget } from './workspace-model';
 import { normalizeNewlines, patchHunks, type PatchHunk } from './workspace-store';
 import type { GitGuard } from '../git/git-guard';
 import type { GitDiff, HunkRef, ReviewDiff } from '../backend/types';
@@ -28,6 +30,26 @@ export type Common = {
 };
 
 export const POLL_MS = 2500;
+
+export type GitTabReadResult = { review: ReviewDiff } | { diff: GitDiff } | { error: string };
+export type GitTabRead = { promise: Promise<GitTabReadResult>; result?: GitTabReadResult; patch?: string; fileDiff?: FileDiffMetadata; prefetchAt?: number; timer: number; consume(): void };
+
+export function gitTabFileDiff(target: Extract<TabTarget, { kind: 'diff' | 'commit' }>, patch: string, revision?: string) {
+  return parsePatchFiles(patch, `git-tab:${targetKey(target)}:${revision ?? ''}`)[0]?.files[0] ?? null;
+}
+
+export function canHighlightGitTabDiff(fileDiff: FileDiffMetadata) {
+  return (fileDiff.lang ?? getFiletypeFromFileName(fileDiff.name)) !== 'text';
+}
+
+export function Reading({ text }: { text: string }) {
+  const [late, setLate] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setLate(true), 200);
+    return () => clearTimeout(timer);
+  }, []);
+  return <Flexbox flex={1} className="min-h-0 bg-[#1F1F1F]">{late && <Note text={text} />}</Flexbox>;
+}
 
 // Acima disso a comparação não é desenhada (duas áreas de texto gigantes travam a tela). A confirmação continua valendo.
 const COMPARE_CHARS = 200_000;
@@ -79,11 +101,12 @@ type ViewMode = 'split' | 'unified';
 
 // Comparador: lado a lado por padrão, com a fonte e as cores do editor (docs/interface.md). Linhas longas quebram dentro das colunas;
 // o motor alinha os lados. A geometria é medida nos elementos de linha do shadow DOM depois de cada render.
-type DiffOptions = NonNullable<ComponentProps<typeof PatchDiff>['diffOptions']>;
+type DiffOptions = NonNullable<ComponentProps<typeof FileDiff>['options']>;
 // A grade tem cinco trilhas: número, texto, vão de 40 px, número e texto. Com o worker, tema e `lineDiffType` valem do pool
 // (`diff-worker.tsx`); os daqui ficam para quando o worker falha e o realce volta à thread principal.
 const COMPARE_DIFF_OPTIONS: DiffOptions = {
   theme: { dark: 'dark-plus', light: 'dark-plus' },
+  disableFileHeader: true,
   overflow: 'wrap',
   diffIndicators: 'none',
   lineDiffType: 'word-alt',
@@ -154,8 +177,8 @@ const clampSplit = (pct: number) => Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct)
 // tem uma marca na faixa da direita, e um clique numa mudança a escolhe. A rolagem vai à primeira linha da unidade atual, e só quando
 // ela, o modo ou o arquivo mudam: a atualização do diff não rola a tela. No lado a lado, a proporção das colunas de texto e a posição do vão
 // são atualizadas no palco sem refazer o diff nem rolar a tela.
-function Continuous({ patch, compare, mode: asked, current, unitName, onPick, center }: {
-  patch: string; compare: CompareModel; mode: ViewMode; current: number; unitName: string; onPick: (unit: number) => void; center?: ReactNode;
+function Continuous({ patch, fileDiff, compare, mode: asked, current, unitName, onPick, center }: {
+  patch: string; fileDiff: FileDiffMetadata; compare: CompareModel; mode: ViewMode; current: number; unitName: string; onPick: (unit: number) => void; center?: ReactNode;
 }) {
   const mode: ViewMode = isNewFile(patch) ? 'unified' : asked;
   const body = useRef<HTMLDivElement>(null);
@@ -247,9 +270,8 @@ function Continuous({ patch, compare, mode: asked, current, unitName, onPick, ce
   }), []);
   // O motor não renderiza de novo no arraste: o pointer só troca a variável do palco e o `aria-valuenow` do divisor, pelo DOM. O estado
   // recebe a proporção no fim. `diff` é o mesmo elemento enquanto o patch e o modo não mudam, então o React não mexe no motor.
-  const diff = useMemo(() => (
-    <PatchDiff patch={patch} viewMode={mode} showHeader={false} variant="borderless" diffOptions={engine} />
-  ), [patch, mode, engine]);
+  const options = useMemo<DiffOptions>(() => ({ ...engine, diffStyle: mode }), [engine, mode]);
+  const diff = useMemo(() => <FileDiff fileDiff={fileDiff} options={options} className="block w-full" />, [fileDiff, options]);
   const drag = useRef<{ x: number; start: number; width: number; pct: number } | null>(null);
   const paint = (pct: number) => {
     const el = stage.current;
@@ -352,23 +374,32 @@ const stepKey = (e: KeyboardEvent<HTMLElement>, step: (by: number) => void) => {
 // `shown`: a aba é a atual do grupo. As abas escondidas ficam montadas e não consultam o Git; ao voltar, leem o diff de novo,
 // porque a aba irmã pode ter mudado o índice (a revisão velha seria recusada pelo Git).
 export function DiffTab({
-  target, common, shown }: { target: Extract<TabTarget, { kind: 'diff' }>; common: Common; shown: boolean }) {
+  target, common, shown, read }: { target: Extract<TabTarget, { kind: 'diff' }>; common: Common; shown: boolean; read?: GitTabRead }) {
   const backend = useBackend();
   const staged = target.side === 'staged';
-  const [review, setReview] = useState<ReviewDiff | null>(null);
-  const [error, setError] = useState('');
+  const [initialRead] = useState(() => read);
+  const initial = initialRead?.result;
+  const [review, setReview] = useState<ReviewDiff | null>(() => initial && 'review' in initial ? initial.review : null);
+  const [error, setError] = useState(() => initial && 'error' in initial ? initial.error : '');
+  const firstRead = useRef(initialRead?.promise ?? null);
   const [mode, setMode] = useState<ViewMode>('split');
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   // Bloco atual pelo índice (os blocos são os do Git, com 3 linhas de contexto). O primeiro é o atual ao abrir; trocar de arquivo volta a ele.
   const [at, setAt] = useState(0);
   useEffect(() => setAt(0), [target.path, target.side]);
+  useEffect(() => { initialRead?.consume(); }, [initialRead]);
   const load = async () => {
-    try {
-      setReview(await backend.gitReviewDiff(target.path, staged));
+    const pending = firstRead.current;
+    firstRead.current = null;
+    const result = pending
+      ? await pending
+      : await backend.gitReviewDiff(target.path, staged).then((review) => ({ review } as const), (e: unknown) => ({ error: message(e) } as const));
+    if ('error' in result) {
+      setError(result.error);
+    } else if ('review' in result) {
+      setReview(result.review);
       setError('');
-    } catch (e) {
-      setError(message(e));
     }
   };
   usePolling(load, POLL_MS, common.active && shown && `${target.path}|${target.side}`);
@@ -402,6 +433,11 @@ export function DiffTab({
   const shownBinary = review ? review.display.binary : false;
   const shownLarge = review ? review.display.tooLarge : false;
   const diffPatch = review ? review.diff.patch : '';
+  const fileDiff = useMemo(() => {
+    if (!review) return null;
+    if (initialRead?.patch === review.display.patch && initialRead.fileDiff) return initialRead.fileDiff;
+    return gitTabFileDiff(target, review.display.patch, review.revision);
+  }, [target.path, target.side, review?.display.patch, review?.revision]);
   const compare = useMemo(() => (
     shownPatch !== '' && !shownBinary && !shownLarge
       ? compareOf(shownPatch, !untracked && diffPatch !== '' ? blockRanges(diffPatch) : null)
@@ -441,10 +477,11 @@ export function DiffTab({
   };
 
   if (error && !review) return <Note text={error} danger />;
-  if (!review) return <Note text="Lendo as alterações…" />;
+  if (!review) return <Reading text="Lendo as alterações…" />;
   if (review.diff.binary) return <Note text="Arquivo binário: o diff não é mostrado." />;
   if (review.diff.tooLarge || review.display.tooLarge) return <Note text="Diff grande demais para mostrar aqui." />;
   if (review.diff.patch === '' || !compare) return <Note text="Não há alterações neste lado." />;
+  if (!fileDiff) return <Note text="Não foi possível interpretar o diff." danger />;
 
   const counter = untracked ? 'arquivo novo, não rastreado' : n === 0 ? (staged ? 'preparadas' : 'alterações') : `bloco ${cur + 1} de ${n}`;
   return (
@@ -508,7 +545,7 @@ export function DiffTab({
           />
         )}
       </Flexbox>
-      <Continuous key={`${target.path}|${target.side}`} patch={review.display.patch} compare={compare} mode={mode} current={cur} unitName="Bloco" onPick={setAt}
+      <Continuous key={`${target.path}|${target.side}`} patch={review.display.patch} fileDiff={fileDiff} compare={compare} mode={mode} current={cur} unitName="Bloco" onPick={setAt}
         center={ref && block && !untracked ? <div className="compare-center-actions">
           {!staged && <ActionIcon size="small" variant="borderless" danger icon={ArrowRight} aria-label={`Descartar bloco ${cur + 1} de ${n}`} title={`Descartar o bloco ${cur + 1} de ${n}`} disabled={blocked_ || draftOpen} onClick={() => discardAt(cur)} />}
           {staged
@@ -524,22 +561,40 @@ export function DiffTab({
 
 // O commit mostra o arquivo inteiro. Sem blocos do Git, a unidade é cada trecho de mudança; a navegação é só de leitura.
 export function CommitTab({
-  target }: { target: Extract<TabTarget, { kind: 'commit' }> }) {
+  target, read }: { target: Extract<TabTarget, { kind: 'commit' }>; read?: GitTabRead }) {
   const backend = useBackend();
-  const [diff, setDiff] = useState<GitDiff | null>(null);
-  const [error, setError] = useState('');
+  const [initialRead] = useState(() => read);
+  const initial = initialRead?.result;
+  const [diff, setDiff] = useState<GitDiff | null>(() => initial && 'diff' in initial ? initial.diff : null);
+  const [error, setError] = useState(() => initial && 'error' in initial ? initial.error : '');
+  const firstRead = useRef(initialRead?.promise ?? null);
   const [mode, setMode] = useState<ViewMode>('split');
   const [at, setAt] = useState(0);
   useEffect(() => {
-    if (diff) return; // histórico é imutável: lê uma vez
-    backend.gitCommitDiff(target.hash, target.path).then(setDiff, (e) => setError(message(e)));
+    initialRead?.consume();
+    if (diff || error) return; // histórico é imutável: lê uma vez
+    const pending = firstRead.current;
+    firstRead.current = null;
+    void (pending
+      ? pending
+      : backend.gitCommitDiff(target.hash, target.path).then((diff) => ({ diff } as const), (e: unknown) => ({ error: message(e) } as const)))
+      .then((result) => {
+        if ('error' in result) setError(result.error);
+        else if ('diff' in result) setDiff(result.diff);
+      });
   }, [target.hash, target.path]);
+  const fileDiff = useMemo(() => {
+    if (!diff) return null;
+    if (initialRead?.patch === diff.patch && initialRead.fileDiff) return initialRead.fileDiff;
+    return gitTabFileDiff(target, diff.patch);
+  }, [target.hash, target.path, diff?.patch]);
   const compare = useMemo(() => (diff && diff.patch !== '' && !diff.binary && !diff.tooLarge ? compareOf(diff.patch, null) : null), [diff]);
   if (error) return <Note text={error} danger />;
-  if (!diff) return <Note text="Lendo o commit…" />;
+  if (!diff) return <Reading text="Lendo o commit…" />;
   if (diff.binary) return <Note text="Arquivo binário: o diff não é mostrado." />;
   if (diff.tooLarge) return <Note text="Diff grande demais para mostrar aqui." />;
   if (!compare) return <Note text="Este commit não altera o texto deste arquivo." />;
+  if (!fileDiff) return <Note text="Não foi possível interpretar o diff." danger />;
   const n = compare.units.length;
   const cur = n === 0 ? -1 : Math.min(at, n - 1);
   const step = (by: number) => {
@@ -560,7 +615,7 @@ export function CommitTab({
         )}
         {!isNewFile(diff.patch) && <ModeToggle mode={mode} onChange={setMode} />}
       </Flexbox>
-      <Continuous key={`${target.hash}|${target.path}`} patch={diff.patch} compare={compare} mode={mode} current={cur} unitName="Mudança" onPick={setAt} />
+      <Continuous key={`${target.hash}|${target.path}`} patch={diff.patch} fileDiff={fileDiff} compare={compare} mode={mode} current={cur} unitName="Mudança" onPick={setAt} />
     </Flexbox>
   );
 }

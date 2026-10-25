@@ -49,6 +49,7 @@ export type GraphSectionProps = {
   active: boolean;
   selected: TabTarget | null | undefined;
   onOpenTarget: OpenCommitTarget;
+  onPrefetchTarget: (target: TabTarget) => void;
   onRefresh: () => void;
   /** Rótulo e trava de cada ação remota, vindos do painel (que tem as travas de busy e de locked). */
   remote: Record<GraphRemote, { label: string; disabled: boolean }>;
@@ -186,7 +187,7 @@ function DetailNote({ row, text, danger = false }: { row: GraphRow; text: string
  * Aberta, ocupa `height` e tem o divisor acima (arrastar ou setas); fechada, sobra só o cabeçalho. Cada parte rola por conta própria.
  */
 export function GraphSection({
-  open, onToggle, height, onHeight, head, stamp, active, selected, onOpenTarget, onRefresh, remote, running, onRemote,
+  open, onToggle, height, onHeight, head, stamp, active, selected, onOpenTarget, onPrefetchTarget, onRefresh, remote, running, onRemote,
 }: GraphSectionProps) {
   const backend = useBackend();
   // Lista paginada (a anterior fica na tela até a nova chegar) e detalhe do commit aberto: os mesmos hooks do histórico.
@@ -297,7 +298,7 @@ export function GraphSection({
                 </ContextMenuTrigger>
                 {isOpen && (detail && detail.commit.hash === c.hash
                   ? (detail.files.length
-                    ? <CommitFileList hash={c.hash} files={detail.files} selected={selected} onOpenTarget={onOpenTarget} gutter={() => <GapLanes row={row} />} />
+                    ? <CommitFileList hash={c.hash} files={detail.files} selected={selected} onOpenTarget={onOpenTarget} onPrefetchTarget={onPrefetchTarget} gutter={() => <GapLanes row={row} />} />
                     : <DetailNote row={row} text="Nenhum arquivo neste commit." />)
                   : <DetailNote row={row} text={detailError || 'Lendo os arquivos…'} danger={!!detailError} />)}
               </li>

@@ -80,6 +80,7 @@ export type GitSidebarProps = {
   /** Alvo aberto no editor central: marca a linha de diff (do mesmo lado) ou de conflito correspondente. */
   selected?: TabTarget | null;
   onOpenTarget: OpenCommitTarget;
+  onPrefetchTarget: (target: TabTarget) => void;
   /** `permanent` abre de vez (duplo clique) em vez de prévia. */
   onOpenFile: (path: string, options?: { permanent?: boolean }) => void;
   /** Pedido de histórico: um pedido novo abre a lista (do projeto, ou do arquivo em `path`). */
@@ -106,6 +107,7 @@ function isOpenTarget(target: TabTarget | null | undefined, side: DiffSide, f: G
 /** O que cada linha pode fazer, vindo do painel (que tem o estado e as travas). */
 type RowActions = {
   pick: (f: GitFile, side: DiffSide, ctrl: boolean) => void;
+  prefetch: (f: GitFile, side: DiffSide) => void;
   review: (f: GitFile, side: DiffSide) => void;
   openFile: (f: GitFile) => void;
   stage: (f: GitFile, side: DiffSide, list: GitFile[]) => void;
@@ -117,7 +119,7 @@ type RowActions = {
  * Fica montado mesmo com o histórico na frente: a mensagem digitada e os recolhidos não se perdem.
  */
 function ChangesPanel({
-  status, error, refresh, locked, guard, active, selected, onOpenTarget, onOpenFile }: {
+  status, error, refresh, locked, guard, active, selected, onOpenTarget, onPrefetchTarget, onOpenFile }: {
   status: GitStatus | null;
   error: string;
   refresh: () => Promise<void>;
@@ -127,6 +129,7 @@ function ChangesPanel({
   active: boolean;
   selected: TabTarget | null | undefined;
   onOpenTarget: OpenCommitTarget;
+  onPrefetchTarget: (target: TabTarget) => void;
   /** `permanent` abre de vez (duplo clique) em vez de prévia. */
   onOpenFile: (path: string, options?: { permanent?: boolean }) => void;
 }) {
@@ -236,6 +239,7 @@ function ChangesPanel({
     onOpenTarget(target, { permanent });
   };
   const actions: RowActions = {
+    prefetch: (f, side) => { if (f[side] !== 'conflicted') onPrefetchTarget({ kind: 'diff', side, path: f.path }); },
     pick: (f, side, ctrl) => {
       const key = keyOf(side, f.path);
       if (ctrl) {
@@ -343,7 +347,7 @@ function ChangesPanel({
       <GraphSection
         open={!collapsed.graph} onToggle={() => toggle('graph')} height={graphHeight} onHeight={setGraphHeight}
         head={status.head} stamp={[graphTick, status.head, status.branch, status.ahead, status.behind].join('|')}
-        active={active} selected={selected} onOpenTarget={onOpenTarget} onRefresh={refreshGraph}
+        active={active} selected={selected} onOpenTarget={onOpenTarget} onPrefetchTarget={onPrefetchTarget} onRefresh={refreshGraph}
         remote={remoteActions} running={running} onRemote={(kind) => void remote(kind)}
       />
     </Flexbox>
@@ -544,6 +548,7 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
                   >
                     <button
                       type="button"
+                      onMouseDown={(e) => { if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) actions.prefetch(f, side); }}
                       onClick={(e) => actions.pick(f, side, e.ctrlKey || e.metaKey)}
                       onDoubleClick={() => actions.review(f, side)}
                       aria-current={isOpen ? 'true' : undefined}
@@ -593,7 +598,7 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
  * Fora do modo `repo` não há nada disso: o painel é só o estado vazio, sem abas, e nada consulta o Git.
  */
 export function GitSidebar({
-  git, locked, guard, active, selected, onOpenTarget, onOpenFile, historyRequest }: GitSidebarProps) {
+  git, locked, guard, active, selected, onOpenTarget, onPrefetchTarget, onOpenFile, historyRequest }: GitSidebarProps) {
   const [view, setView] = useState<'changes' | 'history'>('changes');
   const [request, setRequest] = useState<HistoryRequest>({ path: null });
 
@@ -632,11 +637,11 @@ export function GitSidebar({
       <div className={view === 'changes' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
         <ChangesPanel
           status={data?.status ?? null} error={error} refresh={refresh} locked={locked} guard={guard} selected={selected}
-          active={active && view === 'changes'} onOpenTarget={onOpenTarget} onOpenFile={onOpenFile}
+          active={active && view === 'changes'} onOpenTarget={onOpenTarget} onPrefetchTarget={onPrefetchTarget} onOpenFile={onOpenFile}
         />
       </div>
       <div className={view === 'history' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
-        <HistoryPanel request={request} active={active && view === 'history'} selected={selected} onOpenTarget={onOpenTarget} />
+        <HistoryPanel request={request} active={active && view === 'history'} selected={selected} onOpenTarget={onOpenTarget} onPrefetchTarget={onPrefetchTarget} />
       </div>
     </Flexbox>
   );

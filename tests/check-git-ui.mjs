@@ -170,6 +170,7 @@ scenario('diff: arquivo inteiro num comparador só; preparar, tirar e descartar 
   await openGit(page);
   await row(page, 'staged', EDIT).dblclick();
   await row(page, 'unstaged', EDIT).dblclick();
+  await Promise.all([tab(page, `${EDIT} (preparadas)`).waitFor(), tab(page, `${EDIT} (alterações)`).waitFor()]);
   const titles = await page.locator('[data-tab] [role="tab"]').evaluateAll((els) => els.map((el) => el.getAttribute('title')));
   assert.ok(titles.includes(`${EDIT} (preparadas)`) && titles.includes(`${EDIT} (alterações)`), `abas: ${titles}`);
 
@@ -257,6 +258,59 @@ scenario('diff: arquivo inteiro num comparador só; preparar, tirar e descartar 
   await waitCounter(page, 'bloco 1 de 1');
   await singleColumn(page, 'preparado');
   await tb(page, 'Tirar bloco 1 de 1 do preparo').waitFor();
+});
+
+scenario('diff Git: clique simples em .ts abre com realce no primeiro quadro ativo', async ({ page }) => {
+  const path = 'src/atomic-diff.ts';
+  await page.evaluate((file) => {
+    const base = Array.from({ length: 350 }, (_, i) => `export const ATOMIC_BASE_${i} = ${i};`).join('\n') + '\n';
+    window.__mock.addGitFile(file, base, base.replace('ATOMIC_BASE_0', 'ATOMIC_DIFF_0'));
+  }, path);
+  await openGit(page);
+  await page.evaluate((file) => {
+    window.__atomicDiffFrames = [];
+    window.__atomicDiffMetrics = { clickAt: performance.now(), releasedAt: null, tabAt: null, textAt: null, colorAt: null, responseAt: null, tokens: null };
+    const inspect = () => {
+      const tab = [...document.querySelectorAll('[data-group="A"] [role="tab"][aria-selected="true"]')]
+        .find((item) => item.getAttribute('title')?.includes(`${file} (alterações)`));
+      const metrics = window.__atomicDiffMetrics;
+      const response = window.__mock.calls.find((call) => call.cmd === 'git_review_diff' && call.args.path === file && call.completedAt !== null);
+      if (response) metrics.responseAt ??= response.completedAt;
+      if (tab) {
+        const now = performance.now();
+        metrics.tabAt ??= now;
+        const id = tab.closest('[data-tab]')?.getAttribute('data-tab');
+        const body = [...document.querySelectorAll('[data-body]')].find((item) => item.getAttribute('data-body') === id);
+        const diff = body?.querySelector('.compare-view diffs-container')?.shadowRoot?.querySelector('pre[data-diff-type]');
+        const content = !!diff && diff.textContent.includes('ATOMIC_DIFF_0');
+        const spans = diff ? [...diff.querySelectorAll('[data-content] span')] : [];
+        const colored = spans.some((span) => /--diffs-token-|(?:^|;)\s*color\s*:/i.test(span.getAttribute('style') ?? ''));
+        if (content) {
+          metrics.textAt ??= now;
+          metrics.tokens ??= spans.slice(0, 4).map((span) => span.outerHTML);
+        }
+        if (content && colored) metrics.colorAt ??= now;
+        window.__atomicDiffFrames.push({ content, colored });
+      }
+      requestAnimationFrame(inspect);
+    };
+    requestAnimationFrame(inspect);
+  }, path);
+  const changed = row(page, 'unstaged', path);
+  const bounds = await changed.boundingBox();
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.evaluate(() => { window.__atomicDiffMetrics.clickAt = performance.now(); });
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.evaluate(() => { window.__atomicDiffMetrics.releasedAt = performance.now(); });
+  await page.waitForFunction(() => window.__mock.calls.some((call) => call.cmd === 'git_review_diff' && call.args.path === 'src/atomic-diff.ts'), null, { timeout: 4000 });
+  await page.waitForFunction(() => window.__atomicDiffMetrics.textAt !== null, null, { timeout: 10000 });
+  await page.waitForFunction(() => window.__atomicDiffMetrics.colorAt !== null && window.__atomicDiffFrames.length >= 5, null, { timeout: 10000 });
+  const { metrics, frames } = await page.evaluate(() => ({ metrics: window.__atomicDiffMetrics, frames: window.__atomicDiffFrames }));
+  assert.ok(frames.length > 0, 'o observador registrou a aba ativa');
+  console.log(`diff .ts: ${JSON.stringify({ clickAt: metrics.clickAt, releasedAt: metrics.releasedAt, responseAt: metrics.responseAt, tabAt: metrics.tabAt, textAt: metrics.textAt, colorAt: metrics.colorAt, frames: frames.length, first: frames[0] })}`);
+  assert.ok(metrics.tabAt - metrics.clickAt <= 800, `a aba demorou ${Math.round(metrics.tabAt - metrics.clickAt)} ms para abrir`);
+  assert.ok(frames.every((frame) => frame.content && frame.colored), `o comparador apareceu sem conteúdo colorido; tokens=${JSON.stringify(metrics.tokens)}; amostra=${JSON.stringify(frames.slice(0, 3))}`);
 });
 
 // Layout: 1920 e 1040 com dois grupos. As ações da barra são acessíveis, inteiras e sem sobreposição; o arquivo entra no grupo ativo.
@@ -625,7 +679,13 @@ scenario('histórico do projeto abre commit, arquivo e a aba de diff do commit (
   await commit.click();
   const renamed = page.locator('button[title^="src/lib/utils.ts (renomeado de src/utils.ts)"]');
   await renamed.waitFor();
-  await renamed.click();
+  const renamedBox = await renamed.boundingBox();
+  await page.mouse.move(renamedBox.x + renamedBox.width / 2, renamedBox.y + renamedBox.height / 2);
+  await page.mouse.down();
+  await page.waitForFunction(() => window.__mock.calls.some((call) => call.cmd === 'git_commit_diff' && call.args.path === 'src/lib/utils.ts'), null, { timeout: 4000 });
+  const beforeRelease = await page.locator('[data-group="A"] [role="tab"][aria-selected="true"]').textContent().catch(() => '');
+  assert.ok(!beforeRelease.includes('src/lib/utils.ts'), `a aba trocou antes de soltar o botão (${beforeRelease})`);
+  await page.mouse.up();
   await tab(page, 'src/lib/utils.ts @ 4b2e8d0').waitFor();
   await page.getByText('commit 4b2e8d0 · somente leitura').waitFor();
   // A aba abre antes do conteúdo chegar, e o diff pode estar em shadow DOM (innerText não atravessa): espera pelo texto do locator.
