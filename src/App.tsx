@@ -16,7 +16,7 @@ import { copy, join, splitPath } from './shared/paths';
 import { QuickOpen } from './editor/quick-open';
 import { SearchScreen } from './search/search';
 import { SHELL_HEIGHT, SHELL_MIN, ShellPanel } from './terminal/shell-panel';
-import { type ExecutorTab, FINISHED, PANEL_MIN, PANEL_WIDTH, STATES, TerminalsScreen } from './terminal/terminal-screen';
+import { type ExecutorTab, FINISHED, PANEL_MIN, PANEL_WIDTH, TerminalsScreen } from './terminal/terminal-screen';
 import type { TermView } from './terminal/term';
 import { terminals } from './terminal/terminals';
 import { folderName, TitleBar, type ProjectTab, type TitleBarMenu } from './window/titlebar';
@@ -1057,9 +1057,6 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
   const busy = executors.some((e) => !FINISHED.includes(e.state));
   const count = (state: NodeState) => executors.filter((e) => e.state === state).length;
-  const counts = (['running', 'queued', 'awaiting-choice'] as const)
-    .map((state) => [count(state), STATES[state].label] as const)
-    .filter(([n]) => n);
   // Contador da navegação, branch e Histórico Git só existem no modo `repo`.
   const changed = state.project && git.data?.kind === 'repo' ? git.data.status.files.length : 0;
   const repoStatus = state.project && git.data?.kind === 'repo' ? git.data.status : undefined;
@@ -1151,13 +1148,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
       <TitleBar connected={connected} project={state.project} titleActive={active} menu={titlebarMenu} projectTabs={projects ? {
         projects, active: initialProject?.id ?? null, onSelect: (id) => onSelect?.(id), onClose: (id) => void closeTab(id),
         onMove: (id, index) => onMove?.(id, index), onAdd: () => onOpen(),
-      } : undefined}>
-        {counts.map(([n, label]) => (
-          <Text key={label} as="span" fontSize={12} style={SECONDARY} noWrap ellipsis title={`${n} ${label}`} data-tauri-drag-region>
-            {`${n} ${label}`}
-          </Text>
-        ))}
-      </TitleBar>
+      } : undefined} />
 
       <Flexbox ref={rowRef} horizontal flex={1} className="min-h-0">
         <Nav route={sideShown ? route : null} changed={changed} onGo={go} />
@@ -1183,6 +1174,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
                   {state.project ? <SearchScreen
                     active={active && route === 'pesquisa'} focusKey={searchFocus} folder={scope} seed={seed} refreshKey={saveTick} step={step} hasDraft={hasDraft}
                     openPaths={() => editor.current?.openPaths() ?? []}
+                    onPrefetch={(path) => editor.current?.prefetch(path)}
                     onOpen={(path, line, col, options) => editor.current?.openFile(path, { permanent: options?.permanent, line, col })}
                     onChanged={() => { git.refresh(); editor.current?.refresh(); }}
                   /> : <OpenProjectPrompt onOpen={chooseProject} description="Abra uma pasta para pesquisar nos arquivos." />}

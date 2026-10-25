@@ -248,11 +248,12 @@ type Report = { replaced: number; files: number; replacement: string; errors: { 
 
 /** Pesquisa de texto e substituição no layout do Antigravity: cabeçalho, campos, detalhes, resumo e a lista de resultados. */
 export function SearchScreen({
-  active, focusKey, onOpen, folder, seed, refreshKey, step, hasDraft, openPaths, onChanged }: {
+  active, focusKey, onOpen, onPrefetch, folder, seed, refreshKey, step, hasDraft, openPaths, onChanged }: {
   active: boolean;
   focusKey: number;
   /** Abre o arquivo na linha e na coluna (UTF-16, a partir de 1). Clique simples pede prévia; duplo clique ou Enter pedem permanente. */
   onOpen: (path: string, line: number, col?: number, options?: { permanent?: boolean }) => void;
+  onPrefetch: (path: string) => void;
   /** Pedido de pesquisa só nesta pasta (`path` relativo, '' é o projeto): vira `./pasta` no campo de incluir. Um objeto novo a cada pedido. */
   folder: { path: string } | null;
   /** Texto selecionado no editor: vira a consulta e a busca roda na hora. Um objeto novo a cada pedido. */
@@ -682,9 +683,9 @@ export function SearchScreen({
   const canClear = !!(form.query || form.replacement || form.include || form.exclude || results);
 
   // As linhas ficam memoizadas (digitar nos campos não as renderiza de novo), então os eventos delas leem as ações da hora do evento.
-  const rowActions = useRef({ mark, onOpen, hitMenu, fileMenu, toggleRow, replaceIn, dismissHit, dismissFile });
+  const rowActions = useRef({ mark, onOpen, onPrefetch, hitMenu, fileMenu, toggleRow, replaceIn, dismissHit, dismissFile });
   useLayoutEffect(() => {
-    rowActions.current = { mark, onOpen, hitMenu, fileMenu, toggleRow, replaceIn, dismissHit, dismissFile };
+    rowActions.current = { mark, onOpen, onPrefetch, hitMenu, fileMenu, toggleRow, replaceIn, dismissHit, dismissFile };
   });
 
   // Linha da lista. O recuo é de 8 px por nível e a seta ocupa 30 px (8 + 16 + 6), como o `monaco-tl-twistie`.
@@ -704,6 +705,7 @@ export function SearchScreen({
             <button
               type="button" data-result data-key={row.key} title={`${h.path}:${h.line}:${h.col}`} aria-current={isCurrent(h) ? 'true' : undefined}
               aria-label={`Linha ${h.line}: ${h.text.trim()}`}
+              onMouseDown={(e) => { if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) rowActions.current.onPrefetch(h.path); }}
               onClick={() => { rowActions.current.mark(h); rowActions.current.onOpen(h.path, h.line, h.col); }}
               onDoubleClick={() => rowActions.current.onOpen(h.path, h.line, h.col, { permanent: true })}
               onKeyDown={(e) => {

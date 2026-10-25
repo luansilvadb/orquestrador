@@ -446,6 +446,7 @@ export function CodeEditor({
     if (!host.current) return;
     const cached = cacheKey ? savedStates.get(cacheKey) : undefined;
     const initial: EditorRestore = restore ? restore() : { cursor: start ?? null, scroll: scroll ?? null, focus: !!autoFocus };
+    const initialCursor = reveal ? { line: reveal.line, col: reveal.col ?? 1 } : initial.cursor;
     // Linguagem já carregada: entra no estado inicial (e o minimap, criado junto, já desenha colorido), sem o quadro sem realce.
     const ready = text.length <= COLOR_LIMIT ? readyLanguage(path) : undefined;
     // Extensões são sempre as atuais (listeners apontam para este componente). Estado guardado mantém o histórico de Desfazer.
@@ -499,10 +500,13 @@ export function CodeEditor({
     ];
     let state: EditorState;
     if (cached && cached.doc.toString() === text) {
-      state = cached.update({ effects: StateEffect.reconfigure.of(extensions) }).state;
+      state = cached.update({
+        ...(reveal ? { selection: { anchor: posOf(cached.doc, reveal.line, reveal.col) } } : {}),
+        effects: StateEffect.reconfigure.of(extensions),
+      }).state;
     } else {
       const doc = Text.of(text.split('\n'));
-      const at = initial.cursor;
+      const at = initialCursor;
       state = EditorState.create({ doc, selection: EditorSelection.cursor(at ? posOf(doc, at.line, at.col) : 0), extensions });
     }
     view.current = new EditorView({ state, parent: host.current });
@@ -511,7 +515,7 @@ export function CodeEditor({
     if (initial.focus) view.current.focus();
     const dom = view.current.scrollDOM;
     // A rolagem só é aplicada depois da medição: antes, o CodeMirror ainda não sabe a altura do documento e prende o valor.
-    const restoreScroll = initial.scroll;
+    const restoreScroll = reveal ? null : initial.scroll;
     let frame = 0;
     if (restoreScroll) {
       frame = requestAnimationFrame(() => {
@@ -521,6 +525,10 @@ export function CodeEditor({
     }
     const onDomScroll = () => latest.current.onScroll?.({ top: dom.scrollTop, left: dom.scrollLeft });
     dom.addEventListener('scroll', onDomScroll, { passive: true });
+    if (reveal) {
+      revealed.current = reveal.id;
+      goTo(view.current, posOf(view.current.state.doc, reveal.line, reveal.col));
+    }
     return () => {
       cancelAnimationFrame(frame);
       dom.removeEventListener('scroll', onDomScroll);
@@ -578,7 +586,7 @@ export function CodeEditor({
 
   // Depois da sincronização do texto: um pedido novo usa o documento atualizado. Só roda quando o pedido muda, não a cada digitação.
   // Põe o cursor na linha, rola até ela e foca o editor. A linha é limitada ao documento atual, que pode ser diferente do que a busca leu.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const current = view.current;
     if (!current || !reveal || reveal.id === revealed.current) return;
     revealed.current = reveal.id;

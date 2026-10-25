@@ -108,6 +108,18 @@ scenario('título nativo simulado acompanha o projeto aberto', async ({ page }) 
   assert.equal(await page.title(), `${folder} - Orquestrador`);
 });
 
+scenario('executor em execução não aparece na barra de título', async ({ page }) => {
+  await page.getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('tab', { name: 'Orquestrador' }).waitFor();
+  await page.evaluate(() => window.__mock.addNode({
+    project: 'project-1', id: 'e-running', batch: 'b1', index: 0, title: 'Teste', state: 'running',
+    choice: { tool: 'claude', model: 'opus', effort: 'high' },
+  }));
+  await page.getByRole('tab', { name: /Executor #1/ }).waitFor();
+  assert.doesNotMatch(await page.locator('header').textContent(), /executando|na fila|aguardando escolha/);
+});
+
 scenario('modo sem projeto: tela limpa, a faixa abre pelo ícone e o rascunho do menu volta ao recarregar', async ({ page }) => {
   await openApp(page, '?project=none');
   const nav = page.getByRole('navigation', { name: 'Telas' });

@@ -826,8 +826,15 @@ fn resolve_commit(dir: &Path, id: &str) -> Result<String, String> {
 /// Cabeçalho do commit e os arquivos que ele mudou. Commit raiz também lista tudo como adicionado.
 pub fn commit_detail(dir: &Path, id: &str) -> Result<CommitDetail, String> {
     let hash = resolve_commit(dir, id)?;
-    let commit = cabecalho(dir, id, &hash)?;
-    Ok(CommitDetail { commit, files: commit_files(dir, &hash)? })
+    let (commit, files) = std::thread::scope(|scope| {
+        let commit = scope.spawn(|| cabecalho(dir, id, &hash));
+        let files = scope.spawn(|| commit_files(dir, &hash));
+        (commit.join(), files.join())
+    });
+    let commit =
+        commit.map_err(|_| "Falha interna ao ler o cabeçalho do commit.".to_string())??;
+    let files = files.map_err(|_| "Falha interna ao ler os arquivos do commit.".to_string())??;
+    Ok(CommitDetail { commit, files })
 }
 
 /// O cabeçalho do commit `hash` (já resolvido de `id`), como o histórico o mostra.
@@ -842,15 +849,34 @@ fn cabecalho(dir: &Path, id: &str, hash: &str) -> Result<Commit, String> {
 /// Detalhes carregados só quando o usuário abre o hover do gráfico.
 pub fn commit_hover(dir: &Path, id: &str) -> Result<CommitHoverDetail, String> {
     let hash = resolve_commit(dir, id)?;
-    let commit = cabecalho(dir, id, &hash)?;
-    let message = proc::git_saida(dir, &["show", "-s", "--format=%B", &hash])?;
-    let stats = proc::git_saida(
-        dir,
-        &["show", "--shortstat", "--format=", "--diff-merges=first-parent", &hash],
-    )?;
+    let (commit, message, stats, remote) = std::thread::scope(|scope| {
+        let commit = scope.spawn(|| cabecalho(dir, id, &hash));
+        let message = scope.spawn(|| proc::git_saida(dir, &["show", "-s", "--format=%B", &hash]));
+        let stats = scope.spawn(|| {
+            proc::git_saida(
+                dir,
+                &[
+                    "show",
+                    "--shortstat",
+                    "--format=",
+                    "--diff-merges=first-parent",
+                    &hash,
+                ],
+            )
+        });
+        let remote = scope.spawn(|| proc::git_saida(dir, &["remote", "get-url", "origin"]));
+        (commit.join(), message.join(), stats.join(), remote.join())
+    });
+    let commit =
+        commit.map_err(|_| "Falha interna ao ler o cabeçalho do commit.".to_string())??;
+    let message =
+        message.map_err(|_| "Falha interna ao ler a mensagem do commit.".to_string())??;
+    let stats =
+        stats.map_err(|_| "Falha interna ao ler as estatísticas do commit.".to_string())??;
     let (files_changed, insertions, deletions) = parse_shortstat(&stats);
-    let github_url = proc::git_saida(dir, &["remote", "get-url", "origin"])
+    let github_url = remote
         .ok()
+        .and_then(Result::ok)
         .and_then(|remote| github_commit_url_from_remote(remote.trim(), &hash));
     Ok(CommitHoverDetail {
         author: commit.author,

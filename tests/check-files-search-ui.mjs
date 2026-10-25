@@ -825,3 +825,89 @@ scenario('pasta grande na árvore: abre com só as linhas à vista no DOM; rolar
   assert.equal(await selected(page, 'item-419.md'), true, 'Revelar marca o item');
   await page.screenshot({ path: join(OUT, 'files-search-pasta-grande.png') });
 });
+
+scenario('pesquisa: resultado pré-lido troca a aba com texto, linha e cursor já visíveis', async ({ page }) => {
+  const path = 'pesquisa-atomica.ts';
+  const needle = 'RESULTADO_ATOMICO_UNICO';
+  const line = 71;
+  const source = Array.from({ length: 80 }, (_, i) => i + 1 === line
+    ? `const ${needle} = 1;`
+    : `const linha${i + 1} = ${i + 1};`).join('\n');
+  await page.evaluate(([file, text]) => {
+    window.__mock.addFile('anterior.ts', 'const ARQUIVO_ANTERIOR = true;\n');
+    window.__mock.addFile(file, text);
+  }, [path, source]);
+  await treeItem(page, 'anterior.ts').dblclick();
+  await page.locator('.cm-content:visible').filter({ hasText: 'ARQUIVO_ANTERIOR' }).waitFor();
+  await pesquisar(page);
+  await field(page).fill(needle);
+  const resultRow = page.locator(`[data-result][title^="${path}:${line}:"]`);
+  await resultRow.waitFor();
+  await page.evaluate(() => { window.__mock.delay.read_file = 250; });
+  await page.evaluate((file) => {
+    window.__searchOpenFrames = [];
+    let scheduled = false;
+    const inspect = () => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        const tab = [...document.querySelectorAll('[data-group="A"] [role="tab"][aria-selected="true"]')]
+          .find((item) => item.textContent.includes(file));
+        if (!tab) return;
+        const id = tab.closest('[data-tab]')?.getAttribute('data-tab');
+        const body = [...document.querySelectorAll('[data-body]')].find((item) => item.getAttribute('data-body') === id);
+        const content = body?.querySelector('.cm-content');
+        const text = content?.textContent ?? '';
+        const target = [...(content?.querySelectorAll('.cm-line') ?? [])].find((item) => item.textContent.includes('RESULTADO_ATOMICO_UNICO'));
+        const scroller = body?.querySelector('.cm-scroller');
+        const cursor = body?.querySelector('.cm-cursor-primary, .cm-cursor');
+        const targetBox = target?.getBoundingClientRect();
+        const scrollerBox = scroller?.getBoundingClientRect();
+        const cursorBox = cursor?.getBoundingClientRect();
+        window.__searchOpenFrames.push({
+          text,
+          editor: !!body?.querySelector('.cm-editor'),
+          lineVisible: !!targetBox && !!scrollerBox && targetBox.top >= scrollerBox.top && targetBox.bottom <= scrollerBox.bottom,
+          cursorOnLine: !!cursorBox && !!targetBox && Math.abs((cursorBox.top + cursorBox.bottom - targetBox.top - targetBox.bottom) / 2) <= 2,
+        });
+      });
+    };
+    new MutationObserver(inspect).observe(document.body, {
+      subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-selected', 'style'],
+    });
+  }, path);
+  const bounds = await resultRow.boundingBox();
+  await resultRow.evaluate((el) => {
+    el.addEventListener('mousedown', () => { window.__searchMouseDownAt = performance.now(); }, { once: true });
+    el.addEventListener('click', () => { window.__searchClickAt = performance.now(); }, { once: true });
+  });
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(150);
+  const activeBeforeRelease = await page.locator('[data-group="A"] [role="tab"][aria-selected="true"]').textContent();
+  assert.ok(activeBeforeRelease.includes('anterior.ts'), `a aba mudou no mousedown (${activeBeforeRelease})`);
+  await page.mouse.up();
+  await page.waitForFunction((file) => document.querySelector('[data-group="A"] [role="tab"][aria-selected="true"]')?.textContent.includes(file), path);
+  await page.waitForFunction(() => window.__searchOpenFrames.length > 0);
+  await page.waitForFunction((file) => window.__mock.calls.some((call) =>
+    call.cmd === 'read_file' && call.args.path === file && call.completedAt !== null), path, { timeout: 3000 });
+  const frames = await page.evaluate(() => window.__searchOpenFrames);
+  assert.ok(frames.every((frame) => frame.editor && frame.text.includes('RESULTADO_ATOMICO_UNICO')),
+    `a nova aba apareceu sem o texto (${JSON.stringify(frames)})`);
+  const firstText = frames.find((frame) => frame.text.includes('RESULTADO_ATOMICO_UNICO'));
+  assert.ok(firstText.lineVisible, `primeiro texto sem a linha da busca visível (${JSON.stringify(firstText)})`);
+  assert.ok(firstText.cursorOnLine, `primeiro texto sem cursor na linha da busca (${JSON.stringify(firstText)})`);
+  const measurement = await page.evaluate((file) => {
+    const read = window.__mock.calls.filter((call) => call.cmd === 'read_file' && call.args.path === file).at(-1);
+    const search = window.__mock.calls.filter((call) => call.cmd === 'search').at(-1);
+    return {
+      readMs: read.completedAt - read.startedAt,
+      afterSearchMs: read.startedAt - search.completedAt,
+      prefetchBeforeClick: read.startedAt < window.__searchClickAt,
+      downMs: window.__searchClickAt - window.__searchMouseDownAt,
+    };
+  }, path);
+  assert.ok(measurement.prefetchBeforeClick, 'a leitura deve começar no mousedown, antes do clique');
+  console.log(`medição mock da Pesquisa: read_file ${measurement.readMs.toFixed(0)} ms (+250ms); início ${measurement.afterSearchMs.toFixed(0)} ms após search; mousedown ${measurement.downMs.toFixed(0)} ms antes do clique`);
+});

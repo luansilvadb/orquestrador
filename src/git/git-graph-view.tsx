@@ -102,6 +102,8 @@ function GapLanes({ row }: { row: GraphRow }) {
 }
 
 type CommitHoverState = { kind: 'loading' } | { kind: 'ready'; detail: GitCommitHoverDetail } | { kind: 'error'; text: string };
+const hoverDetailsCache = new Map<string, GitCommitHoverDetail>();
+const hoverRequests = new Map<string, Promise<GitCommitHoverDetail>>();
 
 function coAuthors(messageText: string) {
   const lines = messageText.replace(/\r\n/g, '\n').split('\n');
@@ -192,25 +194,84 @@ export function GraphSection({
   const backend = useBackend();
   // Lista paginada (a anterior fica na tela até a nova chegar) e detalhe do commit aberto: os mesmos hooks do histórico.
   const { items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList((offset) => backend.gitGraph(PAGE, offset), false);
-  const { openHash, detail, detailError, open: openCommit, close: closeCommit } = useCommitDetail();
+  const { openHash, detail, detailError, toggle: toggleCommit, prefetch: prefetchCommit } = useCommitDetail();
   const [hoverDetails, setHoverDetails] = useState<Record<string, CommitHoverState>>({});
-  const requestedHover = useRef(new Set<string>());
+  const [hoverOpenHash, setHoverOpenHash] = useState<string | null>(null);
+  const hoverActive = useRef<{ hash: string; seq: number } | null>(null);
+  const hoverSeq = useRef(0);
+  const hoverOpenTimer = useRef<number | null>(null);
   // Chave da última carga: enquanto ela não muda, voltar à seção ou à tela não recarrega.
   const loaded = useRef<string | null>(null);
   // Faixas calculadas sobre todas as linhas carregadas, de cima para baixo (a página nova continua as faixas da anterior).
   const rows = useMemo(() => layoutGraph(commits ?? []), [commits]);
 
   function loadHover(hash: string) {
-    if (requestedHover.current.has(hash)) return;
-    requestedHover.current.add(hash);
-    setHoverDetails((current) => ({ ...current, [hash]: { kind: 'loading' } }));
-    backend.gitCommitHover(hash).then(
-      (loaded) => setHoverDetails((current) => ({ ...current, [hash]: { kind: 'ready', detail: loaded } })),
+    const cached = hoverDetailsCache.get(hash);
+    if (cached) {
+      setHoverDetails((current) => ({ ...current, [hash]: { kind: 'ready', detail: cached } }));
+      return Promise.resolve(cached);
+    }
+    let pending = hoverRequests.get(hash);
+    if (!pending) {
+      pending = backend.gitCommitHover(hash).then((loaded) => {
+        hoverDetailsCache.set(hash, loaded);
+        return loaded;
+      }).finally(() => hoverRequests.delete(hash));
+      hoverRequests.set(hash, pending);
+    }
+    setHoverDetails((current) => current[hash]?.kind === 'loading' ? current : { ...current, [hash]: { kind: 'loading' } });
+    return pending.then(
+      (loaded) => {
+        setHoverDetails((current) => ({ ...current, [hash]: { kind: 'ready', detail: loaded } }));
+        return loaded;
+      },
       (e: unknown) => {
-        requestedHover.current.delete(hash);
         setHoverDetails((current) => ({ ...current, [hash]: { kind: 'error', text: message(e) } }));
+        return null;
       },
     );
+  }
+
+  function enterHover(hash: string) {
+    if (hoverOpenTimer.current !== null) window.clearTimeout(hoverOpenTimer.current);
+    const seq = ++hoverSeq.current;
+    hoverActive.current = { hash, seq };
+    const cached = hoverDetailsCache.get(hash);
+    if (cached) {
+      setHoverDetails((current) => ({ ...current, [hash]: { kind: 'ready', detail: cached } }));
+      setHoverOpenHash(hash);
+      return;
+    }
+    setHoverOpenHash(null);
+    hoverOpenTimer.current = window.setTimeout(() => {
+      if (hoverActive.current?.seq === seq) setHoverOpenHash(hash);
+    }, 500);
+    void loadHover(hash).then(() => {
+      if (hoverActive.current?.seq !== seq) return;
+      if (hoverOpenTimer.current !== null) window.clearTimeout(hoverOpenTimer.current);
+      hoverOpenTimer.current = null;
+      setHoverOpenHash(hash);
+    });
+  }
+
+  function leaveHover(hash: string) {
+    if (hoverActive.current?.hash !== hash || hoverOpenHash === hash) return;
+    hoverSeq.current++;
+    hoverActive.current = null;
+    if (hoverOpenTimer.current !== null) window.clearTimeout(hoverOpenTimer.current);
+    hoverOpenTimer.current = null;
+  }
+
+  function changeHover(hash: string, shown: boolean) {
+    if (shown) {
+      if (hoverDetails[hash]?.kind === 'ready') setHoverOpenHash(hash);
+    } else if (hoverActive.current?.hash === hash) {
+      hoverSeq.current++;
+      hoverActive.current = null;
+      if (hoverOpenTimer.current !== null) window.clearTimeout(hoverOpenTimer.current);
+      hoverOpenTimer.current = null;
+      setHoverOpenHash(null);
+    }
   }
 
   // Só carrega com a tela visível e a seção aberta, e só quando a chave mudou desde a última carga.
@@ -277,13 +338,16 @@ export function GraphSection({
                   <div>
                     {/* Escolher o mesmo commit de novo fecha. Trocar de commit descarta a lista anterior e pede a nova. */}
                     <Popover
-                      trigger="hover" placement="right" openDelay={500} closeDelay={250}
+                      trigger="hover" placement="right" openDelay={0} closeDelay={120} open={hoverOpenHash === c.hash}
                       triggerProps={{ 'aria-expanded': isOpen }}
-                      onOpenChange={(shown) => { if (shown) loadHover(c.hash); }}
+                      onOpenChange={(shown) => changeHover(c.hash, shown)}
                       content={<CommitHoverCard commit={c} state={hoverDetails[c.hash]} />}
                     >
                       <button
-                        type="button" onClick={() => (openHash === c.hash ? closeCommit() : openCommit(c.hash))} aria-expanded={isOpen}
+                        type="button"
+                        onPointerEnter={() => enterHover(c.hash)} onPointerLeave={() => leaveHover(c.hash)}
+                        onMouseDown={(e) => { if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) prefetchCommit(c.hash); }}
+                        onClick={() => toggleCommit(c.hash)} aria-expanded={isOpen}
                         aria-label={`${c.short}: ${c.subject || '(sem mensagem)'}`}
                         className={`@container flex h-[22px] w-full min-w-0 items-center gap-1 pr-3 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset${isOpen ? ' bg-muted' : ''}`}
                       >

@@ -155,6 +155,17 @@ const DOIS = 'topo\n<<<<<<< ours\natual-1\n=======\nrecebida-1\n>>>>>>> theirs\n
 const DOIS_SIDES = { ours: 'topo\natual-1\nmeio\natual-2\nfim\n', theirs: 'topo\nrecebida-1\nmeio\nrecebida-2\nfim\n' };
 const addDois = (page) => page.evaluate(([t, s]) => window.__mock.addConflict('src/dois.ts', s, t), [DOIS, DOIS_SIDES]);
 const conflictTab = (page, path = 'src/dois.ts') => tab(page, `${path} (conflito)`);
+
+scenario('badge do Git: fundo azul e número branco', async ({ page }) => {
+  const badge = nav(page).locator('button[aria-label^="Git"] + span[aria-hidden="true"]');
+  await badge.waitFor();
+  const colors = await badge.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { background: style.backgroundColor, text: style.color };
+  });
+  assert.equal(colors.background, 'rgb(48, 126, 159)');
+  assert.equal(colors.text, 'rgb(255, 255, 255)');
+});
 // Escolhe o lado de um trecho na lista (Atual, Recebida ou Ambas), pelo rótulo do trecho.
 const choose = (page, n, label) => page.getByText(`Trecho ${n}`, { exact: true }).locator('..').getByRole('button', { name: label, exact: true }).click();
 const trechos = (page, n) => page.getByText(n === 1 ? /^1 trecho com conflito/ : new RegExp(`^${n} trechos com conflito`));
@@ -903,6 +914,26 @@ const graphCommit = (page, hash) => graph(page).locator(`li[data-commit="${hash}
 const graphHeight = (page) => graph(page).evaluate((el) => el.getBoundingClientRect().height);
 const divider = (page) => page.getByRole('separator', { name: 'Divisor do gráfico' });
 
+scenario('histórico: clique simples abre o commit sem mostrar a espera quando a pré-leitura termina', async ({ page }) => {
+  await openGit(page);
+  await gitTab(page, 'Histórico').click();
+  const commit = page.locator('button[title^="9f3a1c2 · "]');
+  await commit.waitFor();
+  await page.evaluate(() => {
+    window.__commitLoadingFrames = [];
+    const inspect = () => {
+      if (document.body.innerText.includes('Lendo o commit…')) window.__commitLoadingFrames.push(performance.now());
+    };
+    const observer = new MutationObserver(inspect);
+    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+    window.__commitLoadingObserver = observer;
+  });
+  await commit.click();
+  await page.getByRole('button', { name: 'Voltar à lista de commits', exact: true }).waitFor();
+  await page.getByText('Prepara v0.1.7 com notas completas e publicação validada', { exact: true }).last().waitFor();
+  assert.deepEqual(await page.evaluate(() => window.__commitLoadingFrames), [], 'a pré-leitura evita qualquer render de “Lendo o commit…”');
+});
+
 scenario('gráfico: os 4 commits do simulado na ordem, com as etiquetas (main atual, origin/main, v0.1.7, feat/painel-git) e o HEAD marcado', async ({ page }) => {
   await openGit(page);
   await graphRows(page).first().waitFor();
@@ -929,7 +960,7 @@ scenario('gráfico: hover busca detalhes uma vez, mantém o popover interativo e
   await waitCount(page, 'git_commit_hover', 1);
 
   const hover = page.locator(`[data-commit-hover="${H9F}"]`);
-  await hover.waitFor();
+  await hover.waitFor({ state: 'visible' });
   const text = await hover.innerText();
   assert.match(text, /Luan/);
   assert.match(text, /há /);
@@ -952,6 +983,42 @@ scenario('gráfico: hover busca detalhes uma vez, mantém o popover interativo e
   await trigger.hover();
   await page.waitForTimeout(700);
   assert.equal((await calls(page, 'git_commit_hover')).length, 1, 'reabrir o mesmo hover usa o cache por hash');
+});
+
+scenario('gráfico: hover abre completo, troca a linha aberta e cancela o cartão ao atravessar a lista', async ({ page }) => {
+  await openGit(page);
+  await graphRows(page).first().waitFor();
+  await page.evaluate((hash) => {
+    window.__hoverLoadingFrames = [];
+    const inspect = () => {
+      const card = document.querySelector(`[data-commit-hover="${hash}"]`);
+      if (card?.getClientRects().length && getComputedStyle(card).visibility !== 'hidden' && card.textContent?.includes('Lendo detalhes…')) {
+        window.__hoverLoadingFrames.push(performance.now());
+      }
+    };
+    const observer = new MutationObserver(inspect);
+    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+    window.__hoverLoadingObserver = observer;
+  }, H9F);
+  const first = graphCommit(page, H9F).locator('button').first();
+  await first.hover();
+  const firstCard = page.locator(`[data-commit-hover="${H9F}"]`);
+  await firstCard.waitFor({ state: 'visible' });
+  await firstCard.getByText(/Consolida as notas e valida o instalador\./).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.__hoverLoadingFrames), [], 'a primeira renderização do cartão já tem a mensagem');
+
+  await graphCommit(page, H4B).locator('button').first().hover();
+  const secondCard = page.locator(`[data-commit-hover="${H4B}"]`);
+  await secondCard.waitFor({ state: 'visible' });
+  await firstCard.waitFor({ state: 'hidden' });
+
+  await page.mouse.move(0, 0);
+  await secondCard.waitFor({ state: 'hidden' });
+  await page.evaluate(() => { window.__mock.delay.git_commit_hover = 600; });
+  await graphCommit(page, HD7).locator('button').first().hover();
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(700);
+  assert.equal(await page.locator(`[data-commit-hover="${HD7}"]`).isVisible().catch(() => false), false, 'sair da linha cancela a abertura pendente');
 });
 
 scenario('gráfico: o commit de merge desenha duas faixas (SVG mais largo que o de um commit linear)', async ({ page }) => {

@@ -32,6 +32,9 @@ export const when = (iso: string, style: Intl.DateTimeFormatOptions) => {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString('pt-BR', style);
 };
+
+const commitDetails = new Map<string, CommitDetail>();
+const commitDetailRequests = new Map<string, Promise<CommitDetail>>();
 // Cores das etiquetas: branch local em azul, remota em lilás, tag em laranja (historyItemRefColor, RemoteRefColor e BaseRefColor).
 const REF_COLOR = { local: '#59a4f9', remote: '#b180d7', tag: '#ea5c00' } as const;
 
@@ -133,30 +136,78 @@ export function useCommitDetail() {
   const [detailError, setDetailError] = useState('');
   // Mesma regra da lista: só a resposta do pedido mais novo vale.
   const detailSeq = useRef(0);
+  const pendingHash = useRef<string | null>(null);
+
+  function request(hash: string) {
+    const cached = commitDetails.get(hash);
+    if (cached) return Promise.resolve(cached);
+    let pending = commitDetailRequests.get(hash);
+    if (!pending) {
+      pending = backend.gitCommitDetail(hash).then((next) => {
+        commitDetails.set(hash, next);
+        return next;
+      }).finally(() => commitDetailRequests.delete(hash));
+      commitDetailRequests.set(hash, pending);
+    }
+    return pending;
+  }
+
+  function prefetch(hash: string) {
+    void request(hash).catch(() => {});
+  }
 
   function open(hash: string) {
     const seq = ++detailSeq.current;
-    setOpenHash(hash);
-    setDetail(null);
-    setDetailError('');
-    backend.gitCommitDetail(hash).then(
+    const cached = commitDetails.get(hash);
+    pendingHash.current = cached ? null : hash;
+    if (cached) {
+      setOpenHash(hash);
+      setDetail(cached);
+      setDetailError('');
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (seq !== detailSeq.current) return;
+      setOpenHash(hash);
+      setDetail(null);
+      setDetailError('');
+    }, 150);
+    request(hash).then(
       (next) => {
-        if (seq === detailSeq.current) setDetail(next);
+        window.clearTimeout(timer);
+        if (seq === detailSeq.current) {
+          pendingHash.current = null;
+          setOpenHash(hash);
+          setDetail(next);
+          setDetailError('');
+        }
       },
       (e: unknown) => {
-        if (seq === detailSeq.current) setDetailError(message(e));
+        window.clearTimeout(timer);
+        if (seq === detailSeq.current) {
+          pendingHash.current = null;
+          setOpenHash(hash);
+          setDetail(null);
+          setDetailError(message(e));
+        }
       },
     );
   }
 
   function close() {
     ++detailSeq.current;
+    pendingHash.current = null;
     setOpenHash(null);
     setDetail(null);
     setDetailError('');
   }
 
-  return { openHash, detail, detailError, open, close };
+  function toggle(hash: string) {
+    if (openHash === hash || pendingHash.current === hash) close();
+    else open(hash);
+  }
+
+  return { openHash, detail, detailError, open, toggle, prefetch, close };
 }
 
 // Busca de uma página do histórico: do projeto (`scope` null) ou só dos commits que mexeram no caminho.
@@ -222,7 +273,7 @@ export function HistoryPanel({
   const backend = useBackend();
   // Lista e detalhe são os mesmos dos gráficos (ver os hooks acima). Aqui recarregar esvazia a lista e fecha o commit aberto.
   const { scope, items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList((offset, scope) => backend.gitHistory(PAGE, offset, scope ?? undefined), true);
-  const { openHash, detail, detailError, open: openCommit, close: closeCommit } = useCommitDetail();
+  const { openHash, detail, detailError, toggle: toggleCommit, prefetch: prefetchCommit, close: closeCommit } = useCommitDetail();
   // Último pedido que já foi carregado: voltar à tela não recarrega a lista à toa.
   const loaded = useRef<HistoryRequest | null>(null);
 
@@ -278,7 +329,9 @@ export function HistoryPanel({
             <li key={c.hash}>
               {/* Duas linhas, como no histórico do Zed: o assunto e as refs; embaixo a inicial do autor, o autor, a data relativa e o hash. */}
               <button
-                type="button" onClick={() => openCommit(c.hash)} title={`${c.short} · ${c.subject}`}
+                type="button"
+                onMouseDown={(e) => { if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) prefetchCommit(c.hash); }}
+                onClick={() => toggleCommit(c.hash)} title={`${c.short} · ${c.subject}`}
                 className="@container flex w-full min-w-0 flex-col gap-0.5 px-3 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
               >
                 <span className="flex w-full min-w-0 items-center gap-1">
