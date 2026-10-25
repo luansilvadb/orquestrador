@@ -40,7 +40,7 @@ import { Breadcrumbs } from './breadcrumbs';
 import { message } from '../backend/backend';
 import { useBackend } from '../backend/backend-context';
 import { usePolling } from '../shared/polling';
-import { CodeEditor, forgetEditorState, type EditorRestore, type Reveal } from './file-view';
+import { CodeEditor, forgetEditorState, preloadLanguage, type EditorRestore, type Reveal } from './file-view';
 import { MediaView, mediaOf, Note } from './media-view';
 import { CommitTab, CompareView, DiffTab, POLL_MS, type Ask, type Common } from './diff-view';
 import { ConflictTab } from './conflict-view';
@@ -328,6 +328,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
 
   const openFile = (path: string, options: OpenOptions = {}) => {
     const docId = docIdFor(path);
+    // A gramática carrega junto com a leitura: o texto chega já colorido.
+    if (!mediaOf(path)) preloadLanguage(path);
     openTarget({ kind: 'file', docId, path }, options);
     if (options.line !== undefined) setReveal({ docId, line: options.line, col: options.col, id: ++revealSeq.current });
   };
@@ -1463,6 +1465,16 @@ function useGitBase(path: string, raw: string, shown: boolean, active: boolean):
   return { base: path === '' || isAbsolutePath(path) ? null : base, reload: load };
 }
 
+// Espera da leitura: corpo na cor do editor (#1F1F1F, de `darkTheme`), sem texto; o aviso só aparece se a leitura demorar.
+function Reading() {
+  const [late, setLate] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setLate(true), 200);
+    return () => clearTimeout(timer);
+  }, []);
+  return <Flexbox flex={1} className="min-h-0 bg-[#1F1F1F]">{late && <Note text="Lendo o arquivo…" />}</Flexbox>;
+}
+
 function FileBody({
   project, active, buffer, shown, status, disk, reveal, restore, onChange, onFormatEol, onSave, onCursor, onCompare, onRetry, onScroll }: {
   project: string; active: boolean;
@@ -1476,7 +1488,7 @@ function FileBody({
   const git = useGitBase(buffer?.path ?? '', buffer?.raw ?? '', shown, active);
   if (status?.binary) return <Note text="Arquivo binário: não há texto para mostrar aqui." />;
   if (status?.large) return <Note text="Arquivo grande demais para mostrar aqui." />;
-  if (!buffer) return <Note text={status?.error ?? 'Lendo o arquivo…'} danger={!!status?.error} onRetry={status?.error ? onRetry : undefined} />;
+  if (!buffer) return status?.error ? <Note text={status.error} danger onRetry={onRetry} /> : <Reading />;
   const notes: string[] = [];
   if (buffer.readOnly) notes.push('Arquivo não está em UTF-8; somente leitura.');
   if (status?.error) notes.push(status.error);

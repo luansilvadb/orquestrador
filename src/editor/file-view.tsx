@@ -30,12 +30,26 @@ const COLOR_LIMIT = 200_000;
 // viraria `tags.quote`, verde como o comentário.
 const DOTENV = /^\.env(\..+)?$|\.env$/i;
 let dotenv: Promise<LanguageSupport> | undefined;
+let dotenvReady: LanguageSupport | undefined;
+let languageList: readonly LanguageDescription[] | undefined;
 const loadDotenv = () => dotenv ??= import('@codemirror/legacy-modes/mode/properties')
-  .then(({ properties }) => new LanguageSupport(StreamLanguage.define({ ...properties, tokenTable: { quote: tags.string } })));
+  .then(({ properties }) => dotenvReady = new LanguageSupport(StreamLanguage.define({ ...properties, tokenTable: { quote: tags.string } })));
+const fileName = (path: string) => path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
 const loadLanguage = (path: string) => {
-  const name = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
-  if (DOTENV.test(name)) return loadDotenv();
-  return import('@codemirror/language-data').then(({ languages }) => LanguageDescription.matchFilename(languages, path)?.load() ?? null);
+  if (DOTENV.test(fileName(path))) return loadDotenv();
+  return import('@codemirror/language-data').then(({ languages }) => {
+    languageList = languages;
+    return LanguageDescription.matchFilename(languages, path)?.load() ?? null;
+  });
+};
+// Pré-carga (ao abrir a aba): a vista já nasce colorida se a gramática estiver pronta quando o texto chegar.
+export const preloadLanguage = (path: string) => { loadLanguage(path).catch(() => {}); };
+// Linguagem de `path` se já estiver carregada (`null`: sem gramática para ele); `undefined` quando ainda falta carregar.
+const readyLanguage = (path: string) => {
+  if (DOTENV.test(fileName(path))) return dotenvReady;
+  if (!languageList) return undefined;
+  const description = LanguageDescription.matchFilename(languageList, path);
+  return description ? description.support : null;
 };
 // Sem a API (contexto inseguro), a ação vira toast como qualquer outra falha.
 const clipboard = () => {
@@ -432,6 +446,8 @@ export function CodeEditor({
     if (!host.current) return;
     const cached = cacheKey ? savedStates.get(cacheKey) : undefined;
     const initial: EditorRestore = restore ? restore() : { cursor: start ?? null, scroll: scroll ?? null, focus: !!autoFocus };
+    // Linguagem já carregada: entra no estado inicial (e o minimap, criado junto, já desenha colorido), sem o quadro sem realce.
+    const ready = text.length <= COLOR_LIMIT ? readyLanguage(path) : undefined;
     // Extensões são sempre as atuais (listeners apontam para este componente). Estado guardado mantém o histórico de Desfazer.
     const extensions = [
       ...basicExtensions,
@@ -458,7 +474,7 @@ export function CodeEditor({
         },
       }])),
       editable.current.of(readOnlyExt(readOnly)),
-      language.current.of([]),
+      language.current.of(ready ?? []),
       mini.current.of(minimap()),
       // Preparar do bloco aberto: erro do backend (índice mudou, executores trabalhando) vira aviso, como o resto do editor.
       onWriteIndex ? gitIndexWriter.of(async (value, expected) => {
@@ -521,6 +537,9 @@ export function CodeEditor({
     let live = true;
     void source.then((support) => {
       if (live && view.current === current) {
+        // Já no estado (veio do cache na criação): sem reconfiguração, que redesenharia o editor e o minimap à toa.
+        const now = language.current.get(current.state);
+        if (support ? now === support : Array.isArray(now) && now.length === 0) return;
         current.dispatch({ effects: [language.current.reconfigure(support ?? []), mini.current.reconfigure(minimap())] });
       }
     });

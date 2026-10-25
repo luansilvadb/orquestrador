@@ -566,3 +566,26 @@ scenario('rascunho: grupo sem abas, duplo clique nos botões da barra não cria 
   await page.waitForTimeout(150);
   assert.equal(await tabs(page).count(), 0, 'duplo clique no botão da barra não criou aba');
 });
+
+scenario('abrir segundo arquivo da mesma linguagem: o primeiro quadro do editor já tem realce e não passa por texto sem cor', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__mock.addFile('um.ts', 'export const um: number = 1;\n');
+    window.__mock.addFile('dois.ts', 'export const dois: string = "dois";\n');
+  });
+  await treeItem(page, 'um.ts').dblclick();
+  await page.waitForFunction(() => document.querySelector('.cm-content span[class]'));
+  // Observa cada mutação: no primeiro quadro em que o texto do segundo arquivo aparece, conta os trechos coloridos.
+  await page.evaluate(() => {
+    window.__frames = [];
+    new MutationObserver(() => {
+      const content = [...document.querySelectorAll('.cm-content')].find((c) => c.textContent.includes('dois'));
+      if (content) window.__frames.push(content.querySelectorAll('.cm-line span[class]').length);
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+  await treeItem(page, 'dois.ts').dblclick();
+  await page.waitForFunction(() => window.__frames.length > 0);
+  await page.waitForTimeout(300);
+  const frames = await page.evaluate(() => window.__frames);
+  assert.ok(frames[0] > 0, `primeiro quadro com o texto sem realce (trechos coloridos por quadro: ${JSON.stringify(frames)})`);
+  assert.ok(frames.every((n) => n > 0), `algum quadro sem realce (${JSON.stringify(frames)})`);
+});
