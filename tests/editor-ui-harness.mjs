@@ -106,7 +106,15 @@ export const tabs = (page, group = 'A') => page.locator(`[data-group="${group}"]
 export const tabTitles = async (page, group = 'A') => (await tabs(page, group).allTextContents()).map((t) => t.trim());
 export const editorText = (page) => page.locator('.cm-content:visible').first().evaluate((el) => el.textContent);
 // Atalhos de arquivo só valem com o foco dentro da área do editor: clica no texto antes.
-export async function focusEditor(page) { await page.locator('.cm-content:visible').first().click(); }
+// O Playwright insiste no elemento que resolveu: se a aba troca no meio (abrir arquivo lê até 150 ms antes de trocar), o editor da aba antiga
+// fica escondido e o clique espera até o timeout. Por isso resolve de novo a cada tentativa curta.
+export async function focusEditor(page) {
+  const limit = Date.now() + 10000;
+  for (;;) {
+    try { await page.locator('.cm-content:visible').first().click({ timeout: 1000 }); return; }
+    catch (error) { if (Date.now() >= limit) throw error; }
+  }
+}
 
 // Posição (x, y) da coluna de uma linha (1-based, UTF-16), pelos nós de texto reais do CodeMirror.
 export async function columnPoint(page, line, col) {

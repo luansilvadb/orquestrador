@@ -80,7 +80,7 @@ export type GitSidebarProps = {
   /** Alvo aberto no editor central: marca a linha de diff (do mesmo lado) ou de conflito correspondente. */
   selected?: TabTarget | null;
   onOpenTarget: OpenCommitTarget;
-  onPrefetchTarget: (target: TabTarget) => void;
+  onPrefetchTarget: (target: TabTarget, hover?: boolean) => void;
   /** `permanent` abre de vez (duplo clique) em vez de prévia. */
   onOpenFile: (path: string, options?: { permanent?: boolean }) => void;
   /** Pedido de histórico: um pedido novo abre a lista (do projeto, ou do arquivo em `path`). */

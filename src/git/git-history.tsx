@@ -212,6 +212,8 @@ export function useCommitDetail() {
 
 // Busca de uma página do histórico: do projeto (`scope` null) ou só dos commits que mexeram no caminho.
 
+const HOVER_PREFETCH_MS = 100;
+
 /**
  * Arquivos de um commit, uma linha de 24 px cada. Clique prévia, duplo clique abre de vez; o arquivo aberto no editor fica marcado.
  * É a lista que abre embaixo do commit, no histórico e no gráfico. `gutter` põe algo antes de cada linha (o gráfico desenha as faixas ali).
@@ -222,9 +224,13 @@ export function CommitFileList({
   files: CommitFile[];
   selected: TabTarget | null | undefined;
   onOpenTarget: OpenCommitTarget;
-  onPrefetchTarget: (target: TabTarget) => void;
+  onPrefetchTarget: (target: TabTarget, hover?: boolean) => void;
   gutter?: (index: number) => ReactNode;
 }) {
+  // Permanência curta no hover aquece leitura e realce antes do clique; varrer a lista sem parar não lê nada.
+  const hoverTimer = useRef(0);
+  const cancelHover = () => window.clearTimeout(hoverTimer.current);
+  useEffect(() => cancelHover, []);
   // A coluna não pode crescer com o nome longo: sem o minmax(0,1fr), o texto empurra a lista para fora.
   return (
     <ul className="grid grid-cols-[minmax(0,1fr)]">
@@ -238,7 +244,9 @@ export function CommitFileList({
             {gutter?.(index)}
             <button
               type="button"
-              onMouseDown={(e) => { if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) onPrefetchTarget({ kind: 'commit', hash, path: f.path }); }}
+              onMouseEnter={() => { cancelHover(); hoverTimer.current = window.setTimeout(() => onPrefetchTarget({ kind: 'commit', hash, path: f.path }, true), HOVER_PREFETCH_MS); }}
+              onMouseLeave={cancelHover}
+              onMouseDown={(e) => { cancelHover(); if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) onPrefetchTarget({ kind: 'commit', hash, path: f.path }); }}
               onClick={() => onOpenTarget({ kind: 'commit', hash, path: f.path })}
               onDoubleClick={() => onOpenTarget({ kind: 'commit', hash, path: f.path }, { permanent: true })}
               aria-current={isOpen ? 'true' : undefined}
@@ -264,7 +272,7 @@ export type HistoryPanelProps = {
   active: boolean;
   selected: TabTarget | null | undefined;
   onOpenTarget: OpenCommitTarget;
-  onPrefetchTarget: (target: TabTarget) => void;
+  onPrefetchTarget: (target: TabTarget, hover?: boolean) => void;
 };
 
 /** Lista paginada de commits (do projeto ou do arquivo) e, ao escolher um, os arquivos dele. */

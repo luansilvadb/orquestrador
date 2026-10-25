@@ -49,7 +49,7 @@ export type GraphSectionProps = {
   active: boolean;
   selected: TabTarget | null | undefined;
   onOpenTarget: OpenCommitTarget;
-  onPrefetchTarget: (target: TabTarget) => void;
+  onPrefetchTarget: (target: TabTarget, hover?: boolean) => void;
   onRefresh: () => void;
   /** Rótulo e trava de cada ação remota, vindos do painel (que tem as travas de busy e de locked). */
   remote: Record<GraphRemote, { label: string; disabled: boolean }>;

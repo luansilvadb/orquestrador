@@ -371,6 +371,7 @@ scenario('pesquisa na pasta src não pega src2 e põe ./src no incluir; resultad
   // termo-b fica sujo no editor depois da prévia. O Substituir Tudo confirma e deixa termo-b de fora, dizendo por quê.
   await arquivos(page);
   await treeItem(page, 'termo-b.ts').dblclick();
+  await page.locator('[data-group="A"] [role="tab"][aria-selected="true"]', { hasText: 'termo-b.ts' }).waitFor();
   await focusEditor(page);
   await page.keyboard.type(' // rascunho');
   await page.locator('[aria-label="Alteração não salva"]').first().waitFor();

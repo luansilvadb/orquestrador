@@ -321,6 +321,8 @@ const debug = { close: async () => {
   delay: {} as Record<string, number>,
   // Atraso (ms) entre `read_file` ler o disco e entregar a resposta: uma gravação nesse meio deixa a resposta velha.
   lateRead: 0,
+  // Patch de commit de fixture por caminho (sobrepõe o exemplo de uma linha): arquivo inteiro como contexto, como o `-U1000000` do app.
+  commitPatches: {} as Record<string, string>,
   // Conflito de fixture (só o check de Git): lados `ours/theirs` e o texto da pasta (`null` = arquivo ausente).
   addConflict: (rel: string, sides: Sides, text: string | null) => {
     const { dir, name } = splitPath(rel);
@@ -640,9 +642,9 @@ function commitById(id: string): Rec {
   return found;
 }
 // Patch de exemplo de um arquivo de commit: o arquivo criado vem como arquivo novo, como no `diff-tree`; os outros, como alteração.
-const commitPatch = (path: string, kind: GitKind) => kind === 'added'
+const commitPatch = (path: string, kind: GitKind) => debug.commitPatches[path] ?? (kind === 'added'
   ? `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+depois\n`
-  : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-antes\n+depois\n`;
+  : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-antes\n+depois\n`);
 // Log do HEAD (todos os pais, como `git log`), com as refs e filtro de caminho opcional.
 function history(limit: number, skip: number, path?: string | null): GraphCommit[] {
   const reach = ancestors([headHash()]);

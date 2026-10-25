@@ -745,6 +745,108 @@ scenario('histórico do projeto abre commit, arquivo e a aba de diff do commit (
   await tab(page, 'docs/design-system.md @ d7e1a9c').waitFor();
 });
 
+// ---------- Git: pré-leitura do diff de commit no hover ----------
+
+// Arquivo grande de um commit com a alteração só na primeira linha: o resto vem como contexto, como o `-U1000000` do app.
+const HOVER_PATH = 'src/App.tsx';
+const HOVER_TAB = `${HOVER_PATH} @ 4b2e8d0`;
+async function bigCommitPatch(page, lines) {
+  await page.evaluate(({ path, count }) => {
+    const rest = Array.from({ length: count - 1 }, (_, i) => ` export const HOVER_KEEP_${i + 1} = ${i + 1};`).join('\n');
+    window.__mock.commitPatches[path] = `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1,${count} +1,${count} @@\n-export const HOVER_OLD_0 = 0;\n+export const HOVER_NEW_0 = 0;\n${rest}\n`;
+  }, { path: HOVER_PATH, count: lines });
+}
+async function openCommitFiles(page) {
+  await openGit(page);
+  await gitTab(page, 'Histórico').click();
+  await page.locator('button[title^="4b2e8d0 · "]').click();
+  const files = page.locator('button[title*="Ver a alteração neste commit"]');
+  await files.first().waitFor();
+  return files;
+}
+const commitRow = (page) => page.locator(`button[title^="${HOVER_PATH}: "][title*="neste commit"]`);
+const commitDiffCalls = (page) => page.evaluate(() => window.__mock.calls.filter((c) => c.cmd === 'git_commit_diff'));
+// Registra, a cada quadro, se a aba do commit está ativa, se já tem o texto do diff e se ele já tem cor.
+function watchCommitFrames(page) {
+  return page.evaluate((suffix) => {
+    window.__commitFrames = [];
+    const inspect = () => {
+      const tab = [...document.querySelectorAll('[data-group="A"] [role="tab"][aria-selected="true"]')].find((item) => item.getAttribute('title')?.endsWith(suffix));
+      if (tab) {
+        const id = tab.closest('[data-tab]')?.getAttribute('data-tab');
+        const body = [...document.querySelectorAll('[data-body]')].find((item) => item.getAttribute('data-body') === id);
+        const diff = body?.querySelector('.compare-view diffs-container')?.shadowRoot?.querySelector('pre[data-diff-type]');
+        const content = !!diff && diff.textContent.includes('HOVER_NEW_0');
+        const spans = diff ? [...diff.querySelectorAll('[data-content] span')] : [];
+        const colored = spans.some((span) => /--diffs-token-|(?:^|;)\s*color\s*:/i.test(span.getAttribute('style') ?? ''));
+        window.__commitFrames.push({ content, colored });
+      }
+      requestAnimationFrame(inspect);
+    };
+    requestAnimationFrame(inspect);
+  }, HOVER_TAB);
+}
+async function assertColoredFrames(page) {
+  await page.waitForFunction(() => window.__commitFrames.some((f) => f.colored) && window.__commitFrames.length >= 5, null, { timeout: 10000 });
+  const frames = await page.evaluate(() => window.__commitFrames);
+  assert.ok(frames.every((f) => f.content && f.colored), `o diff do commit apareceu sem cor: ${JSON.stringify(frames.slice(0, 5))}`);
+}
+
+scenario('histórico: hover parado no arquivo do commit lê o diff antes do clique e a aba abre colorida desde o primeiro quadro', async ({ page }) => {
+  await bigCommitPatch(page, 1200);
+  await openCommitFiles(page);
+  await watchCommitFrames(page);
+  assert.equal((await commitDiffCalls(page)).length, 0, 'nenhuma leitura antes do hover');
+  const box = await commitRow(page).boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.waitForFunction((path) => window.__mock.calls.some((c) => c.cmd === 'git_commit_diff' && c.args.path === path && c.completedAt !== null), HOVER_PATH, { timeout: 4000 });
+  assert.equal((await commitDiffCalls(page)).length, 1, 'o hover leu o diff uma vez, sem mousedown');
+  assert.equal(await tab(page, HOVER_TAB).count(), 0, 'o hover não abre a aba');
+  await page.waitForTimeout(1500);
+  await page.mouse.down();
+  await page.mouse.up();
+  await tab(page, HOVER_TAB).waitFor();
+  await assertColoredFrames(page);
+  assert.equal((await commitDiffCalls(page)).length, 1, 'o clique reaproveitou a leitura do hover');
+});
+
+scenario('histórico: varrer várias linhas do commit sem parar não lê nenhum diff', async ({ page }) => {
+  await openCommitFiles(page);
+  const boxes = [];
+  for (const title of ['src/App.tsx: ', 'src/lib/utils.ts (', 'src/components/ui/card.tsx: ', 'docs/design-system.md: ']) boxes.push(await page.locator(`button[title^="${title}"][title*="neste commit"]`).boundingBox());
+  for (const box of boxes) await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.move(900, 400);
+  await page.waitForTimeout(500);
+  assert.equal((await commitDiffCalls(page)).length, 0, 'passar pelas linhas não dispara git_commit_diff');
+});
+
+scenario('histórico: hover longo e clique sem mousedown espera o prazo de 500 ms a partir do clique, não do hover', async ({ page }) => {
+  // Leitura que não volta dentro do teste: o que abre a aba é só o prazo, e ele tem de ser contado do clique.
+  await page.evaluate(() => { window.__mock.delay.git_commit_diff = 8000; });
+  await openCommitFiles(page);
+  const box = await commitRow(page).boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === 'git_commit_diff'), null, { timeout: 4000 });
+  await page.waitForTimeout(700);
+  assert.equal(await tab(page, HOVER_TAB).count(), 0, 'o hover não abre a aba');
+  // Instantes medidos na própria página (o atraso do Playwright e da máquina não entram na conta).
+  const { clickAt, openAt, pending } = await page.evaluate(({ suffix }) => new Promise((resolve) => {
+    const opened = () => [...document.querySelectorAll('[data-group="A"] [role="tab"]')].some((item) => item.getAttribute('title')?.endsWith(suffix));
+    const row = document.querySelector('button[title^="src/App.tsx: "][title*="neste commit"]');
+    const clickAt = performance.now();
+    const observer = new MutationObserver(() => {
+      if (!opened()) return;
+      observer.disconnect();
+      resolve({ clickAt, openAt: performance.now(), pending: window.__mock.calls.every((c) => c.cmd !== 'git_commit_diff' || c.completedAt === null) });
+    });
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true });
+    row.click();
+  }), { suffix: HOVER_TAB });
+  assert.ok(pending, 'a leitura ainda estava pendente quando a aba abriu: só o prazo a abriu');
+  assert.ok(openAt - clickAt >= 450, `a aba abriu ${Math.round(openAt - clickAt)} ms depois do clique: o prazo de 500 ms foi contado do hover`);
+  assert.equal((await commitDiffCalls(page)).length, 1, 'o clique reaproveitou a leitura do hover');
+});
+
 // ---------- Git: conflitos ----------
 
 scenario('conflito de 2 trechos: escolher Atual e Recebida, texto fora preservado; Salvar atualiza a revisão e mantém em conflito; Marcar como resolvido tira do conflito sem ler o conflito de novo', async ({ page }) => {

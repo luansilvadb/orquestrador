@@ -69,7 +69,7 @@ export type EditorWorkspaceHandle = {
   saveActiveAs(): Promise<boolean>;
   openFile(path: string, options?: OpenOptions): void;
   prefetch(path: string): void;
-  prefetchTarget(target: TabTarget): void;
+  prefetchTarget(target: TabTarget, hover?: boolean): void;
   openTarget(target: TabTarget, options?: Pick<OpenOptions, 'permanent' | 'side'>): void;
   /** Abre à direita: com dois grupos, o segundo na ordem visual (mesmo com o foco nele); com um grupo só, o outro id, que entra depois dele (à direita). */
   openBeside(path: string, options?: Pick<OpenOptions, 'permanent' | 'line' | 'col'>): void;
@@ -409,9 +409,11 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     return entry;
   };
 
-  const prefetchTarget = (target: TabTarget) => {
+  // `hover` só aquece a leitura e o realce: o prazo de 500 ms do openTarget conta do mousedown (ou do clique), não do hover.
+  const prefetchTarget = (target: TabTarget, hover = false) => {
     if (target.kind === 'diff' || target.kind === 'commit') {
-      gitReadFor(target).prefetchAt = performance.now();
+      const entry = gitReadFor(target);
+      if (!hover) entry.prefetchAt = performance.now();
     }
   };
 
