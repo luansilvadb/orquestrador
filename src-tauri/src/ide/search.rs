@@ -59,6 +59,8 @@ pub enum SkipReason {
     NotFile,
     /// Não existe mais na pasta ou não pôde ser lido.
     Unreadable,
+    /// Tem CR que não é parte de um CRLF: a linha só quebra em LF, então a gravação perderia o que vem depois do CR.
+    LooseCr,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -305,14 +307,22 @@ fn apply_one(dir: &Path, listed: &[String], re: &Regex, rep: &str, preserve: boo
     Ok(count)
 }
 
-/// Monta o padrão da consulta. Literal escapa o texto; palavra inteira prende em `\b`. Sem diferença de caixa por padrão.
+/// Monta o padrão da consulta. Literal escapa o texto; palavra inteira prende em `\b`, no literal só do lado em que o
+/// termo começa ou termina com caractere de palavra (`\b` antes de `$` ou `@` nunca casaria). Sem diferença de caixa por padrão.
 /// Consulta com quebra de linha ou que não compila é recusada com a razão em português.
 fn compile(query: &Query) -> Result<Regex, String> {
     if query.text.contains(['\n', '\r', '\0']) {
         return Err("A consulta não pode ter quebra de linha.".into());
     }
     let source = if query.regex { query.text.clone() } else { regex::escape(&query.text) };
-    let source = if query.whole_word { format!(r"\b(?:{source})\b") } else { source };
+    let source = if query.whole_word {
+        let word = |c: Option<char>| query.regex || c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let head = if word(query.text.chars().next()) { r"\b" } else { "" };
+        let tail = if word(query.text.chars().next_back()) { r"\b" } else { "" };
+        format!("{head}(?:{source}){tail}")
+    } else {
+        source
+    };
     let flags = if query.case_sensitive { "" } else { "(?i)" };
     Regex::new(&format!("{flags}{source}")).map_err(|e| format!("Expressão regular inválida: {}", regex_reason(&e)))
 }
@@ -461,6 +471,9 @@ fn load(dir: &Path, path: &str) -> Result<Doc, SkipReason> {
     }
     let body = bytes.strip_prefix(&files::BOM).unwrap_or(&bytes[..]);
     let text = std::str::from_utf8(body).map_err(|_| SkipReason::NotUtf8)?.to_string();
+    if text.replace("\r\n", "").contains('\r') {
+        return Err(SkipReason::LooseCr);
+    }
     Ok(Doc { bom: body.len() < bytes.len(), revision: files::fingerprint(&bytes), text })
 }
 
@@ -541,6 +554,7 @@ fn reason_text(reason: SkipReason) -> &'static str {
         SkipReason::TooLarge => "O arquivo passa de 1 MiB.",
         SkipReason::NotFile => "Não é um arquivo comum (link, junção ou pasta).",
         SkipReason::Unreadable => "Não foi possível ler o arquivo.",
+        SkipReason::LooseCr => "O arquivo tem CR solto, fora de um fim de linha CRLF.",
     }
 }
 
@@ -618,6 +632,37 @@ mod tests {
         assert_eq!(linhas(&buscar(&t.0, &regex), "a.txt").len(), 2);
         let captura = Query { regex: true, ..q("gat(\\w+)") };
         assert_eq!(linhas(&buscar(&t.0, &captura), "a.txt").len(), 2);
+    }
+
+    #[test]
+    fn palavra_inteira_literal_aceita_termo_com_simbolo_na_ponta() {
+        let t = repo_tmp("simbolo");
+        write(&t.0, "a.txt", "echo $foo;\n  @Input()\nfoobar\nx$foo\nfoo\n");
+        commit_all(&t.0, "base");
+        let inteira = |texto: &str| Query { whole_word: true, ..q(texto) };
+        assert_eq!(linhas(&buscar(&t.0, &inteira("$foo")), "a.txt"), vec![(1, "echo $foo;".to_string()), (4, "x$foo".to_string())]);
+        assert_eq!(linhas(&buscar(&t.0, &inteira("@Input")), "a.txt"), vec![(2, "  @Input()".to_string())]);
+        // Termo de palavra continua preso nos dois lados.
+        assert_eq!(linhas(&buscar(&t.0, &inteira("foo")), "a.txt"), vec![(1, "echo $foo;".to_string()), (4, "x$foo".to_string()), (5, "foo".to_string())]);
+    }
+
+    #[test]
+    fn cr_solto_deixa_o_arquivo_de_fora_e_a_substituicao_nao_o_toca() {
+        let t = repo_tmp("cr-solto");
+        write(&t.0, "mac.txt", "a1\rb2\r");
+        write(&t.0, "ok.txt", "a1\r\nb2\r\n");
+        commit_all(&t.0, "base");
+        let regex = Query { regex: true, ..q("a.*") };
+        let r = buscar(&t.0, &regex);
+        assert_eq!(caminhos(&r), vec!["ok.txt"]);
+        assert_eq!(r.skipped, vec![Skipped { path: "mac.txt".into(), reason: SkipReason::LooseCr }]);
+        let prev = preview(&t.0, &regex, "x").unwrap();
+        assert_eq!(prev.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), vec!["ok.txt"]);
+        let req = ApplyRequest { query: regex, replacement: "x".into(), files: vec![Pick { path: "mac.txt".into(), revision: String::new() }] };
+        let out = apply(&t.0, &req).unwrap();
+        assert!(out.applied.is_empty());
+        assert_eq!(out.errors.len(), 1);
+        assert_eq!(read(&t.0, "mac.txt"), b"a1\rb2\r");
     }
 
     #[test]

@@ -213,10 +213,11 @@ struct Lido {
 /// Lê o diff de `rel` uma vez só, para a tela e para a revisão saírem do mesmo snapshot. Pasta é recusada: o patch
 /// dela junta arquivos, e um bloco desse patch cairia no cabeçalho do primeiro arquivo.
 fn snapshot(dir: &Path, rel: &str, staged: bool) -> Result<Lido, String> {
-    if is_folder(dir, rel)? {
+    let registros = index_registros(dir, rel)?;
+    if folder_em(dir, &registros, rel) {
         return Err(format!("{rel} é uma pasta: o diff é de um arquivo por vez."));
     }
-    if !staged && !tracked_file(dir, rel)? {
+    if !staged && !tracked_em(&registros, rel) {
         let diff = untracked(&guarded(dir, rel)?, rel)?;
         return Ok(Lido { raw: diff.patch.clone().into_bytes(), diff, untracked: true });
     }
@@ -564,15 +565,32 @@ pub fn review_diff(dir: &Path, rel: &str, staged: bool) -> Result<ReviewDiff, St
     Err(stale(rel))
 }
 
-/// Os caminhos do índice, com `-z`: nome com quebra de linha não vira duas linhas. Pathspec literal, como em `proc`.
-fn index_paths(dir: &Path, rel: &str) -> Result<Vec<Vec<u8>>, String> {
-    let out = proc::git_bytes(dir, &["ls-files", "-z", "--", rel])?;
-    Ok(out.split(|b| *b == 0).filter(|p| !p.is_empty()).map(<[u8]>::to_vec).collect())
+/// Os registros do índice de `ls-files -s -z`: `modo SP hash SP estágio TAB caminho`. Com `-z`, nome com quebra de linha
+/// não vira duas linhas. Pathspec literal, como em `proc`. Um processo serve às perguntas abaixo.
+fn index_registros(dir: &Path, rel: &str) -> Result<Vec<Vec<u8>>, String> {
+    let out = proc::git_bytes(dir, &["ls-files", "-s", "-z", "--", rel])?;
+    Ok(out.split(|b| *b == 0).filter(|r| !r.is_empty()).map(<[u8]>::to_vec).collect())
+}
+
+/// O caminho de um registro, depois do TAB.
+fn registro_caminho(registro: &[u8]) -> &[u8] {
+    registro.iter().position(|&b| b == b'\t').map_or(&[][..], |tab| &registro[tab + 1..])
+}
+
+/// `rel` é um arquivo dos `registros`, pelo nome exato (não pasta, nem prefixo de outro nome).
+fn tracked_em(registros: &[Vec<u8>], rel: &str) -> bool {
+    registros.iter().any(|r| registro_caminho(r) == rel.as_bytes())
+}
+
+/// `rel` é pasta na pasta de trabalho ou tem arquivos nos `registros`.
+fn folder_em(dir: &Path, registros: &[Vec<u8>], rel: &str) -> bool {
+    let under = format!("{rel}/");
+    dir.join(rel).is_dir() || registros.iter().any(|r| registro_caminho(r).starts_with(under.as_bytes()))
 }
 
 /// Caminho que é um arquivo do índice, pelo nome exato (não pasta, nem prefixo de outro nome).
 fn tracked_file(dir: &Path, rel: &str) -> Result<bool, String> {
-    Ok(index_paths(dir, rel)?.iter().any(|p| p == rel.as_bytes()))
+    Ok(tracked_em(&index_registros(dir, rel)?, rel))
 }
 
 /// Pasta com arquivos rastreados ou com o nome na pasta de trabalho. Um patch de pasta junta arquivos, então é recusado.
@@ -580,8 +598,7 @@ fn is_folder(dir: &Path, rel: &str) -> Result<bool, String> {
     if dir.join(rel).is_dir() {
         return Ok(true);
     }
-    let under = format!("{rel}/");
-    Ok(index_paths(dir, rel)?.iter().any(|p| p.starts_with(under.as_bytes())))
+    Ok(folder_em(dir, &index_registros(dir, rel)?, rel))
 }
 
 fn stale(rel: &str) -> String {
@@ -910,17 +927,14 @@ fn commit_files(dir: &Path, hash: &str) -> Result<Vec<CommitFile>, String> {
     Ok(files)
 }
 
-/// O diff de um commit, ou só de um caminho dele, com o arquivo inteiro (o commit não muda, então a tela mostra tudo).
+/// O diff de um caminho de um commit, com o arquivo inteiro (o commit não muda, então a tela mostra tudo).
 /// Em renomeação, o caminho de origem entra junto, para o diff mostrar a mudança inteira. Diff grande vira só o aviso.
-pub fn commit_diff(dir: &Path, id: &str, path: Option<&str>) -> Result<Diff, String> {
+pub fn commit_diff(dir: &Path, id: &str, path: &str) -> Result<Diff, String> {
     let hash = resolve_commit(dir, id)?;
-    let mut specs: Vec<String> = Vec::new();
-    if let Some(path) = path {
-        let rel = spec(path)?;
-        specs.push(rel.to_string());
-        if let Some(orig) = commit_files(dir, &hash)?.into_iter().find(|f| f.path == rel).and_then(|f| f.orig_path) {
-            specs.push(orig);
-        }
+    let rel = spec(path)?;
+    let mut specs = vec![rel.to_string()];
+    if let Some(orig) = commit_files(dir, &hash)?.into_iter().find(|f| f.path == rel).and_then(|f| f.orig_path) {
+        specs.push(orig);
     }
     let mut args = vec![
         "diff-tree", "--root", "-r", "-p", "-M", "--no-commit-id", "--no-color", "--no-ext-diff", "--no-textconv", CONTEXTO_TODO,
@@ -1080,11 +1094,12 @@ pub fn conflict(dir: &Path, rel: &str) -> Result<Conflict, String> {
     Ok(Conflict { ours: sem(ours), theirs: sem(theirs), worktree, binary, revision: snap.revision() })
 }
 
-/// Linha de marcador de conflito (`<<<<<<<`, `|||||||`, `=======`, `>>>>>>>`), com ou sem o rótulo depois.
+/// Linha de abertura (`<<<<<<<`) ou de fechamento (`>>>>>>>`) de conflito, com ou sem o rótulo depois. `=======` e
+/// `|||||||` não contam sozinhos (um título setext do Markdown é `=======`): num conflito real vêm entre as duas.
 fn has_markers(text: &str) -> bool {
     text.lines().any(|l| {
         let l = l.trim_end_matches('\r');
-        l == "=======" || ["<<<<<<<", "|||||||", ">>>>>>>"].iter().any(|m| l == *m || l.starts_with(&format!("{m} ")))
+        ["<<<<<<<", ">>>>>>>"].iter().any(|m| l == *m || l.starts_with(&format!("{m} ")))
     })
 }
 
@@ -1202,11 +1217,17 @@ pub fn file_base(dir: &Path, rel: &str) -> Result<Option<FileBase>, String> {
     }
     let rel = spec(rel)?;
     guarded(dir, rel)?;
-    if is_folder(dir, rel)? {
+    let registros = index_registros(dir, rel)?;
+    if folder_em(dir, &registros, rel) {
         return Ok(None);
     }
-    let no_indice = index_blob(dir, rel)?;
-    let no_head = has_head(dir) && head_blob(dir, rel)?;
+    let no_indice = entry_em(&registros, rel).is_some_and(|(modo, _)| modo != "160000");
+    // Sem commit o `ls-tree` falha: só então confere o HEAD, para o caso comum não gastar um processo a mais.
+    let no_head = match head_blob(dir, rel) {
+        Ok(blob) => blob,
+        Err(_) if !has_head(dir) => false,
+        Err(why) => return Err(why),
+    };
     if !no_indice && !no_head {
         return Ok(None);
     }
@@ -1219,20 +1240,20 @@ pub fn file_base(dir: &Path, rel: &str) -> Result<Option<FileBase>, String> {
     Ok(Some(FileBase { head, index }))
 }
 
-/// `rel` está no índice no estágio 0 como arquivo (modo `100644`, `100755` ou `120000`; `160000` é submódulo).
-fn index_blob(dir: &Path, rel: &str) -> Result<bool, String> {
-    Ok(index_entry(dir, rel)?.is_some_and(|(modo, _)| modo != "160000"))
-}
-
-/// Modo e hash de `rel` no estágio 0 do índice. Registro de `ls-files -s`: `modo SP hash SP estágio TAB caminho`.
-fn index_entry(dir: &Path, rel: &str) -> Result<Option<(String, String)>, String> {
-    let raw = proc::git_bytes(dir, &["ls-files", "-s", "-z", "--", rel])?;
-    Ok(raw.split(|b| *b == 0).find_map(|record| {
+/// Modo e hash de `rel` no estágio 0 dos `registros`. Há arquivo no índice quando o modo é `100644`, `100755` ou
+/// `120000`; `160000` é submódulo.
+fn entry_em(registros: &[Vec<u8>], rel: &str) -> Option<(String, String)> {
+    registros.iter().find_map(|record| {
         let tab = record.iter().position(|&b| b == b'\t')?;
         let campos: Vec<&[u8]> = record[..tab].split(|&b| b == b' ').collect();
         (&record[tab + 1..] == rel.as_bytes() && campos.len() == 3 && campos[2] == b"0")
             .then(|| (String::from_utf8_lossy(campos[0]).into_owned(), String::from_utf8_lossy(campos[1]).into_owned()))
-    }))
+    })
+}
+
+/// Modo e hash de `rel` no estágio 0 do índice, lidos agora.
+fn index_entry(dir: &Path, rel: &str) -> Result<Option<(String, String)>, String> {
+    Ok(entry_em(&index_registros(dir, rel)?, rel))
 }
 
 /// `rel` está no HEAD como blob. Registro de `ls-tree`: `modo SP tipo SP hash TAB caminho`.
@@ -1245,13 +1266,10 @@ fn head_blob(dir: &Path, rel: &str) -> Result<bool, String> {
 }
 
 /// O texto de `objeto` (`HEAD:<rel>` ou `:<rel>`, que já se sabe existir) como o checkout o escreveria, sem o BOM.
-/// `None` quando é binário ou maior que `files::MAX_FILE`, antes ou depois dos filtros.
+/// `None` quando é binário ou maior que `files::MAX_FILE` depois dos filtros. A leitura para em `MAX_FILE + 1` bytes:
+/// o tamanho do blob não vale, um ponteiro LFS pequeno pode virar o objeto inteiro.
 fn texto_base(dir: &Path, objeto: &str) -> Result<Option<String>, String> {
-    let size: u64 = proc::git_saida(dir, &["cat-file", "-s", objeto])?.trim().parse().unwrap_or(u64::MAX);
-    if size > files::MAX_FILE {
-        return Ok(None);
-    }
-    let bytes = proc::git_bytes(dir, &["cat-file", "--filters", objeto])?;
+    let bytes = proc::git_bytes_ate(dir, &["cat-file", "--filters", objeto], files::MAX_FILE as usize + 1)?;
     if bytes.len() as u64 > files::MAX_FILE || files::is_binary(&bytes) {
         return Ok(None);
     }
@@ -1544,8 +1562,7 @@ mod tests {
 
         commit_all(&dir, "grande");
         let hash = git(&dir, &["rev-parse", "HEAD"]);
-        assert_eq!(commit_diff(&dir, hash.trim(), Some("grande.json")).unwrap(), aviso);
-        assert_eq!(commit_diff(&dir, hash.trim(), None).unwrap(), aviso);
+        assert_eq!(commit_diff(&dir, hash.trim(), "grande.json").unwrap(), aviso);
     }
 
     #[test]
@@ -2323,7 +2340,7 @@ mod tests {
         for id in ["-x", "--output=../x", "--all", "HEAD", "main", "zz12", "ab", "", "HEAD~1"] {
             let why = commit_detail(&dir, id).unwrap_err();
             assert!(why.starts_with("Commit inválido") || why.starts_with("Commit não encontrado"), "{id}: {why}");
-            assert!(commit_diff(&dir, id, None).is_err(), "{id} no diff");
+            assert!(commit_diff(&dir, id, "a.txt").is_err(), "{id} no diff");
         }
         assert!(commit_detail(&dir, "0123456789abcdef0123456789abcdef01234567").unwrap_err().contains("não encontrado"));
     }
@@ -2341,7 +2358,7 @@ mod tests {
         assert_eq!(d.commit.subject, "raiz");
         let raiz_arquivos: Vec<(&str, Kind)> = d.files.iter().map(|f| (f.path.as_str(), f.kind)).collect();
         assert_eq!(raiz_arquivos, [("a.txt", Kind::Added), ("apagar.txt", Kind::Added)]);
-        assert!(commit_diff(&dir, &raiz, Some("a.txt")).unwrap().patch.contains("+seis"));
+        assert!(commit_diff(&dir, &raiz, "a.txt").unwrap().patch.contains("+seis"));
 
         git(&dir, &["mv", "a.txt", "novo nome [1].txt"]);
         fs::remove_file(dir.join("apagar.txt")).unwrap();
@@ -2355,12 +2372,12 @@ mod tests {
         assert_eq!((renomeado.path.as_str(), renomeado.orig_path.as_deref()), ("novo nome [1].txt", Some("a.txt")));
         assert!(d.files.iter().any(|f| f.path == "apagar.txt" && f.kind == Kind::Deleted));
 
-        let patch = commit_diff(&dir, &troca, Some("novo nome [1].txt")).unwrap().patch;
+        let patch = commit_diff(&dir, &troca, "novo nome [1].txt").unwrap().patch;
         assert!(patch.contains("rename from a.txt") && patch.contains("rename to novo nome [1].txt"), "{patch}");
-        let apagado = commit_diff(&dir, &troca, Some("apagar.txt")).unwrap().patch;
+        let apagado = commit_diff(&dir, &troca, "apagar.txt").unwrap().patch;
         assert!(apagado.contains("-x"), "{apagado}");
-        assert!(commit_diff(&dir, &troca, Some("nao-existe.txt")).unwrap().patch.is_empty());
-        assert!(commit_diff(&dir, &troca, Some("../x")).is_err());
+        assert!(commit_diff(&dir, &troca, "nao-existe.txt").unwrap().patch.is_empty());
+        assert!(commit_diff(&dir, &troca, "../x").is_err());
     }
 
     /// Repositório com uma base em `x.txt` e um merge que conflita nele (`main` x `outra`).
@@ -2789,6 +2806,31 @@ mod tests {
 
         assert!(file_base(&dir, "../fora.txt").is_err());
         assert!(file_base(&dir, ".git/config").is_err());
+    }
+
+    #[test]
+    fn texto_base_vazio_quando_o_filtro_infla_um_blob_pequeno() {
+        let tmp = Tmp::new("orq-git", "base-filtro");
+        let dir = repo(&tmp, "r");
+        // Como um ponteiro LFS: o blob é pequeno e o filtro de checkout devolve o objeto real, bem maior que o limite.
+        git(&dir, &["config", "filter.inflar.smudge", "head -c 2000000 /dev/zero | tr '\\0' a"]);
+        git(&dir, &["config", "filter.inflar.clean", "cat"]);
+        write(&dir, ".gitattributes", "inflado.txt filter=inflar\n");
+        write(&dir, "inflado.txt", "ponteiro\n");
+        commit_all(&dir, "base");
+        assert_eq!(git(&dir, &["cat-file", "-s", "HEAD:inflado.txt"]).trim(), "9", "o blob é só o ponteiro");
+        assert_eq!(texto_base(&dir, "HEAD:inflado.txt").unwrap(), None);
+        assert_eq!(file_base(&dir, "inflado.txt").unwrap(), None);
+    }
+
+    #[test]
+    fn marcadores_so_valem_com_abertura_ou_fechamento() {
+        assert!(!has_markers("Título\n=======\n\ntexto\n"), "título setext do Markdown");
+        assert!(!has_markers("Título\r\n=======\r\n|||||||\r\n"));
+        assert!(has_markers("antes\n<<<<<<< HEAD\nnosso\n=======\ndeles\n>>>>>>> outro\ndepois\n"));
+        assert!(has_markers("<<<<<<<\nnosso\n"));
+        assert!(has_markers("deles\n>>>>>>> outro\n"));
+        assert!(has_markers("a\r\n<<<<<<<\r\nb\r\n=======\r\nc\r\n>>>>>>>\r\n"));
     }
 
     #[test]

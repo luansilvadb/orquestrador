@@ -19,6 +19,7 @@
 // - Fechar a ativa passa a ativa para a vizinha da direita entre as que ficam; sem ela, a da esquerda.
 // - `loadWorkspace(texto)` valida o JSON salvo (versão, caminhos seguros, até 2 grupos, ids, prévias, ativas) e conserta o
 //   que for inválido, descartando o que não couber. Nunca abre nem lê path nenhum: só confere texto.
+import { isAbsolutePath } from '../shared/file-tab-actions.ts';
 
 export const WORKSPACE_VERSION = 1;
 export const MAX_GROUPS = 2;
@@ -86,10 +87,11 @@ export function promoteDraft(state: WorkspaceState, tabId: string, path: string)
   return updateTab(state, tabId, (tab) => ({ ...tab, target: { kind: 'file', docId, path } }));
 }
 
-/** Workspace sem os rascunhos abertos. */
-export function withoutDrafts(state: WorkspaceState): WorkspaceState {
-  const drafts = new Set(state.groups.flatMap((g) => g.tabs.filter((t) => t.target.kind === 'draft').map((t) => t.id)));
-  return tidy({ ...state, groups: state.groups.map((g) => dropFromGroup(g, drafts)) });
+/** Salvar como em arquivo aberto: só as abas de arquivo deste `docId` passam para `path`. Diff, conflito e fechadas do caminho antigo ficam como estão (o arquivo antigo continua no disco). */
+export function retargetDoc(state: WorkspaceState, docId: string, path: string): WorkspaceState {
+  if (!isSafeFilePath(path)) return state;
+  const move = (t: EditorTab): EditorTab => (t.target.kind === 'file' && t.target.docId === docId ? { ...t, target: { ...t.target, path } } : t);
+  return tidy({ ...state, groups: state.groups.map((g) => ({ ...g, tabs: g.tabs.map(move) })) });
 }
 
 /** docIds das abas que têm buffer (arquivo e rascunho). Quem guarda os buffers mantém só estes; diff, histórico e conflito não têm docId. */
@@ -417,7 +419,7 @@ export function isSafePath(path: unknown): path is string {
 /** Caminho de arquivo do projeto ou absoluto escolhido pelo usuário. */
 export function isSafeFilePath(path: unknown): path is string {
   if (isSafePath(path)) return true;
-  if (typeof path !== 'string' || path.length === 0 || path.length > 32_768 || !/^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path)) return false;
+  if (typeof path !== 'string' || path.length === 0 || path.length > 32_768 || !isAbsolutePath(path)) return false;
   return !/[\u0000-\u001f]/.test(path) && !path.split(/[\\/]/).some((part) => part === '.' || part === '..');
 }
 

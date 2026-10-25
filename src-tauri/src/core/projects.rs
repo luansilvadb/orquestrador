@@ -112,14 +112,6 @@ impl Projects {
             .map(|entry| entry.opened.clone())
     }
 
-    pub fn list_projects(&self) -> Vec<Opened> {
-        self.registry.lock().unwrap_or_else(|e| e.into_inner()).entries.iter().map(|entry| {
-            let mut opened = entry.opened.clone();
-            opened.existing = true;
-            opened
-        }).collect()
-    }
-
     pub fn close_project(&self, id: &str) -> Result<(), String> {
         let core = {
             let mut registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
@@ -259,7 +251,7 @@ mod tests {
         assert_ne!(a.id, b.id);
         assert_eq!(again.id, a.id);
         assert!(again.existing);
-        assert_eq!(projects.list_projects().len(), 2);
+        assert!(projects.core(&a.id).is_ok() && projects.core(&b.id).is_ok());
         assert!(projects.snapshot(&a.id).unwrap().executors_running == 0);
         assert!(projects.snapshot(&b.id).unwrap().executors_running == 0);
         projects.shutdown();
@@ -294,7 +286,7 @@ mod tests {
         let b = projects.open_project(&root.0.join("b")).unwrap();
         projects.test_set_state(&a.id, true, 0, 0);
         projects.close_project(&a.id).unwrap();
-        assert_eq!(projects.list_projects().iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), [b.id.as_str()]);
+        assert!(projects.core(&a.id).is_err());
         assert!(projects.core(&b.id).unwrap().repo().is_ok());
         assert!(projects.shell_core(None).unwrap().repo().is_err());
         projects.close_project(&b.id).unwrap();

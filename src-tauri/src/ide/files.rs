@@ -92,11 +92,13 @@ pub fn read_at(path: &Path) -> Result<Content, String> {
 }
 
 fn read_path(file: &Path) -> Result<Content, String> {
-    let size = std::fs::metadata(&file).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?.len();
-    if size > MAX_FILE {
+    let erro = |e: std::io::Error| format!("Não foi possível ler o arquivo: {e}");
+    // O `take` limita a leitura mesmo que o arquivo cresça depois de aberto.
+    let mut bytes = Vec::new();
+    File::open(file).map_err(erro)?.take(MAX_FILE + 1).read_to_end(&mut bytes).map_err(erro)?;
+    if bytes.len() as u64 > MAX_FILE {
         return Ok(Content { binary: false, too_large: true, read_only: false, bom: false, text: String::new() });
     }
-    let bytes = std::fs::read(&file).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?;
     if is_binary(&bytes) {
         return Ok(Content { binary: true, too_large: false, read_only: false, bom: false, text: String::new() });
     }
@@ -283,19 +285,27 @@ pub fn write_checked_at(path: &Path, text: &str, base: &str, base_bom: bool) -> 
         if !base.is_empty() || base_bom {
             return Err("O arquivo não existe mais. Nada foi gravado.".into());
         }
+        // Antes de criar: recusa depois do `create_new` deixaria um arquivo vazio.
+        check_size(text)?;
         let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(path).map_err(open_err)?;
         return write_held(file, text, base, base_bom);
     };
     write_held(file, text, base, base_bom)
 }
 
-/// `text` vai com o fim de linha que o editor escolheu (o do disco, ou o que o formatador definiu): nada é convertido.
-fn write_held(mut file: File, text: &str, base: &str, base_bom: bool) -> Result<(), String> {
+fn check_size(text: &str) -> Result<(), String> {
     if text.len() as u64 > MAX_FILE {
         return Err("O arquivo ficaria grande demais para abrir aqui.".into());
     }
+    Ok(())
+}
+
+/// `text` vai com o fim de linha que o editor escolheu (o do disco, ou o que o formatador definiu): nada é convertido.
+fn write_held(mut file: File, text: &str, base: &str, base_bom: bool) -> Result<(), String> {
+    check_size(text)?;
     let mut current = Vec::new();
-    file.seek(SeekFrom::Start(0)).and_then(|_| file.read_to_end(&mut current)).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?;
+    // O `take` evita carregar tudo se um programa externo inchou o arquivo.
+    file.seek(SeekFrom::Start(0)).and_then(|_| (&mut file).take(MAX_FILE + 1).read_to_end(&mut current)).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?;
     if current.len() as u64 > MAX_FILE {
         return Err("O arquivo ficou grande demais para gravar aqui. Nada foi gravado.".into());
     }
@@ -1770,6 +1780,23 @@ src/gerado/
         let grande = root.join("grande.txt");
         std::fs::write(&grande, vec![b'x'; MAX_FILE as usize + 1]).unwrap();
         assert!(read_at(&grande).unwrap().too_large);
+        let limite = root.join("limite.txt");
+        std::fs::write(&limite, vec![b'x'; MAX_FILE as usize]).unwrap();
+        assert!(!read_at(&limite).unwrap().too_large);
+    }
+
+    #[test]
+    fn gravacao_recusa_arquivo_atual_grande_e_nao_cria_arquivo_novo_com_texto_grande() {
+        let root = &fixture("grava-grande").0;
+        let grande = root.join("grande.txt");
+        std::fs::write(&grande, vec![b'x'; MAX_FILE as usize + 1]).unwrap();
+        assert!(write_checked_at(&grande, "x", "", false).unwrap_err().contains("ficou grande demais"));
+        assert_eq!(std::fs::metadata(&grande).unwrap().len(), MAX_FILE + 1);
+
+        let novo = root.join("novo-grande.txt");
+        let texto = "x".repeat(MAX_FILE as usize + 1);
+        assert!(write_checked_at(&novo, &texto, "", false).unwrap_err().contains("ficaria grande demais"));
+        assert!(!novo.exists());
     }
 
     #[test]

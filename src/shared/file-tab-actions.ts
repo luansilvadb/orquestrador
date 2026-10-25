@@ -3,13 +3,16 @@
 
 export type CopyKind = 'relative' | 'absolute' | 'navigation';
 
+/** Caminho absoluto: unidade (`C:\` ou `C:/`), UNC (`\\`) ou raiz (`/`). */
+export const isAbsolutePath = (path: string) => /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path);
+
 /**
  * Texto copiado por cada ação. Relativo e absoluto usam o separador do sistema (o do projeto: `\` no Windows, `/` no resto),
  * já que os caminhos guardados no estado usam `/`. A navegação é o caminho absoluto com linha e coluna (1-based) do cursor;
  * sem cursor, devolve null e quem chama não copia nada.
  */
 export function pathText(kind: CopyKind, path: string, project: string, cursor?: { line: number; col: number }): string | null {
-  const absolutePath = /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path);
+  const absolutePath = isAbsolutePath(path);
   const sep = project.includes('\\') || (absolutePath && path.includes('\\')) ? '\\' : '/';
   if (absolutePath) {
     const absolute = path.replace(/[\\/]/g, sep);
@@ -53,8 +56,9 @@ export function fileNameError(name: string): string | null {
   return null;
 }
 
-/** Caminho relativo ("/") de `abs` dentro de `project`, ou null se está fora (ou é o próprio projeto). Sem diferença de caixa nem de barra, como no Windows. */
+/** Caminho relativo ("/") de `abs` dentro de `project`, ou null se está fora (ou é o próprio projeto, ou não há projeto). Sem diferença de caixa nem de barra, como no Windows. */
 export function relativeTo(project: string, abs: string): string | null {
+  if (!project) return null;
   const root = project.replace(/[\\/]+$/, '').replace(/\\/g, '/');
   const full = abs.replace(/\\/g, '/');
   if (full.slice(0, root.length).toLowerCase() !== root.toLowerCase() || full[root.length] !== '/') return null;

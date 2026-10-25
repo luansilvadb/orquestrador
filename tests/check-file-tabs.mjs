@@ -3,7 +3,7 @@
 // As regras de abas (fechamento em lote, vizinha, fixadas, renomear) estão em tests/check-workspace.mjs, no modelo que o editor usa.
 import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
-import { fileNameError, pathText, relativeTo } from '../src/shared/file-tab-actions.ts';
+import { fileNameError, isAbsolutePath, pathText, relativeTo } from '../src/shared/file-tab-actions.ts';
 import { isWithin } from '../src/editor/workspace-model.ts';
 
 check('Texto relativo usa o separador do Windows quando o projeto tem \\', () => {
@@ -44,6 +44,11 @@ check('Caminho relativo a partir do absoluto: dentro do projeto, sem diferença 
   assert.equal(relativeTo('D:\\orquestrador', 'D:\\orquestrador-antigo\\x.ts'), null);
   assert.equal(relativeTo('D:\\orquestrador', 'C:\\outra\\x.ts'), null);
   assert.equal(relativeTo('D:\\orquestrador', 'D:\\orquestrador'), null);
+  assert.equal(relativeTo('', '/x/y.ts'), null, 'sem projeto nada é relativo');
+});
+check('Caminho absoluto: unidade, UNC e raiz; relativo não', () => {
+  for (const path of ['C:\\x', 'c:/x', '\\\\srv\\x', '/x']) assert.equal(isAbsolutePath(path), true, path);
+  for (const path of ['', 'x/y.ts', 'C:x', 'C:']) assert.equal(isAbsolutePath(path), false, path);
 });
 check('Dentro de: a própria pasta e o que está nela, nunca um irmão com prefixo igual', () => {
   assert.equal(isWithin('src', 'src'), true);

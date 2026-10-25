@@ -298,6 +298,15 @@ export function App() {
       }
     } catch { /* A preferência local não impede abrir a pasta. */ }
   };
+  // Põe a pasta no topo dos recentes e como a última aberta.
+  const rememberProject = (project: string) => {
+    const recents = [project, ...readRecentProjects().filter((item) => item.toLowerCase() !== project.toLowerCase())].slice(0, 10);
+    try {
+      localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(recents));
+      localStorage.setItem(LAST_PROJECT_KEY, project);
+    } catch { /* A preferência local não impede abrir a pasta. */ }
+    setRecentProjects(recents);
+  };
   const openNewProject = async (path?: string) => {
     await connect();
     const opened = path ? await backend.openProject(path) : await backend.chooseProject();
@@ -305,12 +314,7 @@ export function App() {
     const current = projectsRef.current;
     const found = current.find((item) => item.id === opened.id);
     const next = found ? current : [...current, { id: opened.id, project: opened.project }];
-    const recents = [opened.project, ...readRecentProjects().filter((item) => item.toLowerCase() !== opened.project.toLowerCase())].slice(0, 10);
-    try {
-      localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(recents));
-      localStorage.setItem(LAST_PROJECT_KEY, opened.project);
-    } catch { /* A preferência local não impede abrir a pasta. */ }
-    setRecentProjects(recents);
+    rememberProject(opened.project);
     persist(next, opened.id);
     if (opened.subfolder) toast.info({ title: `Esta pasta está dentro do repositório ${opened.project}. O projeto aberto é a raiz dele.`, duration: 6000 });
   };
@@ -345,12 +349,7 @@ export function App() {
     if (opened) {
       const current = projectsRef.current;
       const next = current.some((item) => item.id === opened.id) ? current : [...current, { id: opened.id, project: opened.project }];
-      const recents = [opened.project, ...readRecentProjects().filter((item) => item.toLowerCase() !== opened.project.toLowerCase())].slice(0, 10);
-      try {
-        localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(recents));
-        localStorage.setItem(LAST_PROJECT_KEY, opened.project);
-      } catch { /* A preferência local não impede abrir a pasta. */ }
-      setRecentProjects(recents);
+      rememberProject(opened.project);
       persist(next, opened.id);
       return;
     }

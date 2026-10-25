@@ -43,6 +43,7 @@ const REASON: Record<SkipReason, string> = {
   tooLarge: 'maior que 1 MiB',
   notFile: 'não é arquivo comum',
   unreadable: 'não pôde ser lido',
+  looseCr: 'tem CR solto (fora de CRLF)',
 };
 // Medidas do Antigravity: botão dentro do campo com 20 px e ícone de 16 px; linhas da lista com 22 px e recuo de 8 px por nível.
 const INPUT_TOGGLE = { size: 16, blockSize: 20, borderRadius: 3 } as const;
@@ -74,7 +75,10 @@ function highlighter(query: string, options: SearchOptions): RegExp | null {
   if (!query) return null;
   try {
     const source = options.regex ? query : escapeRegExp(query);
-    return new RegExp(options.wholeWord ? `\\b(?:${source})\\b` : source, options.caseSensitive ? 'g' : 'gi');
+    // Literal: `\b` só do lado em que o termo começa/termina com caractere de palavra (igual ao backend).
+    const edge = (c: string) => (options.regex || /\w/.test(c) ? '\\b' : '');
+    const bounded = options.wholeWord ? `${edge(query[0])}(?:${source})${edge(query[query.length - 1])}` : source;
+    return new RegExp(bounded, options.caseSensitive ? 'g' : 'gi');
   } catch {
     return null;
   }

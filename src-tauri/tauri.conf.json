@@ -11,7 +11,21 @@
   },
   "app": {
     "windows": [{ "label": "main", "title": "Orquestrador", "width": 1400, "height": 900, "center": true, "decorations": false, "visible": false, "backgroundColor": "#000000" }],
-    "security": { "csp": null }
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self' 'wasm-unsafe-eval'",
+        "style-src": "'self' 'unsafe-inline'",
+        "font-src": "'self'",
+        "img-src": "'self' blob: data:",
+        "media-src": "'self' blob: http://orq-media.localhost",
+        "connect-src": "ipc: http://ipc.localhost",
+        "worker-src": "'self'",
+        "object-src": "'none'",
+        "base-uri": "'none'"
+      },
+      "dangerousDisableAssetCspModification": ["style-src"]
+    }
   },
   "bundle": {
     "active": true,

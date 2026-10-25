@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test as check } from 'node:test';
 import {
   activate, closeTabs, createWorkspace, draftName, isDirty, isSafeFilePath, joinGroups, liveDocIds, loadWorkspace, markEdited, moveTab, navigate,
-  openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, reorderTab, splitTab, targetKey, togglePin, withoutDrafts,
+  openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, reorderTab, retargetDoc, splitTab, targetKey, togglePin,
 } from '../src/editor/workspace-model.ts';
 
 const NONE = new Set();
@@ -464,18 +464,6 @@ check('Rascunho fechado não entra na pilha de fechadas (não ressuscita)', () =
   assertConsistent(s);
 });
 
-check('withoutDrafts tira o rascunho do workspace gravado e mantém as abas de arquivo', () => {
-  let s = openPermanent(createWorkspace(), 'A', file('d1', 'a.ts'));
-  s = openDraft(s, 'A', 'x1');
-  const clean = withoutDrafts(s);
-  assert.deepEqual(names(clean, 'A'), ['a.ts']);
-  assert.equal(clean.groups[0].active, tabsOf(clean, 'A')[0].id);
-  assertConsistent(clean);
-  const onlyDraft = withoutDrafts(openDraft(createWorkspace(), 'A', 'x2'));
-  assert.deepEqual(onlyDraft.groups[0].tabs, []);
-  assert.equal(onlyDraft.groups[0].active, null);
-});
-
 check('Rascunho volta na recuperação do projeto e na recuperação sem projeto', () => {
   const serialized = JSON.stringify(openDraft(createWorkspace(), 'A', 'x1'));
   for (const storageKey of ['orquestrador.editor:C:\\projetos', 'orquestrador.editor:__sem-projeto__']) {
@@ -494,6 +482,23 @@ check('Salvar como dentro do projeto: rascunho vira aba de arquivo, mesmo id e m
   assert.equal(promoteDraft(s, tab.id, 'outro.ts'), s, 'já não é rascunho: nada muda');
   const again = openDraft(createWorkspace(), 'A', 'x2');
   assert.equal(promoteDraft(again, tabsOf(again, 'A')[0].id, '../fora.ts'), again, 'caminho inseguro recusado');
+});
+
+check('Salvar como em arquivo aberto: só as abas de arquivo do docId trocam de caminho; diff, conflito e fechadas do antigo ficam', () => {
+  let s = openAll(createWorkspace(), 'A', [['d1', 'a.ts']]);
+  s = splitTab(s, idOf(s, 'A', 'a.ts'));
+  s = openPermanent(s, 'A', diff('unstaged', 'a.ts'));
+  s = openPermanent(s, 'A', conflict('a.ts'));
+  s = openPermanent(s, 'A', file('d2', 'c.ts'));
+  s = closeTabs(s, [idOf(s, 'A', 'c.ts')]);
+  const moved = retargetDoc(s, 'd1', 'b.ts');
+  assert.deepEqual(names(moved, 'A'), ['b.ts', 'unstaged:a.ts', 'conflito:a.ts']);
+  assert.deepEqual(names(moved, 'B'), ['b.ts']);
+  assert.deepEqual(moved.closed, s.closed, 'pilha de fechadas intacta');
+  assert.equal(tabsOf(moved, 'A')[0].id, tabsOf(s, 'A')[0].id, 'a aba continua a mesma');
+  assertConsistent(moved);
+  assert.equal(retargetDoc(s, 'd1', '../fora.ts'), s, 'caminho inseguro recusado');
+  assert.deepEqual(names(retargetDoc(s, 'nenhum', 'x.ts'), 'A'), names(s, 'A'), 'docId sem aba: nada muda');
 });
 
 check('Remapeamento não mexe no rascunho e segue movendo o arquivo ao lado', () => {

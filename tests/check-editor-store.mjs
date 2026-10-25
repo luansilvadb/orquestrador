@@ -18,6 +18,14 @@ check('Buffer limpo não é sujo; editar o rascunho torna sujo', () => {
   assert.equal(isBufferDirty(b), false);
   assert.equal(isBufferDirty({ ...b, draft: 'a\nb!' }), true);
 });
+check('isBufferDirty memorizado por objeto: buffer novo é recalculado, o mesmo objeto repete o resultado', () => {
+  const b = buffer({ raw: 'a\r\nb', draft: 'a\nb' });
+  assert.equal(isBufferDirty(b), false);
+  assert.equal(isBufferDirty(b), false);
+  const edited = { ...b, draft: 'a\nb!' };
+  assert.equal(isBufferDirty(edited), true);
+  assert.equal(isBufferDirty({ ...edited, draft: 'a\nb' }), false);
+});
 check('CRLF no disco e LF no editor não contam como alteração', () => {
   assert.equal(isBufferDirty(buffer({ raw: 'a\r\nb', draft: 'a\nb', newline: '\r\n' })), false);
 });

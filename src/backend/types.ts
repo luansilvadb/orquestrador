@@ -94,7 +94,7 @@ export type FormatterInfo =
 // (até 500; `skippedOmitted` conta o resto). `truncated` avisa que passou de 2000 linhas casadas.
 export type SearchMatch = { line: number; col: number; text: string };
 export type SearchFile = { path: string; matches: SearchMatch[] };
-export type SkipReason = 'binary' | 'notUtf8' | 'tooLarge' | 'notFile' | 'unreadable';
+export type SkipReason = 'binary' | 'notUtf8' | 'tooLarge' | 'notFile' | 'unreadable' | 'looseCr';
 export type Skipped = { path: string; reason: SkipReason };
 export type SearchResults = { files: SearchFile[]; truncated: boolean; skipped: Skipped[]; skippedOmitted: number };
 export type SearchOptions = { caseSensitive: boolean; wholeWord: boolean; regex: boolean };
@@ -150,7 +150,6 @@ export type Commands = {
   choose_project: { args: NoArgs; result: OpenedProject | null };
   open_project: { args: { path: string }; result: OpenedProject };
   close_project: { args: { project: string }; result: void };
-  list_projects: { args: NoArgs; result: OpenedProject[] };
   project_snapshot: { args: { project: string }; result: ProjectSnapshot };
   pick_file: { args: NoArgs; result: string | null };
   pick_save_path: { args: { directory: string | null; fileName: string }; result: string | null };

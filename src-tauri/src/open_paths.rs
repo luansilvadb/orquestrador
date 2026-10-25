@@ -17,12 +17,14 @@ impl OpenPaths {
 }
 
 pub fn extract_paths(args: &[String], cwd: &Path) -> Vec<PathBuf> {
-    if args.first().is_some_and(|arg| matches!(arg.as_str(), "--mcp" | "--hook" | "--allow")) {
-        return Vec::new();
-    }
-    args.iter().filter(|arg| !arg.starts_with('-')).map(|arg| {
-        let path = PathBuf::from(arg);
-        if path.is_absolute() { path } else { cwd.join(path) }
+    args.iter().filter(|arg| !arg.starts_with('-')).filter_map(|arg| {
+        // `"%V"` na raiz de um drive vira `"D:\"`, e o Windows lê `\"` como aspa literal: o argumento chega como `D:"`.
+        let arg = arg.trim_end_matches('"');
+        if arg.is_empty() {
+            return None;
+        }
+        let path = if arg.ends_with(':') { PathBuf::from(format!("{arg}\\")) } else { PathBuf::from(arg) };
+        Some(if path.is_absolute() { path } else { cwd.join(path) })
     }).collect()
 }
 
@@ -39,10 +41,15 @@ mod tests {
     }
 
     #[test]
-    fn ignores_cli_modes_and_queues_until_taken() {
-        for mode in ["--mcp", "--hook", "--allow"] {
-            assert!(extract_paths(&[mode.into(), "folder".into()], Path::new("C:\\work")).is_empty());
-        }
+    fn restores_drive_root_mangled_by_trailing_backslash_quote() {
+        let cwd = Path::new("C:\\work");
+        assert_eq!(extract_paths(&["D:\"".into()], cwd), [PathBuf::from("D:\\")]);
+        assert_eq!(extract_paths(&["D:\\work\\a b".into()], cwd), [PathBuf::from("D:\\work\\a b")]);
+        assert_eq!(extract_paths(&["D:\\".into()], cwd), [PathBuf::from("D:\\")]);
+    }
+
+    #[test]
+    fn queues_until_taken() {
         let queue = OpenPaths::new(extract_paths(&["file.txt".into()], Path::new("C:\\work")));
         assert_eq!(queue.take(), ["C:\\work\\file.txt"]);
         assert!(queue.take().is_empty());

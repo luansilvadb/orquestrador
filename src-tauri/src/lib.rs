@@ -58,11 +58,6 @@ fn close_project(projects: State<Projects>, project: String) -> Result<(), Strin
 }
 
 #[tauri::command(async)]
-fn list_projects(projects: State<Projects>) -> Vec<Opened> {
-    projects.list_projects()
-}
-
-#[tauri::command(async)]
 fn project_snapshot(projects: State<Projects>, project: String) -> Result<ProjectSnapshot, String> {
     projects.snapshot(&project)
 }
@@ -348,13 +343,13 @@ fn git_commit_hover(
     git::commit_hover(&core.repo()?, &hash)
 }
 
-/// O diff de um commit, ou só de um caminho dele.
+/// O diff de um caminho de um commit.
 #[tauri::command(async)]
 fn git_commit_diff(
-    projects: State<Projects>, project: String, id: String, path: Option<String>,
+    projects: State<Projects>, project: String, id: String, path: String,
 ) -> Result<git::Diff, String> {
     let core = projects.core(&project)?;
-    git::commit_diff(&core.repo()?, &id, path.as_deref())
+    git::commit_diff(&core.repo()?, &id, &path)
 }
 
 /// Os lados de um arquivo em conflito, o texto atual da pasta e a revisão.
@@ -644,7 +639,6 @@ pub fn run(context: tauri::Context, initial_paths: Vec<std::path::PathBuf>) {
             choose_project,
             open_project,
             close_project,
-            list_projects,
             project_snapshot,
             pick_file,
             pick_save_path,

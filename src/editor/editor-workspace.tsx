@@ -45,11 +45,11 @@ import { MediaView, mediaOf, Note } from './media-view';
 import { CommitTab, CompareView, DiffTab, POLL_MS, type Ask, type Common } from './diff-view';
 import { ConflictTab } from './conflict-view';
 import { action, blocked, DIVIDER, fileName, useChord } from '../shared/file-tabs';
-import { pathText } from '../shared/file-tab-actions';
+import { isAbsolutePath, pathText, relativeTo } from '../shared/file-tab-actions';
 import { copy, splitPath } from '../shared/paths';
 import {
   activate, closeTabs, createWorkspace, draftName, isDirty, isSafePath, isWithin, joinGroups, liveDocIds, loadWorkspace, markEdited, moveTab, navigate,
-  openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
+  openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, retargetDoc, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
 } from './workspace-model';
 import { dragShift, revealTab, trackTabDrag, type TabDrag, wheelToScroll } from '../shared/tab-strip';
 import { TabListMenu, type TabListItem } from '../shared/tab-list-menu';
@@ -136,28 +136,16 @@ const tabIcon = (target: TabTarget) => (target.kind === 'draft'
   ? <FileText className="size-4" />
   : <FileIcon path={target.path} className="size-4" />);
 
-// Caminho do diálogo "Salvar como" (absoluto, com a raiz do projeto) como caminho relativo com "/". Null se ficou fora do projeto.
-// Sem diferença de caixa, como no Windows.
-function relativeToProject(project: string, picked: string): string | null {
-  if (!project) return null;
-  const root = project.replace(/\\/g, '/').replace(/\/+$/, '');
-  const full = picked.replace(/\\/g, '/');
-  if (full.slice(0, root.length + 1).toLowerCase() !== `${root}/`.toLowerCase()) return null;
-  return full.slice(root.length + 1);
-}
-
 function absoluteFilePath(project: string, path: string): string {
   if (!path) return path;
-  if (isAbsoluteFilePath(path)) return path.replace(/\//g, '\\');
+  if (isAbsolutePath(path)) return path.replace(/\//g, '\\');
   return project.replace(/[\\/]+$/, '') + '\\' + path.replace(/\//g, '\\');
 }
-
-const isAbsoluteFilePath = (path: string) => /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(path);
 
 // Grava `text` em `path` (relativo, dentro do projeto). Arquivo novo é criado; se já existe (o diálogo confirmou a sobrescrita), o texto
 // vai por cima da versão que está no disco agora, sem gravar às cegas.
 async function writeNewFile(backend: ReturnType<typeof useBackend>, path: string, text: string): Promise<void> {
-  if (isAbsoluteFilePath(path)) {
+  if (isAbsolutePath(path)) {
     let base = '';
     let bom = false;
     try {
@@ -177,7 +165,9 @@ async function writeNewFile(backend: ReturnType<typeof useBackend>, path: string
   let bom = false;
   try {
     await backend.createFile(slash < 0 ? '' : path.slice(0, slash), path.slice(slash + 1));
-  } catch {
+  } catch (e) {
+    // Só "já existe" segue para a leitura; outro erro (permissão, pasta ausente) sobe com o motivo real.
+    if (!message(e).startsWith('Já existe um item')) throw e;
     const current = await backend.readFile(path);
     if (current.binary || current.tooLarge) throw new Error(`${fileName(path)} não é texto: não dá para salvar por cima dele.`);
     base = current.text;
@@ -187,6 +177,13 @@ async function writeNewFile(backend: ReturnType<typeof useBackend>, path: string
 }
 
 function emptyData(): EditorData { return { buffers: {}, conflicts: {} }; }
+
+// Só os docIds vivos; devolve o mesmo objeto se nada saiu (o estado não re-renderiza à toa).
+function keepDocs<T>(record: Record<string, T>, ids: ReadonlySet<string>): Record<string, T> {
+  const entries = Object.entries(record);
+  const kept = entries.filter(([id]) => ids.has(id));
+  return kept.length === entries.length ? record : Object.fromEntries(kept);
+}
 
 export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspaceProps>(function EditorWorkspace(props, handle) {
   const backend = useBackend();
@@ -414,6 +411,9 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const buffers = Object.fromEntries(Object.entries(current.buffers).filter(([id]) => docIds.has(id)));
     const conflicts = Object.fromEntries(Object.entries(current.conflicts).filter(([key]) => keys.has(key)));
     for (const id of Object.keys(scrolls.current)) if (!docIds.has(id)) delete scrolls.current[id];
+    for (const id of Object.keys(cursors.current)) if (!docIds.has(id)) delete cursors.current[id];
+    setDisk((d) => keepDocs(d, docIds));
+    setStatus((st) => keepDocs(st, docIds));
     setData({ buffers, conflicts });
   };
 
@@ -513,8 +513,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       const picked = await backend.pickSavePath(project || null, name);
       if (picked === null) return false;
       const absolute = picked.replace(/\\/g, '/');
-      const path = relativeToProject(project, absolute) ?? absolute;
-      if (!isAbsoluteFilePath(path) && !isSafePath(path)) return false;
+      const path = relativeTo(project, absolute) ?? absolute;
+      if (!isAbsolutePath(path) && !isSafePath(path)) return false;
       const lower = path.toLowerCase();
       const existing = allTabs().find((t) => t.target.kind === 'file' && t.target.path.toLowerCase() === lower);
       const existingBuffer = existing?.target.kind === 'file' ? dataRef.current.buffers[existing.target.docId] : undefined;
@@ -565,13 +565,13 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     }
     if (!buffer) return false;
     const slash = buffer.path.lastIndexOf('/');
-    const directory = project || (isAbsoluteFilePath(buffer.path) && slash > 0 ? buffer.path.slice(0, slash) : null);
+    const directory = project || (isAbsolutePath(buffer.path) && slash > 0 ? buffer.path.slice(0, slash) : null);
     const docId = target.docId;
     const attempt = async (current: Buffer): Promise<boolean> => {
       const picked = await backend.pickSavePath(directory, fileName(current.path));
       if (!picked) return false;
       const absolute = picked.replace(/\\/g, '/');
-      const path = relativeToProject(project, absolute) ?? absolute;
+      const path = relativeTo(project, absolute) ?? absolute;
       if (path.toLowerCase() === current.path.toLowerCase()) return saveBuffer(docId);
       const existing = allTabs().find((t) => t.target.kind === 'file' && t.target.path.toLowerCase() === path.toLowerCase());
       const existingBuffer = existing?.target.kind === 'file' ? dataRef.current.buffers[existing.target.docId] : undefined;
@@ -588,8 +588,11 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         pruneData(next);
         void syncFile(existing.target.kind === 'file' ? existing.target.docId : '');
       } else {
-        remap(current.path, path);
+        // Cópia, não renomeação: o arquivo antigo continua no disco, então diff e conflito dele ficam onde estão. Só o documento muda de caminho.
+        setWs(retargetDoc(wsRef.current, docId, path));
         patchBuffer(docId, (b) => ({ ...b, path, raw: saved.text, bom: saved.bom, newline: newlineOf(saved.text) }));
+        clearDisk(docId);
+        setStatusOf(docId, {});
       }
       refreshGit();
       notifySaved();
@@ -741,6 +744,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       localStorage.setItem(recoveryKey(project), encoded.text);
       if (encoded.notes.length > 0) setNotice(encoded.notes.join(' '));
     } catch (e) {
+      // Sem apagar, a gravação anterior ficaria e poderia restaurar um texto que o usuário já descartou.
+      try { localStorage.removeItem(recoveryKey(project)); } catch { /* Sem acesso ao armazenamento: só o aviso. */ }
       setNotice(`Não foi possível guardar a recuperação (${message(e)}). A edição continua, mas não será recuperada.`);
     }
   };
@@ -1060,7 +1065,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       [
         action('pin', tab.pinned ? 'Desafixar' : 'Fixar', () => setWs(togglePin(wsRef.current, tab.id)), 'Ctrl+K Shift+Enter'),
         target.kind === 'draft' ? blocked('reveal', 'Revelar no Explorer', noPath)
-          : target.kind === 'file' && isAbsoluteFilePath(target.path) && relativeToProject(project, target.path) === null
+          : target.kind === 'file' && isAbsolutePath(target.path) && relativeTo(project, target.path) === null
             ? blocked('reveal', 'Revelar no Explorer', 'Este arquivo está fora da pasta do projeto.')
           : action('reveal', 'Revelar no Explorer', () => onReveal(target.path)),
       ],
@@ -1102,7 +1107,11 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           focus: target.kind === 'draft' && freshDraft.current === target.docId,
         })}
         onChange={(value) => {
-          patchBuffer(target.docId, (b) => ({ ...b, draft: value, newline: value === normalizeNewlines(b.raw) ? newlineOf(b.raw) : b.newline }));
+          patchBuffer(target.docId, (b) => {
+            const next = { ...b, draft: value };
+            // Igual ao disco: volta ao fim de linha do arquivo. `isBufferDirty` compara sem normalizar o `raw` a cada tecla.
+            return isBufferDirty(next) ? next : { ...next, newline: newlineOf(b.raw) };
+          });
           // Editar torna a aba permanente (a prévia vira aba de verdade). Só as abas com este docId são tocadas.
           const current = wsRef.current;
           let next = current;
@@ -1444,14 +1453,14 @@ function useGitBase(path: string, raw: string, shown: boolean, active: boolean):
     if (pathRef.current !== path) return;
     setBase((prev) => (prev === next || (prev && next && prev.head === next.head && prev.index === next.index) ? prev : next));
   };
-  usePolling(load, POLL_MS, active && shown && path !== '' && !isAbsoluteFilePath(path) && path);
+  usePolling(load, POLL_MS, active && shown && path !== '' && !isAbsolutePath(path) && path);
   const seenRaw = useRef(raw);
   useEffect(() => {
     if (seenRaw.current === raw) return;
     seenRaw.current = raw;
-    if (path !== '' && !isAbsoluteFilePath(path)) void load();
+    if (path !== '' && !isAbsolutePath(path)) void load();
   }, [raw]);
-  return { base: path === '' || isAbsoluteFilePath(path) ? null : base, reload: load };
+  return { base: path === '' || isAbsolutePath(path) ? null : base, reload: load };
 }
 
 function FileBody({
@@ -1501,7 +1510,7 @@ function FileBody({
             cacheKey={buffer.docId}
             gitBase={git.base}
             onWriteIndex={async (text, expected) => {
-              if (isAbsoluteFilePath(buffer.path)) return;
+              if (isAbsolutePath(buffer.path)) return;
               await backend.gitWriteIndex(buffer.path, text, expected);
               await git.reload();
             }}

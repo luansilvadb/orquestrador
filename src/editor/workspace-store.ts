@@ -27,8 +27,18 @@ export const normalizeNewlines = (text: string) => (text.includes('\r') ? text.r
 export const newlineOf = (text: string): Newline => (text.includes('\r\n') ? '\r\n' : text.includes('\r') ? '\r' : '\n');
 export const toDiskNewlines = (text: string, newline: Newline) => (newline === '\n' ? text : text.replace(/\n/g, newline));
 export const conflictKey = (path: string) => `conflict:${path.toLowerCase()}`;
-// Compara com o `raw` normalizado sem copiá-lo: roda a cada render, para todos os buffers.
-export function isBufferDirty({ raw, draft }: Buffer): boolean {
+// Compara com o `raw` normalizado sem copiá-lo: roda a cada render, para todos os buffers. Buffer é imutável, então o resultado
+// fica guardado por objeto: só o buffer editado é recalculado a cada tecla.
+const dirtyMemo = new WeakMap<Buffer, boolean>();
+export function isBufferDirty(buffer: Buffer): boolean {
+  let dirty = dirtyMemo.get(buffer);
+  if (dirty === undefined) {
+    dirty = differsFromRaw(buffer);
+    dirtyMemo.set(buffer, dirty);
+  }
+  return dirty;
+}
+function differsFromRaw({ raw, draft }: Buffer): boolean {
   if (!raw.includes('\r')) return draft !== raw;
   let j = 0;
   for (let i = 0; i < raw.length; i++, j++) {

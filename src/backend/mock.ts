@@ -742,12 +742,13 @@ function writeIndex(path: string, text: string, expected: string) {
 // Mesmo limite do backend: até 2000 linhas casadas; mais que isso marca `truncated`. A prévia mostra até 100 arquivos com texto.
 const SEARCH_LIMIT = 2000;
 const PREVIEW_FILES = 100;
-// O padrão da consulta: literal escapa o texto; palavra inteira prende em `\b`. Sem diferença de caixa por padrão.
+// O padrão da consulta: literal escapa o texto; palavra inteira prende em `\b` (no literal, só do lado em que o termo começa/termina com caractere de palavra, igual ao backend). Sem diferença de caixa por padrão.
 function compile(q: ReplaceQuery): RegExp {
   if (/[\n\r\0]/.test(q.text)) throw 'A consulta não pode ter quebra de linha.';
   const source = q.regex ? q.text : q.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const edge = (c: string | undefined) => (q.regex || (c !== undefined && /\w/.test(c)) ? '\\b' : '');
   try {
-    return new RegExp(q.wholeWord ? `\\b(?:${source})\\b` : source, q.caseSensitive ? '' : 'i');
+    return new RegExp(q.wholeWord ? `${edge(q.text[0])}(?:${source})${edge(q.text[q.text.length - 1])}` : source, q.caseSensitive ? '' : 'i');
   } catch {
     throw 'Expressão regular inválida. Confira a sintaxe.';
   }
@@ -1031,7 +1032,6 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
     projectOpen = openProjects.size > 0;
     return null;
   },
-  list_projects: () => [...openProjects.values()].map((p) => ({ ...p, existing: true })),
   project_snapshot: ({ project }: { project: string }) => ({ orchestratorOpen: orchestrators.has(project), executorsRunning: 0, executorsQueued: 0 }),
   pick_file: () => 'C:\\arquivos\\solto.ts',
   pick_save_path: ({ directory, fileName }: { directory: string | null; fileName: string }) => `${(directory ?? 'C:\\Users\\Luan').replace(/[\\/]+$/, '')}\\${fileName}`,

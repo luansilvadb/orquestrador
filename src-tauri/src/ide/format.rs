@@ -69,7 +69,8 @@ fn executable_in_path(name: &str) -> bool {
 
 #[derive(Debug, PartialEq)]
 enum Config {
-    Found(Option<String>, &'static str),
+    /// Texto, tipo e pasta onde o arquivo de configuração foi achado (vazia sem configuração).
+    Found(Option<String>, &'static str, PathBuf),
     /// Configuração em JS, TS, JSON5 ou TOML: o Prettier do editor não a lê, e formatar sem ela mudaria o estilo.
     Unsupported(PathBuf),
 }
@@ -81,35 +82,89 @@ const UNSUPPORTED_CONFIGS: [&str; 14] = [
     "prettier.config.mts",
 ];
 
+/// Mesma ordem do Prettier 3 em cada pasta: `package.json` com a chave `prettier` vence os `.prettierrc*`.
 fn config_file(path: &Path) -> Result<Config, String> {
     for dir in path.ancestors() {
-        for (name, kind) in [
-            (".prettierrc", "auto"),
-            (".prettierrc.json", "json"),
-            (".prettierrc.yaml", "yaml"),
-            (".prettierrc.yml", "yaml"),
-        ] {
-            let file = dir.join(name);
-            if file.is_file() {
-                let text = std::fs::read_to_string(&file)
-                    .map_err(|e| format!("Não foi possível ler {}: {e}", file.display()))?;
-                return Ok(Config::Found(Some(text), kind));
-            }
-        }
-        if let Some(file) = UNSUPPORTED_CONFIGS.iter().map(|name| dir.join(name)).find(|file| file.is_file()) {
-            return Ok(Config::Unsupported(file));
-        }
         let package = dir.join("package.json");
         if package.is_file() {
             let text = std::fs::read_to_string(&package).map_err(|e| format!("Não foi possível ler {}: {e}", package.display()))?;
             let value: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
                 .map_err(|e| format!("{}: {e}", package.display()))?;
             if let Some(config) = value.get("prettier").filter(|config| !config.is_null()) {
-                return Ok(Config::Found(Some(config.to_string()), "json"));
+                return Ok(Config::Found(Some(config.to_string()), "json", dir.to_path_buf()));
+            }
+        }
+        for (name, kind) in [
+            (".prettierrc", "auto"),
+            (".prettierrc.json", "json"),
+            (".prettierrc.yml", "yaml"),
+            (".prettierrc.yaml", "yaml"),
+        ] {
+            let file = dir.join(name);
+            if file.is_file() {
+                let text = std::fs::read_to_string(&file)
+                    .map_err(|e| format!("Não foi possível ler {}: {e}", file.display()))?;
+                return Ok(Config::Found(Some(text), kind, dir.to_path_buf()));
+            }
+        }
+        if let Some(file) = UNSUPPORTED_CONFIGS.iter().map(|name| dir.join(name)).find(|file| file.is_file()) {
+            return Ok(Config::Unsupported(file));
+        }
+    }
+    Ok(Config::Found(None, "json", PathBuf::new()))
+}
+
+enum Prepared {
+    Ready(Option<String>, &'static str),
+    /// `overrides` em YAML: sem parser YAML no backend, o casamento não é possível.
+    YamlOverrides,
+}
+
+fn yaml_has_overrides(text: &str) -> bool {
+    text.lines().any(|line| {
+        let key = line.split(':').next().unwrap_or("");
+        line.contains(':') && !key.starts_with(char::is_whitespace) && key.trim_matches(['"', '\'']) == "overrides"
+    })
+}
+
+fn patterns(value: Option<&Value>) -> Vec<&str> {
+    match value {
+        Some(Value::String(pattern)) => vec![pattern.as_str()],
+        Some(Value::Array(items)) => items.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Aplica, em ordem, os `overrides` que casam com o arquivo (glob relativo à pasta da configuração) e remove a chave.
+fn apply_overrides(text: String, kind: &'static str, dir: &Path, file: &Path) -> Prepared {
+    let Ok(Value::Object(mut config)) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else {
+        return if kind != "json" && yaml_has_overrides(&text) { Prepared::YamlOverrides } else { Prepared::Ready(Some(text), kind) };
+    };
+    let Some(overrides) = config.remove("overrides") else { return Prepared::Ready(Some(text), kind) };
+    let relative = file.strip_prefix(dir).unwrap_or(file).to_string_lossy().replace('\\', "/");
+    for item in overrides.as_array().into_iter().flatten().filter_map(Value::as_object) {
+        let matches = |key: &str| patterns(item.get(key)).into_iter().any(|pattern| override_matches(pattern, &relative));
+        if matches("files") && !matches("excludeFiles") {
+            if let Some(options) = item.get("options").and_then(Value::as_object) {
+                config.extend(options.clone());
             }
         }
     }
-    Ok(Config::Found(None, "json"))
+    Prepared::Ready(Some(Value::Object(config).to_string()), "json")
+}
+
+/// Primeiro `.prettierignore` acima do arquivo; devolve o caminho dele se casa o arquivo.
+fn prettier_ignore(file: &Path) -> Result<Option<PathBuf>, String> {
+    for dir in file.ancestors().skip(1) {
+        let ignore_file = dir.join(".prettierignore");
+        if !ignore_file.is_file() { continue; }
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(dir);
+        // Linhas inválidas são descartadas, como faz o Prettier.
+        let _ = builder.add(&ignore_file);
+        let matcher = builder.build().map_err(|e| format!("{}: {e}", ignore_file.display()))?;
+        return Ok(matcher.matched_path_or_any_parents(file, false).is_ignore().then_some(ignore_file));
+    }
+    Ok(None)
 }
 
 /// Troca cada `{a,b}` pelas alternativas; chaves sem vírgula ficam literais.
@@ -142,14 +197,43 @@ fn expand_braces(pattern: &str) -> Vec<String> {
         .collect()
 }
 
-/// `*`, `**` e `?` sobre o nome do arquivo, sem diferenciar maiúsculas.
-fn glob_matches(pattern: &[char], name: &[char]) -> bool {
+/// `*`, `**` e `?` sobre um nome; `fold` ignora maiúsculas (.editorconfig), o Prettier não ignora.
+fn glob_matches(pattern: &[char], name: &[char], fold: bool) -> bool {
     match pattern.split_first() {
         None => name.is_empty(),
-        Some(('*', rest)) => (0..=name.len()).any(|skip| glob_matches(rest, &name[skip..])),
-        Some(('?', rest)) => !name.is_empty() && glob_matches(rest, &name[1..]),
-        Some((c, rest)) => name.first().is_some_and(|n| n.eq_ignore_ascii_case(c)) && glob_matches(rest, &name[1..]),
+        Some(('*', rest)) => (0..=name.len()).any(|skip| glob_matches(rest, &name[skip..], fold)),
+        Some(('?', rest)) => !name.is_empty() && glob_matches(rest, &name[1..], fold),
+        Some((c, rest)) => {
+            name.first().is_some_and(|n| if fold { n.eq_ignore_ascii_case(c) } else { n == c }) && glob_matches(rest, &name[1..], fold)
+        }
     }
+}
+
+fn segment_matches(pattern: &str, name: &str) -> bool {
+    let mut chars: Vec<char> = pattern.chars().collect();
+    chars.dedup_by(|a, b| *a == '*' && *b == '*');
+    glob_matches(&chars, &name.chars().collect::<Vec<_>>(), false)
+}
+
+fn segments_match(pattern: &[&str], path: &[&str]) -> bool {
+    match pattern.split_first() {
+        None => path.is_empty(),
+        Some((&"**", rest)) => (0..=path.len()).any(|skip| segments_match(rest, &path[skip..])),
+        Some((segment, rest)) => path
+            .split_first()
+            .is_some_and(|(name, tail)| segment_matches(segment, name) && segments_match(rest, tail)),
+    }
+}
+
+/// Glob de `overrides` como no Prettier (micromatch, `dot: true`): sem barra casa o nome base, com barra o caminho relativo à configuração.
+fn override_matches(pattern: &str, relative: &str) -> bool {
+    let pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+    expand_braces(pattern).iter().any(|pattern| {
+        if !pattern.contains('/') {
+            return segment_matches(pattern, relative.rsplit('/').next().unwrap_or(relative));
+        }
+        segments_match(&pattern.split('/').collect::<Vec<_>>(), &relative.split('/').collect::<Vec<_>>())
+    })
 }
 
 fn section_matches(section: &str, name: &str) -> bool {
@@ -160,7 +244,7 @@ fn section_matches(section: &str, name: &str) -> bool {
         if pattern.contains('/') { return false; }
         let mut chars: Vec<char> = pattern.chars().collect();
         chars.dedup_by(|a, b| *a == '*' && *b == '*');
-        glob_matches(&chars, &name)
+        glob_matches(&chars, &name, true)
     })
 }
 
@@ -286,8 +370,18 @@ pub fn info(path: &Path) -> Result<Info, String> {
     let directory = validate_path(path)?;
     match engine(path) {
         Some(Engine::Prettier) => {
+            if let Some(ignore) = prettier_ignore(path)? {
+                return Ok(Info::Unavailable { reason: format!("Arquivo ignorado por {}", ignore.display()) });
+            }
             match config_file(directory)? {
-                Config::Found(config, config_kind) => {
+                Config::Found(config, config_kind, dir) => {
+                    let (config, config_kind) = match config.map(|text| apply_overrides(text, config_kind, &dir, path)) {
+                        Some(Prepared::Ready(config, kind)) => (config, kind),
+                        Some(Prepared::YamlOverrides) => {
+                            return Ok(Info::Unavailable { reason: "`overrides` em configuração YAML do Prettier não é suportado".into() });
+                        }
+                        None => (None, config_kind),
+                    };
                     Ok(Info::Prettier { config, config_kind, options: editorconfig_options(directory, path)? })
                 }
                 Config::Unsupported(file) => Ok(Info::Unavailable {
@@ -494,9 +588,9 @@ mod tests {
         write(&tmp.0, ".prettierrc.json", "{\"singleQuote\":true}");
         write(&nested, ".prettierrc.yaml", "singleQuote: false\n");
         let found = config_file(&nested).unwrap();
-        assert_eq!(found, Config::Found(Some("singleQuote: false\n".into()), "yaml"));
+        assert_eq!(found, Config::Found(Some("singleQuote: false\n".into()), "yaml", nested.clone()));
         std::fs::remove_file(nested.join(".prettierrc.yaml")).unwrap();
-        assert_eq!(config_file(&nested).unwrap(), Config::Found(Some("{\"singleQuote\":true}".into()), "json"));
+        assert_eq!(config_file(&nested).unwrap(), Config::Found(Some("{\"singleQuote\":true}".into()), "json", tmp.0.clone()));
     }
 
     #[test]
@@ -520,7 +614,7 @@ mod tests {
     fn package_json_com_bom_e_lido() {
         let tmp = Tmp::new("orq-format", "package-bom");
         write(&tmp.0, "package.json", "\u{feff}{\"prettier\":{\"semi\":false}}");
-        assert_eq!(config_file(&tmp.0).unwrap(), Config::Found(Some("{\"semi\":false}".into()), "json"));
+        assert_eq!(config_file(&tmp.0).unwrap(), Config::Found(Some("{\"semi\":false}".into()), "json", tmp.0.clone()));
     }
 
     #[test]
@@ -542,6 +636,93 @@ mod tests {
         write(&tmp.0, ".editorconfig", "root = true\n[*]\nindent_size = 4\n[{package.json,.travis.yml}]\nindent_size = 2\n");
         let options = editorconfig_options(&tmp.0, &tmp.0.join("package.json")).unwrap();
         assert_eq!(options.get("tabWidth"), Some(&json!(2)));
+    }
+
+    fn prettier_options(dir: &Path, name: &str) -> Value {
+        let Info::Prettier { config, .. } = info(&dir.join(name)).unwrap() else { panic!("deveria ser Prettier") };
+        serde_json::from_str(&config.unwrap()).unwrap()
+    }
+
+    #[test]
+    fn override_que_casa_entra_e_a_chave_overrides_sai() {
+        let tmp = Tmp::new("orq-format", "override-casa");
+        write(&tmp.0, ".prettierrc", r#"{"semi":false,"overrides":[{"files":"*.md","options":{"proseWrap":"always"}},{"files":["*.md","docs/*.md"],"options":{"semi":true}}]}"#);
+        write(&tmp.0, "README.md", "# a\n");
+        assert_eq!(prettier_options(&tmp.0, "README.md"), json!({"semi": true, "proseWrap": "always"}));
+    }
+
+    #[test]
+    fn override_que_nao_casa_nao_entra() {
+        let tmp = Tmp::new("orq-format", "override-nao-casa");
+        write(&tmp.0, "package.json", r#"{"prettier":{"semi":false,"overrides":[{"files":"*.md","options":{"proseWrap":"always"}},{"files":"src/*.ts","options":{"tabWidth":8}},{"files":"*.MD","options":{"useTabs":true}}]}}"#);
+        write(&tmp.0, "a.ts", "let a = 1\n");
+        write(&tmp.0, "README.md", "# a\n");
+        assert_eq!(prettier_options(&tmp.0, "a.ts"), json!({"semi": false}));
+        // Maiúsculas contam e o glob com barra é relativo à pasta da configuração.
+        assert_eq!(prettier_options(&tmp.0, "README.md"), json!({"semi": false, "proseWrap": "always"}));
+    }
+
+    #[test]
+    fn override_com_barra_e_relativo_a_pasta_da_configuracao() {
+        let tmp = Tmp::new("orq-format", "override-barra");
+        let src = tmp.0.join("src").join("sub");
+        write(&tmp.0, ".prettierrc.json", r#"{"overrides":[{"files":"src/**/*.{ts,tsx}","options":{"tabWidth":8}},{"files":"./lib/*.ts","options":{"semi":false}}]}"#);
+        write(&src, "a.tsx", "let a = 1\n");
+        write(&src, "b.js", "let a = 1\n");
+        assert_eq!(prettier_options(&src, "a.tsx"), json!({"tabWidth": 8}));
+        assert_eq!(prettier_options(&src, "b.js"), json!({}));
+    }
+
+    #[test]
+    fn exclude_files_tira_o_arquivo_do_override() {
+        let tmp = Tmp::new("orq-format", "override-exclude");
+        let docs = tmp.0.join("docs");
+        write(&tmp.0, ".prettierrc", r#"{"overrides":[{"files":"*.md","excludeFiles":["CHANGELOG.md","docs/*.md"],"options":{"proseWrap":"always"}}]}"#);
+        write(&tmp.0, "README.md", "# a\n");
+        write(&tmp.0, "CHANGELOG.md", "# a\n");
+        write(&docs, "guia.md", "# a\n");
+        assert_eq!(prettier_options(&tmp.0, "README.md"), json!({"proseWrap": "always"}));
+        assert_eq!(prettier_options(&tmp.0, "CHANGELOG.md"), json!({}));
+        assert_eq!(prettier_options(&docs, "guia.md"), json!({}));
+    }
+
+    #[test]
+    fn overrides_em_yaml_deixam_o_prettier_indisponivel() {
+        let tmp = Tmp::new("orq-format", "override-yaml");
+        write(&tmp.0, ".prettierrc.yaml", "semi: false\noverrides:\n  - files: '*.md'\n    options:\n      proseWrap: always\n");
+        write(&tmp.0, "README.md", "# a\n");
+        let Info::Unavailable { reason } = info(&tmp.0.join("README.md")).unwrap() else { panic!("deveria estar indisponível") };
+        assert!(reason.contains("overrides"), "{reason}");
+        write(&tmp.0, ".prettierrc.yaml", "semi: false\n");
+        assert!(matches!(info(&tmp.0.join("README.md")).unwrap(), Info::Prettier { .. }));
+    }
+
+    #[test]
+    fn prettierignore_impede_a_formatacao() {
+        let tmp = Tmp::new("orq-format", "prettierignore");
+        let dist = tmp.0.join("dist");
+        write(&tmp.0, ".prettierignore", "# gerado\ndist/\n*.min.js\n!keep.min.js\n");
+        write(&dist, "a.js", "let a = 1\n");
+        write(&tmp.0, "app.min.js", "let a = 1\n");
+        write(&tmp.0, "keep.min.js", "let a = 1\n");
+        write(&tmp.0, "app.js", "let a = 1\n");
+        for name in ["dist/a.js", "app.min.js"] {
+            let Info::Unavailable { reason } = info(&tmp.0.join(name)).unwrap() else { panic!("{name} deveria estar ignorado") };
+            assert!(reason.contains(".prettierignore"), "{reason}");
+        }
+        for name in ["keep.min.js", "app.js"] {
+            assert!(matches!(info(&tmp.0.join(name)).unwrap(), Info::Prettier { .. }), "{name}");
+        }
+    }
+
+    #[test]
+    fn package_json_com_chave_prettier_vence_o_prettierrc_da_mesma_pasta() {
+        let tmp = Tmp::new("orq-format", "package-vs-rc");
+        write(&tmp.0, "package.json", r#"{"prettier":{"semi":false}}"#);
+        write(&tmp.0, ".prettierrc", r#"{"semi":true}"#);
+        assert_eq!(config_file(&tmp.0).unwrap(), Config::Found(Some(r#"{"semi":false}"#.into()), "json", tmp.0.clone()));
+        write(&tmp.0, "package.json", r#"{"name":"x"}"#);
+        assert_eq!(config_file(&tmp.0).unwrap(), Config::Found(Some(r#"{"semi":true}"#.into()), "auto", tmp.0.clone()));
     }
 
     #[test]
