@@ -2,7 +2,7 @@
 // Cada linha tem as faixas desenhadas à esquerda (layoutGraph), o assunto, as etiquetas das refs e o autor. Clique num commit abre
 // os arquivos dele ali mesmo, e clique num arquivo abre a alteração daquele commit. Só consulta com a tela Git visível e a seção aberta.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActionIcon, Button, ContextMenuTrigger, Popover, Text, toast } from '@lobehub/ui/base-ui';
+import { ActionIcon, Button, ContextMenuTrigger, PopoverPopup, PopoverPortal, PopoverPositioner, PopoverRoot, PopoverViewport, Text, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, CloudDownload, Copy, ExternalLink, RefreshCw } from 'lucide-react';
 import { message } from '../backend/backend';
@@ -104,6 +104,13 @@ function GapLanes({ row }: { row: GraphRow }) {
 type CommitHoverState = { kind: 'loading' } | { kind: 'ready'; detail: GitCommitHoverDetail } | { kind: 'error'; text: string };
 const hoverDetailsCache = new Map<string, GitCommitHoverDetail>();
 const hoverRequests = new Map<string, Promise<GitCommitHoverDetail>>();
+const HOVER_CLOSE_DELAY = 120;
+const HOVER_NEIGHBOURS_DELAY = 80;
+
+function clearTimer(timer: { current: number | null }) {
+  if (timer.current !== null) window.clearTimeout(timer.current);
+  timer.current = null;
+}
 
 function coAuthors(messageText: string) {
   const lines = messageText.replace(/\r\n/g, '\n').split('\n');
@@ -196,21 +203,18 @@ export function GraphSection({
   const { items: commits, more, loading, error, reload: reloadList, loadMore } = usePagedList((offset) => backend.gitGraph(PAGE, offset), false);
   const { openHash, detail, detailError, toggle: toggleCommit, prefetch: prefetchCommit } = useCommitDetail();
   const [hoverDetails, setHoverDetails] = useState<Record<string, CommitHoverState>>({});
-  const [hoverOpenHash, setHoverOpenHash] = useState<string | null>(null);
+  const [hoverCard, setHoverCard] = useState<{ hash: string; anchor: HTMLElement; open: boolean } | null>(null);
   const hoverActive = useRef<{ hash: string; seq: number } | null>(null);
   const hoverSeq = useRef(0);
   const hoverOpenTimer = useRef<number | null>(null);
+  const hoverCloseTimer = useRef<number | null>(null);
+  const hoverPrefetchTimer = useRef<number | null>(null);
   // Chave da última carga: enquanto ela não muda, voltar à seção ou à tela não recarrega.
   const loaded = useRef<string | null>(null);
   // Faixas calculadas sobre todas as linhas carregadas, de cima para baixo (a página nova continua as faixas da anterior).
   const rows = useMemo(() => layoutGraph(commits ?? []), [commits]);
 
-  function loadHover(hash: string) {
-    const cached = hoverDetailsCache.get(hash);
-    if (cached) {
-      setHoverDetails((current) => ({ ...current, [hash]: { kind: 'ready', detail: cached } }));
-      return Promise.resolve(cached);
-    }
+  function requestHover(hash: string) {
     let pending = hoverRequests.get(hash);
     if (!pending) {
       pending = backend.gitCommitHover(hash).then((loaded) => {
@@ -219,6 +223,16 @@ export function GraphSection({
       }).finally(() => hoverRequests.delete(hash));
       hoverRequests.set(hash, pending);
     }
+    return pending;
+  }
+
+  function loadHover(hash: string) {
+    const cached = hoverDetailsCache.get(hash);
+    if (cached) {
+      setHoverDetails((current) => ({ ...current, [hash]: { kind: 'ready', detail: cached } }));
+      return Promise.resolve(cached);
+    }
+    const pending = requestHover(hash);
     setHoverDetails((current) => current[hash]?.kind === 'loading' ? current : { ...current, [hash]: { kind: 'loading' } });
     return pending.then(
       (loaded) => {
@@ -232,47 +246,81 @@ export function GraphSection({
     );
   }
 
-  function enterHover(hash: string) {
-    if (hoverOpenTimer.current !== null) window.clearTimeout(hoverOpenTimer.current);
+  /** Lê sem abrir cartão nem mexer na tela; o erro some e a leitura de verdade repete. */
+  function prefetchHover(hash: string) {
+    if (!hoverDetailsCache.has(hash)) requestHover(hash).catch(() => {});
+  }
+
+  /** Um só cartão, ancorado na linha ativa: trocar de linha move o cartão em vez de fechar um e abrir outro. */
+  function showHover(hash: string, anchor: HTMLElement) {
+    clearTimer(hoverCloseTimer);
+    setHoverCard({ hash, anchor, open: true });
+  }
+
+  function closeHover() {
+    hoverSeq.current++;
+    hoverActive.current = null;
+    clearTimer(hoverOpenTimer);
+    clearTimer(hoverCloseTimer);
+    clearTimer(hoverPrefetchTimer);
+    setHoverCard((current) => current?.open ? { ...current, open: false } : current);
+  }
+
+  function closeHoverSoon() {
+    clearTimer(hoverCloseTimer);
+    hoverCloseTimer.current = window.setTimeout(closeHover, HOVER_CLOSE_DELAY);
+  }
+
+  function enterHover(hash: string, anchor: HTMLElement, index: number) {
+    clearTimer(hoverOpenTimer);
+    clearTimer(hoverCloseTimer);
+    clearTimer(hoverPrefetchTimer);
     const seq = ++hoverSeq.current;
     hoverActive.current = { hash, seq };
+    // Com o cartão aberto a vizinhança é lida já; sem ele, só depois de o ponteiro ficar um instante (varredura rápida não lê).
+    const neighbours = () => {
+      for (const near of [-1, 1, -2, 2]) {
+        const commit = commits?.[index + near];
+        if (commit) prefetchHover(commit.hash);
+      }
+    };
+    if (hoverCard?.open) neighbours();
+    else hoverPrefetchTimer.current = window.setTimeout(() => { if (hoverActive.current?.seq === seq) neighbours(); }, HOVER_NEIGHBOURS_DELAY);
     const cached = hoverDetailsCache.get(hash);
     if (cached) {
       setHoverDetails((current) => ({ ...current, [hash]: { kind: 'ready', detail: cached } }));
-      setHoverOpenHash(hash);
+      showHover(hash, anchor);
       return;
     }
-    setHoverOpenHash(null);
+    // O cartão anterior continua até este chegar, ou até o aviso de espera, aos 500 ms.
     hoverOpenTimer.current = window.setTimeout(() => {
-      if (hoverActive.current?.seq === seq) setHoverOpenHash(hash);
+      if (hoverActive.current?.seq === seq) showHover(hash, anchor);
     }, 500);
     void loadHover(hash).then(() => {
       if (hoverActive.current?.seq !== seq) return;
-      if (hoverOpenTimer.current !== null) window.clearTimeout(hoverOpenTimer.current);
-      hoverOpenTimer.current = null;
-      setHoverOpenHash(hash);
+      clearTimer(hoverOpenTimer);
+      showHover(hash, anchor);
     });
   }
 
   function leaveHover(hash: string) {
-    if (hoverActive.current?.hash !== hash || hoverOpenHash === hash) return;
+    if (hoverActive.current?.hash !== hash) return;
     hoverSeq.current++;
     hoverActive.current = null;
-    if (hoverOpenTimer.current !== null) window.clearTimeout(hoverOpenTimer.current);
-    hoverOpenTimer.current = null;
+    clearTimer(hoverOpenTimer);
+    clearTimer(hoverPrefetchTimer);
+    closeHoverSoon();
   }
 
-  function changeHover(hash: string, shown: boolean) {
-    if (shown) {
-      if (hoverDetails[hash]?.kind === 'ready') setHoverOpenHash(hash);
-    } else if (hoverActive.current?.hash === hash) {
-      hoverSeq.current++;
-      hoverActive.current = null;
-      if (hoverOpenTimer.current !== null) window.clearTimeout(hoverOpenTimer.current);
-      hoverOpenTimer.current = null;
-      setHoverOpenHash(null);
-    }
-  }
+  // Lista recolhida ou sem a linha: o cartão não fica ancorado no vazio.
+  useEffect(() => {
+    if (hoverCard?.open && !hoverCard.anchor.isConnected) closeHover();
+  });
+  useEffect(() => () => {
+    clearTimer(hoverOpenTimer);
+    clearTimer(hoverCloseTimer);
+    clearTimer(hoverPrefetchTimer);
+  }, []);
 
   // Só carrega com a tela visível e a seção aberta, e só quando a chave mudou desde a última carga.
   useEffect(() => {
@@ -337,27 +385,20 @@ export function GraphSection({
                 <ContextMenuTrigger items={menu}>
                   <div>
                     {/* Escolher o mesmo commit de novo fecha. Trocar de commit descarta a lista anterior e pede a nova. */}
-                    <Popover
-                      trigger="hover" placement="right" openDelay={0} closeDelay={120} open={hoverOpenHash === c.hash}
-                      triggerProps={{ 'aria-expanded': isOpen }}
-                      onOpenChange={(shown) => changeHover(c.hash, shown)}
-                      content={<CommitHoverCard commit={c} state={hoverDetails[c.hash]} />}
+                    <button
+                      type="button"
+                      onPointerEnter={(e) => enterHover(c.hash, e.currentTarget, i)} onPointerLeave={() => leaveHover(c.hash)}
+                      onMouseDown={(e) => { if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) prefetchCommit(c.hash); }}
+                      onClick={() => toggleCommit(c.hash)} aria-expanded={isOpen}
+                      aria-label={`${c.short}: ${c.subject || '(sem mensagem)'}`}
+                      className={`@container flex h-[22px] w-full min-w-0 items-center gap-1 pr-3 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset${isOpen ? ' bg-muted' : ''}`}
                     >
-                      <button
-                        type="button"
-                        onPointerEnter={() => enterHover(c.hash)} onPointerLeave={() => leaveHover(c.hash)}
-                        onMouseDown={(e) => { if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) prefetchCommit(c.hash); }}
-                        onClick={() => toggleCommit(c.hash)} aria-expanded={isOpen}
-                        aria-label={`${c.short}: ${c.subject || '(sem mensagem)'}`}
-                        className={`@container flex h-[22px] w-full min-w-0 items-center gap-1 pr-3 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset${isOpen ? ' bg-muted' : ''}`}
-                      >
-                        <CommitLanes row={row} head={isHead} />
-                        {/* O assunto tem prioridade: base zero (só cresce) e piso de 6rem. Etiquetas e autor encolhem antes dele. */}
-                        <Text as="span" ellipsis fontSize={13} weight={isHead ? 600 : 400} className="min-w-[6rem] flex-1">{c.subject || '(sem mensagem)'}</Text>
-                        {c.refs.map((r) => <RefBadge key={`${r.kind}:${r.name}`} item={r} />)}
-                        <span className="hidden min-w-0 max-w-[30%] shrink truncate text-[0.9em] opacity-70 @[24rem]:inline">{c.author}</span>
-                      </button>
-                    </Popover>
+                      <CommitLanes row={row} head={isHead} />
+                      {/* O assunto tem prioridade: base zero (só cresce) e piso de 6rem. Etiquetas e autor encolhem antes dele. */}
+                      <Text as="span" ellipsis fontSize={13} weight={isHead ? 600 : 400} className="min-w-[6rem] flex-1">{c.subject || '(sem mensagem)'}</Text>
+                      {c.refs.map((r) => <RefBadge key={`${r.kind}:${r.name}`} item={r} />)}
+                      <span className="hidden min-w-0 max-w-[30%] shrink truncate text-[0.9em] opacity-70 @[24rem]:inline">{c.author}</span>
+                    </button>
                   </div>
                 </ContextMenuTrigger>
                 {isOpen && (detail && detail.commit.hash === c.hash
@@ -379,8 +420,23 @@ export function GraphSection({
     );
   }
 
+  const hoverCommit = hoverCard && commits?.find((c) => c.hash === hoverCard.hash);
+
   return (
     <>
+      {hoverCard && hoverCommit && (
+        <PopoverRoot open={hoverCard.open} onOpenChange={(shown, details) => { if (!shown && details.reason === 'escape-key') closeHover(); }}>
+          <PopoverPortal>
+            <PopoverPositioner placement="right" anchor={hoverCard.anchor}>
+              <PopoverPopup initialFocus={false} finalFocus={false} onPointerEnter={() => clearTimer(hoverCloseTimer)} onPointerLeave={closeHoverSoon}>
+                <PopoverViewport>
+                  <CommitHoverCard key={hoverCard.hash} commit={hoverCommit} state={hoverDetails[hoverCard.hash]} />
+                </PopoverViewport>
+              </PopoverPopup>
+            </PopoverPositioner>
+          </PopoverPortal>
+        </PopoverRoot>
+      )}
       {open && (
         <div
           role="separator" tabIndex={0} aria-orientation="horizontal" aria-label="Divisor do gráfico" aria-valuemin={GRAPH_MIN} aria-valuenow={height ?? undefined}

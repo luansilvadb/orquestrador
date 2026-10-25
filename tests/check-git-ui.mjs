@@ -1084,7 +1084,7 @@ scenario('gráfico: hover busca detalhes uma vez, mantém o popover interativo e
   await hover.waitFor({ state: 'hidden' });
   await trigger.hover();
   await page.waitForTimeout(700);
-  assert.equal((await calls(page, 'git_commit_hover')).length, 1, 'reabrir o mesmo hover usa o cache por hash');
+  assert.equal((await calls(page, 'git_commit_hover')).filter((x) => x.args.hash === H9F).length, 1, 'reabrir o mesmo hover usa o cache por hash');
 });
 
 scenario('gráfico: hover abre completo, troca a linha aberta e cancela o cartão ao atravessar a lista', async ({ page }) => {
@@ -1121,6 +1121,126 @@ scenario('gráfico: hover abre completo, troca a linha aberta e cancela o cartã
   await page.mouse.move(0, 0);
   await page.waitForTimeout(700);
   assert.equal(await page.locator(`[data-commit-hover="${HD7}"]`).isVisible().catch(() => false), false, 'sair da linha cancela a abertura pendente');
+});
+
+// Quadro a quadro: os cartões de commit visíveis (com opacidade) e se algum mostra a espera; `marks` guarda a entrada do ponteiro em cada linha do gráfico.
+const recordHoverFrames = (page) => page.evaluate(() => {
+  const shown = (el) => {
+    if (!el.getClientRects().length || getComputedStyle(el).visibility === 'hidden') return false;
+    let opacity = 1;
+    for (let node = el; node; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity);
+    return opacity > 0.05;
+  };
+  const rec = { frames: [], marks: [], running: true };
+  const tick = () => {
+    if (!rec.running) return;
+    const cards = [...document.querySelectorAll('[data-commit-hover]')].filter(shown);
+    rec.frames.push({ t: performance.now(), cards: cards.map((el) => el.getAttribute('data-commit-hover')), loading: cards.some((el) => el.textContent.includes('Lendo detalhes…')) });
+    requestAnimationFrame(tick);
+  };
+  document.addEventListener('pointerover', (e) => {
+    const hash = e.target.closest?.('li[data-commit]')?.getAttribute('data-commit');
+    if (hash && rec.marks.at(-1)?.hash !== hash) rec.marks.push({ t: performance.now(), hash });
+  }, true);
+  window.__hoverRec = rec;
+  requestAnimationFrame(tick);
+});
+const stopHoverFrames = (page) => page.evaluate(() => { window.__hoverRec.running = false; return { frames: window.__hoverRec.frames, marks: window.__hoverRec.marks }; });
+const hoverCalls = async (page) => (await calls(page, 'git_commit_hover')).map((x) => x.args.hash).sort();
+
+scenario('gráfico: a varredura rápida lê só as linhas tocadas, sem pré-ler as vizinhas', async ({ page }) => {
+  await openGit(page);
+  await graphRows(page).first().waitFor();
+  // Entra e sai em poucos milissegundos, sem o ponteiro ficar: as linhas 0 e 3 não são vizinhas entre si.
+  await page.evaluate(({ a, b }) => {
+    const sweep = (hash) => {
+      const button = document.querySelector(`li[data-commit="${hash}"] button`);
+      button.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, relatedTarget: null }));
+      button.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, relatedTarget: null }));
+    };
+    sweep(a);
+    sweep(b);
+  }, { a: H9F, b: HA2 });
+  await page.waitForTimeout(400);
+  assert.deepEqual(await hoverCalls(page), [H9F, HA2].sort(), 'só as linhas tocadas, sem vizinhas');
+});
+
+scenario('gráfico: com o ponteiro parado na linha, as vizinhas até ±2 são lidas uma vez cada', async ({ page }) => {
+  await openGit(page);
+  await graphRows(page).first().waitFor();
+  await graphCommit(page, H9F).locator('button').first().hover();
+  await waitCount(page, 'git_commit_hover', 3);
+  await page.waitForTimeout(300);
+  // O 9f3a1c2 é a linha 0: as vizinhas são o 4b2e8d0 (1) e o d7e1a9c (2); o a2c4e6f (3) fica fora.
+  assert.deepEqual(await hoverCalls(page), [H9F, H4B, HD7].sort(), 'a própria linha e as vizinhas até ±2');
+  // A linha 1 enxerga a 3: só ela falta, e as já lidas não são pedidas de novo.
+  await graphCommit(page, H4B).locator('button').first().hover();
+  await waitCount(page, 'git_commit_hover', 4);
+  await page.waitForTimeout(300);
+  assert.deepEqual(await hoverCalls(page), [H9F, H4B, HD7, HA2].sort(), 'cada commit é lido uma vez');
+});
+
+scenario('gráfico: com um cartão aberto, a linha vizinha em cache assume o cartão sem quadro vazio', async ({ page }) => {
+  await openGit(page);
+  await graphRows(page).first().waitFor();
+  await graphCommit(page, H9F).locator('button').first().hover();
+  await page.locator(`[data-commit-hover="${H9F}"]`).waitFor({ state: 'visible' });
+  await waitCount(page, 'git_commit_hover', 3);
+  await recordHoverFrames(page);
+  await page.waitForTimeout(100);
+  await graphCommit(page, H4B).locator('button').first().hover();
+  await page.locator(`[data-commit-hover="${H4B}"]`).waitFor({ state: 'visible' });
+  await page.waitForTimeout(300);
+  await graphCommit(page, HD7).locator('button').first().hover();
+  await page.locator(`[data-commit-hover="${HD7}"]`).waitFor({ state: 'visible' });
+  await page.waitForTimeout(300);
+  const { frames, marks } = await stopHoverFrames(page);
+  assert.ok(frames.length > 20, `o registro de quadros rodou (${frames.length})`);
+  assert.deepEqual(frames.filter((f) => f.cards.length !== 1).map((f) => f.cards), [], 'em todo quadro há exatamente um cartão visível');
+  for (const hash of [H4B, HD7]) {
+    const mark = marks.find((m) => m.hash === hash);
+    const after = frames.filter((f) => f.t >= mark.t);
+    const first = after.findIndex((f) => f.cards[0] === hash);
+    assert.ok(first >= 0 && first <= 1, `o cartão de ${hash.slice(0, 7)} aparece em até 2 quadros depois da entrada (quadro ${first})`);
+  }
+  assert.deepEqual(frames.filter((f) => f.loading), [], 'sem “Lendo detalhes…” na troca');
+});
+
+scenario('gráfico: com a leitura da nova linha lenta, o cartão anterior fica até o novo chegar, sem a espera', async ({ page }) => {
+  await openGit(page);
+  await graphRows(page).first().waitFor();
+  await graphCommit(page, H9F).locator('button').first().hover();
+  await page.locator(`[data-commit-hover="${H9F}"]`).waitFor({ state: 'visible' });
+  await waitCount(page, 'git_commit_hover', 3);
+  // A linha 3 não é vizinha da 0: ainda não foi lida.
+  await page.evaluate(() => { window.__mock.delay.git_commit_hover = 300; });
+  await recordHoverFrames(page);
+  await graphCommit(page, HA2).locator('button').first().hover();
+  await page.locator(`[data-commit-hover="${HA2}"]`).waitFor({ state: 'visible' });
+  await page.waitForTimeout(200);
+  const { frames, marks } = await stopHoverFrames(page);
+  const after = frames.filter((f) => f.t >= marks.find((m) => m.hash === HA2).t);
+  const arrived = after.findIndex((f) => f.cards.includes(HA2));
+  assert.ok(arrived > 5, `o novo cartão só chega com a leitura (quadro ${arrived})`);
+  assert.deepEqual(after.slice(0, arrived).filter((f) => f.cards.length !== 1 || f.cards[0] !== H9F).map((f) => f.cards), [], 'até chegar, o cartão anterior fica');
+  assert.deepEqual(frames.filter((f) => f.cards.length !== 1).map((f) => f.cards), [], 'nenhum quadro sem cartão nem com dois');
+  assert.deepEqual(frames.filter((f) => f.loading), [], 'sem “Lendo detalhes…” antes de 500 ms');
+});
+
+scenario('gráfico: leitura da nova linha acima de 500 ms mostra a espera no cartão da nova linha', async ({ page }) => {
+  await openGit(page);
+  await graphRows(page).first().waitFor();
+  await graphCommit(page, H9F).locator('button').first().hover();
+  await page.locator(`[data-commit-hover="${H9F}"]`).waitFor({ state: 'visible' });
+  await waitCount(page, 'git_commit_hover', 3);
+  await page.evaluate(() => { window.__mock.delay.git_commit_hover = 1500; });
+  await graphCommit(page, HA2).locator('button').first().hover();
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator(`[data-commit-hover="${HA2}"]`).count(), 0, 'antes de 500 ms o cartão novo não aparece');
+  assert.equal(await page.locator(`[data-commit-hover="${H9F}"]`).isVisible(), true, 'o anterior continua');
+  const waiting = page.locator(`[data-commit-hover="${HA2}"]`);
+  await waiting.getByText('Lendo detalhes…').waitFor();
+  await waiting.getByText('Lendo detalhes…').waitFor({ state: 'detached' });
 });
 
 scenario('gráfico: o commit de merge desenha duas faixas (SVG mais largo que o de um commit linear)', async ({ page }) => {
