@@ -70,7 +70,9 @@ jobs:
       - run: npm ci
         shell: bash
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       # Checks do projeto: build do frontend, pontos de tabs e de release, e os testes Rust.
       - name: Rodar os checks
@@ -83,7 +85,7 @@ jobs:
 
       # Instalador NSIS assinado com TAURI_SIGNING_PRIVATE_KEY (conteúdo da chave privada, secret do repositório; sem senha). Sai em rascunho.
       - name: Gerar o instalador assinado e a release em rascunho
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
