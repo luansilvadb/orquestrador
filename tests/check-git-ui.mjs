@@ -892,6 +892,24 @@ scenario('conflito de 2 trechos: escolher Atual e Recebida, texto fora preservad
   assert.equal(await page.evaluate(() => window.__mock.disk('src/dois.ts')), text, 'o texto resolvido ficou no disco');
 });
 
+scenario('conflito: editor fica somente leitura enquanto grava a resolução', async ({ page }) => {
+  await addDois(page);
+  await openGit(page);
+  await row(page, 'unstaged', 'src/dois.ts').dblclick();
+  await conflictTab(page).waitFor();
+  await trechos(page, 2).waitFor();
+  await choose(page, 1, 'Atual');
+  await choose(page, 1, 'Recebida');
+  const before = await editorText(page);
+  await page.evaluate(() => { window.__mock.delay.git_write_resolution = 1000; });
+  await page.getByRole('button', { name: 'Marcar como resolvido', exact: true }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some((button) => button.textContent.trim() === 'Marcar como resolvido' && button.disabled));
+  await focusEditor(page);
+  await page.keyboard.type('digitação durante a gravação');
+  assert.equal(await editorText(page), before, 'a digitação não altera o rascunho durante a gravação');
+  await row(page, 'staged', 'src/dois.ts').waitFor();
+});
+
 scenario('conflito: edição externa depois da leitura deixa o rascunho e mostra erro claro; Recarregar do Git pede confirmação e só então troca o rascunho', async ({ page }) => {
   await addDois(page);
   await openGit(page);

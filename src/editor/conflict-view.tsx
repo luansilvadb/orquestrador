@@ -27,12 +27,16 @@ export function ConflictTab({
   const [stale, setStale] = useState(false);
   const busyRef = useRef(false);
   const [busy, setBusy] = useState(false);
+  const latestPathRef = useRef(path);
+  latestPathRef.current = path;
   // `reset` troca o rascunho pelo texto atual da pasta; só é chamado depois da confirmação. Sem ele, respeita o rascunho.
   const load = async (reset = false) => {
-    const fresh = await backend.gitConflict(path).catch((e: unknown) => {
-      setError(message(e));
+    const requestedPath = path;
+    const fresh = await backend.gitConflict(requestedPath).catch((e: unknown) => {
+      if (latestPathRef.current === requestedPath) setError(message(e));
       return null;
     });
+    if (latestPathRef.current !== requestedPath) return;
     if (!fresh) return;
     setConflict(fresh);
     setError('');
@@ -194,7 +198,7 @@ export function ConflictTab({
         <Flexbox flex={1} className="min-h-0 overflow-hidden">
           <CodeEditor
             text={text}
-            readOnly={common.locked}
+            readOnly={common.locked || busy}
             path={path}
             reveal={null}
             onChange={(value) => putConflict({ ...draft, draft: value })}
