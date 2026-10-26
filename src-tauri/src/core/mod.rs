@@ -659,7 +659,8 @@ impl Core {
         files.retain(|f| f.extension().is_some_and(|e| e == "json"));
         files.sort();
         files.iter().find_map(|file| {
-            let found = turn_end(&std::fs::read_to_string(file).unwrap_or_default(), &node.prompt);
+            let Ok(bytes) = std::fs::read(file) else { return None };
+            let found = turn_end(&String::from_utf8_lossy(&bytes), &node.prompt);
             if found.is_none() {
                 let _ = std::fs::remove_file(file);
             }
@@ -968,6 +969,23 @@ mod tests {
         let exes = Exes { claude: fake.clone(), codex: fake.clone(), app: fake };
         let places = session::Places { temp: root.join("temp"), codex_rules: root.join("rules") };
         Core::new(exes, places, root.join("config.json"), emit)
+    }
+
+    #[test]
+    fn signal_preserva_arquivo_ilegivel_e_apaga_conteudo_invalido() {
+        let root = Tmp::new("orq-core", "signal-leitura");
+        let hook = root.0.join("hook");
+        std::fs::create_dir_all(hook.join("x.json")).unwrap();
+        write(&root.0, "hook/y.json", "inválido");
+        std::fs::write(hook.join("z.json"), [0xff, 0xfe, 0x00]).unwrap();
+        let core = core_vazio(&root.0, Arc::new(|_: &str, _: Value| {}));
+        let mut node = test_node(0, NodeState::Running);
+        node.dir = root.0.clone();
+
+        assert_eq!(core.signal(&node), None);
+        assert!(hook.join("x.json").is_dir());
+        assert!(!hook.join("y.json").exists());
+        assert!(!hook.join("z.json").exists());
     }
 
     #[test]
