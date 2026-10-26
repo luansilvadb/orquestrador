@@ -219,6 +219,7 @@ export function GraphSection({
     if (!pending) {
       pending = backend.gitCommitHover(hash).then((loaded) => {
         hoverDetailsCache.set(hash, loaded);
+        if (hoverDetailsCache.size > 500) hoverDetailsCache.delete(hoverDetailsCache.keys().next().value!);
         return loaded;
       }).finally(() => hoverRequests.delete(hash));
       hoverRequests.set(hash, pending);

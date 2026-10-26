@@ -145,6 +145,7 @@ export function useCommitDetail() {
     if (!pending) {
       pending = backend.gitCommitDetail(hash).then((next) => {
         commitDetails.set(hash, next);
+        if (commitDetails.size > 500) commitDetails.delete(commitDetails.keys().next().value!);
         return next;
       }).finally(() => commitDetailRequests.delete(hash));
       commitDetailRequests.set(hash, pending);

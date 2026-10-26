@@ -7,18 +7,22 @@ const key = (id: string, project?: string | null) => `${project ?? ''}\0${id}`;
 const views = new Map<string, TermView>();
 /** Dados que chegam antes de o terminal montar; sem isso o começo do fluxo se perderia. */
 const early = new Map<string, TermData[]>();
+const forgotten = new Set<string>();
 
 export const terminals = {
   get: (id: string, project?: string | null) => views.get(key(id, project)),
   push(data: TermData) {
     const k = key(data.id, data.project);
+    if (forgotten.has(k)) return;
     const view = views.get(k);
     if (view) view.push(data.seq, data.data);
     else if (early.has(k)) early.get(k)!.push(data);
     else early.set(k, [data]);
   },
   forget(id: string, project?: string | null) {
-    early.delete(key(id, project));
+    const k = key(id, project);
+    early.delete(k);
+    forgotten.add(k);
   },
 };
 
