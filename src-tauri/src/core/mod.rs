@@ -363,8 +363,10 @@ impl Core {
             let inner = self.lock()?;
             (inner.cfg_path.clone(), inner.exes.codex.clone())
         };
-        let _config = self.config_lock();
-        let cfg = config::read(&path)?;
+        let cfg = {
+            let _config = self.config_lock();
+            config::read(&path)?
+        };
         Ok(config::options(&cfg, &codex))
     }
 

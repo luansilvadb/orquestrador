@@ -141,8 +141,10 @@ impl Projects {
     }
 
     pub fn options(&self) -> Result<Options, String> {
-        let _config = self.config_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let cfg = config::read(&self.cfg_path)?;
+        let cfg = {
+            let _config = self.config_lock.lock().unwrap_or_else(|e| e.into_inner());
+            config::read(&self.cfg_path)?
+        };
         Ok(config::options(&cfg, &self.exes.codex))
     }
 
