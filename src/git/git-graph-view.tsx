@@ -102,6 +102,12 @@ function GapLanes({ row }: { row: GraphRow }) {
 }
 
 type CommitHoverState = { kind: 'loading' } | { kind: 'ready'; detail: GitCommitHoverDetail } | { kind: 'error'; text: string };
+function withHover(current: Record<string, CommitHoverState>, hash: string, state: CommitHoverState) {
+  const next = { ...current, [hash]: state };
+  if (Object.keys(next).length > 500) delete next[Object.keys(next)[0]];
+  return next;
+}
+
 const hoverDetailsCache = new Map<string, GitCommitHoverDetail>();
 const hoverRequests = new Map<string, Promise<GitCommitHoverDetail>>();
 const HOVER_CLOSE_DELAY = 120;
@@ -230,18 +236,18 @@ export function GraphSection({
   function loadHover(hash: string) {
     const cached = hoverDetailsCache.get(hash);
     if (cached) {
-      setHoverDetails((current) => ({ ...current, [hash]: { kind: 'ready', detail: cached } }));
+      setHoverDetails((current) => withHover(current, hash, { kind: 'ready', detail: cached }));
       return Promise.resolve(cached);
     }
     const pending = requestHover(hash);
-    setHoverDetails((current) => current[hash]?.kind === 'loading' ? current : { ...current, [hash]: { kind: 'loading' } });
+    setHoverDetails((current) => current[hash]?.kind === 'loading' ? current : withHover(current, hash, { kind: 'loading' }));
     return pending.then(
       (loaded) => {
-        setHoverDetails((current) => ({ ...current, [hash]: { kind: 'ready', detail: loaded } }));
+        setHoverDetails((current) => withHover(current, hash, { kind: 'ready', detail: loaded }));
         return loaded;
       },
       (e: unknown) => {
-        setHoverDetails((current) => ({ ...current, [hash]: { kind: 'error', text: message(e) } }));
+        setHoverDetails((current) => withHover(current, hash, { kind: 'error', text: message(e) }));
         return null;
       },
     );
@@ -289,7 +295,7 @@ export function GraphSection({
     else hoverPrefetchTimer.current = window.setTimeout(() => { if (hoverActive.current?.seq === seq) neighbours(); }, HOVER_NEIGHBOURS_DELAY);
     const cached = hoverDetailsCache.get(hash);
     if (cached) {
-      setHoverDetails((current) => ({ ...current, [hash]: { kind: 'ready', detail: cached } }));
+      setHoverDetails((current) => withHover(current, hash, { kind: 'ready', detail: cached }));
       showHover(hash, anchor);
       return;
     }

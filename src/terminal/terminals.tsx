@@ -7,6 +7,7 @@ const key = (id: string, project?: string | null) => `${project ?? ''}\0${id}`;
 const views = new Map<string, TermView>();
 /** Dados que chegam antes de o terminal montar; sem isso o começo do fluxo se perderia. */
 const early = new Map<string, TermData[]>();
+// Só IDs de executor são monotônicos; shells e o orquestrador podem reutilizar a chave.
 const forgotten = new Set<string>();
 
 export const terminals = {
@@ -19,10 +20,10 @@ export const terminals = {
     else if (early.has(k)) early.get(k)!.push(data);
     else early.set(k, [data]);
   },
-  forget(id: string, project?: string | null) {
+  forget(id: string, project?: string | null, ended = false) {
     const k = key(id, project);
     early.delete(k);
-    forgotten.add(k);
+    if (ended) forgotten.add(k);
   },
 };
 

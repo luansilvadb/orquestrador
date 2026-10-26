@@ -190,7 +190,7 @@ scenario('shell sem projeto, abrir e fechar a pasta, e o shell abre de novo', as
   await page.locator('[data-shell]').first().waitFor();
   await page.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === 'start_shell' && c.completedAt !== null));
   assert.equal((await startShell()).error, null, 'o shell novo abre sem erro de id');
-  await page.waitForTimeout(100);
+  await page.waitForFunction(() => [...document.querySelectorAll('.xterm-rows')].some((rows) => rows.textContent.includes('PS C:\\Users\\Luan>')));
   assert.equal(await page.locator('[data-shell]').count(), 1, 'a aba do shell novo continua');
 });
 

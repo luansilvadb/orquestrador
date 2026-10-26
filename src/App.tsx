@@ -550,7 +550,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
   // ---------- ações ----------
 
   const resetOrchestrator = (notice = '') => {
-    for (const e of stateRef.current.executors) terminals.forget(e.id, stateRef.current.projectId);
+    for (const e of stateRef.current.executors) terminals.forget(e.id, stateRef.current.projectId, true);
     dispatch({ type: 'reset', notice });
   };
 
@@ -708,7 +708,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
           if (next === 'running') terminals.get(id, project)?.setLive();
           // Executor que terminou fecha a própria aba; a resposta dele já seguiu para o orquestrador.
           if (FINISHED.includes(next)) {
-            terminals.forget(id, project);
+            terminals.forget(id, project, true);
             dispatch({ type: 'removed', ids: [id] });
           }
         }),
