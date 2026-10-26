@@ -1294,6 +1294,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     if (target.kind === 'conflict') {
       return (
         <ConflictTab
+          key={targetKey(target)}
           path={target.path}
           common={common}
           shown={shown}

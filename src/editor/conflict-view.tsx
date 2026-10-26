@@ -27,17 +27,19 @@ export function ConflictTab({
   const [stale, setStale] = useState(false);
   const busyRef = useRef(false);
   const [busy, setBusy] = useState(false);
-  const latestPathRef = useRef(path);
-  latestPathRef.current = path;
+  const alive = useRef(true);
+  const [marking, setMarking] = useState(false);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
   // `reset` troca o rascunho pelo texto atual da pasta; só é chamado depois da confirmação. Sem ele, respeita o rascunho.
   const load = async (reset = false) => {
-    const requestedPath = path;
-    const fresh = await backend.gitConflict(requestedPath).catch((e: unknown) => {
-      if (latestPathRef.current === requestedPath) setError(message(e));
+    const fresh = await backend.gitConflict(path).catch((e: unknown) => {
+      if (alive.current) setError(message(e));
       return null;
     });
-    if (latestPathRef.current !== requestedPath) return;
-    if (!fresh) return;
+    if (!alive.current || !fresh) return;
     setConflict(fresh);
     setError('');
     if (!draft || reset) {
@@ -78,6 +80,14 @@ export function ConflictTab({
     busyRef.current = false;
     setBusy(false);
   };
+  const markResolved = async () => {
+    setMarking(true);
+    try {
+      await save(true);
+    } finally {
+      setMarking(false);
+    }
+  };
 
   // Escolhe o lado de um trecho do rascunho atual; os demais trechos ficam com marcadores.
   const choose = (index: number, value: Choice) => {
@@ -104,6 +114,7 @@ export function ConflictTab({
         <span className="ml-auto flex flex-wrap items-center gap-1.5">
           <Button
             size="small"
+            disabled={busy}
             onClick={async () => {
               if (stale) {
                 const ok = await common.ask({
@@ -121,7 +132,7 @@ export function ConflictTab({
             {stale ? 'Recarregar do Git' : 'Atualizar'}
           </Button>
           <Button size="small" disabled={!isConflictDirty(draft) || common.locked || busy || fileOpen} onClick={() => run(() => save(false))}>Salvar</Button>
-          <Button size="small" disabled={!canMark} onClick={() => run(() => save(true))}>Marcar como resolvido</Button>
+          <Button size="small" disabled={!canMark} onClick={() => run(markResolved)}>Marcar como resolvido</Button>
         </span>
       </Flexbox>
       {fileOpen && (
@@ -198,7 +209,7 @@ export function ConflictTab({
         <Flexbox flex={1} className="min-h-0 overflow-hidden">
           <CodeEditor
             text={text}
-            readOnly={common.locked || busy}
+            readOnly={common.locked || marking}
             path={path}
             reveal={null}
             onChange={(value) => putConflict({ ...draft, draft: value })}

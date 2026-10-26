@@ -910,6 +910,26 @@ scenario('conflito: editor fica somente leitura enquanto grava a resolução', a
   await row(page, 'staged', 'src/dois.ts').waitFor();
 });
 
+scenario('conflito: Salvar lento mantém a digitação no rascunho', async ({ page }) => {
+  await addDois(page);
+  await openGit(page);
+  await row(page, 'unstaged', 'src/dois.ts').dblclick();
+  await conflictTab(page).waitFor();
+  await trechos(page, 2).waitFor();
+  await choose(page, 1, 'Atual');
+  await choose(page, 1, 'Recebida');
+  const before = await editorText(page);
+  await page.evaluate(() => { window.__mock.delay.git_write_resolution = 5000; });
+  await page.getByRole('button', { name: 'Salvar', exact: true }).click();
+  await waitCount(page, 'git_write_resolution', 1);
+  await focusEditor(page);
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('digitação durante o salvamento');
+  assert.equal(await editorText(page), `${before}digitação durante o salvamento`, 'a digitação fica no rascunho durante o salvamento');
+  await waitCount(page, 'git_conflict', 2);
+  assert.equal(await editorText(page), `${before}digitação durante o salvamento`, 'o rascunho preserva a digitação depois de salvar');
+});
+
 scenario('conflito: edição externa depois da leitura deixa o rascunho e mostra erro claro; Recarregar do Git pede confirmação e só então troca o rascunho', async ({ page }) => {
   await addDois(page);
   await openGit(page);
