@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Quanto uma chamada espera o lote antes de devolver `--- EM ANDAMENTO ---`.
-pub const WINDOW: Duration = Duration::from_secs(300);
+pub const WINDOW: Duration = Duration::from_secs(840);
 const POLL: Duration = Duration::from_millis(250);
 const NOT_ACTIVE: &str = "A pasta não é uma sessão ativa do orquestrador.";
 const DEAD: &str = "A sessão do orquestrador terminou antes do fim do lote.";

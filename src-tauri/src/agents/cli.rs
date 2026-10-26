@@ -83,8 +83,9 @@ fn claude_settings(app: &str, mut extra: Value) -> String {
 
 /// O settings do orquestrador Claude. Sem `CLAUDE_CODE_USE_POWERSHELL_TOOL`, o Claude Code 2.1.296 não expõe o
 /// PowerShell no Windows com Git Bash (medido com um stub que mostra a lista de ferramentas enviada ao modelo), e o
-/// orquestrador ficaria no Git Bash. `MCP_TOOL_TIMEOUT` dá às chamadas ao servidor do orquestrador os 15 minutos
-/// da espera de um lote. As duas entram só por este arquivo: o ambiente do usuário e o dos executores não mudam.
+/// orquestrador ficaria no Git Bash. `MCP_TOOL_TIMEOUT` dá às chamadas ao servidor do orquestrador os 15 minutos, que
+/// cobrem a espera de 14 minutos de uma chamada. As duas entram só por este arquivo: o ambiente do usuário e o dos
+/// executores não mudam.
 pub fn orchestrator_settings(app: &str) -> String {
     claude_settings(app, json!({ "env": { "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1", "MCP_TOOL_TIMEOUT": "900000" } }))
 }
@@ -92,7 +93,7 @@ pub fn orchestrator_settings(app: &str) -> String {
 /// O servidor MCP do orquestrador pela configuração do Codex, só para este processo: o app em modo `--mcp`, com a
 /// pasta da sessão. `approve` libera as três ferramentas: medido no Codex 0.162.1, sem ele toda chamada MCP é
 /// negada com `approval_policy` `never`, e os outros valores não liberam; se o bypass de `codex_base` o dispensa
-/// não foi medido, então fica. O prazo cobre a espera de 5 minutos de uma chamada, com folga.
+/// não foi medido, então fica. O prazo cobre a espera de 14 minutos de uma chamada.
 fn codex_mcp(app: &str, dir: &str) -> Vec<String> {
     let server = "mcp_servers.orquestrador";
     [

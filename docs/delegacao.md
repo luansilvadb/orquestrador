@@ -11,7 +11,7 @@ Em qualquer CLI, o orquestrador e os executores iniciam na pasta do projeto, cad
 
 Os argumentos vão em JSON. Cada tarefa chega ao executor como está: aspas duplas, barras, acentos, crases, `$`, apóstrofos e quebras de linha passam sem escape, e o canal não tem limite de tamanho. O canal e o texto do orquestrador (`src-tauri/src/agents/roles.rs`) são os mesmos para o Claude Code e para o Codex.
 
-Cada chamada espera até 5 minutos. A resposta termina de um de dois jeitos:
+Cada chamada espera até 14 minutos. A resposta termina de um de dois jeitos:
 
 - `--- FIM ---`: o lote acabou. A saída traz as seções `--- EXECUTOR i/N ---`, `executor_exit` e `--- GIT ---` (abaixo).
 - `--- EM ANDAMENTO ---`: a janela passou e os executores continuam. O orquestrador chama `aguardar`.
@@ -33,5 +33,6 @@ Limites:
 - Medido em 2026-10-14 com servidores MCP descartáveis:
   - **Claude Code 2.1.300**: um texto com apóstrofo solto, acentos, crases e `$` chegou byte a byte. Chamadas de 180 s (sem ajuste) e de 400 s (com `MCP_TOOL_TIMEOUT = 900000`) voltaram normalmente.
   - **Codex 0.162.1**, com `approval_policy` `never`: toda chamada MCP é negada (`MCP tool call requires approval, but approval policy is never`), a menos que o servidor tenha `default_tools_approval_mode = "approve"`. Os valores `auto`, `writes` e `prompt` e o `enabled_tools` não liberam. A anotação `readOnlyHint` liberaria, mas `delegar` não é só leitura. Com `approve`, o texto chegou exato. Chamadas de 90 s (sem ajuste) e de 400 s (com `tool_timeout_sec = 900`) voltaram normalmente. Ver `codex_mcp`, em `src-tauri/src/agents/cli.rs`.
+- Medido em 2026-10-26 com um servidor MCP descartável que responde após 840 s: **Claude Code 2.1.310** (`MCP_TOOL_TIMEOUT = 900000`) voltou em 847 s e **Codex 0.164.0** (`tool_timeout_sec = 900`) em 853 s, os dois com a resposta completa.
 
 O fim da rodada de um executor é detectado pelo hook `Stop` do Claude Code e pelo `notify` do Codex, que chamam o próprio executável do app.
