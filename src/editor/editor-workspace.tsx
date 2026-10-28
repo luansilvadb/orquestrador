@@ -1481,9 +1481,9 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
                     {tab.pinned
                       ? <Pin className="size-4 shrink-0 text-[var(--ant-color-text-secondary)]" aria-hidden />
                       : tabIcon(tab.target)}
-                    <span className="min-w-0 truncate">{titleOf(tab.target)}</span>
+                    <span className={`min-w-0 truncate ${tab.preview ? 'pr-0.5' : ''}`}>{titleOf(tab.target)}</span>
                     {detail && (
-                      <span className="min-w-0 truncate text-[12px] text-[var(--ant-color-text-secondary)]">{detail}</span>
+                      <span className={`min-w-0 truncate text-[12px] text-[var(--ant-color-text-secondary)] ${tab.preview ? 'pr-0.5' : ''}`}>{detail}</span>
                     )}
                     {tab.pinned && <span className="sr-only">(fixada)</span>}
                     {tab.preview && <span className="sr-only">(prévia)</span>}
