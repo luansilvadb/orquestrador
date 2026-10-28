@@ -27,7 +27,7 @@ export function Nav({ route, changed, onGo }: { route: Route | null; changed: nu
   // Contador no canto de baixo à direita do botão, com as medidas do badge do Antigravity (pílula de 12 px, fonte de 10 px, texto branco sobre o azul do VS Code) e a posição 19/5 px dentro do botão de 36 px. Sem filhos, o Badge é a própria pílula: o `style` troca o tamanho e a sombra do tema, e não há deslocamento para fora do canto.
   const gitBadge = changed > 0 && (
     <Badge
-      aria-hidden="true" count={changed} size="small" color="#307E9F" className="pointer-events-none absolute"
+      aria-hidden="true" count={changed} overflowCount={Infinity} size="small" color="#307E9F" className="pointer-events-none absolute"
       style={{ top: 19, right: 5, minWidth: 12, height: 12, padding: '0 3px', fontSize: 10, fontWeight: 600, color: '#FFFFFF', lineHeight: '12px', borderRadius: 4, boxShadow: 'none' }}
     />
   );
