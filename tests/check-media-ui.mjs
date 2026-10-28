@@ -1,6 +1,6 @@
 // QA da aba de mídia (imagem, áudio e vídeo), em Chrome headless contra o app simulado (src/backend/mock.ts, só no `vite` de desenvolvimento).
-// O simulado entra só na fronteira de I/O: `read_media` devolve um PNG 32×32 para `.png` e um WAV de 2 s em silêncio para
-// `.wav` (`__mock.addFile`); `mediaUrl` devolve um WebM VP8 64×48 de 2 s para `.webm` (no app, o protocolo `orq-media` com Range);
+// O simulado entra só na fronteira de I/O: `read_media` devolve um PNG 32×32 para `.png` (`__mock.addFile`); `mediaUrl` devolve um
+// WAV de 2 s em silêncio para `.wav` e um WebM VP8 64×48 de 2 s para `.webm` (no app, o protocolo `orq-media` com Range, sem limite de tamanho);
 // `__mock.failRead` faz a leitura falhar e `__mock.corruptRead` devolve bytes que o navegador não decodifica.
 // Tudo o mais é o app de verdade. Áudio e vídeo usam os controles nativos do WebView2/Chromium: o check clica neles
 // (gesto), e usa a API HTMLMediaElement só onde o controle não expõe o ajuste (posição e volume).
@@ -128,8 +128,22 @@ scenario('áudio: seek, volume, pausa ao trocar de aba, ao ficar oculto e ao fec
   assert.equal(await page.locator('audio').count(), 0, 'aba fechada sem elemento de áudio');
 });
 
-// Erro de leitura: a aba mostra a mensagem do backend, sem elemento de mídia nem editor.
-scenario('falha de leitura da mídia aparece como erro na aba', async ({ page }) => {
+// Erro de leitura da imagem (`read_media`): a aba mostra a mensagem do backend, sem elemento de mídia nem editor.
+scenario('falha de leitura da imagem aparece como erro na aba', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__mock.addFolder('midia');
+    window.__mock.addFile('midia/quebrado.png');
+    window.__mock.failRead = ['midia/quebrado.png'];
+  });
+  await expand(page, ['midia']);
+  await treeItem(page, 'quebrado.png').dblclick();
+  await page.getByRole('status').filter({ hasText: 'Falha de leitura simulada' }).waitFor();
+  assert.equal(await page.locator('img[alt="quebrado.png"]').count(), 0, 'sem imagem quando a leitura falha');
+  assert.equal(await page.locator('.cm-content').count(), 0, 'sem editor de texto');
+});
+
+// Áudio que falha (no app, status de erro do protocolo): aviso na aba, como no vídeo, sem editor.
+scenario('áudio com falha de leitura mostra aviso na aba, sem editor', async ({ page }) => {
   await page.evaluate(() => {
     window.__mock.addFolder('midia');
     window.__mock.addFile('midia/quebrado.wav');
@@ -137,12 +151,11 @@ scenario('falha de leitura da mídia aparece como erro na aba', async ({ page })
   });
   await expand(page, ['midia']);
   await treeItem(page, 'quebrado.wav').dblclick();
-  await page.getByRole('status').filter({ hasText: 'Falha de leitura simulada' }).waitFor();
-  assert.equal(await page.locator('audio').count(), 0, 'sem elemento de áudio quando a leitura falha');
+  await page.locator('audio[aria-label="quebrado.wav"] ~ [role="alert"]').filter({ hasText: 'Não foi possível tocar este áudio' }).waitFor();
   assert.equal(await page.locator('.cm-content').count(), 0, 'sem editor de texto');
 });
 
-// Arquivo inválido: a leitura chega, mas o navegador não decodifica. Erro na aba, sem editor, sem tela em branco.
+// Arquivo inválido: o navegador não decodifica. Erro na aba, sem editor, sem tela em branco.
 scenario('arquivo inválido: imagem e áudio que não decodificam mostram erro na aba, sem editor', async ({ page }) => {
   await page.evaluate(() => {
     window.__mock.addFolder('midia');

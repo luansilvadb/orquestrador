@@ -11,7 +11,7 @@
 // conflitos (resolver e aceitar remoção). Branches, fetch, pull e push são respostas fixas; as refs são fixas, exceto a `main`, que anda com o commit. Regex da pesquisa e da substituição usa a
 // sintaxe do JavaScript (o backend usa a do Rust); o texto de busca e de substituição é o mesmo nos dois.
 // Na pesquisa (Ctrl+Shift+F), `search` filtra de verdade, mas só os arquivos de `TEXTS` têm linhas; os demais não casam nada.
-// Ao abrir um arquivo, `read_file` devolve o texto de `TEXTS`; `write_file_checked` (a gravação do editor) atualiza esse texto. `.png` vem binário, `dados/exportacao.json` vem grande demais, e os demais começam vazios. `read_media` (aba de imagem e áudio) devolve um PNG 32×32 e um WAV de 2 s em silêncio para `.png` e `.wav`; `mediaUrl` (vídeo, que no app vem por streaming do protocolo `orq-media`) devolve um WebM VP8 64×48 de 2 s em `data:` para `.webm` e `.mp4`; `__mock.failRead = ['caminho']` faz a leitura falhar, e `__mock.corruptRead = ['caminho']` devolve bytes que o navegador não decodifica (no vídeo, as duas dão um `<video>` com erro). `__mock.lateRead = 1500` faz `read_file` ler o disco na hora e só entregar a resposta depois desses ms (resposta velha, de antes de uma gravação).
+// Ao abrir um arquivo, `read_file` devolve o texto de `TEXTS`; `write_file_checked` (a gravação do editor) atualiza esse texto. `.png` vem binário, `dados/exportacao.json` vem grande demais, e os demais começam vazios. `read_media` (aba de imagem) devolve um PNG 32×32 para `.png`; `mediaUrl` (áudio e vídeo, que no app vêm por streaming do protocolo `orq-media`) devolve um WebM VP8 64×48 de 2 s em `data:` para `.webm` e `.mp4`, e um WAV de 2 s em silêncio para `.wav`; `__mock.failRead = ['caminho']` faz a leitura falhar, e `__mock.corruptRead = ['caminho']` devolve bytes que o navegador não decodifica (no áudio e no vídeo, as duas dão um `<audio>` ou `<video>` com erro). `__mock.lateRead = 1500` faz `read_file` ler o disco na hora e só entregar a resposta depois desses ms (resposta velha, de antes de uma gravação).
 // Menu do arquivo na árvore: `rename_file` e `delete_files` mudam a árvore e `TEXTS` de verdade (com as mesmas recusas do backend); `reveal_file` e
 // `open_with` só conferem que o arquivo existe, porque o Explorer, o diálogo e a Lixeira são do Windows. `start_shell` aceita `cwd`.
 // Área vazia da árvore: `create_file` e `create_dir` criam de verdade na raiz (com as mesmas recusas); `reveal_dir` só confere a pasta.
@@ -313,7 +313,7 @@ const debug = { close: async () => {
   addFolder: (rel: string) => { const { dir, name } = splitPath(rel); const parent = folderAt(dir); if (parent && !parent.children[name]) parent.children[name] = folder(); },
   // Falha de I/O simulada: colar ou mover para quando chega num destes caminhos de origem (relativos), como um disco que recusa um item.
   failOn: [] as string[],
-  // Falha de leitura de mídia (`read_media`, e a URL de vídeo) nestes caminhos, como um disco que não entrega o arquivo.
+  // Falha de leitura de mídia (`read_media`, e a URL de áudio e vídeo) nestes caminhos, como um disco que não entrega o arquivo.
   failRead: [] as string[],
   // Bytes que não são imagem, áudio nem vídeo nestes caminhos: a leitura chega, mas o navegador recusa a decodificação.
   corruptRead: [] as string[],
@@ -947,8 +947,8 @@ function moveItems(paths: string[], dest: string): Batch<Moved> {
   });
 }
 
-// Mídia simulada: `read_media` devolve bytes válidos de um PNG 32×32 (`.png`) e de um WAV de 2 s em silêncio (`.wav`), para arquivos
-// que estão na árvore. Outras extensões e caminhos fora da árvore recusam como o backend.
+// Mídia simulada: `read_media` devolve bytes válidos de um PNG 32×32 (`.png`), para arquivos que estão na árvore. Outras extensões e
+// caminhos fora da árvore recusam como o backend. Áudio e vídeo vão por `mediaUrl` (abaixo), sem `read_media`.
 const MOCK_PNG = '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';
 const mockBytes = (path: string): ArrayBuffer => {
   if (debug.failRead.includes(path)) throw `Falha de leitura simulada em “${path}”.`;
@@ -958,22 +958,25 @@ const mockBytes = (path: string): ArrayBuffer => {
   const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
   requireFile(path);
   if (ext === 'png') return Uint8Array.fromBase64(MOCK_PNG).buffer;
-  if (ext === 'wav') return wavSilence(2);
   throw `Tipo de arquivo não aberto como mídia: ${path}`;
 };
 // WebM VP8 64×48, 10 fps, 2 s, cor sólida, sem áudio (976 bytes), reprodutível:
 // ffmpeg -f lavfi -i "color=c=0x3366cc:s=64x48:r=10:d=2" -c:v libvpx -b:v 20k -g 20 -an -fflags +bitexact -flags:v +bitexact -map_metadata -1 mock.webm
 const MOCK_WEBM = 'GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAOgEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHGTbuMU6uEElTDZ1OsggEiTbuMU6uEHFO7a1OsggOK7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmoCrXsYMPQkBNgIRMYXZmV0GETGF2ZkSJiECfQAAAAAAAFlSua9euAQAAAAAAAE7XgQFzxYgAAAAAAAAAAZyBACK1nIN1bmSIgQCGhVZfVlA4g4EBI+ODhAX14QDgkLCBQLqBMJqBAlWwhFW5gQFV7oEA7AEAAAAAAAACAAASVMNn0HNzzWPAi2PFiAAAAAAAAAABZ8iYRaOHRU5DT0RFUkSHi0xhdmMgbGlidnB4Z8ihRaOIRFVSQVRJT05Eh5MwMDowMDowMi4wMDAwMDAwMDAAH0O2dUIN54EAo8KBAACAUAMAnQEqQAAwAABHCIWFiIWEiAICAnWqA/gCBwjVZ5mPN9IA/vk2z/+vMvrzL68y/68y/+7zft5v283+/ICjloEAZADRAQABEBAAGAAYWC/0AAiMAACjloEAyADRAQABEBAAGAAYWC/0AAiMAACjloEBLADRAQABEBAAGAAYWC/0AAiMAACjloEBkADRAQABEBAAGAAYWC/0AAiMAACjloEB9ADRAQABEBAAGAAYWC/0AAiMAACjloECWADRAQABEBAAGAAYWC/0AAiMAACjlYECvACxAQABEBAUYABhYL/QACIwAKOWgQMgANEBAAEQEAAYABhYL/QACIwAAKOWgQOEANEBAAEQEAAYABhYL/QACIwAAKOWgQPoANEBAAEQEAAYABhYL/QACIwAAKOWgQRMANEBAAEQEAAYABhYL/QACIwAAKOWgQSwANEBAAEQEAAYABhYL/QACIwAAKOWgQUUANEBAAEQEAAYABhYL/QACIwAAKOWgQV4ANEBAAEQEAAYABhYL/QACIwAAKOWgQXcANEBAAEQEAAYABhYL/QACIwAAKOWgQZAANEBAAEQEAAYABhYL/QACIwAAKOVgQakALEBAAEQEBRgAGFgv9AAIjAAo5aBBwgA0QEAARAQABgAGFgv9AAIjAAAo5aBB2wA0QEAARAQABgAGFgv9AAIjAAAHFO7a5G7j7OBALeK94EB8YIBd/CBAw==';
-// Vídeo simulado: o `<video>` recebe a URL direto, sem `read_media`. Falha, bytes inválidos, arquivo ausente ou extensão fora da lista dão
-// uma URL que não decodifica: o elemento dispara `error`, como o status de erro do protocolo no app.
+// Vídeo e áudio simulados: o `<video>` e o `<audio>` recebem a URL direto, sem `read_media` (`.webm`/`.mp4`: WebM; `.wav`: WAV de 2 s em
+// silêncio). Falha, bytes inválidos, arquivo ausente ou extensão fora da lista dão uma URL que não decodifica: o elemento dispara `error`,
+// como o status de erro do protocolo no app.
 const BROKEN_VIDEO = 'data:video/webm;base64,AAECAw==';
+const BROKEN_AUDIO = 'data:audio/wav;base64,AAECAw==';
 function mockMediaUrl(path: string, project: string | null): string {
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
-  if (!['webm', 'mp4'].includes(ext) || debug.failRead.includes(path) || debug.corruptRead.includes(path)) return BROKEN_VIDEO;
+  const audio = ext === 'wav';
+  const broken = audio ? BROKEN_AUDIO : BROKEN_VIDEO;
+  if (!audio && !['webm', 'mp4'].includes(ext) || debug.failRead.includes(path) || debug.corruptRead.includes(path)) return broken;
   if (project !== null) {
-    try { requireFile(path); } catch { return BROKEN_VIDEO; }
+    try { requireFile(path); } catch { return broken; }
   }
-  return `data:video/webm;base64,${MOCK_WEBM}`;
+  return audio ? `data:audio/wav;base64,${new Uint8Array(wavSilence(2)).toBase64()}` : `data:video/webm;base64,${MOCK_WEBM}`;
 }
 function formatInfo(path: string): FormatterInfo {
   const rel = relOf(path);
@@ -1007,7 +1010,6 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   read_media_at: ({ path }: { path: string }) => {
     const ext = path.split('.').pop()?.toLowerCase();
     if (ext === 'png') return Uint8Array.fromBase64(MOCK_PNG).buffer;
-    if (ext === 'wav') return wavSilence(2);
     throw `Tipo de arquivo não aberto como mídia: ${path}`;
   },
   formatter_info: ({ path }: { path: string }) => formatInfo(path),

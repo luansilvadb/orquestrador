@@ -12,7 +12,7 @@ Arquivos e pastas passados pelo Explorer ou pela linha de comando são abertos c
 
 **Arquivos fora do projeto.** O editor lê e grava fora da pasta do projeto apenas arquivos que o usuário abriu ou escolheu em `Abrir`/`Salvar como`. Os comandos absolutos usam o mesmo limite de tamanho, preservação de BOM e checagem de mudança desde a leitura dos arquivos do projeto. Esses arquivos não entram na árvore, pesquisa ou Git.
 
-**Vídeo na aba de mídia.** O protocolo `orq-media` serve só as extensões de `VIDEO_EXTS` (`files.rs`). Arquivo do projeto passa pelas mesmas recusas de caminho de `read_media`; caminho absoluto segue a regra de `read_media_at`. O arquivo é lido em pedaços, pelo cabeçalho Range, e o protocolo não grava nada.
+**Áudio e vídeo na aba de mídia.** O protocolo `orq-media` serve só as extensões de `VIDEO_EXTS` e `AUDIO_EXTS` (`files.rs`). Arquivo do projeto passa pelas mesmas recusas de caminho de `read_media`; caminho absoluto segue a regra de `read_media_at`. O arquivo é lido em pedaços, pelo cabeçalho Range, e o protocolo não grava nada.
 
 **CSP da interface.** `app.security.csp` em `src-tauri/tauri.conf.json` limita a página a `'self'`: scripts só com `'wasm-unsafe-eval'` (o shiki compila o WASM do realce embutido no JS), `connect-src` só do IPC do Tauri (a interface não faz `fetch`), mídia só de `blob:` e do `orq-media`, sem `object-src` e sem `<base>`. `style-src` mantém `'unsafe-inline'` (CodeMirror, xterm e antd injetam estilo) e `dangerousDisableAssetCspModification` impede o Tauri de trocá-lo por nonce. A CSP vale só no app empacotado: em `tauri dev` o Vite serve a página sem ela.
 

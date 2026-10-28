@@ -21,7 +21,7 @@ export interface Transport {
   setTitle(title: string): Promise<void>;
   /** Chama `handler` a cada mudança de tamanho (maximizar e restaurar entram aqui); responde o cancelamento da escuta. */
   onResized(handler: () => void): Promise<() => void>;
-  /** URL de vídeo para o `<video>`: no app, o protocolo `orq-media` (streaming com Range); `project` null é caminho absoluto. */
+  /** URL de vídeo ou áudio para o `<video>` e o `<audio>`: no app, o protocolo `orq-media` (streaming com Range); `project` null é caminho absoluto. */
   mediaUrl(path: string, project: string | null): string;
 }
 

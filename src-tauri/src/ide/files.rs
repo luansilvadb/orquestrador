@@ -106,15 +106,16 @@ fn read_path(file: &Path) -> Result<Content, String> {
     Ok(Content { binary: false, too_large: false, read_only: std::str::from_utf8(text).is_err(), bom: text.len() != bytes.len(), text: String::from_utf8_lossy(text).into_owned() })
 }
 
-/// Extensões (minúsculas) que a aba de mídia abre: imagem e áudio. SVG e HTML ficam de fora de propósito, porque viram
+/// Extensões (minúsculas) de imagem que a aba de mídia lê pela IPC. SVG e HTML ficam de fora de propósito, porque viram
 /// documento ativo; eles seguem como texto. Os tipos MIME ficam em `src/media-view.tsx`, que é quem monta o blob.
-const MEDIA_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "mp3", "wav", "ogg", "oga", "flac", "m4a"];
-/// Mídia acima disto não é lida: a aba mostra o erro. Os bytes inteiros passam pela memória do app.
+/// Áudio e vídeo não passam por aqui: ver `AUDIO_EXTS` e `VIDEO_EXTS`.
+const MEDIA_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+/// Imagem acima disto não é lida: a aba mostra o erro. Os bytes inteiros passam pela memória do app.
 pub(crate) const MAX_MEDIA: u64 = 32 * 1_048_576;
 
-/// Os bytes do arquivo de imagem ou áudio `rel` do projeto, para a aba de mídia. A extensão precisa estar em `MEDIA_EXTS`;
+/// Os bytes do arquivo de imagem `rel` do projeto, para a aba de mídia. A extensão precisa estar em `MEDIA_EXTS`;
 /// o caminho passa por `plain` (sem `.git`, sem link em nenhuma parte, sem sair do projeto); e o arquivo não pode passar
-/// de `MAX_MEDIA`. Não há sniff de conteúdo: o navegador é quem decodifica (e recusa o que não for imagem ou áudio).
+/// de `MAX_MEDIA`. Não há sniff de conteúdo: o navegador é quem decodifica (e recusa o que não for imagem).
 pub fn read_media(project: &Path, rel: &str) -> Result<Vec<u8>, String> {
     let ext = Path::new(rel).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     if !MEDIA_EXTS.contains(&ext.as_str()) {
@@ -124,7 +125,7 @@ pub fn read_media(project: &Path, rel: &str) -> Result<Vec<u8>, String> {
     read_media_path(&file, rel)
 }
 
-/// Imagem ou áudio aberto pelo caminho absoluto que o usuário escolheu.
+/// Imagem aberta pelo caminho absoluto que o usuário escolheu.
 pub fn read_media_at(path: &Path) -> Result<Vec<u8>, String> {
     if !path.is_absolute() {
         return Err("O caminho do arquivo precisa ser absoluto.".into());
@@ -152,22 +153,28 @@ fn read_media_path(file: &Path, label: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// Extensões (minúsculas) de vídeo. Vídeo não passa pela IPC: o protocolo `orq-media` serve pedaços (HTTP Range) lidos do
-/// disco sob demanda, porque costuma passar de `MAX_MEDIA`.
+/// Extensões (minúsculas) de vídeo. Vídeo e áudio não passam pela IPC: o protocolo `orq-media` serve pedaços (HTTP Range)
+/// lidos do disco sob demanda, porque costumam passar de `MAX_MEDIA`.
 pub(crate) const VIDEO_EXTS: &[&str] = &["mp4", "m4v", "webm", "mov"];
-/// Maior pedaço de vídeo numa resposta: intervalo aberto ou maior é cortado aqui, e o arquivo nunca vai inteiro para a memória.
-pub(crate) const MAX_VIDEO_CHUNK: u64 = 4 * 1_048_576;
+/// Extensões (minúsculas) de áudio, servidas pelo mesmo protocolo que o vídeo.
+pub(crate) const AUDIO_EXTS: &[&str] = &["mp3", "wav", "ogg", "oga", "flac", "m4a"];
+/// Maior pedaço de vídeo ou áudio numa resposta: intervalo aberto ou maior é cortado aqui, e o arquivo nunca vai inteiro para a memória.
+pub(crate) const MAX_STREAM_CHUNK: u64 = 4 * 1_048_576;
 
-/// Recusa (403) a extensão que não é de vídeo.
-fn video_ext(path: &Path, label: &str) -> Result<(), (u16, String)> {
+/// Recusa (403) a extensão que não é de vídeo nem de áudio.
+fn stream_ext(path: &Path, label: &str) -> Result<(), (u16, String)> {
     let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    if VIDEO_EXTS.contains(&ext.as_str()) { Ok(()) } else { Err((403, format!("Tipo de arquivo não aberto como vídeo: {label}"))) }
+    if VIDEO_EXTS.contains(&ext.as_str()) || AUDIO_EXTS.contains(&ext.as_str()) {
+        Ok(())
+    } else {
+        Err((403, format!("Tipo de arquivo não aberto como vídeo ou áudio: {label}")))
+    }
 }
 
-/// O arquivo de vídeo `rel` do projeto, com as regras de `plain` (sem `.git`, sem link, sem sair do projeto). O erro leva
+/// O arquivo de vídeo ou áudio `rel` do projeto, com as regras de `plain` (sem `.git`, sem link, sem sair do projeto). O erro leva
 /// o status HTTP: 404 se o arquivo não existe, 403 para o resto.
-pub fn video_path(project: &Path, rel: &str) -> Result<PathBuf, (u16, String)> {
-    video_ext(Path::new(rel), rel)?;
+pub fn stream_path(project: &Path, rel: &str) -> Result<PathBuf, (u16, String)> {
+    stream_ext(Path::new(rel), rel)?;
     plain(project, rel, false).map_err(|e| {
         let lexical = no_git(rel).is_ok() && Path::new(rel).components().all(|c| matches!(c, Component::Normal(_)));
         let missing = lexical && no_links(project, rel).is_ok() && std::fs::symlink_metadata(project.join(rel)).is_err();
@@ -175,27 +182,32 @@ pub fn video_path(project: &Path, rel: &str) -> Result<PathBuf, (u16, String)> {
     })
 }
 
-/// O vídeo aberto pelo caminho absoluto que o usuário escolheu, com as regras de `read_media_at`.
-pub fn video_path_at(path: &Path) -> Result<PathBuf, (u16, String)> {
+/// O vídeo ou áudio aberto pelo caminho absoluto que o usuário escolheu, com as regras de `read_media_at`.
+pub fn stream_path_at(path: &Path) -> Result<PathBuf, (u16, String)> {
     if !path.is_absolute() {
         return Err((403, "O caminho do arquivo precisa ser absoluto.".into()));
     }
-    video_ext(path, &path.display().to_string())?;
+    stream_ext(path, &path.display().to_string())?;
     Ok(path.to_path_buf())
 }
 
-/// O tipo MIME do vídeo pela extensão. `.mov` vai como `video/mp4`: o Chromium não toca `video/quicktime`, e o `.mov`
-/// H.264 costuma tocar assim.
-fn video_type(path: &Path) -> &'static str {
+/// O tipo MIME do vídeo ou áudio pela extensão. `.mov` vai como `video/mp4`: o Chromium não toca `video/quicktime`, e o
+/// `.mov` H.264 costuma tocar assim.
+fn stream_type(path: &Path) -> &'static str {
     match path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).as_deref() {
         Some("webm") => "video/webm",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("ogg" | "oga") => "audio/ogg",
+        Some("flac") => "audio/flac",
+        Some("m4a") => "audio/mp4",
         _ => "video/mp4",
     }
 }
 
-/// O intervalo inclusivo pedido em `range` num arquivo de `total` bytes, cortado em `MAX_VIDEO_CHUNK`. Aceita um intervalo
+/// O intervalo inclusivo pedido em `range` num arquivo de `total` bytes, cortado em `MAX_STREAM_CHUNK`. Aceita um intervalo
 /// só (`a-b`, `a-`, `-n`); sem cabeçalho, ou com um que não se entende, vale `bytes=0-`. `None`: não cabe no arquivo (416).
-fn video_range(range: Option<&str>, total: u64) -> Option<(u64, u64)> {
+fn stream_range(range: Option<&str>, total: u64) -> Option<(u64, u64)> {
     let last = total.checked_sub(1)?;
     let spec = range.and_then(|r| r.trim().strip_prefix("bytes=")).and_then(|spec| {
         let (a, b) = spec.split_once('-')?;
@@ -212,7 +224,7 @@ fn video_range(range: Option<&str>, total: u64) -> Option<(u64, u64)> {
         (None, Some(n)) if n > 0 => (total.saturating_sub(n), last),
         _ => return None,
     };
-    (start <= last).then(|| (start, end.min(start + MAX_VIDEO_CHUNK - 1)))
+    (start <= last).then(|| (start, end.min(start + MAX_STREAM_CHUNK - 1)))
 }
 
 /// Resposta de erro em texto.
@@ -224,9 +236,9 @@ pub fn text_response(status: u16, message: String) -> tauri::http::Response<Vec<
         .expect("resposta de texto válida")
 }
 
-/// O pedaço do vídeo `file` (já validado) pedido no cabeçalho `range`: 206 com `Content-Range`, 416 se o intervalo não cabe,
+/// O pedaço do vídeo ou áudio `file` (já validado) pedido no cabeçalho `range`: 206 com `Content-Range`, 416 se o intervalo não cabe,
 /// 200 vazio se o arquivo é vazio, 404 se sumiu, 500 em outro erro de leitura. Lê num handle só, só os bytes do intervalo.
-pub fn serve_video(file: &Path, range: Option<&str>) -> tauri::http::Response<Vec<u8>> {
+pub fn serve_stream(file: &Path, range: Option<&str>) -> tauri::http::Response<Vec<u8>> {
     let erro = |e: std::io::Error| match e.kind() {
         std::io::ErrorKind::NotFound => text_response(404, format!("Arquivo não encontrado: {}", file.display())),
         _ => text_response(500, format!("Não foi possível ler o arquivo: {e}")),
@@ -234,14 +246,14 @@ pub fn serve_video(file: &Path, range: Option<&str>) -> tauri::http::Response<Ve
     let read = || -> std::io::Result<tauri::http::Response<Vec<u8>>> {
         let mut handle = File::open(file)?;
         let total = handle.metadata()?.len();
-        let response = tauri::http::Response::builder().header("Accept-Ranges", "bytes").header("Content-Type", video_type(file));
+        let response = tauri::http::Response::builder().header("Accept-Ranges", "bytes").header("Content-Type", stream_type(file));
         if total == 0 {
             return Ok(response.status(200).header("Content-Length", "0").body(Vec::new()).expect("resposta válida"));
         }
         let unsatisfiable = |response: tauri::http::response::Builder| {
             Ok(response.status(416).header("Content-Range", format!("bytes */{total}")).body(Vec::new()).expect("resposta válida"))
         };
-        let Some((start, end)) = video_range(range, total) else {
+        let Some((start, end)) = stream_range(range, total) else {
             return unsatisfiable(response);
         };
         handle.seek(SeekFrom::Start(start))?;
@@ -1039,19 +1051,17 @@ src/gerado/
     }
 
     #[test]
-    fn midia_devolve_os_bytes_de_imagem_e_audio_sem_olhar_o_conteudo() {
+    fn midia_devolve_os_bytes_de_imagem_sem_olhar_o_conteudo() {
         let root = &fixture("midia-ok").0;
         let png = [0x89, b'P', b'N', b'G', 0, 0, 0, 0];
         std::fs::write(root.join("sub/logo.PNG"), png).unwrap();
-        std::fs::write(root.join("sub/tom.wav"), b"RIFF\0\0\0\0WAVEfmt ").unwrap();
         assert_eq!(read_media(&root, "sub/logo.PNG").unwrap(), png);
-        assert_eq!(read_media(&root, "sub/tom.wav").unwrap(), b"RIFF\0\0\0\0WAVEfmt ");
     }
 
     #[test]
     fn midia_recusa_extensao_fora_da_lista_e_arquivo_sem_extensao() {
         let root = &fixture("midia-ext").0;
-        for name in ["x.svg", "x.html", "x.exe", "x.txt", "sem-ext", ".png"] {
+        for name in ["x.svg", "x.html", "x.exe", "x.txt", "x.wav", "x.mp4", "sem-ext", ".png"] {
             std::fs::write(root.join(name), b"x").unwrap();
             let got = read_media(&root, name).unwrap_err();
             assert_eq!(got, format!("Tipo de arquivo não aberto como mídia: {name}"), "{name}");
@@ -1088,7 +1098,7 @@ src/gerado/
 
     /// Status, `Content-Range`, `Content-Length` e corpo da resposta de vídeo.
     fn video(file: &Path, range: Option<&str>) -> (u16, Option<String>, Option<String>, Vec<u8>) {
-        let r = serve_video(file, range);
+        let r = serve_stream(file, range);
         let header = |name: &str| r.headers().get(name).map(|v| v.to_str().unwrap().to_string());
         (r.status().as_u16(), header("Content-Range"), header("Content-Length"), r.body().clone())
     }
@@ -1097,7 +1107,7 @@ src/gerado/
     fn video_serve_o_intervalo_pedido_com_206() {
         let root = &fixture("video-range").0;
         std::fs::write(root.join("sub/clipe.mp4"), b"0123456789").unwrap();
-        let file = video_path(root, "sub/clipe.mp4").unwrap();
+        let file = stream_path(root, "sub/clipe.mp4").unwrap();
         let some = |s: &str| Some(s.to_string());
         assert_eq!(video(&file, Some("bytes=2-5")), (206, some("bytes 2-5/10"), some("4"), b"2345".to_vec()));
         assert_eq!(video(&file, Some("bytes=7-")), (206, some("bytes 7-9/10"), some("3"), b"789".to_vec()));
@@ -1110,7 +1120,7 @@ src/gerado/
             assert_eq!(video(&file, Some(range)).0, 206, "{range}");
             assert_eq!(video(&file, Some(range)).1, some("bytes 0-9/10"), "{range}");
         }
-        let r = serve_video(&file, Some("bytes=0-0"));
+        let r = serve_stream(&file, Some("bytes=0-0"));
         assert_eq!(r.headers()["Accept-Ranges"], "bytes");
         assert_eq!(r.headers()["Content-Type"], "video/mp4");
     }
@@ -1118,16 +1128,16 @@ src/gerado/
     #[test]
     fn video_corta_o_intervalo_no_teto() {
         let root = &fixture("video-teto").0;
-        let total = MAX_VIDEO_CHUNK + 1;
+        let total = MAX_STREAM_CHUNK + 1;
         std::fs::write(root.join("grande.webm"), vec![7u8; total as usize]).unwrap();
-        let file = video_path(root, "grande.webm").unwrap();
-        let last = MAX_VIDEO_CHUNK - 1;
+        let file = stream_path(root, "grande.webm").unwrap();
+        let last = MAX_STREAM_CHUNK - 1;
         for range in [None, Some("bytes=0-"), Some(format!("bytes=0-{total}")).as_deref()] {
             let (status, content_range, len, body) = video(&file, range);
-            assert_eq!((status, content_range, len), (206, Some(format!("bytes 0-{last}/{total}")), Some(MAX_VIDEO_CHUNK.to_string())), "{range:?}");
-            assert_eq!(body.len() as u64, MAX_VIDEO_CHUNK);
+            assert_eq!((status, content_range, len), (206, Some(format!("bytes 0-{last}/{total}")), Some(MAX_STREAM_CHUNK.to_string())), "{range:?}");
+            assert_eq!(body.len() as u64, MAX_STREAM_CHUNK);
         }
-        assert_eq!(video(&file, Some("bytes=1-")).1, Some(format!("bytes 1-{MAX_VIDEO_CHUNK}/{total}")));
+        assert_eq!(video(&file, Some("bytes=1-")).1, Some(format!("bytes 1-{MAX_STREAM_CHUNK}/{total}")));
         assert_eq!(video(&file, Some(&format!("bytes=-{total}"))).1, Some(format!("bytes 0-{last}/{total}")));
     }
 
@@ -1136,11 +1146,11 @@ src/gerado/
         let root = &fixture("video-416").0;
         std::fs::write(root.join("clipe.mp4"), b"0123456789").unwrap();
         std::fs::write(root.join("vazio.mp4"), b"").unwrap();
-        let file = video_path(root, "clipe.mp4").unwrap();
+        let file = stream_path(root, "clipe.mp4").unwrap();
         for range in ["bytes=10-", "bytes=10-20", "bytes=-0"] {
             assert_eq!(video(&file, Some(range)), (416, Some("bytes */10".into()), None, Vec::new()), "{range}");
         }
-        let vazio = video_path(root, "vazio.mp4").unwrap();
+        let vazio = stream_path(root, "vazio.mp4").unwrap();
         for range in [None, Some("bytes=0-"), Some("bytes=5-9")] {
             assert_eq!(video(&vazio, range), (200, None, Some("0".into()), Vec::new()), "{range:?}");
         }
@@ -1151,19 +1161,51 @@ src/gerado/
         let root = &fixture("video-tipo").0;
         for (name, mime) in [("a.mp4", "video/mp4"), ("b.MP4", "video/mp4"), ("c.m4v", "video/mp4"), ("d.MOV", "video/mp4"), ("e.webm", "video/webm"), ("f.WebM", "video/webm")] {
             std::fs::write(root.join(name), b"x").unwrap();
-            let r = serve_video(&video_path(root, name).unwrap(), None);
+            let r = serve_stream(&stream_path(root, name).unwrap(), None);
             assert_eq!(r.headers()["Content-Type"], mime, "{name}");
         }
     }
 
     #[test]
+    fn audio_serve_pelo_protocolo_com_tipo_e_intervalo_e_sem_o_teto_de_midia() {
+        let root = &fixture("audio-stream").0;
+        for (name, mime) in [("a.mp3", "audio/mpeg"), ("b.WAV", "audio/wav"), ("c.ogg", "audio/ogg"), ("d.oga", "audio/ogg"), ("e.flac", "audio/flac"), ("f.m4a", "audio/mp4")] {
+            std::fs::write(root.join(name), b"0123456789").unwrap();
+            let file = stream_path(root, name).unwrap();
+            let r = serve_stream(&file, Some("bytes=2-5"));
+            assert_eq!((r.status().as_u16(), r.headers()["Content-Type"].to_str().unwrap(), r.body().as_slice()), (206, mime, &b"2345"[..]), "{name}");
+            assert_eq!(r.headers()["Accept-Ranges"], "bytes");
+        }
+        // Acima de `MAX_MEDIA` o protocolo serve (em pedaços), enquanto `read_media` recusa a extensão.
+        let total = MAX_MEDIA + 1;
+        std::fs::write(root.join("grande.wav"), vec![1u8; total as usize]).unwrap();
+        let file = stream_path(root, "grande.wav").unwrap();
+        let (status, content_range, len, body) = video(&file, Some(&format!("bytes={}-", total - 3)));
+        assert_eq!((status, content_range, len), (206, Some(format!("bytes {}-{}/{total}", total - 3, total - 1)), Some("3".into())));
+        assert_eq!(body, vec![1u8; 3]);
+        assert!(read_media(root, "grande.wav").is_err());
+        let absoluto = stream_path_at(&root.join("grande.wav")).unwrap();
+        assert_eq!(video(&absoluto, Some("bytes=0-0")).0, 206);
+    }
+
+    #[test]
+    fn audio_recusa_caminho_que_sai_do_projeto_ou_entra_no_git() {
+        let root = &fixture("audio-caminho").0;
+        std::fs::write(root.join(".git/x.wav"), b"x").unwrap();
+        for rel in ["../x.wav", "sub/../../x.wav", ".git/x.wav", "sub\\x.wav"] {
+            assert_eq!(stream_path(root, rel).map_err(|e| e.0), Err(403), "{rel} deveria ser recusado");
+        }
+        assert_eq!(stream_path(root, "nao-existe.mp3").unwrap_err().0, 404);
+    }
+
+    #[test]
     fn video_recusa_extensao_fora_da_lista() {
         let root = &fixture("video-ext").0;
-        for name in ["x.png", "x.txt", "x.mp3", "sem-ext", ".mp4"] {
+        for name in ["x.png", "x.txt", "x.exe", "sem-ext", ".mp4", ".wav"] {
             std::fs::write(root.join(name), b"x").unwrap();
-            assert_eq!(video_path(root, name).unwrap_err(), (403, format!("Tipo de arquivo não aberto como vídeo: {name}")), "{name}");
+            assert_eq!(stream_path(root, name).unwrap_err(), (403, format!("Tipo de arquivo não aberto como vídeo ou áudio: {name}")), "{name}");
             let absoluto = root.join(name);
-            assert_eq!(video_path_at(&absoluto).unwrap_err().0, 403, "{name}");
+            assert_eq!(stream_path_at(&absoluto).unwrap_err().0, 403, "{name}");
         }
     }
 
@@ -1176,14 +1218,14 @@ src/gerado/
         std::fs::write(root.join("sub/.git/y.mp4"), b"x").unwrap();
         std::fs::create_dir(root.join("pasta.mp4")).unwrap();
         for rel in ["../x.mp4", "sub/../../x.mp4", "/etc/x.mp4", "C:/x.mp4", ".git/x.mp4", "sub/.git/y.mp4", "sub\\x.mp4", "pasta.mp4"] {
-            assert_eq!(video_path(root, rel).map_err(|e| e.0), Err(403), "{rel} deveria ser recusado");
+            assert_eq!(stream_path(root, rel).map_err(|e| e.0), Err(403), "{rel} deveria ser recusado");
         }
-        assert_eq!(video_path(root, "nao-existe.mp4").unwrap_err(), (404, "Arquivo não encontrado: nao-existe.mp4".into()));
+        assert_eq!(stream_path(root, "nao-existe.mp4").unwrap_err(), (404, "Arquivo não encontrado: nao-existe.mp4".into()));
         let absoluto = outside.join("segredo.mp4").to_string_lossy().into_owned();
-        assert_eq!(video_path(root, &absoluto).map_err(|e| e.0), Err(403));
+        assert_eq!(stream_path(root, &absoluto).map_err(|e| e.0), Err(403));
         if junction(&root.join("alias"), outside) && junction(&root.join("git-alias"), &root.join(".git")) {
-            assert_eq!(video_path(root, "alias/segredo.mp4").map_err(|e| e.0), Err(403));
-            assert_eq!(video_path(root, "git-alias/x.mp4").map_err(|e| e.0), Err(403));
+            assert_eq!(stream_path(root, "alias/segredo.mp4").map_err(|e| e.0), Err(403));
+            assert_eq!(stream_path(root, "git-alias/x.mp4").map_err(|e| e.0), Err(403));
         } else {
             eprintln!("sem junction: parte do teste pulada");
         }
@@ -1193,12 +1235,12 @@ src/gerado/
     fn video_absoluto_exige_caminho_absoluto_e_404_se_sumiu() {
         let root = &fixture("video-absoluto").0;
         std::fs::write(root.join("clipe.mov"), b"0123").unwrap();
-        assert_eq!(video_path_at(Path::new("clipe.mov")).unwrap_err(), (403, "O caminho do arquivo precisa ser absoluto.".into()));
-        let file = video_path_at(&root.join("clipe.mov")).unwrap();
+        assert_eq!(stream_path_at(Path::new("clipe.mov")).unwrap_err(), (403, "O caminho do arquivo precisa ser absoluto.".into()));
+        let file = stream_path_at(&root.join("clipe.mov")).unwrap();
         assert_eq!(video(&file, Some("bytes=1-2")).3, b"12");
-        let sumiu = video_path_at(&root.join("nao-existe.mp4")).unwrap();
-        assert_eq!(serve_video(&sumiu, None).status().as_u16(), 404);
-        assert_eq!(serve_video(&sumiu, None).headers()["Content-Type"], "text/plain; charset=utf-8");
+        let sumiu = stream_path_at(&root.join("nao-existe.mp4")).unwrap();
+        assert_eq!(serve_stream(&sumiu, None).status().as_u16(), 404);
+        assert_eq!(serve_stream(&sumiu, None).headers()["Content-Type"], "text/plain; charset=utf-8");
     }
 
     #[test]

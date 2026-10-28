@@ -107,7 +107,7 @@ fn read_file_at(path: String) -> Result<files::Content, String> {
     files::read_at(std::path::Path::new(&path))
 }
 
-/// Bytes de uma imagem ou áudio do projeto para a aba de mídia. `path` é relativo ao projeto. Vai como bytes crus (o
+/// Bytes de uma imagem do projeto para a aba de mídia. `path` é relativo ao projeto. Vai como bytes crus (o
 /// frontend recebe `ArrayBuffer`), sem JSON nem base64; o tipo é o da extensão, decidido na tela.
 #[tauri::command(async)]
 fn read_media(projects: State<Projects>, project: String, path: String) -> Result<tauri::ipc::Response, String> {
@@ -115,13 +115,13 @@ fn read_media(projects: State<Projects>, project: String, path: String) -> Resul
     files::read_media(&core.repo()?, &path).map(tauri::ipc::Response::new)
 }
 
-/// Bytes de uma imagem ou áudio aberto pelo caminho absoluto escolhido pelo usuário.
+/// Bytes de uma imagem aberta pelo caminho absoluto escolhido pelo usuário.
 #[tauri::command(async)]
 fn read_media_at(path: String) -> Result<tauri::ipc::Response, String> {
     files::read_media_at(std::path::Path::new(&path)).map(tauri::ipc::Response::new)
 }
 
-/// Responde ao protocolo `orq-media`, que serve vídeo em pedaços. Só a query importa: `path`, relativo ao `project` quando
+/// Responde ao protocolo `orq-media`, que serve vídeo e áudio em pedaços. Só a query importa: `path`, relativo ao `project` quando
 /// ele vem, ou absoluto quando não vem.
 fn media_protocol(app: &tauri::AppHandle, request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
     let (mut path, mut project) = (None, None);
@@ -135,18 +135,18 @@ fn media_protocol(app: &tauri::AppHandle, request: &tauri::http::Request<Vec<u8>
         }
     }
     let file = match (path, project) {
-        (None, _) => Err((403, "Falta o caminho do vídeo.".to_string())),
+        (None, _) => Err((403, "Falta o caminho do arquivo.".to_string())),
         (Some(path), Some(project)) => app
             .state::<Projects>()
             .core(&project)
             .and_then(|core| core.repo())
             .map_err(|e| (403, e))
-            .and_then(|repo| files::video_path(&repo, &path)),
-        (Some(path), None) => files::video_path_at(std::path::Path::new(&path)),
+            .and_then(|repo| files::stream_path(&repo, &path)),
+        (Some(path), None) => files::stream_path_at(std::path::Path::new(&path)),
     };
     let range = request.headers().get(tauri::http::header::RANGE).and_then(|v| v.to_str().ok());
     match file {
-        Ok(file) => files::serve_video(&file, range),
+        Ok(file) => files::serve_stream(&file, range),
         Err((status, message)) => files::text_response(status, message),
     }
 }

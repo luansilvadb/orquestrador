@@ -1,9 +1,9 @@
 // Aba de mídia do editor central: imagem (png, jpg, gif, webp, bmp), áudio (mp3, wav, ogg, flac, m4a) e vídeo (mp4, m4v, webm, mov).
-// Imagem e áudio: os bytes vêm de `read_media` e entram num blob local (nada de asset protocol nem HTML). Vídeo não passa pelo IPC:
-// o `<video>` recebe a URL do protocolo `orq-media`, que o backend serve em pedaços (HTTP Range), sem limite de tamanho.
+// Imagem: os bytes vêm de `read_media` e entram num blob local (nada de asset protocol nem HTML). Áudio e vídeo não passam pelo IPC:
+// o `<audio>` e o `<video>` recebem a URL do protocolo `orq-media`, que o backend serve em pedaços (HTTP Range), sem limite de tamanho.
 // Mídia não lê texto, não cria rascunho e não grava: a aba é só de leitura.
 // Áudio e vídeo não tocam sozinhos e param ao sair da vista (troca de aba, grupo oculto, app em segundo plano) e ao desmontar.
-// As listas espelham `MEDIA_EXTS` e `VIDEO_EXTS` em `files.rs`: o backend recusa o que não estiver nelas.
+// As listas espelham `MEDIA_EXTS`, `AUDIO_EXTS` e `VIDEO_EXTS` em `files.rs`: o backend recusa o que não estiver nelas.
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import { Button, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
@@ -48,7 +48,7 @@ export function MediaView({
   const [source, setSource] = useState<Source>(null);
   // Uma leitura por caminho: a troca de caminho (renomear) descarta o blob anterior, e a resposta tardia de um caminho velho não entra.
   useEffect(() => {
-    if (!media || media.kind === 'video') return;
+    if (!media || media.kind !== 'image') return;
     let live = true;
     let url: string | null = null;
     setSource(null);
@@ -67,15 +67,15 @@ export function MediaView({
   }, [path]);
 
   if (!media) return null;
-  if (media.kind === 'video') {
+  if (media.kind === 'video' || media.kind === 'audio') {
     const url = backend.mediaUrl(path);
-    return <VideoBody key={url} url={url} name={fileName(path)} shown={shown} />;
+    return media.kind === 'video'
+      ? <VideoBody key={url} url={url} name={fileName(path)} shown={shown} />
+      : <AudioBody key={url} url={url} name={fileName(path)} shown={shown} />;
   }
   if (!source) return <Note text="Lendo o arquivo…" />;
   if ('error' in source) return <Note text={source.error} danger />;
-  return media.kind === 'image'
-    ? <ImageBody url={source.url} name={fileName(path)} />
-    : <AudioBody url={source.url} name={fileName(path)} shown={shown} />;
+  return <ImageBody url={source.url} name={fileName(path)} />;
 }
 
 // Aviso no lugar do corpo da aba (lendo, erro, sem conteúdo). Também usado pelas abas do editor central (src/editor/editor-workspace.tsx).
@@ -143,6 +143,7 @@ function usePauseOutOfView(media: RefObject<HTMLMediaElement | null>, box: RefOb
 }
 
 // Controles nativos do WebView2 (tocar, pausar, posição, volume), sem pacote novo. Não toca sozinho (sem `autoplay`).
+// A troca de URL (renomear) remonta pelo `key`.
 function AudioBody({ url, name, shown }: { url: string; name: string; shown: boolean }) {
   const audio = useRef<HTMLAudioElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -155,7 +156,7 @@ function AudioBody({ url, name, shown }: { url: string; name: string; shown: boo
       <audio
         ref={audio} src={url} controls preload="metadata" aria-label={name} style={{ width: '100%', maxWidth: 560 }}
         onPlay={() => setError(null)}
-        onError={() => setError('Não foi possível tocar este áudio. O formato pode não ser suportado pelo Windows.')}
+        onError={() => setError('Não foi possível tocar este áudio. O arquivo pode ter sumido ou o formato pode não ser suportado pelo Windows.')}
       />
       {error && <Text as="p" role="alert" fontSize={12} type="danger">{error}</Text>}
     </Flexbox>
