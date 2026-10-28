@@ -50,6 +50,10 @@ const EXPECTED_MD = 'gg' + 'googgg';
 // .env.example (Properties): os pares do comentário e do valor (string) ficam sem cor; os da seção `[secao]` são coloridos.
 const DOTENV = '# comentário (a [b])\n[secao]\nCHAVE=valor (x)\n';
 const EXPECTED_DOTENV = '----' + 'gg' + '--';
+// Batch (.bat): comentário com par, comando, variável e string com variável dentro. Os pares do comentário ficam sem cor; o `(` e o
+// `)` do bloco do `if` são coloridos.
+const BAT = '@echo off\nREM nota (a)\nset NOME=1\n:inicio\necho "olá %NOME%" && goto inicio\nif exist x.txt (\n  del x.txt\n)\n';
+const EXPECTED_BAT = '--' + 'gg';
 // Cor de `tags.string` no darkHighlight (src/editor/file-view.tsx), em rgb().
 const STRING_COLOR = (() => {
   const src = readFileSync(join(ROOT, 'src', 'editor', 'file-view.tsx'), 'utf8');
@@ -261,6 +265,29 @@ scenario('.env.example: realce de Properties e pares fora do comentário e do va
     assert.notEqual(valor, 'rgb(106, 153, 85)', 'valor com cor diferente da do comentário');
   });
   await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'editor-style-dotenv.png') });
+});
+
+scenario('.bat: REM, rótulo, set, %VAR%, string e operador coloridos', async ({ page }) => {
+  await open(page, 'script.bat', BAT);
+  await assertBrackets(page, EXPECTED_BAT);
+  const plain = 'rgb(204, 204, 204)';
+  await eventually(async () => {
+    assert.equal((await styleOf(page, 'REM nota')).color, 'rgb(106, 153, 85)', 'REM (#6A9955)');
+    assert.equal((await styleOf(page, 'set')).color, 'rgb(86, 156, 214)', 'set (#569CD6)');
+    assert.equal((await styleOf(page, ':inicio')).color, 'rgb(200, 200, 200)', 'rótulo (#C8C8C8)');
+    assert.equal((await styleOf(page, '%NOME%')).color, 'rgb(156, 220, 254)', 'variável (#9CDCFE)');
+    assert.equal((await styleOf(page, '"olá')).color, STRING_COLOR, 'string');
+    assert.equal((await styleOf(page, '&&')).color, 'rgb(212, 212, 212)', 'operador (#D4D4D4)');
+    for (const t of ['REM nota', 'set', '%NOME%', '"olá']) assert.notEqual((await styleOf(page, t)).color, plain, `${t} diferente de texto puro`);
+  });
+  await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'editor-style-bat.png') });
+});
+
+scenario('.CMD (maiúsculas): REM colorido', async ({ page }) => {
+  await open(page, 'SCRIPT.CMD', 'REM x\n');
+  await eventually(async () => {
+    assert.equal((await styleOf(page, 'REM x')).color, 'rgb(106, 153, 85)', 'REM em .CMD');
+  });
 });
 
 scenario('par sob o cursor: caixa do Antigravity sem mudar a geometria do texto; digitar recolore o arquivo', async ({ page }) => {

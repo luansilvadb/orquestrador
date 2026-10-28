@@ -34,9 +34,15 @@ let dotenvReady: LanguageSupport | undefined;
 let languageList: readonly LanguageDescription[] | undefined;
 const loadDotenv = () => dotenv ??= import('@codemirror/legacy-modes/mode/properties')
   .then(({ properties }) => dotenvReady = new LanguageSupport(StreamLanguage.define({ ...properties, tokenTable: { quote: tags.string } })));
+// Batch (`.bat`, `.cmd`) também não tem descrição no pacote: modo próprio em batch-mode.ts.
+const BATCH = /\.(bat|cmd)$/i;
+let batchSupport: Promise<LanguageSupport> | undefined;
+let batchReady: LanguageSupport | undefined;
+const loadBatch = () => batchSupport ??= import('./batch-mode').then(({ batch }) => batchReady = new LanguageSupport(StreamLanguage.define(batch)));
 const fileName = (path: string) => path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
 const loadLanguage = (path: string) => {
   if (DOTENV.test(fileName(path))) return loadDotenv();
+  if (BATCH.test(path)) return loadBatch();
   return import('@codemirror/language-data').then(({ languages }) => {
     languageList = languages;
     return LanguageDescription.matchFilename(languages, path)?.load() ?? null;
@@ -47,6 +53,7 @@ export const preloadLanguage = (path: string) => loadLanguage(path).then(() => {
 // Linguagem de `path` se já estiver carregada (`null`: sem gramática para ele); `undefined` quando ainda falta carregar.
 const readyLanguage = (path: string) => {
   if (DOTENV.test(fileName(path))) return dotenvReady;
+  if (BATCH.test(path)) return batchReady;
   if (!languageList) return undefined;
   const description = LanguageDescription.matchFilename(languageList, path);
   return description ? description.support : null;
