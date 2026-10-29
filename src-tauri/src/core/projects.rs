@@ -43,7 +43,6 @@ pub struct Projects {
     emit: Emit,
     capacity: Arc<Global>,
     config_lock: Arc<Mutex<()>>,
-    executor_choice: Mutex<Option<Choice>>,
     no_project: Core,
 }
 
@@ -67,7 +66,6 @@ impl Projects {
             emit,
             capacity,
             config_lock,
-            executor_choice: Mutex::new(None),
             no_project,
         }
     }
@@ -99,10 +97,7 @@ impl Projects {
             return Ok(existing);
         }
         let result = Opened { id, project: opened.project, subfolder: opened.subfolder, existing: false };
-        registry.entries.push(Entry { opened: result.clone(), core: core.clone() });
-        if let Some(choice) = self.executor_choice.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-            core.apply_executor_choice(choice)?;
-        }
+        registry.entries.push(Entry { opened: result.clone(), core });
         Ok(result)
     }
 
@@ -148,21 +143,17 @@ impl Projects {
         Ok(config::options(&cfg, &self.exes.codex))
     }
 
-    pub fn set_executor_choice(&self, choice: Choice) -> Result<(), String> {
+    /// Vale só para o projeto `id`; a configuração global guarda a última escolha para preencher o formulário.
+    pub fn set_executor_choice(&self, id: &str, choice: Choice) -> Result<(), String> {
         config::check_choice("executor", &choice)?;
+        let core = self.core(id)?;
         {
             let _config = self.config_lock.lock().unwrap_or_else(|e| e.into_inner());
             let mut cfg = config::read(&self.cfg_path)?;
             cfg.executor = choice.clone();
             config::save(&self.cfg_path, &cfg)?;
         }
-        *self.executor_choice.lock().unwrap_or_else(|e| e.into_inner()) = Some(choice.clone());
-        let cores: Vec<Core> = self.registry.lock().unwrap_or_else(|e| e.into_inner()).entries.iter()
-            .map(|entry| entry.core.clone()).collect();
-        for core in cores {
-            let _ = core.apply_executor_choice(choice.clone());
-        }
-        Ok(())
+        core.apply_executor_choice(choice)
     }
 
     pub fn has_running(&self) -> bool {
@@ -297,17 +288,38 @@ mod tests {
 
     #[test]
     fn escolha_do_executor_invalida_nao_grava_e_valida_persiste() {
-        let (projects, root, _, _) = fixture("escolha-executor");
+        let (projects, root, a_path, _) = fixture("escolha-executor");
         let config_path = root.0.join("config.json");
+        let a = projects.open_project(&a_path).unwrap();
 
-        assert!(projects.set_executor_choice(Choice::new("codex", "", "enorme")).is_err());
+        assert!(projects.set_executor_choice(&a.id, Choice::new("codex", "", "enorme")).is_err());
         assert!(!config_path.exists());
 
-        projects.set_executor_choice(Choice::new("codex", "gpt-5.5", "high")).unwrap();
+        projects.set_executor_choice(&a.id, Choice::new("codex", "gpt-5.5", "high")).unwrap();
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
         assert_eq!(saved["executor"]["tool"], "codex");
         assert_eq!(saved["executor"]["model"], "gpt-5.5");
         assert_eq!(saved["executor"]["effort"], "high");
+        projects.shutdown();
+    }
+
+    #[test]
+    fn escolha_do_executor_fica_no_projeto() {
+        let (projects, root, a_path, _) = fixture("escolha-isolada");
+        let a = projects.open_project(&a_path).unwrap();
+        let b = projects.open_project(&root.0.join("b")).unwrap();
+        projects.set_executor_choice(&b.id, Choice::new("claude", "", "")).unwrap();
+
+        projects.set_executor_choice(&a.id, Choice::new("codex", "", "high")).unwrap();
+        assert_eq!(projects.core(&a.id).unwrap().test_choice(), Some(Choice::new("codex", "", "high")));
+        assert_eq!(projects.core(&b.id).unwrap().test_choice(), Some(Choice::new("claude", "", "")));
+
+        let c_path = root.0.join("c");
+        std::fs::create_dir_all(&c_path).unwrap();
+        let c = projects.open_project(&c_path).unwrap();
+        assert_eq!(projects.core(&c.id).unwrap().test_choice(), None);
+        assert!(projects.set_executor_choice("project-99", Choice::new("codex", "", "")).is_err());
+        projects.shutdown();
     }
 
 }

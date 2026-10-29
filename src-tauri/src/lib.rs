@@ -532,8 +532,8 @@ fn close_shell(projects: State<Projects>, project: Option<String>, id: String) -
 }
 
 #[tauri::command(async)]
-fn set_executor_choice(projects: State<Projects>, choice: Choice) -> Result<(), String> {
-    projects.set_executor_choice(choice)
+fn set_executor_choice(projects: State<Projects>, project: String, choice: Choice) -> Result<(), String> {
+    projects.set_executor_choice(&project, choice)
 }
 
 #[tauri::command(async)]

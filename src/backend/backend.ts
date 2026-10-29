@@ -85,7 +85,7 @@ export const projectBackend = (projectId: string | null) => ({
   startShell: (id: string, cols: number, rows: number, cwd?: string, project?: string | null) => call('start_shell', { project: shellProject(projectId, project), id, cols, rows, cwd }),
   // Mata o shell de `id` sem gerar evento de saída.
   closeShell: (id: string, project?: string | null) => call('close_shell', { project: shellProject(projectId, project), id }),
-  setExecutorChoice: (choice: Choice) => call('set_executor_choice', { choice }),
+  setExecutorChoice: (choice: Choice) => projectCall(projectId, 'set_executor_choice', { choice }),
   termWrite: (id: string, data: string, project?: string | null) => call('term_write', { project: shellProject(projectId, project), id, data }),
   // O CLI que roda agora no terminal `id`, pelo processo (num shell, muda quando ele abre e quando sai); `null` é shell comum.
   termCli: (id: string, project?: string | null) => call('term_cli', { project: shellProject(projectId, project), id }),

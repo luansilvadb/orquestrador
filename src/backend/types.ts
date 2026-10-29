@@ -208,7 +208,7 @@ export type Commands = {
   start_orchestrator: { args: ProjectArgs<{ choice: Choice; cols: number; rows: number }>; result: void };
   start_shell: { args: { project: string | null; id: string; cols: number; rows: number; cwd?: string }; result: string };
   close_shell: { args: { project: string | null; id: string }; result: void };
-  set_executor_choice: { args: { choice: Choice }; result: void };
+  set_executor_choice: { args: ProjectArgs<{ choice: Choice }>; result: void };
   term_write: { args: { project: string | null; id: string; data: string }; result: void };
   term_cli: { args: { project: string | null; id: string }; result: 'claude' | 'codex' | null };
   term_resize: { args: { project: string | null; id: string; cols: number; rows: number }; result: void };

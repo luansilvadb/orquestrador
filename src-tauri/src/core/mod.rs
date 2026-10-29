@@ -548,6 +548,11 @@ impl Core {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_choice(&self) -> Option<Choice> {
+        self.inner.lock().unwrap().choice.clone()
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_emit(&self) {
         (self.emit)("test-event", json!({}));
     }
