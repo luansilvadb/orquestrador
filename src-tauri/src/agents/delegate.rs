@@ -32,7 +32,12 @@ pub fn check_session(session: &Path) -> Result<(), String> {
     }
 }
 
-/// Publica as tarefas como um lote novo, na ordem em que vieram, exatamente como vieram.
+/// O manifesto de um lote: as tarefas, na ordem, num arquivo só. O app lê este arquivo de uma vez, então um lote
+/// não pode ser aceito pela metade.
+pub const MANIFEST: &str = "tarefas.json";
+
+/// Publica as tarefas como um lote novo, na ordem em que vieram, exatamente como vieram. O manifesto é o único
+/// arquivo do lote e vai junto com a pasta, publicada por renomeação.
 pub fn publish(session: &Path, tasks: &[String]) -> Result<String, String> {
     if tasks.is_empty() {
         return Err("Nenhuma tarefa: `tarefas` precisa ter pelo menos um texto.".into());
@@ -44,12 +49,27 @@ pub fn publish(session: &Path, tasks: &[String]) -> Result<String, String> {
     let requests = session.join("requests");
     let tmp = requests.join(format!("{id}.tmp"));
     let io = |e: std::io::Error| format!("Não foi possível publicar o lote em {}: {e}", requests.display());
+    let manifest = serde_json::to_vec(tasks).map_err(|e| format!("Não foi possível publicar o lote: {e}"))?;
     std::fs::create_dir(&tmp).map_err(io)?;
-    for (n, task) in tasks.iter().enumerate() {
-        std::fs::write(tmp.join(format!("{}.txt", n + 1)), task).map_err(io)?;
-    }
+    std::fs::write(tmp.join(MANIFEST), manifest).map_err(io)?;
     std::fs::rename(&tmp, requests.join(&id)).map_err(io)?;
     Ok(id)
+}
+
+/// Lê o manifesto de um lote publicado. Devolve a razão quando o arquivo não abre, não é uma lista de textos ou tem
+/// tarefa vazia: quem chama recusa o lote inteiro, porque nenhuma tarefa roda sem o lote completo.
+pub fn read_manifest(batch: &Path) -> Result<Vec<String>, String> {
+    let file = batch.join(MANIFEST);
+    let bytes = std::fs::read(&file).map_err(|e| format!("não foi possível abrir {}: {e}", file.display()))?;
+    let tasks: Vec<String> =
+        serde_json::from_slice(&bytes).map_err(|e| format!("o manifesto não é uma lista de textos: {e}"))?;
+    if tasks.is_empty() {
+        return Err("o lote chegou sem tarefas".into());
+    }
+    if tasks.iter().any(|task| task.trim().is_empty()) {
+        return Err("o lote tem tarefa vazia".into());
+    }
+    Ok(tasks)
 }
 
 /// O lote mais recente que ainda não foi entregue.
@@ -99,9 +119,11 @@ mod tests {
         let tasks = ["Tarefa A\nlinha 2 d'água", "Diga \"oi\" e \\\"tchau\\\" e a barra \\", "{\"a\":\"b\\\"c\"}"];
         let id = publish(&dir, &tasks.map(String::from)).unwrap();
         let batch = dir.join("requests").join(&id);
-        for (n, task) in tasks.iter().enumerate() {
-            assert_eq!(std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap(), *task);
-        }
+        let manifest: Vec<String> = serde_json::from_slice(&std::fs::read(batch.join(MANIFEST)).unwrap()).unwrap();
+        assert_eq!(manifest, tasks, "o texto exato, na ordem, no manifesto");
+        assert_eq!(read_manifest(&batch).unwrap(), tasks, "o leitor devolve o que o escritor gravou");
+        let names: Vec<String> = std::fs::read_dir(&batch).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, [MANIFEST], "o manifesto é o único arquivo do lote");
         let names: Vec<String> = std::fs::read_dir(dir.join("requests")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(names, [id]);
     }

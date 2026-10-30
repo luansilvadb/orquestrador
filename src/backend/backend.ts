@@ -93,9 +93,9 @@ export const projectBackend = (projectId: string | null) => ({
   termSnapshot: (id: string, project?: string | null) => call('term_snapshot', { project: shellProject(projectId, project), id }),
   stopExecutor: (id: string) => projectCall(projectId, 'stop_executor', { id }),
   hasRunning: () => call('has_running'),
-  // Caminho relativo à pasta do projeto, com "/"; '' é a raiz.
-  listDir: (path: string) => projectCall(projectId, 'list_dir', { path }),
-  // Conteúdo de um arquivo, com o mesmo caminho de `listDir`. Erro chega como mensagem em português.
+  // Caminhos relativos à pasta do projeto, com "/"; '' é a raiz. Uma resposta por caminho, na ordem pedida.
+  listDirs: (paths: string[]) => projectCall(projectId, 'list_dirs', { paths }),
+  // Conteúdo de um arquivo, com o mesmo caminho de `listDirs`. Erro chega como mensagem em português.
   readFile: (path: string) => isAbsolutePath(path) ? call('read_file_at', { path }) : projectCall(projectId, 'read_file', { path }),
   readFileAt: (path: string) => call('read_file_at', { path }),
   // Bytes de uma imagem ou áudio (extensão na lista de `files.rs`), como `ArrayBuffer`. Erro chega como mensagem em português; limite de 32 MiB.

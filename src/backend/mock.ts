@@ -6,7 +6,8 @@
 // `__mock.addNode(node)` simula o orquestrador delegando: um executor chega ao projeto ativo (o orquestrador precisa estar aberto).
 // `__mock.nodeState(event)` simula a troca de estado de um executor (`done`, `stopped` ou `failed` fecham a aba).
 // `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto.
-// A árvore (`list_dir`) é em memória e muda com as ações do menu e com `__mock.remove`.
+// A árvore (`list_dirs`) é em memória e muda com as ações do menu e com `__mock.remove`; `__mock.failListDirs = 1`
+// faz a próxima consulta inteira falhar (a chamada rejeita, como um erro de transporte), não só uma pasta.
 // O Git tem estado só no que a mock modela: blocos (preparar, tirar do preparo, descartar), arquivo descartado, commit, histórico, gráfico e
 // conflitos (resolver e aceitar remoção). Branches, fetch, pull e push são respostas fixas; as refs são fixas, exceto a `main`, que anda com o commit. Regex da pesquisa e da substituição usa a
 // sintaxe do JavaScript (o backend usa a do Rust); o texto de busca e de substituição é o mesmo nos dois.
@@ -30,7 +31,7 @@ import type { Transport } from './backend';
 import { fileNameError } from '../shared/file-tab-actions';
 import { splitPath } from '../shared/paths';
 import {
-  type Batch, type Choice, type ExecutorNode, type NodeStateEvent, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events, type FormatterInfo,
+  type Batch, type Choice, type DirListing, type ExecutorNode, type NodeStateEvent, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events, type FormatterInfo,
   type FileBase, type GitCommitHoverDetail, type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
   type SearchResults, type SkipReason,
@@ -311,6 +312,8 @@ const debug = { close: async () => {
   addGitFile: (rel: string, base: string, text: string) => addGitFile(rel, base, text),
   // Pasta nova no disco simulado (fixture de teste): aparece na árvore. Pasta-mãe que não existe é ignorada.
   addFolder: (rel: string) => { const { dir, name } = splitPath(rel); const parent = folderAt(dir); if (parent && !parent.children[name]) parent.children[name] = folder(); },
+  // Falha de transporte simulada nas próximas N consultas de `list_dirs`: a chamada inteira rejeita, como um erro de IPC.
+  failListDirs: 0,
   // Falha de I/O simulada: colar ou mover para quando chega num destes caminhos de origem (relativos), como um disco que recusa um item.
   failOn: [] as string[],
   // Falha de leitura de mídia (`read_media`, e a URL de áudio e vídeo) nestes caminhos, como um disco que não entrega o arquivo.
@@ -1146,10 +1149,16 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
     // O orquestrador simulado só mostra o que chega (a colagem, por exemplo), com as quebras de linha do texto (LF no bracketed paste, CR no paste do xterm).
     else if (id === 'orchestrator') out(id, text.replace(/\r\n?|\n/g, '\r\n'), project);
   },
-  list_dir: ({ path }: { path: string }) => {
-    const dir = folderAt(path);
-    if (!dir) throw `Pasta não encontrada: ${path}`;
-    return listing(dir, path);
+  list_dirs: ({ paths }: { paths: string[] }): DirListing[] => {
+    if (debug.failListDirs > 0) {
+      debug.failListDirs -= 1;
+      throw 'Falha simulada ao listar as pastas.';
+    }
+    return paths.map((path) => {
+      const dir = folderAt(path);
+      // Mesma regra do backend: a pasta que não abre vem com o motivo, sem derrubar as outras do pedido.
+      return dir ? { kind: 'ok', entries: listing(dir, path) } : { kind: 'error', message: `Pasta não encontrada: ${path}` };
+    });
   },
   read_file: ({ path }: { path: string }) => {
     requireFile(path);

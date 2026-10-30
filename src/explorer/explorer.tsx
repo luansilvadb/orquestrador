@@ -21,7 +21,7 @@ import { fileNameError } from '../shared/file-tab-actions';
 import { action, blocked, DIVIDER, fileName, useChord } from '../shared/file-tabs';
 import { splitPath } from '../shared/paths';
 import { usePolling } from '../shared/polling';
-import type { Batch, DirEntry, GitStatus, Moved } from '../backend/types';
+import type { Batch, DirEntry, DirListing, GitStatus, Moved } from '../backend/types';
 
 /** Opções de abertura. Sem elas, o clique simples abre como prévia (a aba seguinte substitui). `permanent`: a aba fica. `side`: abre na área da direita. */
 export type OpenOptions = { permanent?: boolean; side?: boolean };
@@ -324,36 +324,50 @@ export function FilesScreen({
   // Trocar de aba limpa a seleção: a marcação volta a ser a do arquivo aberto.
   useEffect(() => setSelection([]), [openPath]);
 
-  // Uma rodada consulta a raiz e cada pasta aberta. O estado só muda quando a resposta é diferente.
-  // Pasta aberta que não lista mais sai da árvore sem erro na tela; falha na raiz aparece como texto, não como toast.
-  usePolling(async () => {
-    const paths = ['', ...expanded.current];
-    const results = await Promise.all(paths.map((path) =>
-      backend.listDir(path).then((list) => ({ list }), (e: unknown) => ({ error: message(e) }))));
-    const rootResult = results[0];
-    setError('error' in rootResult ? rootResult.error : '');
+  // Aplica as respostas do `list_dirs` (uma por caminho, na ordem pedida) às pastas que continuam abertas: a que
+  // fechou durante a consulta não se aplica, e a que não abre mais sai da árvore sem derrubar as outras.
+  function applyListings(paths: string[], results: DirListing[]) {
     setTree((prev) => {
       let next = prev;
       paths.forEach((path, i) => {
         const r = results[i];
+        if (!r) return;
         if (!path) {
-          if ('list' in r && !sameList(next.children[''], r.list)) next = { ...next, children: { ...next.children, '': r.list } };
+          if (r.kind === 'ok' && !sameList(next.children[''], r.entries)) next = { ...next, children: { ...next.children, '': r.entries } };
         } else if (prev.expanded.includes(path)) {
-          // Pasta fechada enquanto a consulta ia: a resposta não se aplica.
-          if ('error' in r) next = drop(next, path);
-          else if (!sameList(next.children[path], r.list)) next = { ...next, children: { ...next.children, [path]: r.list } };
+          if (r.kind === 'error') next = drop(next, path);
+          else if (!sameList(next.children[path], r.entries)) next = { ...next, children: { ...next.children, [path]: r.entries } };
         }
       });
       return next;
     });
-  }, 1500, active);
+  }
+
+  // Uma rodada consulta a raiz e cada pasta aberta numa chamada só (um `git check-ignore` para todas). O estado só
+  // muda quando a resposta é diferente. Falha na raiz aparece como texto, não como toast; com a árvore recolhida não
+  // há o que atualizar. O pedido que falha por inteiro (erro de transporte, projeto fechando) mostra o motivo e fica
+  // para a volta seguinte: o laço do `usePolling` não pode cair, ou a árvore pararia de se atualizar em silêncio.
+  usePolling(async () => {
+    const paths = ['', ...expanded.current];
+    let results: DirListing[];
+    try {
+      results = await backend.listDirs(paths);
+    } catch (e) {
+      setError(message(e));
+      return;
+    }
+    const root = results[0];
+    setError(root?.kind === 'error' ? root.message : '');
+    applyListings(paths, results);
+  }, 1500, active && !collapsed);
 
   async function openDir(path: string) {
     // A lista chega antes da pasta abrir: ela abre já com o conteúdo, sem o nó provisório.
     try {
-      const list = await backend.listDir(path);
+      const first = (await backend.listDirs([path]))[0];
+      if (first?.kind !== 'ok') throw new Error(first?.message ?? `Pasta não encontrada: ${path}`);
       setTree((prev) => ({
-        children: { ...prev.children, [path]: list },
+        children: { ...prev.children, [path]: first.entries },
         expanded: prev.expanded.includes(path) || !path ? prev.expanded : [...prev.expanded, path],
       }));
     } catch {
@@ -369,16 +383,10 @@ export function FilesScreen({
   }
 
 
-  // Relê uma pasta depois de uma ação dela (renomear, excluir, criar), sem abrir a pasta se ela estava fechada.
-  async function reloadFolder(dir: string) {
-    try {
-      const list = await backend.listDir(dir);
-      setTree((prev) => (dir === '' || prev.expanded.includes(dir)
-        ? { ...prev, children: { ...prev.children, [dir]: list } }
-        : prev));
-    } catch {
-      // O polling mostra o que sumiu.
-    }
+  // Relê a raiz e as pastas dadas numa chamada só (depois de uma ação em lote), sem abrir a pasta que estava fechada.
+  function reloadDirs(dirs: string[]) {
+    const paths = [...new Set(['', ...dirs])];
+    return backend.listDirs(paths).then((results) => applyListings(paths, results), () => {});
   }
 
   // Depois de uma ação em lote, com ou sem erro: tira do estado o que saiu do lugar (`gone`), leva a seleção para onde os itens foram
@@ -386,12 +394,12 @@ export function FilesScreen({
   function settle(dirs: string[], gone: string[], moves: Moved[] = []) {
     gone.forEach((path) => setTree((prev) => drop(prev, path)));
     setSelection((prev) => prev.map((p) => remapPath(p, moves)).filter((p) => !gone.some((g) => under(g, p))));
-    new Set(['', ...dirs]).forEach((dir) => void reloadFolder(dir));
+    void reloadDirs(dirs);
   }
 
   // Depois de colar: relê a raiz e as pastas abertas, porque um recorte tira itens de onde estavam.
   async function reloadAll() {
-    await Promise.all(['', ...expanded.current].map(reloadFolder));
+    await reloadDirs(expanded.current);
   }
 
   // Pedido de revelar: abre as pastas de cima para baixo (cada uma precisa da lista antes), seleciona o arquivo e rola até ele.
@@ -562,7 +570,7 @@ export function FilesScreen({
       const created = await request;
       setCreating(null);
       if (dir) await openDir(dir);
-      else await reloadFolder('');
+      else await reloadDirs([]);
       if (kind === 'file') onOpen(created, { permanent: true });
       toast.success({ title, duration: 3000 });
     } catch (e) {

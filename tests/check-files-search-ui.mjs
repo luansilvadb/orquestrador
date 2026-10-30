@@ -1,7 +1,8 @@
 // QA de interface dos fluxos de arquivos (árvore) e de pesquisa/substituição, em Chrome headless contra o app simulado (src/backend/mock.ts,
 // só no `vite` de desenvolvimento). Usa o mesmo loader do check-editor-ui (editor-ui-harness.mjs): cada cenário roda com contexto novo,
 // clipboard fake e a árvore carregada. O mock só entra na fronteira de I/O: fixtures (`__mock.addFile`, `__mock.addFolder`), edição externa
-// (`__mock.external`), disco (`__mock.disk`), falha de I/O (`__mock.failOn`) e o clipboard simulado (`__mock.clipboard`).
+// (`__mock.external`), disco (`__mock.disk`), falha de I/O (`__mock.failOn`), falha de transporte na árvore
+// (`__mock.failListDirs`) e o clipboard simulado (`__mock.clipboard`).
 // Uso: node tests/check-files-search-ui.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
 // Capturas em .playwright-mcp/files-search-*.png: evidência para leitura humana, não asserção.
 import { join } from 'node:path';
@@ -885,6 +886,21 @@ scenario('pasta grande na árvore: abre com só as linhas à vista no DOM; rolar
   });
   assert.equal(await selected(page, 'item-419.md'), true, 'Revelar marca o item');
   await page.screenshot({ path: join(OUT, 'files-search-pasta-grande.png') });
+});
+
+// O polling da árvore não pode cair quando a consulta inteira falha (erro de transporte, projeto fechando): o motivo
+// aparece na faixa e a rodada seguinte volta a atualizar a árvore normalmente.
+scenario('árvore: consulta que falha por inteiro mostra o motivo e o polling seguinte volta a atualizar', async ({ page }) => {
+  await treeItem(page, 'README.md').waitFor();
+  await page.evaluate(() => { window.__mock.failListDirs = 1; });
+  const erro = page.getByRole('status').filter({ hasText: 'Falha simulada ao listar as pastas.' });
+  await erro.waitFor({ timeout: 5000 });
+  assert.equal(await treeItem(page, 'README.md').isVisible(), true, 'a árvore anterior continua na tela');
+
+  // A volta seguinte (1,5 s) já vale: o erro some e a árvore recebe o arquivo novo do disco simulado.
+  await page.evaluate(() => window.__mock.addFile('novo-depois-da-falha.txt'));
+  await treeItem(page, 'novo-depois-da-falha.txt').waitFor({ timeout: 6000 });
+  await erro.waitFor({ state: 'detached', timeout: 6000 });
 });
 
 scenario('pesquisa: resultado pré-lido troca a aba com texto, linha e cursor já visíveis', async ({ page }) => {

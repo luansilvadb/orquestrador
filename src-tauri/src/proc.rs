@@ -3,14 +3,83 @@
 use crate::platform::{self, Job, Situacao};
 use std::collections::HashSet;
 use std::path::Path;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// Um comando que não abre janela de console (o app é de janela; cada filho abriria a sua).
 pub fn quiet(program: &str) -> Command {
     let mut cmd = Command::new(program);
     platform::sem_janela(&mut cmd);
     cmd
+}
+
+/// A saída de um comando rodado com prazo.
+pub struct Saida {
+    pub status: std::process::ExitStatus,
+    pub out: Vec<u8>,
+    pub err: Vec<u8>,
+    /// O prazo estourou e o processo foi morto: `out` e `err` trazem o que saiu até ali.
+    pub estourou: bool,
+}
+
+/// Por que o comando com prazo não deixou saída: ele não iniciou, não pôde ser aguardado (ou encerrado), ou a saída
+/// não pôde ser lida. Quem chama põe o nome do programa na mensagem.
+#[derive(Debug)]
+pub enum FalhaPrazo {
+    Iniciar(io::Error),
+    Aguardar(io::Error),
+    Ler(io::Error),
+}
+
+/// Roda `cmd` com `entrada` na entrada padrão (e a fecha em seguida) e um prazo. A saída e o erro são lidos em
+/// threads enquanto o comando roda, para um pipe cheio não travar o processo; no estouro, o comando é morto e o que
+/// saiu até ali volta com `estourou`.
+pub fn saida_com_prazo(mut cmd: Command, entrada: &[u8], prazo: Duration) -> Result<Saida, FalhaPrazo> {
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(FalhaPrazo::Iniciar)?;
+    // Os três pipes foram pedidos `piped`: as tomadas existem.
+    let mut stdin = child.stdin.take().expect("stdin pedido com pipe");
+    let stdout = child.stdout.take().expect("stdout pedido com pipe");
+    let stderr = child.stderr.take().expect("stderr pedido com pipe");
+    let bytes = entrada.to_vec();
+    let writer = thread::spawn(move || {
+        let _ = stdin.write_all(&bytes);
+    });
+    let out_reader = thread::spawn(move || ler_pipe(stdout));
+    let err_reader = thread::spawn(move || ler_pipe(stderr));
+    let started = Instant::now();
+    let (status, estourou) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break (status, false),
+            Ok(None) if started.elapsed() < prazo => thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                break (child.wait().map_err(FalhaPrazo::Aguardar)?, true);
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(FalhaPrazo::Aguardar(e));
+            }
+        }
+    };
+    let _ = writer.join();
+    let out = out_reader.join().map_err(leitura_caiu)?.map_err(FalhaPrazo::Ler)?;
+    let err = err_reader.join().map_err(leitura_caiu)?.map_err(FalhaPrazo::Ler)?;
+    Ok(Saida { status, out, err, estourou })
+}
+
+/// A thread de leitura caiu (pânico): não há saída para devolver.
+fn leitura_caiu(_: Box<dyn std::any::Any + Send>) -> FalhaPrazo {
+    FalhaPrazo::Ler(io::Error::other("a leitura da saída do comando foi interrompida"))
+}
+
+fn ler_pipe(mut pipe: impl Read) -> io::Result<Vec<u8>> {
+    let mut data = Vec::new();
+    pipe.read_to_end(&mut data)?;
+    Ok(data)
 }
 
 /// Por que o Git não deu saída: ele nem começou (não está instalado ou não está no PATH), ou respondeu com erro.
@@ -214,6 +283,37 @@ mod tests {
     #[cfg(windows)]
     use crate::platform::start_time;
     use crate::testutil::{git, write, Tmp};
+
+    #[test]
+    fn saida_com_prazo_devolve_o_que_o_comando_escreveu() {
+        let mut cmd = quiet("git");
+        cmd.args(["--version"]);
+        let saida = saida_com_prazo(cmd, b"", Duration::from_secs(10)).unwrap();
+        assert!(saida.status.success() && !saida.estourou, "estourou: {}", saida.estourou);
+        assert!(String::from_utf8_lossy(&saida.out).contains("git version"));
+    }
+
+    /// Um comando que passa do prazo é morto na hora: `saida_com_prazo` não espera o filho terminar.
+    #[test]
+    fn comando_que_passa_do_prazo_e_morto_e_volta_sem_esperar() {
+        #[cfg(windows)]
+        let cmd = {
+            let mut cmd = quiet("ping");
+            cmd.args(["-n", "30", "127.0.0.1"]);
+            cmd
+        };
+        #[cfg(not(windows))]
+        let cmd = {
+            let mut cmd = quiet("sleep");
+            cmd.arg("30");
+            cmd
+        };
+        let started = Instant::now();
+        let saida = saida_com_prazo(cmd, b"", Duration::from_millis(300)).unwrap();
+        assert!(saida.estourou, "o prazo tinha de estourar");
+        assert!(!saida.status.success(), "o processo foi morto");
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    }
 
     #[cfg(windows)]
     #[test]

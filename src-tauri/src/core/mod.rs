@@ -5,6 +5,7 @@ pub mod projects;
 pub mod pty;
 
 use crate::agents::cli::{self, Exes};
+use crate::agents::delegate;
 use crate::agents::session::{self, Places, Session};
 use crate::config::{self, Choice, Options};
 use crate::core::capacity::{Global, Resources};
@@ -674,7 +675,7 @@ impl Core {
     }
 
     fn accept_batches(&self, inner: &mut Inner) {
-        // Com uma operação do Git em curso, o pedido fica na pasta `requests`: `seen` só marca o que foi aceito,
+        // Com uma operação do Git em curso, o pedido fica na pasta `requests`: `seen` marca o que já foi decidido,
         // então a volta seguinte do laço o lê, sem perder nem repetir o lote.
         if inner.git_exclusive {
             return;
@@ -690,8 +691,16 @@ impl Core {
             .collect();
         ids.sort();
         for id in ids {
+            // Marcado antes de ler: um lote que não abre fica decidido (nada roda, a falha é entregue), não é um
+            // lote para tentar de novo a cada volta do laço.
             inner.seen.insert(id.clone());
-            let tasks: Vec<String> = (1..).map_while(|n| std::fs::read_to_string(requests.join(&id).join(format!("{n}.txt"))).ok()).collect();
+            let tasks = match delegate::read_manifest(&requests.join(&id)) {
+                Ok(tasks) => tasks,
+                Err(why) => {
+                    fail_batch(inner.session.as_ref(), &id, &why);
+                    continue;
+                }
+            };
             let titles: Vec<String> = tasks.iter().map(|t| title(t)).collect();
             inner.batches.push(Batch { id: id.clone(), titles: titles.clone(), outcomes: vec![None; tasks.len()] });
             for (index, task) in tasks.iter().enumerate() {
@@ -704,9 +713,6 @@ impl Core {
             // Cada nó entra na sessão já no estado em que vai ficar: rodando, na fila ou esperando a escolha.
             let first = inner.nodes.len() - tasks.len();
             self.schedule_from(inner, first, true);
-            if tasks.is_empty() {
-                self.deliver(inner, &id);
-            }
         }
     }
 
@@ -834,24 +840,32 @@ impl Core {
         let batch = batch.to_string();
         // O `git status` leva segundos num repositório grande: roda fora do lock do Core, que segura teclado e terminais.
         std::thread::spawn(move || {
-            let text = if items.is_empty() {
-                "wrapper_error: o lote chegou sem tarefas.\n--- FIM ---\n".to_string()
-            } else {
-                let dir = Path::new(&project);
-                let git = match git::modo(dir) {
-                    Ok(git::Modo::Repo) => proc::git_saida(dir, &["status", "--porcelain", "--untracked-files=all"]).map(GitLote::Status),
-                    Ok(git::Modo::NoRepo) => Ok(GitLote::NoRepo),
-                    Ok(git::Modo::NoGit) => Ok(GitLote::NoGit),
-                    Ok(git::Modo::RepoAbove(root)) => Ok(GitLote::RepoAbove(root)),
-                    Err(why) => Err(why),
-                };
-                format_result(&items, &git)
+            let dir = Path::new(&project);
+            let git = match git::modo(dir) {
+                Ok(git::Modo::Repo) => proc::git_saida(dir, &["status", "--porcelain", "--untracked-files=all"]).map(GitLote::Status),
+                Ok(git::Modo::NoRepo) => Ok(GitLote::NoRepo),
+                Ok(git::Modo::NoGit) => Ok(GitLote::NoGit),
+                Ok(git::Modo::RepoAbove(root)) => Ok(GitLote::RepoAbove(root)),
+                Err(why) => Err(why),
             };
-            let tmp = results.join(format!("{batch}.tmp"));
-            if let Err(e) = std::fs::write(&tmp, &text).and_then(|_| std::fs::rename(&tmp, results.join(format!("{batch}.txt")))) {
-                eprintln!("Aviso: o resultado do lote {batch} não pôde ser gravado: {e}");
-            }
+            write_result(&results, &batch, &format_result(&items, &git));
         });
+    }
+}
+
+/// Um lote que não pôde ser lido não roda nada: a falha vai no lugar do resultado, para o `delegar` que espera não
+/// ficar pendurado. Sem a seção de Git: nada foi executado e nenhum executor chegou a abrir.
+fn fail_batch(session: Option<&Session>, batch: &str, why: &str) {
+    let Some(results) = session.map(|s| s.dir.join("results")) else { return };
+    let text = format!("O lote não pôde ser lido e nada foi executado: {why}\nDelegue as tarefas de novo.\n--- FIM ---\n");
+    write_result(&results, batch, &text);
+}
+
+/// Publica um resultado de lote em `results\<lote>.txt`, por renomeação: quem espera nunca lê o arquivo pela metade.
+fn write_result(results: &Path, batch: &str, text: &str) {
+    let tmp = results.join(format!("{batch}.tmp"));
+    if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, results.join(format!("{batch}.txt")))) {
+        eprintln!("Aviso: o resultado do lote {batch} não pôde ser gravado: {e}");
     }
 }
 
@@ -974,6 +988,16 @@ mod tests {
         let exes = Exes { claude: fake.clone(), codex: fake.clone(), app: fake };
         let places = session::Places { temp: root.join("temp"), codex_rules: root.join("rules") };
         Core::new(exes, places, root.join("config.json"), emit)
+    }
+
+    /// Põe no Core uma sessão de teste com as pastas que a delegação usa, e devolve a pasta dela.
+    fn sessao(core: &Core, root: &Path) -> PathBuf {
+        let dir = root.join("sessao");
+        for sub in ["requests", "results", "exec"] {
+            std::fs::create_dir_all(dir.join(sub)).unwrap();
+        }
+        core.inner.lock().unwrap().session = Some(Session { dir: dir.clone() });
+        dir
     }
 
     #[test]
@@ -1281,21 +1305,77 @@ mod tests {
     }
 
     #[test]
+    fn lote_publicado_abre_um_executor_por_tarefa_do_manifesto() {
+        let root = Tmp::new("orq-core", "lote-manifesto");
+        let core = core_vazio(&root.0, Arc::new(|_: &str, _: Value| {}));
+        let dir = sessao(&core, &root.0);
+        let tasks = ["Tarefa A", "Tarefa B\nlinha 2", "Tarefa C"];
+        let id = delegate::publish(&dir, &tasks.map(String::from)).unwrap();
+
+        let mut inner = core.inner.lock().unwrap();
+        core.accept_batches(&mut inner);
+        assert_eq!(inner.nodes.len(), 3, "uma tarefa, um executor");
+        let titles: Vec<&str> = inner.nodes.iter().map(|n| n.info.title.as_str()).collect();
+        assert_eq!(titles, ["Tarefa A", "Tarefa B", "Tarefa C"], "o título é a primeira linha, na ordem do manifesto");
+        assert!(inner.nodes[1].prompt.ends_with("Tarefa B\nlinha 2"), "a tarefa inteira vai ao executor");
+        assert!(inner.nodes.iter().all(|n| n.info.batch == id));
+        assert_eq!(inner.batches.len(), 1);
+        assert_eq!(inner.batches[0].outcomes.len(), 3);
+    }
+
+    #[test]
+    fn lote_com_manifesto_ilegivel_nao_roda_nada_e_entrega_a_falha() {
+        let root = Tmp::new("orq-core", "lote-ilegivel");
+        let core = core_vazio(&root.0, Arc::new(|_: &str, _: Value| {}));
+        let dir = sessao(&core, &root.0);
+        let id = "00000000000000000001-aaaaaaaa";
+        // Um diretório no lugar do arquivo: `fs::read` falha como falharia com o arquivo travado, sem truque de ACL.
+        std::fs::create_dir_all(dir.join("requests").join(id).join(delegate::MANIFEST)).unwrap();
+
+        let mut inner = core.inner.lock().unwrap();
+        core.accept_batches(&mut inner);
+        assert!(inner.nodes.is_empty(), "nenhum executor abre");
+        assert!(inner.batches.is_empty());
+        assert!(inner.seen.contains(id), "o lote não é tentado de novo");
+        let text = std::fs::read_to_string(dir.join("results").join(format!("{id}.txt"))).unwrap();
+        assert!(text.contains("nada foi executado") && text.ends_with("--- FIM ---\n"), "{text}");
+        assert!(!text.contains("--- GIT ---") && !text.contains("--- EXECUTOR"), "{text}");
+        core.accept_batches(&mut inner);
+        assert!(inner.nodes.is_empty(), "a volta seguinte não relê o lote");
+    }
+
+    #[test]
+    fn manifesto_invalido_derruba_o_lote_inteiro() {
+        let root = Tmp::new("orq-core", "lote-invalido");
+        let core = core_vazio(&root.0, Arc::new(|_: &str, _: Value| {}));
+        let dir = sessao(&core, &root.0);
+        for (n, manifest) in ["{", "{}", "[]", "[1,2]", "[\"\",\"x\"]"].iter().enumerate() {
+            let batch = dir.join("requests").join(format!("invalido-{n}"));
+            std::fs::create_dir_all(&batch).unwrap();
+            std::fs::write(batch.join(delegate::MANIFEST), manifest).unwrap();
+        }
+
+        let mut inner = core.inner.lock().unwrap();
+        core.accept_batches(&mut inner);
+        assert!(inner.nodes.is_empty() && inner.batches.is_empty(), "nenhuma tarefa de um lote inválido roda");
+        for n in 0..5 {
+            assert!(dir.join("results").join(format!("invalido-{n}.txt")).is_file(), "resultado do lote {n}");
+        }
+    }
+
+    #[test]
     fn lote_pedido_durante_a_operacao_do_git_espera_e_entra_uma_vez() {
         let (core, root) = git_core("lote");
-        let session = root.0.join("sessao");
-        let pedido = session.join("requests").join("lote1");
-        std::fs::create_dir_all(&pedido).unwrap();
-        std::fs::write(pedido.join("1.txt"), "Tarefa X\n").unwrap();
+        let session = sessao(&core, &root.0);
+        let id = delegate::publish(&session, &["Tarefa X\n".to_string()]).unwrap();
         let mut inner = core.inner.lock().unwrap();
-        inner.session = Some(Session { dir: session.clone() });
         inner.git_exclusive = true;
         core.accept_batches(&mut inner);
         assert!(inner.nodes.is_empty(), "com o git em curso, o lote não é aceito");
         inner.git_exclusive = false;
         core.accept_batches(&mut inner);
         assert_eq!(inner.nodes.len(), 1);
-        assert_eq!(inner.nodes[0].info.batch, "lote1");
+        assert_eq!(inner.nodes[0].info.batch, id);
         core.accept_batches(&mut inner);
         assert_eq!(inner.nodes.len(), 1, "o lote não entra duas vezes");
         drop(inner);

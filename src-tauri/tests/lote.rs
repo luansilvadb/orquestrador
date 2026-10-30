@@ -3,6 +3,7 @@
 //! lugar do claude e do codex.
 use base64::Engine;
 use orquestrador_lib::agents::cli::Exes;
+use orquestrador_lib::agents::delegate;
 use orquestrador_lib::agents::session::Places;
 use orquestrador_lib::config::{self, Choice};
 use orquestrador_lib::core::capacity::{Memory, Resources};
@@ -398,6 +399,22 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     assert!(!session.exists(), "a pasta da sessão tem de sair no shutdown");
 }
 
+/// O lote que não abre não roda nada, e a falha volta ao orquestrador como resposta na hora, não como uma espera
+/// que só terminaria com a janela de 14 minutos.
+#[test]
+fn lote_ilegivel_volta_como_resposta_e_nao_trava_o_aguardar() {
+    let b = bench("ilegivel", "temp", Some(8));
+    b.pronto();
+    // Diretório no lugar do arquivo: a leitura do manifesto falha como falharia com o arquivo travado.
+    std::fs::create_dir_all(b.core.session_dir().unwrap().join("requests").join("zzzz-lote-ilegivel").join(delegate::MANIFEST)).unwrap();
+    let mut m = b.mcp();
+    let started = Instant::now();
+    let (text, is_error) = m.call("aguardar", json!({}));
+    assert!(!is_error, "{text}");
+    assert!(text.contains("nada foi executado") && text.ends_with("--- FIM ---\n"), "{text}");
+    assert!(started.elapsed() < Duration::from_secs(20), "a resposta demorou {:?}", started.elapsed());
+}
+
 /// Publica `tasks` pelo `delegar` e confere, byte a byte, o texto publicado de cada tarefa e o título de cada nó.
 /// O lote termina sem erro, com um EXECUTOR por tarefa.
 fn publica_e_confere(b: &Bench, tasks: &[String]) {
@@ -408,9 +425,9 @@ fn publica_e_confere(b: &Bench, tasks: &[String]) {
     let (out, is_error) = m.done(run);
     assert!(!is_error, "{out}");
     let batch = b.last_batch();
+    let published = delegate::read_manifest(&batch).unwrap();
+    assert_eq!(published.as_slice(), tasks, "as tarefas chegaram diferentes do pedido");
     for (n, task) in tasks.iter().enumerate() {
-        let published = std::fs::read_to_string(batch.join(format!("{}.txt", n + 1))).unwrap();
-        assert_eq!(published, *task, "a tarefa {} chegou diferente do pedido", n + 1);
         assert_eq!(nodes[n]["title"], title(task), "título da tarefa {}", n + 1);
     }
     assert!(out.contains(&format!("--- EXECUTOR {0}/{0} ---\n", tasks.len())), "{out}");

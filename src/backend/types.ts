@@ -27,9 +27,12 @@ export type UpdateStatus =
   | { phase: 'ready' }
   | { phase: 'failed'; message: string };
 
-// Uma entrada de `list_dir`: um nível só. A ordem é a do backend (pastas primeiro, depois arquivos, alfabética).
+// Uma entrada de `list_dirs`: um nível só. A ordem é a do backend (pastas primeiro, depois arquivos, alfabética).
 // `ignored`: o `.gitignore` ignora a entrada (a árvore a mostra apagada); sempre falso fora de um repositório.
 export type DirEntry = { name: string; dir: boolean; ignored: boolean };
+// A resposta de uma pasta em `list_dirs`: as entradas ou o motivo de não ter aberto. O explorador pede todas as
+// pastas abertas numa chamada só, e uma falha não derruba as outras.
+export type DirListing = { kind: 'ok'; entries: DirEntry[] } | { kind: 'error'; message: string };
 // Arquivos do clipboard do Windows: caminhos absolutos, na ordem, e se foram recortados (mover) ou copiados.
 export type ClipboardSnapshot = { paths: string[]; cut: boolean };
 
@@ -154,7 +157,7 @@ export type Commands = {
   pick_file: { args: NoArgs; result: string | null };
   pick_save_path: { args: { directory: string | null; fileName: string }; result: string | null };
   get_options: { args: NoArgs; result: Options };
-  list_dir: { args: ProjectArgs<{ path: string }>; result: DirEntry[] };
+  list_dirs: { args: ProjectArgs<{ paths: string[] }>; result: DirListing[] };
   read_file: { args: ProjectArgs<{ path: string }>; result: FileContent };
   read_file_at: { args: { path: string }; result: FileContent };
   read_media: { args: ProjectArgs<{ path: string }>; result: ArrayBuffer };

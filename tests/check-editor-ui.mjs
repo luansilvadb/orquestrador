@@ -667,3 +667,33 @@ scenario('explorador: dois cliques enquanto a primeira abertura espera deixam ab
   assert.ok(active.includes('ultimo-pronto.ts'), `a primeira abertura pendente roubou o foco (${active})`);
   await page.locator('[data-pane="A"] .cm-content').filter({ hasText: 'ULTIMO' }).waitFor();
 });
+
+// Abertura rápida (Ctrl+P): a lista na tela pode ser a do texto anterior enquanto a resposta nova não chega. Nesse
+// intervalo o Enter não pode abrir o arquivo do texto velho; clicar numa linha continua abrindo o que está à vista.
+scenario('abertura rápida: Enter com texto novo não abre o arquivo da lista anterior', async ({ page }) => {
+  await openApp(page);
+  const before = await tabTitles(page);
+  await page.keyboard.press('Control+p');
+  const dialog = page.getByRole('dialog', { name: 'Abrir arquivo rápido' });
+  await dialog.waitFor();
+  const field = dialog.getByRole('textbox', { name: 'Abrir arquivo rápido' });
+  await field.fill('read');
+  await dialog.getByRole('option').first().waitFor();
+
+  // A resposta do próximo pedido fica 1,5 s no simulado: o Enter chega com a lista de "read" na tela e o campo em "readm".
+  await page.evaluate(() => { window.__mock.delay.quick_open = 1500; });
+  await field.press('m');
+  await field.press('Enter');
+  await page.waitForTimeout(250);
+  assert.equal(await dialog.isVisible(), true, 'o Enter não podia abrir nada com a lista de outro texto');
+  assert.deepEqual(await tabTitles(page), before, 'nenhuma aba abriu antes da resposta do texto atual');
+  await dialog.getByRole('status').filter({ hasText: 'Procurando' }).waitFor();
+
+  // A resposta de "readm" chega: o mesmo Enter abre o arquivo que casa com o campo.
+  await dialog.getByRole('status').filter({ hasText: '1 arquivo' }).waitFor({ timeout: 5000 });
+  await field.press('Enter');
+  await dialog.waitFor({ state: 'detached' });
+  // A abertura do arquivo é assíncrona (o editor lê antes de trocar a aba): espera a aba aparecer.
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-group="A"] [data-tab]')].some((el) => el.textContent?.includes('README.md')), undefined, { timeout: 5000 });
+  assert.ok((await tabTitles(page)).some((t) => t.includes('README.md')), 'o Enter com a resposta do texto atual abre o arquivo');
+});

@@ -13,8 +13,10 @@ Os argumentos vão em JSON. Cada tarefa chega ao executor como está: aspas dupl
 
 Cada chamada espera até 14 minutos. A resposta termina de um de dois jeitos:
 
-- `--- FIM ---`: o lote acabou. A saída traz as seções `--- EXECUTOR i/N ---`, `executor_exit` e `--- GIT ---` (abaixo).
+- `--- FIM ---`: o lote acabou. No caso normal, a saída traz as seções `--- EXECUTOR i/N ---`, `executor_exit` e `--- GIT ---` (abaixo).
 - `--- EM ANDAMENTO ---`: a janela passou e os executores continuam. O orquestrador chama `aguardar`.
+
+Um lote ou roda inteiro ou não roda: cada lote é um manifesto (`tarefas.json`, um array de textos) que o app lê de uma vez. Se o manifesto não abrir ou não for uma lista de textos válida, nenhuma tarefa roda: a resposta diz que o lote não pôde ser lido e que nada foi executado, sem a seção `--- GIT ---`, e termina em `--- FIM ---` para o `delegar` não ficar esperando.
 
 Uma chamada interrompida ou que deu erro de tempo também se resolve com `aguardar`, porque os executores não param. Erros do próprio comando (lista vazia, tarefa em branco, nenhum lote aguardando, sessão encerrada) voltam como erro da ferramenta, sem publicar nada.
 

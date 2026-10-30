@@ -95,7 +95,7 @@ Cada comando dependente de projeto recebe o id devolvido por `open_project` (ou 
 
 Os testes do front-end, agrupados por tipo. Os do backend ficam em `src-tauri/tests/` e nos módulos do Rust.
 
-**Checagens puras** (`npm run check`): Node, sem dependências, com `node:test`. Os 9 arquivos rodam um de cada vez.
+**Checagens puras** (`npm run check`): Node, sem dependências, com `node:test`. Os arquivos rodam um de cada vez.
 
 - `tests/check-workspace.mjs`: o modelo de abas.
 - `tests/check-editor-store.mjs`: rascunhos, conflitos e recuperação.
@@ -106,6 +106,7 @@ Os testes do front-end, agrupados por tipo. Os do backend ficam em `src-tauri/te
 - `tests/check-paste.mjs`: a colagem de arquivo e imagem no terminal. O efeito real nos CLIs fica no teste ignorado `src-tauri/tests/colagem.rs`.
 - `tests/check-release.mjs`: as regras do fluxo de release.
 - `tests/check-commands.mjs`: o contrato dos comandos, com as chaves de `Commands` (`types.ts`) iguais às de `generate_handler!` (`lib.rs`).
+- `tests/check-shiki-language.mjs`: a linguagem de cada tipo de arquivo pelos metadados do Linguist e pelas gramáticas do Shiki (`src/editor/shiki-colors.ts`): GoDot, `.env`, Dockerfile, extensões desconhecidas e nomes sem extensão.
 
 **Checks de interface** (`npm run check:ui`): Chrome headless contra o app simulado (`src/backend/mock.ts`, só no `vite` de desenvolvimento). Um Vite só, na porta 1421 (`SMOKE_PORT`), atende todos os arquivos, que rodam 4 de cada vez, cada um com o próprio Chromium. Saem com 0 se todos os cenários passam.
 

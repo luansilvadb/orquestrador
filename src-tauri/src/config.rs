@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Duration;
 
 pub const TOOLS: [&str; 2] = ["claude", "codex"];
 
@@ -168,9 +169,13 @@ pub fn parse_codex_models(json: &str) -> Vec<ModelOption> {
 }
 
 // O Claude não tem comando que liste modelos: os apelidos resolvem para o mais novo de cada
-// família. O Codex é perguntado; se não responder, a lista fica vazia (o nome ainda pode ser
-// digitado) e a pergunta é refeita na próxima vez.
+// família. O Codex é perguntado com prazo; se não responder a tempo, a lista fica vazia (o nome
+// ainda pode ser digitado) e a pergunta é refeita na próxima vez.
 static CODEX_MODELS: Mutex<Vec<ModelOption>> = Mutex::new(Vec::new());
+
+/// Prazo da consulta dos modelos do Codex: o normal é abaixo de 300 ms, e uma instalação travada não pode segurar o
+/// diálogo de escolha.
+const PRAZO_MODELOS: Duration = Duration::from_secs(5);
 
 pub fn models(tool: &str, codex_exe: &str) -> Vec<ModelOption> {
     let all = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -180,8 +185,13 @@ pub fn models(tool: &str, codex_exe: &str) -> Vec<ModelOption> {
     }
     let mut cache = CODEX_MODELS.lock().unwrap();
     if cache.is_empty() {
-        if let Ok(out) = crate::proc::quiet(codex_exe).args(["debug", "models"]).output() {
-            *cache = parse_codex_models(&String::from_utf8_lossy(&out.stdout));
+        let mut cmd = crate::proc::quiet(codex_exe);
+        cmd.args(["debug", "models"]);
+        // Estourou o prazo, saiu com erro ou não devolveu uma lista: fica vazia, e a próxima pergunta tenta de novo.
+        if let Ok(saida) = crate::proc::saida_com_prazo(cmd, b"", PRAZO_MODELOS) {
+            if !saida.estourou && saida.status.success() {
+                *cache = parse_codex_models(&String::from_utf8_lossy(&saida.out));
+            }
         }
     }
     cache.clone()

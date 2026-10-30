@@ -13,6 +13,8 @@ import type { QuickOpen as QuickOpenResult } from '../backend/types';
 const DELAY_MS = 120;
 
 export type QuickOpenChoice = { permanent: boolean; side: boolean };
+/** A resposta do backend e o texto que a produziu: enquanto o campo tiver outro texto, a lista na tela é a antiga. */
+type Found = { query: string; data: QuickOpenResult };
 
 export function QuickOpen({
   onClose, onOpen }: {
@@ -21,7 +23,7 @@ export function QuickOpen({
 }) {
   const backend = useBackend();
   const [term, setTerm] = useState('');
-  const [result, setResult] = useState<QuickOpenResult | null>(null);
+  const [result, setResult] = useState<Found | null>(null);
   const [error, setError] = useState('');
   const [index, setIndex] = useState(0);
   const seq = useRef(0);
@@ -30,17 +32,17 @@ export function QuickOpen({
   useEffect(() => {
     const current = ++seq.current;
     const text = term.trim();
+    // O erro era do texto anterior: o pedido novo ainda vai sair, e a lista na tela pode ser de antes dele.
+    setError('');
     if (text === '') {
       setResult(null);
-      setError('');
       return;
     }
     const timer = window.setTimeout(() => {
       backend.quickOpen(text).then(
         (found) => {
           if (current !== seq.current) return;
-          setResult(found);
-          setError('');
+          setResult({ query: text, data: found });
           setIndex(0);
         },
         (e) => {
@@ -58,7 +60,13 @@ export function QuickOpen({
     list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
   }, [index, result]);
 
-  const paths = result?.paths ?? [];
+  const typed = term.trim();
+  const paths = result?.data.paths ?? [];
+  // A resposta é do texto atual? Enquanto não for, a lista na tela é a do texto anterior: o Enter não abre nada (clicar
+  // numa linha continua abrindo o que está à vista) e o resumo diz que está procurando.
+  const fresh = result !== null && result.query === typed;
+  const pending = typed !== '' && !fresh;
+  const total = fresh && result ? result.data.total : 0;
   const open = (at: number, choice: QuickOpenChoice) => {
     const path = paths[at];
     if (path) onOpen(path, choice);
@@ -75,11 +83,23 @@ export function QuickOpen({
       setIndex((at) => (at + step + paths.length) % paths.length);
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      // Texto novo ainda sem resposta: abrir aqui seria abrir o arquivo do texto anterior.
+      if (!fresh) return;
       if (e.ctrlKey) open(index, { permanent: true, side: true });
       else if (e.shiftKey) open(index, { permanent: true, side: false });
       else open(index, { permanent: false, side: false });
     }
   };
+
+  const summary = error
+    ? <span className="text-destructive">{error}</span>
+    : typed === ''
+      ? 'Digite parte do nome ou do caminho. Enter abre como prévia; Shift+Enter, de vez; Ctrl+Enter, à direita.'
+      : pending
+        ? 'Procurando…'
+        : total === 0
+          ? 'Nenhum arquivo casa com o termo.'
+          : `${total} ${total === 1 ? 'arquivo' : 'arquivos'}${total > paths.length ? `, mostrando ${paths.length}` : ''}.`;
 
   return (
     <div className="fixed inset-0 z-[1000] flex items-start justify-center bg-black/30 px-4 pt-[12vh]" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -90,15 +110,7 @@ export function QuickOpen({
           onChange={(e) => setTerm(e.target.value)} onKeyDown={onKeyDown}
         />
         <Text as="p" role="status" fontSize={12} type="secondary" style={{ margin: 0 }}>
-          {error
-            ? <span className="text-destructive">{error}</span>
-            : term.trim() === ''
-              ? 'Digite parte do nome ou do caminho. Enter abre como prévia; Shift+Enter, de vez; Ctrl+Enter, à direita.'
-              : result === null
-                ? 'Procurando…'
-                : result.total === 0
-                  ? 'Nenhum arquivo casa com o termo.'
-                  : `${result.total} ${result.total === 1 ? 'arquivo' : 'arquivos'}${result.total > paths.length ? `, mostrando ${paths.length}` : ''}.`}
+          {summary}
         </Text>
         <div id="quick-open-list" role="listbox" aria-label="Arquivos" ref={list} className="min-h-0 overflow-y-auto">
           {paths.map((path, at) => {

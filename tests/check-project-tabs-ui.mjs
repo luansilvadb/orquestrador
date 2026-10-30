@@ -36,7 +36,7 @@ scenario('sincronizar permanece no projeto de origem e a árvore escondida para 
   const postPullStatus = calls.filter((c) => c.cmd === 'git_status' && c.startedAt >= pullDoneAt).sort((a, b) => a.startedAt - b.startedAt)[0];
   assert.equal(postPullStatus?.project, 'project-1', 'status encadeado ao pull fica no projeto de origem');
   assert.ok(calls.filter((c) => c.cmd === 'git_push').every((c) => c.project === 'project-1'), 'push fica no projeto de origem');
-  assert.equal(calls.filter((c) => c.cmd === 'list_dir' && c.project === 'project-1').length, 0, 'a árvore escondida não consulta list_dir');
+  assert.equal(calls.filter((c) => c.cmd === 'list_dirs' && c.project === 'project-1').length, 0, 'a árvore escondida não consulta list_dirs');
 });
 
 scenario('trocar de projeto preserva árvore, editor e texto digitado', async ({ page }) => {

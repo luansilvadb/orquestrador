@@ -185,6 +185,7 @@ pub fn recover_orphans(places: &Places) {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::agents::delegate;
     use crate::config::Choice;
     use crate::testutil::Tmp;
 
@@ -225,7 +226,7 @@ pub mod tests {
 
         // O que o app deixa na pasta durante o uso também sai.
         std::fs::create_dir_all(s.dir.join("requests").join("x")).unwrap();
-        std::fs::write(s.dir.join("requests").join("x").join("1.txt"), "t").unwrap();
+        std::fs::write(s.dir.join("requests").join("x").join(delegate::MANIFEST), "[]").unwrap();
         assert_eq!(remove_dir(&s.dir), None);
         assert!(!s.dir.exists());
     }

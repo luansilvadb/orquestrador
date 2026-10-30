@@ -2,11 +2,9 @@
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::env;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -452,57 +450,25 @@ fn cargo_edition(directory: &Path) -> String {
     "2021".into()
 }
 
-fn run(mut command: Command, input: &str, timeout: Duration) -> Result<String, String> {
-    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|e| format!("O formatador não pôde iniciar: {e}"))?;
-    let stdin = child.stdin.take().unwrap();
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-    let input = input.as_bytes().to_vec();
-    let writer = thread::spawn(move || stdin_pipe(stdin, &input));
-    let out_reader = thread::spawn(move || read_pipe(stdout));
-    let err_reader = thread::spawn(move || read_pipe(stderr));
-    let started = Instant::now();
-    let (status, timed_out) = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break (status, false),
-            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(20)),
-            Ok(None) => {
-                let _ = child.kill();
-                break (child.wait().map_err(|e| format!("Não foi possível encerrar o formatador: {e}"))?, true);
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("Não foi possível aguardar o formatador: {e}"));
-            }
+fn run(command: Command, input: &str, timeout: Duration) -> Result<String, String> {
+    let saida = crate::proc::saida_com_prazo(command, input.as_bytes(), timeout).map_err(|falha| {
+        use crate::proc::FalhaPrazo;
+        match falha {
+            FalhaPrazo::Iniciar(e) => format!("O formatador não pôde iniciar: {e}"),
+            FalhaPrazo::Aguardar(e) => format!("Não foi possível aguardar o formatador: {e}"),
+            FalhaPrazo::Ler(e) => format!("Não foi possível ler a saída do formatador: {e}"),
         }
-    };
-    let _ = writer.join();
-    let output = out_reader.join().map_err(|_| "Falha ao ler a saída do formatador.".to_string())?
-        .map_err(|e| format!("Falha ao ler a saída do formatador: {e}"))?;
-    let error = err_reader.join().map_err(|_| "Falha ao ler o erro do formatador.".to_string())?
-        .map_err(|e| format!("Falha ao ler o erro do formatador: {e}"))?;
-    let stderr = String::from_utf8_lossy(&error).trim().to_string();
-    if timed_out {
+    })?;
+    let stderr = String::from_utf8_lossy(&saida.err).trim().to_string();
+    if saida.estourou {
         let detail = if stderr.is_empty() { String::new() } else { format!(" {stderr}") };
         return Err(format!("O formatador excedeu o limite de {} s.{detail}", timeout.as_secs()));
     }
-    if !status.success() {
-        return Err(if stderr.is_empty() { format!("O formatador falhou (código {}).", status.code().unwrap_or(-1)) }
+    if !saida.status.success() {
+        return Err(if stderr.is_empty() { format!("O formatador falhou (código {}).", saida.status.code().unwrap_or(-1)) }
             else { format!("O formatador falhou: {stderr}") });
     }
-    String::from_utf8(output).map_err(|e| format!("O formatador devolveu texto que não está em UTF-8: {e}"))
-}
-
-fn stdin_pipe(mut stdin: impl Write, input: &[u8]) {
-    let _ = stdin.write_all(input);
-}
-
-fn read_pipe(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
-    let mut data = Vec::new();
-    pipe.read_to_end(&mut data)?;
-    Ok(data)
+    String::from_utf8(saida.out).map_err(|e| format!("O formatador devolveu texto que não está em UTF-8: {e}"))
 }
 
 pub fn format_cli(path: &Path, text: &str) -> Result<String, String> {
@@ -538,6 +504,7 @@ mod tests {
     use super::*;
     use crate::testutil::{write, Tmp};
     use serde_json::json;
+    use std::time::Instant;
 
     #[test]
     fn escolhe_motor_pela_extensao() {

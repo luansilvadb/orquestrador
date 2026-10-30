@@ -24,7 +24,10 @@ export function Breadcrumbs({
     setDir(folder);
     setEntries(null);
     setError('');
-    backend.listDir(folder).then(setEntries, (e) => setError(message(e)));
+    backend.listDirs([folder]).then(([first]) => {
+      if (first?.kind === 'ok') setEntries(first.entries);
+      else setError(first?.message ?? `Pasta não encontrada: ${folder}`);
+    }, (e) => setError(message(e)));
   };
   const show = (index: number, value: boolean) => {
     setOpen(value ? index : null);

@@ -87,11 +87,12 @@ fn get_options(projects: State<Projects>) -> Result<Options, String> {
     projects.options()
 }
 
-/// Um nível de uma pasta do projeto para o explorador. `path` é relativo ao projeto ("" é a raiz).
+/// Os níveis das pastas `paths` do projeto para o explorador ("" é a raiz), na ordem pedida. O explorador pede todas
+/// as pastas abertas de uma vez, para o `git check-ignore` rodar uma vez só. Pasta que não abre vem com o motivo.
 #[tauri::command(async)]
-fn list_dir(projects: State<Projects>, project: String, path: String) -> Result<Vec<files::Entry>, String> {
+fn list_dirs(projects: State<Projects>, project: String, paths: Vec<String>) -> Result<Vec<files::DirListing>, String> {
     let core = projects.core(&project)?;
-    files::list(&core.repo()?, &path)
+    files::list_many(&core.repo()?, &paths)
 }
 
 /// O conteúdo de um arquivo do projeto para a tela. `path` é relativo ao projeto.
@@ -636,7 +637,7 @@ pub fn run(context: tauri::Context, initial_paths: Vec<std::path::PathBuf>) {
             pick_file,
             pick_save_path,
             get_options,
-            list_dir,
+            list_dirs,
             read_file,
             read_file_at,
             read_media,

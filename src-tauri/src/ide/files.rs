@@ -48,8 +48,51 @@ pub struct Content {
 }
 
 /// Um nível da pasta `rel` do projeto (com barras "/", vazio é a raiz). Pastas primeiro, cada grupo em
-/// ordem alfabética sem diferenciar maiúsculas. Na raiz, o `.git` fica de fora.
+/// ordem alfabética sem diferenciar maiúsculas. Na raiz, o `.git` fica de fora. Pasta única: um `check-ignore` só para
+/// ela; o explorador usa o `list_many`.
 pub fn list(project: &Path, rel: &str) -> Result<Vec<Entry>, String> {
+    let (entries, paths) = list_one(project, rel)?;
+    let ignored = crate::proc::git_ignorados(project, &paths).unwrap_or_default();
+    Ok(with_ignored(entries, &paths, &ignored))
+}
+
+/// O que o explorador recebe de uma pasta pedida: as entradas ou o motivo de não ter aberto. Pasta que não abre não
+/// derruba as outras do mesmo pedido.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum DirListing {
+    Ok { entries: Vec<Entry> },
+    Error { message: String },
+}
+
+/// Os níveis das pastas `rels`, na ordem pedida. Tudo o que abre é lido antes do `git check-ignore`: as pastas todas
+/// num processo só, não um por pasta. O `Err` é do pedido (caminho fora do projeto), não do disco: falha de uma pasta
+/// volta como `DirListing::Error` no lugar dela.
+pub fn list_many(project: &Path, rels: &[String]) -> Result<Vec<DirListing>, String> {
+    for rel in rels {
+        valid_rel(rel)?;
+    }
+    let folders: Vec<Result<(Vec<Entry>, Vec<String>), String>> = rels.iter().map(|rel| list_one(project, rel)).collect();
+    let all: Vec<String> = folders.iter().filter_map(|f| f.as_ref().ok()).flat_map(|(_, paths)| paths.iter().cloned()).collect();
+    // Fora de um repositório (ou sem Git) o check-ignore falha, e nada fica apagado.
+    let ignored = crate::proc::git_ignorados(project, &all).unwrap_or_default();
+    Ok(folders
+        .into_iter()
+        .map(|folder| match folder {
+            Ok((entries, paths)) => DirListing::Ok { entries: with_ignored(entries, &paths, &ignored) },
+            Err(message) => DirListing::Error { message },
+        })
+        .collect())
+}
+
+/// Marca as entradas que o `check-ignore` apontou, na mesma ordem dos caminhos.
+fn with_ignored(mut entries: Vec<Entry>, paths: &[String], ignored: &HashSet<String>) -> Vec<Entry> {
+    entries.iter_mut().zip(paths).for_each(|(entry, path)| entry.ignored = ignored.contains(path));
+    entries
+}
+
+/// As entradas de uma pasta e o caminho de cada uma, relativo ao projeto (o que o `check-ignore` recebe).
+fn list_one(project: &Path, rel: &str) -> Result<(Vec<Entry>, Vec<String>), String> {
     let dir = inside(project, rel, true)?;
     let root = rel.is_empty();
     let read = std::fs::read_dir(&dir).map_err(|e| format!("Não foi possível ler a pasta: {e}"))?;
@@ -66,15 +109,8 @@ pub fn list(project: &Path, rel: &str) -> Result<Vec<Entry>, String> {
         })
         .collect();
     entries.sort_by_key(|e| (!e.dir, e.name.to_lowercase()));
-    // Fora de um repositório (ou sem Git) o check-ignore falha, e nada fica apagado.
     let paths: Vec<String> = entries.iter().map(|e| if root { e.name.clone() } else { format!("{rel}/{}", e.name) }).collect();
-    if paths.is_empty() {
-        return Ok(entries);
-    }
-    if let Ok(ignored) = crate::proc::git_ignorados(project, &paths) {
-        entries.iter_mut().zip(&paths).for_each(|(e, p)| e.ignored = ignored.contains(p));
-    }
-    Ok(entries)
+    Ok((entries, paths))
 }
 
 /// O arquivo `rel` do projeto (com barras "/"). Arquivo grande ou binário volta sem `text`.
@@ -897,13 +933,20 @@ fn erro_colagem(erro: ErroShell) -> String {
     }
 }
 
+/// Caminho relativo ao projeto: só nomes normais (`..`, absoluto, unidade e `.` ficam de fora). É regra do pedido,
+/// não do disco: caminho inválido recusa a chamada inteira, e não uma pasta só.
+fn valid_rel(rel: &str) -> Result<(), String> {
+    if Path::new(rel).components().all(|c| matches!(c, Component::Normal(_))) {
+        Ok(())
+    } else {
+        Err(format!("Caminho fora do projeto: {rel}"))
+    }
+}
+
 /// O caminho real de `rel` dentro do projeto. Recusa o que sai da pasta, o que não existe e o que não é do tipo pedido
 /// (pasta se `dir`, senão arquivo).
 fn inside(project: &Path, rel: &str, dir: bool) -> Result<PathBuf, String> {
-    // Só nomes normais: `..`, barra inicial, unidade (`D:`) e `.` ficam de fora.
-    if !Path::new(rel).components().all(|c| matches!(c, Component::Normal(_))) {
-        return Err(format!("Caminho fora do projeto: {rel}"));
-    }
+    valid_rel(rel)?;
     let base = project.canonicalize().map_err(|e| format!("Não foi possível abrir o projeto: {e}"))?;
     let real = base.join(rel).canonicalize().map_err(|_| {
         if dir { format!("Pasta não encontrada: {rel}") } else { format!("Arquivo não encontrado: {rel}") }
@@ -972,6 +1015,29 @@ src/gerado/
         let flags = |rel: &str| list(root, rel).unwrap().into_iter().map(|x| (x.name, x.ignored)).collect::<Vec<_>>();
         assert_eq!(flags(""), [("node_modules", true), ("src", false), (".gitignore", false), ("a.log", true), ("b.txt", false)].map(|(n, i)| (n.to_string(), i)));
         assert_eq!(flags("src"), [("codigo", false), ("gerado", true), ("c.log", true)].map(|(n, i)| (n.to_string(), i)));
+    }
+
+    /// Várias pastas numa chamada: os ignorados continuam certos em cada uma, a pasta que não abre vira erro no lugar
+    /// dela (sem derrubar as outras) e o caminho inválido recusa o pedido inteiro.
+    #[test]
+    fn varias_pastas_numa_chamada_isolam_a_que_falhou() {
+        let tmp = Tmp::new("orq-files", "varias");
+        let root = &tmp.0;
+        crate::testutil::git(root, &["init", "-q"]);
+        crate::testutil::write(root, ".gitignore", "*.log\n");
+        crate::testutil::write(root, "a.log", "");
+        crate::testutil::write(root, "sub/b.txt", "");
+        crate::testutil::write(root, "sub/c.log", "");
+
+        let listings = list_many(root, &["".into(), "sub".into(), "nao-existe".into()]).unwrap();
+        let entries = |i: usize| match &listings[i] {
+            DirListing::Ok { entries } => entries.iter().map(|e| (e.name.clone(), e.ignored)).collect::<Vec<_>>(),
+            DirListing::Error { message } => panic!("{message}"),
+        };
+        assert_eq!(entries(0), [("sub", false), (".gitignore", false), ("a.log", true)].map(|(n, i)| (n.to_string(), i)));
+        assert_eq!(entries(1), [("b.txt", false), ("c.log", true)].map(|(n, i)| (n.to_string(), i)));
+        assert!(matches!(&listings[2], DirListing::Error { message } if message == "Pasta não encontrada: nao-existe"));
+        assert_eq!(list_many(root, &["sub/..".into()]).unwrap_err(), "Caminho fora do projeto: sub/..");
     }
 
     #[test]
