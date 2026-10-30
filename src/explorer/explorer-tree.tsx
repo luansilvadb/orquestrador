@@ -89,7 +89,7 @@ const Row = memo(function Row({ row, isOpen, selected, active, draggable, frame,
     <div
       role="treeitem" data-id={row.key} aria-level={row.depth + 1} aria-selected={selected}
       aria-expanded={row.expandable ? isOpen : undefined} tabIndex={active ? 0 : -1} draggable={draggable} style={style}
-      className="relative flex h-[22px] cursor-pointer items-center pr-2 text-[var(--ant-color-text)] outline-none hover:bg-[var(--ant-color-fill-tertiary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ant-color-info)] aria-selected:bg-[var(--ant-color-fill-secondary)]"
+      className="relative isolate flex h-[22px] cursor-pointer items-center pr-2 text-[var(--ant-color-text)] outline-none focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-[var(--ant-color-info)]"
       onMouseDown={(e) => { if (row.kind === 'file' && e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) onPrefetch(row.key); }}
       onClick={(e) => onSelect(row, { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey })}
       onContextMenu={(e) => onRightClick(e, row)}

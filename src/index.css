@@ -74,6 +74,27 @@ body {
     opacity: 1;
 }
 
+.explorer-tree [role='treeitem'] {
+    border-radius: 4px;
+}
+
+.explorer-tree [role='treeitem']::after {
+    content: '';
+    position: absolute;
+    inset: 0 4px;
+    z-index: -1;
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+.explorer-tree [role='treeitem']:hover::after {
+    background: var(--ant-color-fill-tertiary);
+}
+
+.explorer-tree [role='treeitem'][aria-selected='true']::after {
+    background: var(--ant-color-fill-secondary);
+}
+
 /* Pesquisa: as cores do destaque e da prévia da troca são as do VS Code (findMatchHighlight, removedText e insertedText do diff),
    translúcidas para valer nos temas claro e escuro. */
 .search-hit {
