@@ -1,10 +1,10 @@
+import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 // Paridade visual do editor central com o Antigravity (Dark Modern), em Chrome headless contra o app simulado (src/backend/mock.ts).
 // Os valores esperados vêm dos arquivos do Antigravity (ver docs/interface.md, "Cores e fontes do editor"). Cada cenário abre um
 // arquivo pela árvore, espera a linguagem carregar (é assíncrona) e confere estilos computados e geometria, não aparência: a
 // comparação pixel a pixel não é feita aqui. Capturas em .playwright-mcp/editor-style-*.png para leitura humana.
 // Uso: node tests/check-editor-style.mjs   (saída 0 = todos os cenários passaram; 1 = algum falhou)
-import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { OUT, ROOT, uiSuite, treeItem } from './editor-ui-harness.mjs';
 
@@ -54,12 +54,7 @@ const EXPECTED_DOTENV = '----' + 'gg' + '--';
 // `)` do bloco do `if` são coloridos.
 const BAT = '@echo off\nREM nota (a)\nset NOME=1\n:inicio\necho "olá %NOME%" && goto inicio\nif exist x.txt (\n  del x.txt\n)\n';
 const EXPECTED_BAT = '--' + 'gg';
-// Cor de `tags.string` no darkHighlight (src/editor/file-view.tsx), em rgb().
-const STRING_COLOR = (() => {
-  const src = readFileSync(join(ROOT, 'src', 'editor', 'file-view.tsx'), 'utf8');
-  const hex = src.match(/\{ tag: \[tags\.string,[^\]]*\], color: '#([0-9a-f]{6})' \}/i)[1];
-  return `rgb(${[0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`;
-})();
+const STRING_COLOR = 'rgb(206, 145, 120)'; // Shiki Dark Plus
 const EXPECTED_LONG_TOP = 'go'; // `{` e `(` na primeira tela
 const EXPECTED_LONG_END = 'og'; // `)` (profundidade 1, o) e `}` (profundidade 0, g) depois de Ctrl+End
 
@@ -82,7 +77,7 @@ async function open(page, name, content) {
 // (o `$` não é par); o caractere fica dentro do mesmo marcador do par, então recebe o nível dele.
 function brackets(page) {
   return page.evaluate((levels) => {
-    const content = document.querySelector('.cm-content:not([aria-hidden])');
+    const content = [...document.querySelectorAll('.cm-content:not([aria-hidden])')].find((el) => el.getBoundingClientRect().width > 0);
     const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
     const out = [];
     let node;
@@ -114,13 +109,18 @@ async function assertBrackets(page, expected) {
 // Cor e peso do nó de texto que contém o trecho `t`.
 function styleOf(page, t) {
   return page.evaluate((text) => {
-    const content = document.querySelector('.cm-content:not([aria-hidden])');
-    const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-      if (node.textContent.includes(text)) {
-        const cs = getComputedStyle(node.parentElement);
-        return { color: cs.color, weight: cs.fontWeight, background: cs.backgroundColor };
+    const content = [...document.querySelectorAll('.cm-content:not([aria-hidden])')].find((el) => el.getBoundingClientRect().width > 0);
+    for (const line of content.querySelectorAll('.cm-line')) {
+      const at = line.textContent.indexOf(text);
+      if (at < 0) continue;
+      const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+      let node, offset = 0;
+      while ((node = walker.nextNode())) {
+        if (at < offset + node.length) {
+          const cs = getComputedStyle(node.parentElement);
+          return { color: cs.color, weight: cs.fontWeight, background: cs.backgroundColor };
+        }
+        offset += node.length;
       }
     }
     return null;
@@ -192,7 +192,7 @@ scenario('Markdown: fonte, medidas, fundo, medianiz, seleção e cores de markup
   assert.equal((await styleOf(page, 'Lobe UI')).color, 'rgb(86, 156, 214)', 'negrito de texto (#569CD6)');
   assert.equal((await styleOf(page, 'Lobe UI')).weight, '700', 'negrito de texto');
   assert.equal((await styleOf(page, 'npm run build')).color, 'rgb(206, 145, 120)', 'código inline (#CE9178)');
-  assert.equal((await styleOf(page, 'A interface usa')).color, 'rgb(204, 204, 204)', 'texto comum (#CCCCCC)');
+  assert.equal((await styleOf(page, 'A interface usa')).color, 'rgb(212, 212, 212)', 'texto comum (Dark Plus)');
 
   // Lista: o marcador (`-`) é azul-claro (#6796E6) e é o único que ganha a cor; o texto do item e o código dentro dele não.
   const marks = await eventually(async () => {
@@ -201,8 +201,8 @@ scenario('Markdown: fonte, medidas, fundo, medianiz, seleção e cores de markup
     return found;
   });
   for (const m of marks) assert.equal(m.color, 'rgb(103, 150, 230)', `marcador "${m.text}" (#6796E6)`);
-  assert.equal((await styleOf(page, 'outro item')).color, 'rgb(204, 204, 204)', 'corpo do item da lista (#CCCCCC), não o marcador');
-  assert.equal((await styleOf(page, 'item com')).color, 'rgb(204, 204, 204)', 'corpo do item com código (#CCCCCC)');
+  assert.equal((await styleOf(page, 'outro item')).color, 'rgb(212, 212, 212)', 'corpo do item da lista (Dark Plus)');
+  assert.equal((await styleOf(page, 'item com')).color, 'rgb(212, 212, 212)', 'corpo do item com código (Dark Plus)');
   assert.equal((await styleOf(page, 'código')).color, 'rgb(206, 145, 120)', 'código inline dentro do item da lista (#CE9178)');
 
   // Seleção: com foco, #264F78; sem foco, #3A3D41 (inactiveSelectionBackground). Medido pelo fundo do .cm-selectionBackground.
@@ -261,7 +261,7 @@ scenario('.env.example: realce de Properties e pares fora do comentário e do va
     assert.equal((await styleOf(page, '# comentário')).color, 'rgb(106, 153, 85)', 'comentário (#6A9955)');
     assert.equal((await styleOf(page, 'CHAVE')).color, 'rgb(156, 220, 254)', 'chave (#9CDCFE)');
     const valor = (await styleOf(page, 'valor')).color;
-    assert.equal(valor, STRING_COLOR, 'valor com a cor de string');
+    assert.equal(valor, 'rgb(212, 212, 212)', 'valor com a cor do tema Dark Plus');
     assert.notEqual(valor, 'rgb(106, 153, 85)', 'valor com cor diferente da do comentário');
   });
   await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'editor-style-dotenv.png') });
@@ -272,9 +272,10 @@ scenario('.bat: REM, rótulo, set, %VAR%, string e operador coloridos', async ({
   await assertBrackets(page, EXPECTED_BAT);
   const plain = 'rgb(204, 204, 204)';
   await eventually(async () => {
-    assert.equal((await styleOf(page, 'REM nota')).color, 'rgb(106, 153, 85)', 'REM (#6A9955)');
+    assert.equal((await styleOf(page, 'REM nota')).color, 'rgb(86, 156, 214)', 'REM (#569CD6)');
+    assert.equal((await styleOf(page, 'nota (a)')).color, 'rgb(106, 153, 85)', 'comentário (#6A9955)');
     assert.equal((await styleOf(page, 'set')).color, 'rgb(86, 156, 214)', 'set (#569CD6)');
-    assert.equal((await styleOf(page, ':inicio')).color, 'rgb(200, 200, 200)', 'rótulo (#C8C8C8)');
+    assert.equal((await styleOf(page, 'inicio')).color, 'rgb(86, 156, 214)', 'rótulo (#569CD6)');
     assert.equal((await styleOf(page, '%NOME%')).color, 'rgb(156, 220, 254)', 'variável (#9CDCFE)');
     assert.equal((await styleOf(page, '"olá')).color, STRING_COLOR, 'string');
     assert.equal((await styleOf(page, '&&')).color, 'rgb(212, 212, 212)', 'operador (#D4D4D4)');
@@ -286,8 +287,41 @@ scenario('.bat: REM, rótulo, set, %VAR%, string e operador coloridos', async ({
 scenario('.CMD (maiúsculas): REM colorido', async ({ page }) => {
   await open(page, 'SCRIPT.CMD', 'REM x\n');
   await eventually(async () => {
-    assert.equal((await styleOf(page, 'REM x')).color, 'rgb(106, 153, 85)', 'REM em .CMD');
+    assert.equal((await styleOf(page, 'REM x')).color, 'rgb(86, 156, 214)', 'REM em .CMD');
   });
+});
+
+scenario('GDScript: Dark Plus aparece e acompanha a digitação', async ({ page }) => {
+  await open(page, 'player.gd', 'func mover():\n  var velocidade = 1\n');
+  await eventually(async () => {
+    assert.equal((await styleOf(page, 'func')).color, 'rgb(86, 156, 214)');
+    assert.equal((await styleOf(page, 'mover')).color, 'rgb(220, 220, 170)');
+    assert.equal((await styleOf(page, 'velocidade')).color, 'rgb(156, 220, 254)');
+  });
+  await page.locator('.cm-content:visible').first().click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('var energia = 2');
+  await eventually(async () => {
+    assert.equal((await styleOf(page, 'energia')).color, 'rgb(156, 220, 254)');
+    assert.equal((await styleOf(page, '2')).color, 'rgb(181, 206, 168)');
+  });
+});
+
+scenario('linguagem desconhecida fica legível e troca rápida não conserva cores da aba anterior', async ({ page }) => {
+  await open(page, 'primeiro.gd', 'func mover():\n  pass\n');
+  await open(page, 'sem-gramatica.xyzdesconhecida', 'texto simples\n');
+  await eventually(async () => assert.equal((await styleOf(page, 'texto simples')).color, 'rgb(204, 204, 204)'));
+  await page.waitForTimeout(100);
+  assert.equal((await styleOf(page, 'texto simples')).color, 'rgb(204, 204, 204)');
+});
+
+scenario('arquivo acima de 200 mil caracteres permanece editável sem tokenização', async ({ page }) => {
+  await open(page, 'grande.gd', `var energia = 1\n${'x'.repeat(200001)}\n`);
+  assert.equal((await styleOf(page, 'energia')).color, 'rgb(204, 204, 204)');
+  await page.locator('.cm-content:visible').first().click();
+  await page.keyboard.press('Control+Home');
+  await page.keyboard.type('#');
+  await eventually(async () => assert.equal((await styleOf(page, '#var')).color, 'rgb(204, 204, 204)'));
 });
 
 scenario('par sob o cursor: caixa do Antigravity sem mudar a geometria do texto; digitar recolore o arquivo', async ({ page }) => {
@@ -360,7 +394,7 @@ scenario('docs/design-system.md real, aberto no mock: lista, código inline e ma
     return found;
   });
   for (const m of marks) assert.equal(m.color, 'rgb(103, 150, 230)', 'marcador (#6796E6)');
-  assert.equal((await styleOf(page, 'Concorrência dos executores')).color, 'rgb(204, 204, 204)', 'corpo da lista (#CCCCCC)');
+  assert.equal((await styleOf(page, 'Concorrência dos executores')).color, 'rgb(212, 212, 212)', 'corpo da lista (Dark Plus)');
   assert.equal((await styleOf(page, 'src/window/titlebar.tsx')).color, 'rgb(206, 145, 120)', 'código inline dentro da lista (#CE9178)');
   await page.locator('.cm-editor:visible').first().screenshot({ path: join(OUT, 'editor-style-design-system.png') });
 });

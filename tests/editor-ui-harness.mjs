@@ -84,7 +84,7 @@ export async function session(browser) {
 
 /** Abre o app na URL dada (o simulado lê a query) e escolhe a pasta: a página recomeça do zero. */
 export async function openApp(page, query = '') {
-  await page.goto(`${BASE}${query}`);
+  await page.goto(`${BASE}${query}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.getByRole('navigation', { name: 'Telas' }).waitFor();
   if (new URLSearchParams(query.replace(/^\?/, '')).get('project') !== 'none') {
     await page.getByRole('button', { name: 'Arquivo', exact: true }).click();

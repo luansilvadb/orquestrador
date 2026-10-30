@@ -582,13 +582,13 @@ scenario('abrir segundo arquivo da mesma linguagem: o primeiro quadro do editor 
     window.__mock.addFile('dois.ts', 'export const dois: string = "dois";\n');
   });
   await treeItem(page, 'um.ts').dblclick();
-  await page.waitForFunction(() => document.querySelector('.cm-content span[class]'));
+  await page.waitForFunction(() => document.querySelector('.cm-content span[style*="color"]'), null, { timeout: 30000 });
   // Observa cada mutação: no primeiro quadro em que o texto do segundo arquivo aparece, conta os trechos coloridos.
   await page.evaluate(() => {
     window.__frames = [];
     new MutationObserver(() => {
       const content = [...document.querySelectorAll('.cm-content')].find((c) => c.textContent.includes('dois'));
-      if (content) window.__frames.push(content.querySelectorAll('.cm-line span[class]').length);
+      if (content) window.__frames.push(content.querySelectorAll('.cm-line span[style*="color"]').length);
     }).observe(document.body, { subtree: true, childList: true, characterData: true });
   });
   await treeItem(page, 'dois.ts').dblclick();

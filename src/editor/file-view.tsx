@@ -8,7 +8,9 @@ import { EditorView, keymap } from '@codemirror/view';
 import { copyLineDown, deleteLine, indentWithTab, moveLineDown, moveLineUp, redo, selectAll, toggleComment, undo } from '@codemirror/commands';
 import { openSearchPanel, selectNextOccurrence } from '@codemirror/search';
 import { LanguageDescription, LanguageSupport, StreamLanguage, syntaxHighlighting, HighlightStyle } from '@codemirror/language';
+import { languages } from '@codemirror/language-data';
 import { tags } from '@lezer/highlight';
+import { preloadShiki, shikiColors } from './shiki-colors';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
 import { showMinimap, type MinimapConfig } from '@replit/codemirror-minimap';
 import { bracketColors } from './bracket-colors';
@@ -25,16 +27,15 @@ import { formatPrettier } from './format';
 
 // ponytail: acima de 200 mil caracteres, carregar parser e colorir custa mais que a leitura simples.
 const COLOR_LIMIT = 200_000;
-// Linguagem pelo nome do arquivo; o pacote de linguagens só carrega quando um arquivo é colorido. `.env`, `.env.*` e `*.env` (sem
+// Parser de edição pelo nome do arquivo; o pacote de linguagens só carrega quando um arquivo é aberto. `.env`, `.env.*` e `*.env` (sem
 // descrição própria) usam o modo de Properties (comentário com `#` e `chave=valor`) com o valor como string; o token `quote` do modo
 // viraria `tags.quote`, verde como o comentário.
 const DOTENV = /^\.env(\..+)?$|\.env$/i;
 let dotenv: Promise<LanguageSupport> | undefined;
 let dotenvReady: LanguageSupport | undefined;
-let languageList: readonly LanguageDescription[] | undefined;
 const loadDotenv = () => dotenv ??= import('@codemirror/legacy-modes/mode/properties')
   .then(({ properties }) => dotenvReady = new LanguageSupport(StreamLanguage.define({ ...properties, tokenTable: { quote: tags.string } })));
-// Batch (`.bat`, `.cmd`) também não tem descrição no pacote: modo próprio em batch-mode.ts.
+// Batch (`.bat`, `.cmd`) também não tem descrição no pacote CodeMirror: modo próprio em batch-mode.ts.
 const BATCH = /\.(bat|cmd)$/i;
 let batchSupport: Promise<LanguageSupport> | undefined;
 let batchReady: LanguageSupport | undefined;
@@ -43,19 +44,15 @@ const fileName = (path: string) => path.slice(Math.max(path.lastIndexOf('/'), pa
 const loadLanguage = (path: string) => {
   if (DOTENV.test(fileName(path))) return loadDotenv();
   if (BATCH.test(path)) return loadBatch();
-  return import('@codemirror/language-data').then(({ languages }) => {
-    languageList = languages;
-    return LanguageDescription.matchFilename(languages, path)?.load() ?? null;
-  });
+  return LanguageDescription.matchFilename(languages, path)?.load() ?? Promise.resolve(null);
 };
-// Pré-carga (ao abrir a aba): a vista já nasce colorida se a gramática estiver pronta quando o texto chegar.
-export const preloadLanguage = (path: string) => loadLanguage(path).then(() => {}, () => {});
+// Pré-carga dos parsers de edição e das cores Shiki ao abrir a aba.
+export const preloadLanguage = (path: string) => Promise.all([loadLanguage(path).catch(() => null), preloadShiki(path)]).then(() => {});
 // Linguagem de `path` se já estiver carregada (`null`: sem gramática para ele); `undefined` quando ainda falta carregar.
 const readyLanguage = (path: string) => {
   if (DOTENV.test(fileName(path))) return dotenvReady;
   if (BATCH.test(path)) return batchReady;
-  if (!languageList) return undefined;
-  const description = LanguageDescription.matchFilename(languageList, path);
+  const description = LanguageDescription.matchFilename(languages, path);
   return description ? description.support : null;
 };
 // Sem a API (contexto inseguro), a ação vira toast como qualquer outra falha.
@@ -139,43 +136,11 @@ const minimap = () => {
   });
 };
 
-// Cores de sintaxe do tema padrão do Antigravity (Dark Modern, que herda as do Dark+), lidas do editor dele: controle de fluxo e
-// import/export em rosa, declarações e literais em azul, variáveis e propriedades em azul-claro, funções em amarelo, tipos em verde-água.
-// O minimap desenha com estas mesmas cores.
-const darkHighlight = HighlightStyle.define([
-  { tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment], color: '#6a9955' },
-  { tag: [tags.keyword, tags.definitionKeyword, tags.modifier, tags.operatorKeyword, tags.self, tags.bool, tags.null, tags.atom], color: '#569cd6' },
-  { tag: [tags.controlKeyword, tags.moduleKeyword], color: '#c586c0' },
-  { tag: [tags.string, tags.special(tags.string), tags.docString, tags.attributeValue], color: '#ce9178' },
-  { tag: tags.regexp, color: '#d16969' },
-  { tag: [tags.escape, tags.character], color: '#d7ba7d' },
-  { tag: [tags.number, tags.integer, tags.float, tags.unit], color: '#b5cea8' },
-  { tag: [tags.variableName, tags.propertyName, tags.attributeName, tags.definition(tags.variableName), tags.special(tags.variableName)], color: '#9cdcfe' },
-  { tag: tags.constant(tags.variableName), color: '#4fc1ff' },
-  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.function(tags.definition(tags.variableName)), tags.annotation], color: '#dcdcaa' },
-  { tag: [tags.typeName, tags.className, tags.namespace, tags.standard(tags.typeName)], color: '#4ec9b0' },
-  { tag: tags.tagName, color: '#569cd6' },
-  { tag: tags.angleBracket, color: '#808080' },
-  { tag: tags.labelName, color: '#c8c8c8' },
-  { tag: [tags.operator, tags.derefOperator], color: '#d4d4d4' },
-  { tag: [tags.punctuation, tags.separator], color: '#cccccc' },
-  { tag: tags.invalid, color: '#f44747' },
-  // Markdown (markup.heading, markup.bold e markup.inline.raw do Dark Modern): título e negrito azuis, código inline salmão
-  // (tags.monospace é o que o Markdown usa para `código`). O marcador de lista tem cor própria (bracket-colors.ts): `tags.list` do
-  // parser cobre a lista inteira, então não entra aqui.
-  { tag: tags.heading, color: '#569cd6', fontWeight: 'bold' },
-  { tag: tags.emphasis, fontStyle: 'italic' },
-  { tag: tags.strong, color: '#569cd6', fontWeight: 'bold' },
-  { tag: tags.monospace, color: '#ce9178' },
-  { tag: tags.strikethrough, textDecoration: 'line-through' },
-  { tag: [tags.link, tags.url], color: '#ce9178', textDecoration: 'underline' },
-  { tag: tags.quote, color: '#6a9955' },
-]);
 const basicExtensions = [
   basicSetup,
+  syntaxHighlighting(HighlightStyle.define([])),
   keymap.of([indentWithTab]),
   darkTheme,
-  syntaxHighlighting(darkHighlight),
   bracketColors(COLOR_LIMIT),
   // Quebra visual das linhas longas, sem rolagem horizontal; a continuação fica no recuo da linha.
   EditorView.lineWrapping,
@@ -277,6 +242,7 @@ export function CodeEditor({
   const language = useRef(new Compartment());
   const editable = useRef(new Compartment());
   const mini = useRef(new Compartment());
+  const syntax = useRef(new Compartment());
   // Último pedido já atendido: o editor fica montado ao trocar de aba, e um pedido antigo não pode mover o cursor de novo.
   const revealed = useRef(0);
   // Textos que este editor já mandou para cima (um por digitação, em ordem). O pai devolve o texto com atraso: uma renderização
@@ -483,6 +449,7 @@ export function CodeEditor({
       }])),
       editable.current.of(readOnlyExt(readOnly)),
       language.current.of(ready ?? []),
+      syntax.current.of(shikiColors(path)),
       mini.current.of(minimap()),
       // Preparar do bloco aberto: erro do backend (índice mudou, executores trabalhando) vira aviso, como o resto do editor.
       onWriteIndex ? gitIndexWriter.of(async (value, expected) => {
@@ -562,6 +529,8 @@ export function CodeEditor({
       live = false;
     };
   }, [path, text.length > COLOR_LIMIT]);
+
+  useEffect(() => { const current = view.current; if (current) current.dispatch({ effects: syntax.current.reconfigure(shikiColors(path)) }); }, [path]);
 
   useEffect(() => {
     const current = view.current;

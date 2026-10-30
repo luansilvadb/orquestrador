@@ -8,8 +8,8 @@
 // defaultRemoveColor rgba(255, 0, 0, .2) e defaultInsertColor rgba(155, 185, 85, .2); o Dark Modern não muda nenhuma das duas).
 import { Facet, Prec, StateField, type EditorState } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, WidgetType } from '@codemirror/view';
-import { highlightingFor, language } from '@codemirror/language';
-import { highlightTree } from '@lezer/highlight';
+import { language } from '@codemirror/language';
+import { shikiTokens } from './shiki-colors';
 import { gitDiff, gitHunks, openGitHunk, openHunk, type Hunk } from './git-gutter';
 import { stageHunk, unstageHunk } from './git-stage';
 
@@ -106,14 +106,12 @@ const el = (tag: string, cls: string, text?: string) => {
   return node;
 };
 
-// Linhas antigas com a sintaxe do arquivo: o parser da linguagem atual lê só o trecho antigo (fora de contexto, então um trecho no meio
+// Linhas antigas com a sintaxe do arquivo: o Shiki lê só o trecho antigo (fora de contexto, então um trecho no meio
 // de um comentário ou de uma string longa pode sair com cor diferente; é o "se for simples").
 function oldLines(view: EditorView, text: string) {
-  const marks: { from: number; to: number; cls: string }[] = [];
-  const lang = view.state.facet(language);
-  if (lang && text.length <= HIGHLIGHT_LIMIT) {
-    highlightTree(lang.parser.parse(text), { style: (tags) => highlightingFor(view.state, tags) }, (from, to, cls) => marks.push({ from, to, cls }));
-  }
+  const marks = text.length <= HIGHLIGHT_LIMIT ? shikiTokens(view.state, text).flat().map((token) => ({
+    from: token.offset, to: token.offset + token.content.length, color: token.color, fontStyle: token.fontStyle ?? 0,
+  })) : [];
   const out: HTMLElement[] = [];
   let pos = 0;
   let m = 0;
@@ -126,7 +124,11 @@ function oldLines(view: EditorView, text: string) {
       const from = Math.max(marks[k].from, pos);
       const to = Math.min(marks[k].to, end);
       if (from > at) div.append(text.slice(at, from));
-      div.append(el('span', marks[k].cls, text.slice(from, to)));
+      const span = el('span', '', text.slice(from, to));
+      span.style.color = marks[k].color ?? '';
+      if (marks[k].fontStyle & 1) span.style.fontStyle = 'italic';
+      if (marks[k].fontStyle & 2) span.style.fontWeight = 'bold';
+      div.append(span);
       at = to;
     }
     if (at < end) div.append(text.slice(at, end));

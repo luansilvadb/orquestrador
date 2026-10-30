@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "check": "node --test --test-concurrency=1 tests/check-workspace.mjs tests/check-editor-store.mjs tests/check-git-stage.mjs tests/check-file-tabs.mjs tests/check-explorer.mjs tests/check-git-graph.mjs tests/check-paste.mjs tests/check-release.mjs tests/check-commands.mjs",
+    "check": "node --test --test-concurrency=1 tests/check-workspace.mjs tests/check-editor-store.mjs tests/check-git-stage.mjs tests/check-file-tabs.mjs tests/check-explorer.mjs tests/check-git-graph.mjs tests/check-paste.mjs tests/check-release.mjs tests/check-commands.mjs tests/check-shiki-language.mjs",
     "check:ui": "node --test --test-global-setup=tests/ui-setup.mjs --test-concurrency=4 tests/check-editor-ui.mjs tests/check-files-search-ui.mjs tests/check-git-ui.mjs tests/check-media-ui.mjs tests/check-titlebar-ui.mjs tests/check-editor-style.mjs tests/check-git-gutter-ui.mjs tests/check-shell-tabs-ui.mjs tests/check-editor-tabs-ui.mjs tests/check-project-tabs-ui.mjs tests/check-tab-lists-ui.mjs",
     "tauri": "tauri"
   },
@@ -33,11 +33,13 @@
     "@xterm/xterm": "^6.0.0",
     "antd": "^6.6.6",
     "codemirror": "^6.0.2",
+    "linguist-languages": "^9.5.0",
     "lucide-react": "^1.55.0",
     "motion": "^12.43.0",
     "prettier": "3.9.10",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "shiki": "^4.5.0",
     "virtua": "0.52.10",
     "yaml": "2.9.1"
   },
