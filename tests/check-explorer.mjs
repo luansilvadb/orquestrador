@@ -57,6 +57,28 @@ check('pasta herda a alteração mais forte de dentro, com •', () => {
   const d = decorations([f('src/x/a.ts', null, 'untracked'), f('src/b.ts', null, 'modified'), f('docs/c.md', null, 'deleted')]);
   assert.deepEqual([d.get('src').letter, d.get('src').color], ['•', '#E2C08D']);
   assert.equal(d.get('src/x').color, '#73C991');
-  assert.equal(d.get('docs').color, '#c74e39', 'apagado também colore a pasta');
+  assert.equal(d.get('docs'), undefined, 'apagado não colore a pasta');
   assert.equal(d.get(''), undefined, 'a raiz não é decorada');
+});
+
+check('exclusões ficam no arquivo e não se propagam aos ancestrais', () => {
+  for (const [staged, unstaged] of [[null, 'deleted'], ['deleted', null]]) {
+    const d = decorations([f('a/b/c/removido.ts', staged, unstaged)]);
+    assert.deepEqual([d.get('a/b/c/removido.ts').letter, d.get('a/b/c/removido.ts').color], ['D', '#c74e39']);
+    for (const dir of ['a', 'a/b', 'a/b/c']) assert.equal(d.get(dir), undefined);
+  }
+});
+
+check('pastas agregam somente estados propagáveis', () => {
+  for (const [other, color] of [['modified', '#E2C08D'], ['untracked', '#73C991']]) {
+    const d = decorations([f('a/b/excluido.ts', null, 'deleted'), f('a/b/outro.ts', null, other)]);
+    for (const dir of ['a', 'a/b']) assert.deepEqual([d.get(dir).letter, d.get(dir).color], ['•', color]);
+  }
+  for (const [staged, unstaged] of [['modified', 'deleted'], ['deleted', 'modified']]) {
+    const d = decorations([f('a/b/arquivo.ts', staged, unstaged)]);
+    assert.deepEqual([d.get('a/b/arquivo.ts').letter, d.get('a/b/arquivo.ts').color], ['D', '#c74e39']);
+    for (const dir of ['a', 'a/b']) assert.deepEqual([d.get(dir).letter, d.get(dir).color], ['•', '#E2C08D']);
+  }
+  const conflict = decorations([f('a/b/conflito.ts', null, 'conflicted'), f('a/b/excluido.ts', 'deleted', null)]);
+  for (const dir of ['a', 'a/b']) assert.deepEqual([conflict.get(dir).letter, conflict.get(dir).color], ['•', '#e4676b']);
 });

@@ -29,10 +29,12 @@ export function decorations(files: GitFile[]): Map<string, Decoration> {
     const kind = stronger(stronger(undefined, f.staged), f.unstaged);
     if (!kind) continue;
     kinds.set(f.path, kind);
+    const inherited = stronger(stronger(undefined, f.staged === 'deleted' ? null : f.staged), f.unstaged === 'deleted' ? null : f.unstaged);
+    if (!inherited) continue;
     const parts = f.path.split('/');
     for (let i = 1; i < parts.length; i++) {
       const dir = parts.slice(0, i).join('/');
-      dirs.set(dir, stronger(dirs.get(dir), kind)!);
+      dirs.set(dir, stronger(dirs.get(dir), inherited)!);
     }
   }
   const out = new Map<string, Decoration>();

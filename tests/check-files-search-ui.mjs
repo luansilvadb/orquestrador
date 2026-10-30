@@ -712,7 +712,7 @@ scenario('muitos resultados: a lista monta só as linhas à vista, digitar não 
 });
 
 
-scenario('visual do Explorer: ícones do tema Symbols, cores e letras do Git (pasta herda com •), ignorado em cinza; barra com Recolher Tudo e Novo Arquivo; seção do projeto recolhe a árvore', async ({ page }) => {
+scenario('visual do Explorer: ícones Material, cores e letras do Git (pasta herda com •), ignorado em cinza; barra com Recolher Tudo e Novo Arquivo; seção do projeto recolhe a árvore', async ({ page }) => {
   const color = (path) => at(page, path).evaluate((el) => getComputedStyle(el).color);
   const letter = (path) => at(page, path).evaluate((el) => el.nextElementSibling?.textContent ?? '');
   const icon = (path) => at(page, path).evaluate((el) => el.closest('[role="treeitem"]').querySelector('img').dataset.icon);
@@ -731,10 +731,10 @@ scenario('visual do Explorer: ícones do tema Symbols, cores e letras do Git (pa
   assert.equal(await letter('package.json'), '');
   assert.notEqual(await color('package.json'), 'rgb(140, 140, 140)');
   // Ícones por nome de pasta e por extensão, como no Antigravity.
-  assert.equal(await icon('docs'), 'folder-blue');
-  assert.equal(await icon('src'), 'folder-orange-code');
-  assert.equal(await icon('README.md'), 'markdown');
-  assert.equal(await icon('package.json'), 'node');
+  assert.equal(await icon('docs'), 'folder-docs');
+  assert.equal(await icon('src'), 'folder-src');
+  assert.equal(await icon('README.md'), 'readme');
+  assert.equal(await icon('package.json'), 'nodejs');
 
   // Dentro de pasta aberta: o arquivo alterado tem a letra dele; a pasta ignorada passa o cinza aos filhos (o check-ignore os marca).
   await expand(page, ['docs', 'dist']);
@@ -765,6 +765,22 @@ scenario('visual do Explorer: ícones do tema Symbols, cores e letras do Git (pa
   await treeItem(page, 'docs').waitFor({ state: 'hidden' });
   await section.click();
   await treeItem(page, 'docs').waitFor();
+});
+
+scenario('decoração Git: pasta só com exclusão fica neutra; pasta mista herda modificação', async ({ page }) => {
+  const entries = await page.evaluate(async () => {
+    const { decorations } = await import('/src/explorer/explorer-decorations.ts');
+    const file = (path, unstaged) => ({ path, origPath: null, staged: null, unstaged });
+    return [...decorations([
+      file('somente-exclusao/apagado.md', 'deleted'),
+      file('mista/apagado.md', 'deleted'),
+      file('mista/editado.md', 'modified'),
+    ])];
+  });
+  const result = new Map(entries);
+  assert.equal(result.has('somente-exclusao'), false, 'exclusão não colore a pasta');
+  assert.deepEqual(result.get('somente-exclusao/apagado.md'), { color: '#c74e39', letter: 'D', title: 'Apagado' });
+  assert.deepEqual(result.get('mista'), { color: '#E2C08D', letter: '•', title: 'Contém itens: modificado' });
 });
 
 scenario('pasta grande na árvore: abre com só as linhas à vista no DOM; rolar e End alcançam o fim; Revelar rola até item que não estava montado', async ({ page }) => {
