@@ -1,51 +1,43 @@
-// Check puro do Explorer: a escolha de ícones (src/shared/file-icons.ts), com os casos do Explorer do Antigravity aberto neste projeto e a
-// ordem nome > extensão longa > extensão curta > linguagem > padrão, e as decorações do Git (src/explorer/explorer-decorations.ts).
-// Roda sem dependências: `node tests/check-explorer.mjs`.
+// Resolução do Material Icon Theme e decorações do Explorer.
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { test as check } from 'node:test';
-import theme from '../src/assets/symbols/theme.json' with { type: 'json' };
+import theme from '../src/assets/material-icons/theme.json' with { type: 'json' };
 import { decorations } from '../src/explorer/explorer-decorations.ts';
 import { iconFile, iconKey } from '../src/shared/file-icons.ts';
 
-check('pastas do print', () => {
-  assert.equal(iconKey('.github', true), 'folder-github');
-  assert.equal(iconKey('src', true), 'folder-orange-code');
-  assert.equal(iconKey('docs', true), 'folder-blue');
-  assert.equal(iconKey('scripts', true), 'folder-red-code');
-  assert.equal(iconKey('dist', true), 'folder-purple-outline');
-  assert.equal(iconKey('node_modules', true), 'folder-green');
-  assert.equal(iconKey('src-tauri', true), 'folder');
-  assert.equal(iconKey('a/b/SRC', true), 'folder-orange-code');
+check('pastas fechadas e abertas', () => {
+  assert.equal(iconKey('a/b/SRC', true), theme.folderNames.src);
+  assert.equal(iconKey('C:\\a\\SRC', true, true), theme.folderNamesExpanded.src);
+  assert.equal(iconKey('desconhecida', true), theme.folder);
+  assert.equal(iconKey('desconhecida', true, true), theme.folderExpanded);
 });
 
-check('arquivos do print', () => {
-  assert.equal(iconKey('.gitignore', false), 'git');
-  assert.equal(iconKey('index.html', false), 'code-orange');
-  assert.equal(iconKey('package.json', false), 'node');
-  assert.equal(iconKey('package-lock.json', false), 'node');
-  assert.equal(iconKey('README.md', false), 'markdown');
-  assert.equal(iconKey('tsconfig.json', false), 'tsconfig');
-  assert.equal(iconKey('vite.config.ts', false), 'vite');
+check('nomes, extensões, caminhos e desconhecidos', () => {
+  for (const name of ['package.json', 'vite.config.ts', '.gitignore', 'Dockerfile']) {
+    assert.equal(iconKey(`C:\\repo\\${name.toUpperCase()}`, false), theme.fileNames[name.toLowerCase()]);
+  }
+  for (const [name, extension] of Object.entries({ 'app.tsx': 'tsx', 'main.ts': 'ts', 'index.js': 'js', 'data.json': 'json', 'main.rs': 'rs', 'Program.cs': 'cs', 'script.gd': 'gd', 'scene.tscn': 'tscn', 'resource.tres': 'tres', 'project.godot': 'godot' })) {
+    assert.equal(iconKey(`a/b/${name}`, false), theme.fileExtensions[extension], name);
+  }
+  assert.equal(iconKey('.env', false), theme.fileNames['.env'] ?? theme.file);
+  assert.equal(iconKey('sem-extensao', false), theme.file);
+  assert.equal(iconKey('.inventado', false), theme.file);
 });
 
 check('ordem de resolução', () => {
-  assert.equal(iconKey('src/types.d.ts', false), 'ts-types');
-  assert.equal(iconKey('src/App.tsx', false), 'react-ts');
-  assert.equal(iconKey('main.rs', false), 'rust');
-  assert.equal(iconKey('.json', false), 'document');
-  assert.equal(iconKey('sem-extensao', false), 'document');
-  assert.equal(iconKey('LICENSE', false), 'license');
+  assert.equal(iconKey('src/types.d.ts', false), theme.fileExtensions['d.ts']);
+  assert.equal(iconKey('a/b/VITE.CONFIG.TS', false), theme.fileNames['vite.config.ts']);
 });
 
 check('todo ícone mapeado tem SVG', () => {
   // Toda chave que iconKey pode devolver: os valores dos mapas e os padrões. O caminho tem de bater exato com o arquivo.
-  const maps = [theme.fileNames, theme.fileExtensions, theme.langNames, theme.langExtensions, theme.folderNames];
-  const keys = new Set([theme.file, theme.folder, ...maps.flatMap(Object.values)]);
+  const maps = [theme.fileNames, theme.fileExtensions, theme.langNames, theme.langExtensions, theme.folderNames, theme.folderNamesExpanded];
+  const keys = new Set([theme.file, theme.folder, theme.folderExpanded, ...maps.flatMap(Object.values)]);
   const broken = [...keys].filter((key) => {
     const file = iconFile(key);
-    return !file || !existsSync(join(import.meta.dirname, '..', 'src', 'assets', 'symbols', 'icons', file));
+    return !file || !existsSync(join(import.meta.dirname, '..', 'src', 'assets', 'material-icons', 'icons', file));
   });
   assert.deepEqual(broken, []);
 });

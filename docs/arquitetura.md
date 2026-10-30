@@ -9,7 +9,7 @@ Uma linha por pasta; os arquivos não óbvios de cada uma vêm logo abaixo da ta
 | Pasta | Papel |
 | --- | --- |
 | `src/` | Raiz: `main.tsx` monta o app (o `ThemeProvider`, os hosts de aviso e de diálogo); `App.tsx` integra as telas e os painéis (a tela de atualização, a tela principal com árvore, área do arquivo, painel Terminal e painel do Orquestrador, e a tela Git); `index.css` é o CSS global. O design system (Lobe UI) está em [design system](design-system.md). |
-| `src/assets/` | Os codicons e o tema de ícones Symbols, com as licenças. |
+| `src/assets/` | Codicons; ícones Material gerados localmente no build. |
 | `src/backend/` | O contato com o backend: `backend.ts` é o único ponto que fala com o Tauri, e o backend simulado fica aqui. |
 | `src/editor/` | A área central: abas, grupos, as vistas de diff, commit e conflito, comparação com o disco, recuperação, o editor de texto, a aba de mídia, os breadcrumbs e o arquivo rápido. |
 | `src/explorer/` | A árvore de arquivos e as decorações do Git nela. |
@@ -55,7 +55,7 @@ Arquivos não óbvios:
 - `src/terminal/terminals.tsx`: registro de views e dados iniciais de xterm, chaveado por `(project, id)`.
 - `src/terminal/paste.ts`: a colagem de arquivo e imagem no terminal.
 - `src/terminal/choice-form.tsx`: o formulário de escolha de ferramenta, modelo e esforço.
-- `src/shared/file-icons.ts` e `file-icon.tsx`: a escolha do ícone do tema Symbols pela ordem do VS Code (nome, extensão, linguagem, padrão) e o componente `FileIcon`, usado na árvore, nas abas, no Git, na pesquisa e no arquivo rápido.
+- `src/shared/file-icons.ts` e `file-icon.tsx`: associações do Material Icon Theme por nome, extensão e linguagem; `FileIcon` é usado na árvore, nas abas, no Git, na pesquisa e no arquivo rápido.
 - `src/shared/file-tab-actions.ts`: as regras puras de caminho e nome das abas de arquivo.
 - `src/shared/text-style.ts`: `SECONDARY`, a cor do texto secundário do tema para informação em texto pequeno.
 
@@ -133,7 +133,7 @@ Ferramentas, sem testes.
 
 **Sincronização de ícones**
 
-- `scripts/sync-file-icons.mjs`: copia o tema de ícones Symbols (MIT, com a LICENSE) da pasta `extensions` de uma IDE do VS Code para `src/assets/symbols`, só os ícones que o app alcança (as chaves que `iconKey` pode devolver), e gera o `theme.json` só com essas chaves; rode de novo para atualizar os ícones.
+- `scripts/sync-file-icons.mjs`: gera associações e SVGs locais do pacote `material-icon-theme` (MIT) antes de dev, check e build; a licença acompanha os assets gerados. Atualizar a dependência atualiza o catálogo no ciclo seguinte.
 
 ## Workflows (`.github/workflows/`)
 

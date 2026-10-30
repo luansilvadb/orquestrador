@@ -3,7 +3,7 @@
 // Arquivo e pasta da árvore têm menu de contexto (clique direito, Shift+F10 e a tecla de contexto); a área vazia do painel tem o menu da raiz do projeto.
 // Seleção com Ctrl e Shift; arrastar e soltar move para pasta ou para a raiz, com o destino mostrado e validado. As ações que mexem no App (abas,
 // rascunhos, telas) vêm pelo `actions`; as que só chamam o backend a árvore chama direto.
-// O visual segue o Explorer do Antigravity/VS Code: ícones do tema Symbols, decorações do Git (cor, letra e "•" na pasta; cinza no ignorado),
+// O visual segue o Explorer do Antigravity/VS Code: ícones Material, decorações do Git (cor, letra e "•" na pasta; cinza no ignorado),
 // barra com as ações da view e a seção recolhível com o nome do projeto. As linhas são virtuais (explorer-tree.tsx): pasta grande abre na hora.
 import { type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, ChevronsDownUp, FilePlus, FolderPlus, Info, LoaderCircle, type LucideIcon, RefreshCw, X } from 'lucide-react';
@@ -807,8 +807,8 @@ export function FilesScreen({
   // O nó provisório fica sem ícone próprio (a árvore põe o de arquivo genérico).
   const rowIcon = useCallback((row: TreeRow) => {
     if (row.kind === 'new') return creating && <FileIcon path={creating.name.trim() || (creating.kind === 'dir' ? 'pasta' : 'arquivo')} dir={creating.kind === 'dir'} className="mr-1.5 size-4" />;
-    return row.entry && <FileIcon path={row.entry.name} dir={row.entry.dir} className="mr-1.5 size-4" />;
-  }, [creating]);
+    return row.entry && <FileIcon path={row.entry.name} dir={row.entry.dir} expanded={tree.expanded.includes(row.key)} className="mr-1.5 size-4" />;
+  }, [creating, tree.expanded]);
 
   // Novo Arquivo e Nova Pasta da barra: na pasta selecionada (ou na do arquivo selecionado); sem seleção única, na raiz.
   const barDir = () => {
