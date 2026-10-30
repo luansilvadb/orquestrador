@@ -14,14 +14,14 @@ pub use windows::{
     abrir_para_gravar, abrir_pasta_no_explorador, clear_if_same, cli_do_processo, copiar_ou_mover, em_uso,
     ja_existe, mandar_para_lixeira, memoria, mover_sem_substituir, open_url,
     pasta_local_do_usuario, pasta_pessoal, revelar_no_explorador,
-    sem_janela, set_files, situacao_do_processo, snapshot, start_time, symlink_arquivo, Job, SHELLS,
+    sem_janela, set_files, situacao_do_processo, snapshot, spawn_com_prazo, start_time, symlink_arquivo, Job, SHELLS,
 };
 #[cfg(not(windows))]
 pub use other::{
     abrir_para_gravar, abrir_pasta_no_explorador, clear_if_same, cli_do_processo, copiar_ou_mover, em_uso,
     ja_existe, mandar_para_lixeira, memoria, mover_sem_substituir, open_url,
     pasta_local_do_usuario, pasta_pessoal, revelar_no_explorador,
-    sem_janela, set_files, situacao_do_processo, snapshot, start_time, symlink_arquivo, Job, SHELLS,
+    sem_janela, set_files, situacao_do_processo, snapshot, spawn_com_prazo, start_time, symlink_arquivo, Job, SHELLS,
 };
 
 /// Os arquivos no clipboard: os caminhos, na ordem, e se foram recortados (`cut`) ou copiados. `paths` vem vazio quando

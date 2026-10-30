@@ -89,6 +89,8 @@ A raiz guarda a infraestrutura (comandos Tauri, configuração, processos, atual
 
 O módulo src-tauri/src/ide/format.rs escolhe o motor pela extensão, procura as configurações pelo caminho absoluto e executa os formatadores externos com timeout. Os comandos formatter_info e format_cli são registrados em lib.rs e tipados em src/backend/types.ts.
 
+`src-tauri/src/proc.rs` é o único lugar que roda comando externo com prazo (`saida_com_prazo`), e o prazo cobre execução, escrita na entrada e leitura dos dois pipes. No Windows o processo nasce suspenso, entra no Job Object antes de qualquer descendente rodar e só então é liberado; no macOS e no Linux, o comando abre um grupo de processos próprio. No estouro, a árvore inteira é encerrada e o que saiu até ali volta com `estourou`. `src-tauri/tests/prazo.rs` cobre pai que sai e deixa descendente segurando os pipes, pai vivo, entrada de 16 MiB sem destino e saída grande nos dois pipes.
+
 Cada comando dependente de projeto recebe o id devolvido por `open_project` (ou `choose_project`); reabrir a mesma raiz normalizada devolve o id existente. Os eventos do Core também carregam `project`; ids de terminal são locais ao Core e o front deve chavear por `(project, id)`. O limite de executores é global, com fila FIFO entre projetos. Opções e escolhas padrão ficam na configuração global; a escolha dos executores, cada sessão em execução, seus shells e sua trava Git pertencem ao Core do projeto. O Core sem projeto é separado e sobrevive à abertura e ao fechamento de projetos.
 
 ## Testes (`tests/`)

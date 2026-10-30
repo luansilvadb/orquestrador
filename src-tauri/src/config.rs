@@ -1,8 +1,8 @@
 //! Configuração: `%LOCALAPPDATA%\orquestrador\config.json`, as validações e a lista de modelos.
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 pub const TOOLS: [&str; 2] = ["claude", "codex"];
 
@@ -168,10 +168,85 @@ pub fn parse_codex_models(json: &str) -> Vec<ModelOption> {
         .collect()
 }
 
+struct ModelosEmConsulta {
+    resultado: Mutex<Option<Vec<ModelOption>>>,
+    pronto: Condvar,
+}
+
+impl ModelosEmConsulta {
+    fn aguardar(&self) -> Vec<ModelOption> {
+        let mut resultado = self.resultado.lock().unwrap();
+        let limite = Instant::now() + PRAZO_MODELOS;
+        while resultado.is_none() {
+            let restante = limite.saturating_duration_since(Instant::now());
+            if restante.is_zero() {
+                return Vec::new();
+            }
+            let (novo, tempo) = self.pronto.wait_timeout(resultado, restante).unwrap();
+            resultado = novo;
+            if tempo.timed_out() && resultado.is_none() {
+                return Vec::new();
+            }
+        }
+        resultado.as_ref().unwrap().clone()
+    }
+}
+
+struct EstadoModelos {
+    cache: Vec<ModelOption>,
+    em_consulta: Option<Arc<ModelosEmConsulta>>,
+}
+
+struct CacheModelosCodex(Mutex<EstadoModelos>);
+
+impl CacheModelosCodex {
+    const fn new() -> Self {
+        Self(Mutex::new(EstadoModelos { cache: Vec::new(), em_consulta: None }))
+    }
+
+    fn get_or_query(&self, query: impl FnOnce() -> Vec<ModelOption>) -> Vec<ModelOption> {
+        let (consulta, dono) = {
+            let mut estado = self.0.lock().unwrap();
+            if !estado.cache.is_empty() {
+                return estado.cache.clone();
+            }
+            if let Some(consulta) = &estado.em_consulta {
+                (consulta.clone(), false)
+            } else {
+                let consulta = Arc::new(ModelosEmConsulta { resultado: Mutex::new(None), pronto: Condvar::new() });
+                estado.em_consulta = Some(consulta.clone());
+                (consulta, true)
+            }
+        };
+
+        if !dono {
+            return consulta.aguardar();
+        }
+
+        let resposta = std::panic::catch_unwind(std::panic::AssertUnwindSafe(query));
+        let (resultado, panico) = match resposta {
+            Ok(resultado) => (resultado, None),
+            Err(panico) => (Vec::new(), Some(panico)),
+        };
+        let mut estado = self.0.lock().unwrap();
+        if !resultado.is_empty() {
+            estado.cache = resultado.clone();
+        }
+        *consulta.resultado.lock().unwrap() = Some(resultado.clone());
+        estado.em_consulta = None;
+        drop(estado);
+        consulta.pronto.notify_all();
+        if let Some(panico) = panico {
+            std::panic::resume_unwind(panico);
+        }
+        resultado
+    }
+}
+
 // O Claude não tem comando que liste modelos: os apelidos resolvem para o mais novo de cada
 // família. O Codex é perguntado com prazo; se não responder a tempo, a lista fica vazia (o nome
 // ainda pode ser digitado) e a pergunta é refeita na próxima vez.
-static CODEX_MODELS: Mutex<Vec<ModelOption>> = Mutex::new(Vec::new());
+static CODEX_MODELS: CacheModelosCodex = CacheModelosCodex::new();
 
 /// Prazo da consulta dos modelos do Codex: o normal é abaixo de 300 ms, e uma instalação travada não pode segurar o
 /// diálogo de escolha.
@@ -183,18 +258,17 @@ pub fn models(tool: &str, codex_exe: &str) -> Vec<ModelOption> {
         let efforts = all(efforts("claude").unwrap());
         return all(&["fable", "opus", "sonnet", "haiku"]).into_iter().map(|name| ModelOption { name, efforts: efforts.clone() }).collect();
     }
-    let mut cache = CODEX_MODELS.lock().unwrap();
-    if cache.is_empty() {
+    CODEX_MODELS.get_or_query(|| {
         let mut cmd = crate::proc::quiet(codex_exe);
         cmd.args(["debug", "models"]);
         // Estourou o prazo, saiu com erro ou não devolveu uma lista: fica vazia, e a próxima pergunta tenta de novo.
         if let Ok(saida) = crate::proc::saida_com_prazo(cmd, b"", PRAZO_MODELOS) {
             if !saida.estourou && saida.status.success() {
-                *cache = parse_codex_models(&String::from_utf8_lossy(&saida.out));
+                return parse_codex_models(&String::from_utf8_lossy(&saida.out));
             }
         }
-    }
-    cache.clone()
+        Vec::new()
+    })
 }
 
 pub fn options(cfg: &Config, codex_exe: &str) -> Options {
@@ -215,6 +289,62 @@ pub fn options(cfg: &Config, codex_exe: &str) -> Options {
 mod tests {
     use super::*;
     use crate::testutil::Tmp;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    use std::thread::{self, JoinHandle};
+
+    const CLIENTES_CONCORRENTES: usize = 8;
+    const PRAZO_TESTE: Duration = Duration::from_secs(10);
+
+    fn lista_teste() -> Vec<ModelOption> {
+        vec![ModelOption { name: "gpt-test".into(), efforts: vec!["low".into(), "high".into()] }]
+    }
+
+    fn vista(modelos: &[ModelOption]) -> Vec<(String, Vec<String>)> {
+        modelos.iter().map(|modelo| (modelo.name.clone(), modelo.efforts.clone())).collect()
+    }
+
+    fn consultas_simultaneas(
+        cache: Arc<CacheModelosCodex>,
+        consulta: Arc<dyn Fn() -> Vec<ModelOption> + Send + Sync>,
+    ) -> Vec<JoinHandle<Vec<ModelOption>>> {
+        let threads: Vec<_> = (0..CLIENTES_CONCORRENTES)
+            .map(|_| {
+                let cache = cache.clone();
+                let consulta = consulta.clone();
+                thread::spawn(move || cache.get_or_query(|| consulta()))
+            })
+            .collect();
+        aguardar_clientes(&cache, CLIENTES_CONCORRENTES);
+        threads
+    }
+
+    fn aguardar_clientes(cache: &CacheModelosCodex, quantidade: usize) {
+        let limite = Instant::now() + PRAZO_TESTE;
+        loop {
+            let ligados = {
+                let estado = cache.0.lock().unwrap();
+                estado.em_consulta.as_ref().map(Arc::strong_count).unwrap_or(0)
+            };
+            // Uma referência fica no estado, outra no dono, e cada aguardante mantém a geração.
+            if ligados >= quantidade + 2 {
+                return;
+            }
+            assert!(Instant::now() < limite, "clientes não aderiram à mesma geração (referências: {ligados})");
+            thread::yield_now();
+        }
+    }
+
+    fn aguardar_consulta_finalizada(cache: &CacheModelosCodex) {
+        let limite = Instant::now() + PRAZO_TESTE;
+        loop {
+            if cache.0.lock().unwrap().em_consulta.is_none() {
+                return;
+            }
+            assert!(Instant::now() < limite, "consulta não terminou no prazo do teste");
+            thread::yield_now();
+        }
+    }
 
     /// O `config.json` de uma pasta que some com o `Tmp` devolvido.
     fn temp(name: &str) -> (Tmp, PathBuf) {
@@ -316,5 +446,132 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!((models[0].name.as_str(), models[0].efforts.join(",")), ("gpt-a", "low,high".to_string()));
         assert!(parse_codex_models("nao e json").is_empty());
+    }
+
+    #[test]
+    fn clientes_concorrentes_compartilham_sucesso_e_uma_consulta() {
+        let cache = Arc::new(CacheModelosCodex::new());
+        let chamadas = Arc::new(AtomicUsize::new(0));
+        let consultas_inesperadas = Arc::new(AtomicUsize::new(0));
+        let (iniciou, esperar_inicio) = mpsc::channel();
+        let (liberar, espera) = mpsc::channel();
+        let dono = {
+            let cache = cache.clone();
+            let chamadas = chamadas.clone();
+            thread::spawn(move || {
+                cache.get_or_query(|| {
+                    chamadas.fetch_add(1, Ordering::SeqCst);
+                    iniciou.send(()).unwrap();
+                    espera.recv_timeout(PRAZO_TESTE).expect("liberar consulta de sucesso");
+                    lista_teste()
+                })
+            })
+        };
+        esperar_inicio.recv_timeout(PRAZO_TESTE).expect("dono iniciou a consulta");
+        let consulta_inesperada = {
+            let consultas_inesperadas = consultas_inesperadas.clone();
+            Arc::new(move || {
+                consultas_inesperadas.fetch_add(1, Ordering::SeqCst);
+                Vec::new()
+            })
+        };
+
+        let clientes = consultas_simultaneas(cache, consulta_inesperada);
+        liberar.send(()).unwrap();
+        let resultado_dono = dono.join().unwrap();
+        assert_eq!(vista(&resultado_dono), vista(&lista_teste()));
+        let resultados: Vec<_> = clientes.into_iter().map(|cliente| cliente.join().unwrap()).collect();
+        assert!(resultados.iter().all(|resultado| vista(resultado) == vista(&lista_teste())));
+        assert_eq!(chamadas.load(Ordering::SeqCst), 1);
+        assert_eq!(consultas_inesperadas.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn clientes_concorrentes_compartilham_falha_e_retry_imediato_preserva_a_geracao_antiga() {
+        let cache = Arc::new(CacheModelosCodex::new());
+        let chamadas = Arc::new(AtomicUsize::new(0));
+        let consultas_inesperadas = Arc::new(AtomicUsize::new(0));
+        let (iniciou, esperar_inicio) = mpsc::channel();
+        let (liberar, espera) = mpsc::channel();
+        let dono = {
+            let cache = cache.clone();
+            let chamadas = chamadas.clone();
+            thread::spawn(move || {
+                cache.get_or_query(|| {
+                    chamadas.fetch_add(1, Ordering::SeqCst);
+                    iniciou.send(()).unwrap();
+                    espera.recv_timeout(PRAZO_TESTE).expect("liberar consulta com falha");
+                    Vec::new()
+                })
+            })
+        };
+        esperar_inicio.recv_timeout(PRAZO_TESTE).expect("dono iniciou a consulta");
+        let consulta_inesperada = {
+            let consultas_inesperadas = consultas_inesperadas.clone();
+            Arc::new(move || {
+                consultas_inesperadas.fetch_add(1, Ordering::SeqCst);
+                Vec::new()
+            })
+        };
+
+        let clientes = consultas_simultaneas(cache.clone(), consulta_inesperada);
+        liberar.send(()).unwrap();
+        assert!(dono.join().unwrap().is_empty());
+        aguardar_consulta_finalizada(&cache);
+        let resultado = cache.get_or_query(|| {
+            chamadas.fetch_add(1, Ordering::SeqCst);
+            lista_teste()
+        });
+        assert_eq!(vista(&resultado), vista(&lista_teste()));
+
+        let resultados: Vec<_> = clientes.into_iter().map(|cliente| cliente.join().unwrap()).collect();
+        assert!(resultados.iter().all(Vec::is_empty));
+        assert_eq!(chamadas.load(Ordering::SeqCst), 2);
+        assert_eq!(consultas_inesperadas.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn panico_do_dono_libera_aguardantes_e_permite_nova_consulta() {
+        let cache = Arc::new(CacheModelosCodex::new());
+        let chamadas = Arc::new(AtomicUsize::new(0));
+        let (iniciou, esperar_inicio) = mpsc::channel();
+        let (liberar, espera) = mpsc::channel();
+        let dono = {
+            let cache = cache.clone();
+            let chamadas = chamadas.clone();
+            thread::spawn(move || {
+                cache.get_or_query(|| {
+                    chamadas.fetch_add(1, Ordering::SeqCst);
+                    iniciou.send(()).unwrap();
+                    espera.recv_timeout(PRAZO_TESTE).expect("liberar consulta que entra em pânico");
+                    std::panic::panic_any("falha planejada da consulta");
+                })
+            })
+        };
+        esperar_inicio.recv_timeout(PRAZO_TESTE).expect("dono iniciou a consulta");
+
+        let consultas_inesperadas = Arc::new(AtomicUsize::new(0));
+        let consulta_inesperada = {
+            let consultas_inesperadas = consultas_inesperadas.clone();
+            Arc::new(move || {
+                consultas_inesperadas.fetch_add(1, Ordering::SeqCst);
+                Vec::new()
+            })
+        };
+        let aguardantes = consultas_simultaneas(cache.clone(), consulta_inesperada);
+
+        liberar.send(()).unwrap();
+        let panico = dono.join().expect_err("o pânico original deve chegar ao dono");
+        assert_eq!(panico.downcast_ref::<&str>(), Some(&"falha planejada da consulta"));
+
+        let resultado = cache.get_or_query(|| {
+            chamadas.fetch_add(1, Ordering::SeqCst);
+            lista_teste()
+        });
+        assert_eq!(vista(&resultado), vista(&lista_teste()));
+        let resultados: Vec<_> = aguardantes.into_iter().map(|cliente| cliente.join().unwrap()).collect();
+        assert!(resultados.iter().all(Vec::is_empty));
+        assert_eq!(chamadas.load(Ordering::SeqCst), 2);
+        assert_eq!(consultas_inesperadas.load(Ordering::SeqCst), 0);
     }
 }

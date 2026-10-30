@@ -20,7 +20,7 @@ pub struct Saida {
     pub status: std::process::ExitStatus,
     pub out: Vec<u8>,
     pub err: Vec<u8>,
-    /// O prazo estourou e o processo foi morto: `out` e `err` trazem o que saiu até ali.
+    /// O prazo estourou e a árvore foi encerrada: `out` e `err` trazem o que saiu até ali.
     pub estourou: bool,
 }
 
@@ -33,12 +33,12 @@ pub enum FalhaPrazo {
     Ler(io::Error),
 }
 
-/// Roda `cmd` com `entrada` na entrada padrão (e a fecha em seguida) e um prazo. A saída e o erro são lidos em
-/// threads enquanto o comando roda, para um pipe cheio não travar o processo; no estouro, o comando é morto e o que
-/// saiu até ali volta com `estourou`.
+/// Roda `cmd` com `entrada` na entrada padrão e um prazo para execução, escrita e drenagem dos pipes. Leitores e
+/// escritor correm em paralelo; no estouro, a árvore é encerrada e os bytes capturados voltam com `estourou`.
 pub fn saida_com_prazo(mut cmd: Command, entrada: &[u8], prazo: Duration) -> Result<Saida, FalhaPrazo> {
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(FalhaPrazo::Iniciar)?;
+    let started = Instant::now();
+    let (mut child, job) = platform::spawn_com_prazo(&mut cmd).map_err(FalhaPrazo::Iniciar)?;
     // Os três pipes foram pedidos `piped`: as tomadas existem.
     let mut stdin = child.stdin.take().expect("stdin pedido com pipe");
     let stdout = child.stdout.take().expect("stdout pedido com pipe");
@@ -49,26 +49,56 @@ pub fn saida_com_prazo(mut cmd: Command, entrada: &[u8], prazo: Duration) -> Res
     });
     let out_reader = thread::spawn(move || ler_pipe(stdout));
     let err_reader = thread::spawn(move || ler_pipe(stderr));
-    let started = Instant::now();
-    let (status, estourou) = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break (status, false),
-            Ok(None) if started.elapsed() < prazo => thread::sleep(Duration::from_millis(20)),
-            Ok(None) => {
-                let _ = child.kill();
-                break (child.wait().map_err(FalhaPrazo::Aguardar)?, true);
+    let mut status = None;
+    let estourou = loop {
+        if started.elapsed() >= prazo {
+            job.kill();
+            let _ = child.kill();
+            if status.is_none() {
+                match child.wait() {
+                    Ok(exit) => status = Some(exit),
+                    Err(error) => {
+                        let _ = juntar_saidas(writer, out_reader, err_reader);
+                        return Err(FalhaPrazo::Aguardar(error));
+                    }
+                }
             }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(FalhaPrazo::Aguardar(e));
+            break true;
+        }
+        if status.is_none() {
+            match child.try_wait() {
+                Ok(exit) => status = exit,
+                Err(error) => {
+                    job.kill();
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = juntar_saidas(writer, out_reader, err_reader);
+                    return Err(FalhaPrazo::Aguardar(error));
+                }
             }
         }
+        if status.is_some() && writer.is_finished() && out_reader.is_finished() && err_reader.is_finished() {
+            break false;
+        }
+        thread::sleep(Duration::from_millis(10));
     };
-    let _ = writer.join();
-    let out = out_reader.join().map_err(leitura_caiu)?.map_err(FalhaPrazo::Ler)?;
-    let err = err_reader.join().map_err(leitura_caiu)?.map_err(FalhaPrazo::Ler)?;
+    let (out, err) = juntar_saidas(writer, out_reader, err_reader)?;
+    let status = status.expect("o processo terminou ou foi aguardado");
     Ok(Saida { status, out, err, estourou })
+}
+
+fn juntar_saidas(
+    writer: thread::JoinHandle<()>,
+    out_reader: thread::JoinHandle<io::Result<Vec<u8>>>,
+    err_reader: thread::JoinHandle<io::Result<Vec<u8>>>,
+) -> Result<(Vec<u8>, Vec<u8>), FalhaPrazo> {
+    let _ = writer.join();
+    let out = out_reader.join().map_err(leitura_caiu).and_then(|result| result.map_err(FalhaPrazo::Ler));
+    let err = err_reader.join().map_err(leitura_caiu).and_then(|result| result.map_err(FalhaPrazo::Ler));
+    match (out, err) {
+        (Ok(out), Ok(err)) => Ok((out, err)),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+    }
 }
 
 /// A thread de leitura caiu (pânico): não há saída para devolver.

@@ -16,6 +16,9 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, FILE_SHARE_READ};
 use windows_sys::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Thread32First, Thread32Next, THREADENTRY32, TH32CS_SNAPTHREAD,
+};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
@@ -27,8 +30,9 @@ use windows_sys::Win32::System::JobObjects::{
 use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, CREATE_NO_WINDOW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+    GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread, QueryFullProcessImageNameW, ResumeThread,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+    PROCESS_TERMINATE, THREAD_SUSPEND_RESUME,
 };
 use windows_sys::Win32::UI::Shell::{
     DragQueryFileW, SHCreateItemFromParsingName, DROPFILES, FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION,
@@ -41,6 +45,59 @@ pub const SHELLS: [&str; 2] = ["pwsh.exe", "powershell.exe"];
 /// Um comando que não abre janela de console (o app é de janela; cada filho abriria a sua).
 pub fn sem_janela(cmd: &mut Command) {
     cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+/// Cria suspenso para que nenhum descendente execute antes de o processo entrar no Job.
+pub fn spawn_com_prazo(cmd: &mut Command) -> io::Result<(std::process::Child, Job)> {
+    cmd.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+    let mut child = cmd.spawn()?;
+    let job = match Job::adopt(child.id()) {
+        Some(job) => job,
+        None => {
+            let error = io::Error::last_os_error();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    if let Err(error) = resume_thread(child.id()) {
+        job.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+    Ok((child, job))
+}
+
+fn resume_thread(pid: u32) -> io::Result<()> {
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == usize::MAX as HANDLE {
+            return Err(io::Error::last_os_error());
+        }
+        let mut entry: THREADENTRY32 = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        let result = if Thread32First(snapshot, &mut entry) == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            loop {
+                if entry.th32OwnerProcessID == pid {
+                    let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                    if thread.is_null() {
+                        break Err(io::Error::last_os_error());
+                    }
+                    let resumed = ResumeThread(thread);
+                    let result = if resumed == u32::MAX { Err(io::Error::last_os_error()) } else { Ok(()) };
+                    CloseHandle(thread);
+                    break result;
+                }
+                if Thread32Next(snapshot, &mut entry) == 0 {
+                    break Err(io::Error::last_os_error());
+                }
+            }
+        };
+        CloseHandle(snapshot);
+        result
+    }
 }
 
 /// Job do Windows: tudo o que o processo criar morre junto, no `kill` ou quando o app fecha o
@@ -58,12 +115,15 @@ impl Job {
             let job = Job(job);
             let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
             info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            SetInformationJobObject(
+            if SetInformationJobObject(
                 job.0,
                 JobObjectExtendedLimitInformation,
                 &info as *const _ as *const _,
                 std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            );
+            ) == 0
+            {
+                return None;
+            }
             let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
             if process.is_null() {
                 return None;

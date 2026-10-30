@@ -4,26 +4,51 @@ use super::{ErroShell, Situacao, Snapshot};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 
 const AINDA_NAO: &str = "Ainda não suportado neste sistema.";
 
 /// Sem o recurso de Windows, o comando não tem janela para esconder.
 pub fn sem_janela(_cmd: &mut Command) {}
 
-/// Sem Job Objects: nada é adotado, então `kill` e `pids` não têm o que fazer.
-pub struct Job;
+/// `kill` encerra o grupo usado por comandos com prazo; adoção genérica e consulta de PIDs não são suportadas.
+pub struct Job(Option<i32>);
 
 impl Job {
     pub fn adopt(_pid: u32) -> Option<Job> {
         None
     }
 
-    pub fn kill(&self) {}
+    pub fn kill(&self) {
+        #[cfg(unix)]
+        if let Some(group) = self.0 {
+            unsafe { kill(-group, 9) };
+        }
+    }
 
     pub fn pids(&self) -> Option<Vec<u32>> {
         None
     }
+}
+
+pub fn spawn_com_prazo(cmd: &mut Command) -> io::Result<(Child, Job)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+        let child = cmd.spawn()?;
+        Ok((child, Job(Some(child.id() as i32))))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok((cmd.spawn()?, Job(None)))
+    }
+}
+
+#[cfg(unix)]
+#[link(name = "c")]
+extern "C" {
+    fn kill(pid: i32, signal: i32) -> i32;
 }
 
 /// Sem a consulta de executável do Windows, nenhum processo é CLI.
