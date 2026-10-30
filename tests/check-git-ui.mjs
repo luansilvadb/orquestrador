@@ -1281,6 +1281,48 @@ scenario('gráfico: leitura da nova linha acima de 500 ms mostra a espera no car
   await waiting.getByText('Lendo detalhes…').waitFor({ state: 'detached' });
 });
 
+scenario('gráfico: numa janela baixa, o cartão de hover cabe inteiro na janela, também ao ir de um cartão curto para o de mensagem longa', async ({ page }) => {
+  const HEIGHT = 560;
+  await page.setViewportSize({ width: 1280, height: HEIGHT });
+  await openGit(page);
+  await graphRows(page).first().waitFor();
+  // Rola a lista para a linha ficar perto do fim da janela: o cartão não tem espaço abaixo da âncora.
+  const fits = async (hash) => {
+    const card = page.locator(`[data-commit-hover="${hash}"]`);
+    await card.waitFor({ state: 'visible' });
+    await page.waitForTimeout(500);
+    const box = await card.evaluate((el) => {
+      const popup = el.closest('[data-base-ui-popup], [role="dialog"]') ?? el.parentElement;
+      const rect = (node) => { const r = node.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right }; };
+      const copy = [...el.querySelectorAll('button')].find((b) => b.textContent.includes('Copiar hash'));
+      return { card: rect(el), popup: rect(popup), copy: copy ? rect(copy) : null, win: { w: innerWidth, h: innerHeight } };
+    });
+    return box;
+  };
+  const inside = (r, win) => r.top >= 0 && r.left >= 0 && r.bottom <= win.h && r.right <= win.w;
+  // Primeiro um cartão curto numa linha baixa, depois o da mensagem longa (9f3a1c2).
+  await graphCommit(page, HA2).locator('button').first().hover();
+  const short = await fits(HA2);
+  assert.ok(inside(short.card, short.win), `cartão curto cabe na janela: ${JSON.stringify(short)}`);
+  await graphCommit(page, H9F).locator('button').first().hover();
+  await page.locator(`[data-commit-hover="${H9F}"]`).getByText(/Consolida as notas/).waitFor();
+  const long = await fits(H9F);
+  assert.ok(inside(long.card, long.win), `cartão longo cabe na janela: ${JSON.stringify(long)}`);
+  assert.ok(inside(long.popup, long.win), `popup cabe na janela: ${JSON.stringify(long)}`);
+  assert.ok(long.copy && inside(long.copy, long.win), `'Copiar hash' visível na janela: ${JSON.stringify(long)}`);
+
+  // Janela menor que o cartão: só a mensagem rola; autor, estatísticas e os botões ficam visíveis.
+  await page.mouse.move(0, 0);
+  await page.locator(`[data-commit-hover="${H9F}"]`).waitFor({ state: 'hidden' });
+  await page.setViewportSize({ width: 1280, height: 280 });
+  await graphCommit(page, H9F).locator('button').first().hover();
+  const tiny = await fits(H9F);
+  assert.ok(inside(tiny.card, tiny.win) && inside(tiny.popup, tiny.win), `cartão cabe na janela de 280 px: ${JSON.stringify(tiny)}`);
+  assert.ok(tiny.copy && inside(tiny.copy, tiny.win), `'Copiar hash' visível na janela de 280 px: ${JSON.stringify(tiny)}`);
+  const scrolls = await page.locator(`[data-commit-hover="${H9F}"]`).evaluate((el) => [...el.querySelectorAll('p')].filter((p) => p.scrollHeight > p.clientHeight).map((p) => p.textContent.slice(0, 14)));
+  assert.deepEqual(scrolls, ['Prepara v0.1.7'], 'só a mensagem rola');
+});
+
 scenario('gráfico: o commit de merge desenha duas faixas (SVG mais largo que o de um commit linear)', async ({ page }) => {
   await openGit(page);
   await graphRows(page).first().waitFor();

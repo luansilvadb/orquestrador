@@ -144,8 +144,8 @@ function CommitHoverCard({
       data-commit-hover={commit.hash}
       role="group"
       aria-label={`Detalhes do commit ${commit.short}`}
-      className="space-y-2 p-3"
-      style={{ width: 384, maxWidth: 'calc(100vw - 2rem)', maxHeight: 'min(70vh, 32rem)', overflowY: 'auto' }}
+      className="flex flex-col gap-2 p-3"
+      style={{ width: 384, maxWidth: 'calc(100vw - 2rem)', maxHeight: 'min(calc(var(--available-height) - 1.5rem), 32rem)' }}
     >
       <Flexbox horizontal align="baseline" gap={2}>
         <Text as="span" fontSize={13} weight={600}>{commit.author}</Text>
@@ -158,7 +158,7 @@ function CommitHoverCard({
       {detail && (
         <>
           {coauthors.map((name, index) => <Text key={`${name}:${index}`} as="p" fontSize={12}>{name} (coautor)</Text>)}
-          <Text as="p" fontSize={13} className="whitespace-pre-wrap break-words">{detail.message}</Text>
+          <Text as="p" fontSize={13} className="min-h-0 overflow-y-auto whitespace-pre-wrap break-words">{detail.message}</Text>
           <Text as="p" fontSize={12}>
             {detail.filesChanged} {detail.filesChanged === 1 ? 'arquivo alterado' : 'arquivos alterados'},{' '}
             <span style={{ color: 'var(--ant-color-success)' }}>{detail.insertions} {detail.insertions === 1 ? 'inserção(+)' : 'inserções(+)'}</span>,{' '}
@@ -434,7 +434,8 @@ export function GraphSection({
       {hoverCard && hoverCommit && (
         <PopoverRoot open={hoverCard.open} onOpenChange={(shown, details) => { if (!shown && details.reason === 'escape-key') closeHover(); }}>
           <PopoverPortal>
-            <PopoverPositioner placement="right" anchor={hoverCard.anchor}>
+            {/* A altura do posicionador é fixada na primeira medição (--positioner-height) e a troca de cartão não a remede: automática, ele acompanha o cartão e reposiciona. */}
+            <PopoverPositioner placement="right" anchor={hoverCard.anchor} style={{ height: 'auto' }}>
               <PopoverPopup initialFocus={false} finalFocus={false} onPointerEnter={() => clearTimer(hoverCloseTimer)} onPointerLeave={closeHoverSoon}>
                 <PopoverViewport>
                   <CommitHoverCard key={hoverCard.hash} commit={hoverCommit} state={hoverDetails[hoverCard.hash]} />
