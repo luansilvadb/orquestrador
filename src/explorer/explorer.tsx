@@ -474,7 +474,6 @@ export function FilesScreen({
     }
     sections.push([
       ...(folder ? [] : [
-        single('open-with', 'Abrir com...', () => void backend.openWith(one).catch(report)),
         single('open-side', 'Abrir à Direita', () => onOpen(one, { side: true })),
       ]),
       single('reveal', 'Revelar no Explorador', () => revealPath(backend, one, folder), 'Shift+Alt+R'),

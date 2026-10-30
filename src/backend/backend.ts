@@ -117,7 +117,6 @@ export const projectBackend = (projectId: string | null) => ({
   moveFiles: (paths: string[], dest: string) => projectCall(projectId, 'move_files', { paths, dest }),
   copyFiles: (paths: string[], cut: boolean) => projectCall(projectId, 'copy_files', { paths, cut }),
   revealFile: (path: string) => projectCall(projectId, 'reveal_file', { path }),
-  openWith: (path: string) => projectCall(projectId, 'open_with', { path }),
   openUrl: (url: string) => call('open_url', { url }),
   // Criação na pasta `dir` (relativa, '' é a raiz). Devolve o caminho relativo criado; nunca sobrescreve (nome que existe rejeita com a mensagem).
   createFile: (dir: string, name: string) => projectCall(projectId, 'create_file', { dir, name }),

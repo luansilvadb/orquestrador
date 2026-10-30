@@ -682,12 +682,6 @@ pub fn reveal(project: &Path, rel: &str) -> Result<(), String> {
     platform::revelar_no_explorador(&path).map_err(|e| format!("Não foi possível abrir o Explorer: {e}"))
 }
 
-/// Abre o diálogo "Como você quer abrir este arquivo?" do Windows, o mesmo do Abrir com... do Explorer.
-pub fn open_with(project: &Path, rel: &str) -> Result<(), String> {
-    let path = plain(project, rel, false)?;
-    platform::dialogo_abrir_com(&path).map_err(|e| format!("Não foi possível abrir o diálogo do Windows: {e}"))
-}
-
 /// Cria um arquivo vazio `name` dentro da pasta `dir` do projeto (vazio é a raiz). Devolve o caminho relativo criado.
 /// Não sobrescreve: `create_new` recusa nome já existente, inclusive link quebrado.
 pub fn create_file(project: &Path, dir: &str, name: &str) -> Result<String, String> {

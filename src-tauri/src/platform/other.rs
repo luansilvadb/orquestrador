@@ -90,10 +90,6 @@ pub fn open_url(_url: &str) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Unsupported, AINDA_NAO))
 }
 
-pub fn dialogo_abrir_com(_path: &Path) -> io::Result<()> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, AINDA_NAO))
-}
-
 pub fn mandar_para_lixeira(_file: &Path) -> Result<(), ErroShell> {
     Err(ErroShell::NaoSuportado)
 }

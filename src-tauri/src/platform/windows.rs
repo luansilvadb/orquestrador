@@ -238,11 +238,6 @@ pub fn open_url(url: &str) -> io::Result<()> {
     cmd.arg(url).spawn().map(drop)
 }
 
-/// Abre o diálogo "Como você quer abrir este arquivo?" do Windows, o mesmo do Abrir com... do Explorer.
-pub fn dialogo_abrir_com(path: &Path) -> io::Result<()> {
-    abrir_cru("rundll32.exe", &format!("shell32.dll,OpenAs_RunDLL \"{}\"", path.display()))
-}
-
 /// Abre `programa` sem janela com `arg` como linha de comando crua. O código de saída não é lido: o Explorer sai com 1
 /// mesmo quando funciona.
 fn abrir_cru(programa: &str, arg: &str) -> io::Result<()> {

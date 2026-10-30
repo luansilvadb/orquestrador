@@ -169,7 +169,6 @@ export type Commands = {
   copy_files: { args: ProjectArgs<{ paths: string[]; cut: boolean }>; result: void };
   reveal_file: { args: ProjectArgs<{ path: string }>; result: void };
   reveal_dir: { args: ProjectArgs<{ path: string }>; result: void };
-  open_with: { args: ProjectArgs<{ path: string }>; result: void };
   open_url: { args: { url: string }; result: void };
   create_file: { args: ProjectArgs<{ dir: string; name: string }>; result: string };
   create_dir: { args: ProjectArgs<{ dir: string; name: string }>; result: string };

@@ -467,13 +467,6 @@ fn reveal_file(projects: State<Projects>, project: String, path: String) -> Resu
     files::reveal(&core.repo()?, &path)
 }
 
-/// Abre o diálogo "Abrir com..." do Windows para o arquivo `path`.
-#[tauri::command(async)]
-fn open_with(projects: State<Projects>, project: String, path: String) -> Result<(), String> {
-    let core = projects.core(&project)?;
-    files::open_with(&core.repo()?, &path)
-}
-
 /// Abre no navegador somente URLs HTTPS do GitHub.
 #[tauri::command(async)]
 fn open_url(url: String) -> Result<(), String> {
@@ -658,7 +651,6 @@ pub fn run(context: tauri::Context, initial_paths: Vec<std::path::PathBuf>) {
             copy_files,
             reveal_file,
             reveal_dir,
-            open_with,
             open_url,
             create_file,
             create_dir,

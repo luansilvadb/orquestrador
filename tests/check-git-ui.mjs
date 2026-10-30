@@ -53,7 +53,7 @@ async function openFileMenu(page) {
   await openRoute(page, 'Arquivos');
   await expand(page, ['docs']);
   await treeItem(page, 'design-system.md').click({ button: 'right' });
-  await page.getByRole('menuitem', { name: /Abrir com/ }).waitFor();
+  await page.getByRole('menuitem', { name: /Revelar no Explorador/ }).waitFor();
 }
 // Comparador do Git: o arquivo inteiro numa visão só (um PatchDiff) e a unidade atual (bloco do Git, ou trecho no commit) marcada.
 // As linhas vêm do motor (shadow DOM do PatchDiff): `data-line` é o número da linha e o topo é a posição real na tela.

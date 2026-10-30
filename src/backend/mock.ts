@@ -12,8 +12,8 @@
 // sintaxe do JavaScript (o backend usa a do Rust); o texto de busca e de substituição é o mesmo nos dois.
 // Na pesquisa (Ctrl+Shift+F), `search` filtra de verdade, mas só os arquivos de `TEXTS` têm linhas; os demais não casam nada.
 // Ao abrir um arquivo, `read_file` devolve o texto de `TEXTS`; `write_file_checked` (a gravação do editor) atualiza esse texto. `.png` vem binário, `dados/exportacao.json` vem grande demais, e os demais começam vazios. `read_media` (aba de imagem) devolve um PNG 32×32 para `.png`; `mediaUrl` (áudio e vídeo, que no app vêm por streaming do protocolo `orq-media`) devolve um WebM VP8 64×48 de 2 s em `data:` para `.webm` e `.mp4`, e um WAV de 2 s em silêncio para `.wav`; `__mock.failRead = ['caminho']` faz a leitura falhar, e `__mock.corruptRead = ['caminho']` devolve bytes que o navegador não decodifica (no áudio e no vídeo, as duas dão um `<audio>` ou `<video>` com erro). `__mock.lateRead = 1500` faz `read_file` ler o disco na hora e só entregar a resposta depois desses ms (resposta velha, de antes de uma gravação).
-// Menu do arquivo na árvore: `rename_file` e `delete_files` mudam a árvore e `TEXTS` de verdade (com as mesmas recusas do backend); `reveal_file` e
-// `open_with` só conferem que o arquivo existe, porque o Explorer, o diálogo e a Lixeira são do Windows. `start_shell` aceita `cwd`.
+// Menu do arquivo na árvore: `rename_file` e `delete_files` mudam a árvore e `TEXTS` de verdade (com as mesmas recusas do backend); `reveal_file`
+// só confere que o arquivo existe, porque o Explorer e a Lixeira são do Windows. `start_shell` aceita `cwd`.
 // Área vazia da árvore: `create_file` e `create_dir` criam de verdade na raiz (com as mesmas recusas); `reveal_dir` só confere a pasta.
 // O clipboard do simulado é uma variável em memória, nunca o do Windows: `copy_files` (copiar ou recortar) e `paste_files_detailed` mexem nela.
 // `paste_files_detailed` move ou copia a árvore e `TEXTS` de verdade, e nome repetido vira "nome (2)". `__mock.clipboard()` mostra o que há.
@@ -1089,7 +1089,6 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
     return next;
   },
   reveal_file: ({ path }: { path: string }) => void requireFile(path),
-  open_with: ({ path }: { path: string }) => void requireFile(path),
   open_url: ({ url }: { url: string }) => {
     if (!url.startsWith('https://github.com/')) throw 'Só é permitido abrir links do GitHub.';
     return null;
