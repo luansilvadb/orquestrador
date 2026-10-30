@@ -170,7 +170,7 @@ function ChangesPanel({
   // Buscar, Receber e Enviar: os botões do cabeçalho do gráfico, com a contagem no rótulo e a trava.
   const remoteActions: Record<GraphRemote, { label: string; disabled: boolean }> = {
     fetch: { label: 'Buscar', disabled: busy !== null },
-    pull: { label: status.behind > 0 ? `Receber (${commits(status.behind)})` : 'Receber', disabled: busy !== null || locked },
+    pull: { label: status.behind > 0 ? `Receber (${commits(status.behind)})` : 'Receber', disabled: busy !== null },
     push: { label: status.ahead > 0 ? `Enviar (${commits(status.ahead)})` : 'Enviar', disabled: busy !== null },
   };
   const running = busy === 'fetch' || busy === 'pull' || busy === 'push' ? busy : null;
@@ -198,10 +198,16 @@ function ChangesPanel({
     });
   };
 
-  const remote = (kind: GraphRemote) => withBusy(kind, () => run(async () => {
-    const out = await remoteCalls[kind].run();
-    toast.success({ title: remoteCalls[kind].done, description: lastLine(out), duration: 3000 });
-  }, refreshWithGraph));
+  const remote = (kind: GraphRemote) => {
+    if (kind === 'pull' && locked) {
+      toast.warning({ title: LOCKED_TITLE, duration: 4000 });
+      return;
+    }
+    return withBusy(kind, () => run(async () => {
+      const out = await remoteCalls[kind].run();
+      toast.success({ title: remoteCalls[kind].done, description: lastLine(out), duration: 3000 });
+    }, refreshWithGraph));
+  };
 
   // Commit, e depois o push. O push só sai se o commit deu certo: commit com erro mantém a mensagem e não envia.
   // Commit feito limpa a mensagem mesmo se o envio falhar, para ninguém commitar o mesmo texto de novo; Enviar no gráfico tenta só o envio.
@@ -279,8 +285,8 @@ function ChangesPanel({
           <ActionIcon size="small" variant="borderless" icon={RefreshCw} aria-label="Atualizar status" title="Atualizar status do Git" onClick={(e) => { spinIcon(e.currentTarget); void refresh(); }} />
         </Flexbox>
         {/* Buscar, Receber e Enviar já giram no próprio botão e terminam num aviso: sem texto aqui. */}
-        {((busy && !running) || locked) && (
-          <Text as="p" role="status" fontSize={12} type="secondary">{busy && !running ? BUSY_TEXT[busy] : LOCKED_TITLE}</Text>
+        {busy && !running && (
+          <Text as="p" role="status" fontSize={12} type="secondary">{BUSY_TEXT[busy]}</Text>
         )}
       </Flexbox>
 
@@ -395,8 +401,8 @@ function BranchPicker({
   refresh: () => Promise<void>;
 }) {
   const backend = useBackend();
-  // Trocar e criar também param com qualquer operação em curso (commit, envio, preparo); o executor segue o `locked` de sempre.
-  const off = locked || busy !== null;
+  // Operação Git em curso impede outra; com executor ativo, a tentativa explica a recusa.
+  const off = busy !== null;
   const [open, setOpen] = useState(false);
   const [branches, setBranches] = useState<GitBranches | null>(null);
   const [branchError, setBranchError] = useState('');
@@ -427,12 +433,14 @@ function BranchPicker({
   // Trocar ou criar: o popover fecha só se deu certo.
   async function choose(target: string) {
     if (target === branches?.current || off) return;
+    if (locked) return void toast.warning({ title: LOCKED_TITLE, duration: 4000 });
     if (await withBusy('branch', () => run(() => backend.gitSwitch(target), refresh))) setOpen(false);
   }
 
   async function create() {
     const target = name.trim();
     if (!target || off) return;
+    if (locked) return void toast.warning({ title: LOCKED_TITLE, duration: 4000 });
     if (await withBusy('branch', () => run(() => backend.gitCreateBranch(target), refresh))) setOpen(false);
   }
 
@@ -443,8 +451,7 @@ function BranchPicker({
       className="w-64"
       content={
         <Flexbox gap={8} padding={8}>
-          {locked && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 4 }}>{LOCKED_TITLE}</Text>}
-          {!locked && busy && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 4 }}>{BUSY_TEXT[busy]}</Text>}
+          {busy && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 4 }}>{BUSY_TEXT[busy]}</Text>}
           {branchError && <Text as="p" role="status" fontSize={12} type="danger" style={{ paddingInline: 4 }}>{branchError}</Text>}
           {!branches && !branchError && <Text as="p" fontSize={12} type="secondary" style={{ paddingInline: 4 }}>Lendo as branches…</Text>}
           {branches && (
@@ -456,7 +463,7 @@ function BranchPicker({
                     key={item} type="text" size="small" className="w-full justify-start! gap-2 font-mono"
                     icon={<Check className={`shrink-0${current ? '' : ' invisible'}`} />}
                     disabled={off} aria-current={current ? 'true' : undefined}
-                    title={locked ? LOCKED_TITLE : busy ? BUSY_TEXT[busy] : current ? 'Branch atual' : `Trocar para ${item}`}
+                    title={busy ? BUSY_TEXT[busy] : current ? 'Branch atual' : `Trocar para ${item}`}
                     onClick={() => choose(item)}
                   >
                     <Text as="span" ellipsis className="min-w-0">{item}</Text>
@@ -471,7 +478,7 @@ function BranchPicker({
               placeholder="Nova branch" aria-label="Nome da nova branch"
               className="min-w-0 flex-1 font-mono"
             />
-            <Button type="primary" htmlType="submit" size="small" disabled={off || !name.trim()} title={locked ? LOCKED_TITLE : 'Cria a branch e troca para ela'}>
+            <Button type="primary" htmlType="submit" size="small" disabled={off || !name.trim()} title="Cria a branch e troca para ela">
               Criar
             </Button>
           </Flexbox>

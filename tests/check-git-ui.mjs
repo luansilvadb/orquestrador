@@ -1513,6 +1513,38 @@ scenario('barra de status: 22 px, branch abre o painel Git; Sincronizar mostra 0
   await page.screenshot({ path: join(OUT, 'git-ui-barra-de-status.png'), clip: { x: 0, y: (await footer.boundingBox()).y - 10, width: 400, height: 32 } });
 });
 
+scenario('executor ativo: Git não mostra aviso fixo e explica tentativas bloqueadas por mouse e teclado', async ({ page }) => {
+  await page.getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('tab', { name: 'Orquestrador' }).waitFor();
+  await page.evaluate(() => window.__mock.addNode({
+    project: 'project-1', id: 'git-busy', batch: 'b1', index: 0, title: 'Trabalho', state: 'running',
+    choice: { tool: 'claude', model: 'opus', effort: 'high' },
+  }));
+  await openGit(page);
+  const reason = 'Há executores trabalhando. Espere o lote terminar.';
+  const pull = page.getByRole('button', { name: /^Receber/ });
+  await pull.waitFor();
+  assert.equal(await page.getByText(reason).count(), 0, 'sem aviso permanente');
+  await page.screenshot({ path: join(OUT, 'git-ui-executor-sem-aviso.png') });
+  await pull.click();
+  await page.getByText(reason).first().waitFor();
+  assert.equal((await calls(page, 'git_pull')).length, 0, 'pull não chega ao backend');
+
+  await page.getByRole('button', { name: /^main$/ }).click();
+  const other = page.getByRole('button', { name: 'feat/painel-git' });
+  await other.waitFor();
+  await other.focus();
+  await page.keyboard.press('Enter');
+  await page.getByText(reason).first().waitFor();
+  assert.equal((await calls(page, 'git_switch')).length, 0, 'troca não chega ao backend');
+  await page.getByRole('textbox', { name: 'Nome da nova branch' }).fill('nova');
+  await page.getByRole('button', { name: 'Criar', exact: true }).click();
+  assert.equal((await calls(page, 'git_create_branch')).length, 0, 'criação não chega ao backend');
+  assert.equal(await page.getByRole('button', { name: 'Commit', exact: true }).isDisabled(), true, 'commit mantém condições próprias');
+  assert.equal(await page.getByRole('button', { name: 'Preparar todas' }).isDisabled(), false, 'preparo continua disponível');
+});
+
 scenario('Git ausente e repositório acima: cada caso diz o motivo certo, sem botão e sem ações do painel', async ({ page }) => {
   await openApp(page, '?git=no-git');
   await openGit(page);
