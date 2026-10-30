@@ -37,7 +37,8 @@ pub fn spawn_com_prazo(cmd: &mut Command) -> io::Result<(Child, Job)> {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
         let child = cmd.spawn()?;
-        Ok((child, Job(Some(child.id() as i32))))
+        let pid = child.id() as i32;
+        Ok((child, Job(Some(pid))))
     }
     #[cfg(not(unix))]
     {

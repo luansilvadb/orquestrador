@@ -1,8 +1,11 @@
 // Regras do fluxo de release: versões iguais nos manifests, notas completas e o latest.json que o app lê.
 // Só usa módulos nativos do Node. Uso: node scripts/release.mjs <comando> ... (detalhes em docs/releases/README.md).
 import { createHash, createPublicKey, verify } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { setTimeout as sleepFor } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 export const REPO = 'luansilvadb/orquestrador';
@@ -20,6 +23,96 @@ const PLACEHOLDER = /\b(TODO|TBD|XXX)\b|\{\{|<!--|Instalador para Windows, por u
 const MIN_NOTES_CHARS = 1500;
 const MIN_SECTION_CHARS = 60;
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+export const CI_WAIT_MS = 30 * 60 * 1000;
+const CI_POLL_MS = 15_000;
+const CI_RUN_LIMIT = 1000;
+const CI_RUN_FIELDS = 'attempt,conclusion,createdAt,databaseId,event,headBranch,headSha,status,workflowDatabaseId,workflowName,startedAt,updatedAt';
+
+function ciRunTime(run) {
+  const parseTime = (value, field, optional = false) => {
+    if (optional && (value === null || value === '0001-01-01T00:00:00Z')) return null;
+    const time = typeof value === 'string' ? Date.parse(value) : NaN;
+    if (!Number.isFinite(time) || time <= 0) throw new Error(`CI retornou ${field} inválido.`);
+    return time;
+  };
+  const createdAt = parseTime(run.createdAt, 'createdAt');
+  const updatedAt = parseTime(run.updatedAt, 'updatedAt');
+  const startedAt = parseTime(run.startedAt, 'startedAt', true);
+  const pending = ['queued', 'in_progress', 'requested', 'waiting', 'pending'].includes(run.status);
+  if ((run.status === 'in_progress' || run.status === 'completed') && startedAt === null) throw new Error('CI retornou startedAt ausente para uma execução iniciada.');
+  return pending && run.status !== 'in_progress' ? updatedAt : startedAt ?? createdAt;
+}
+
+function validateCiRun(run, sha) {
+  const fields = ['attempt', 'conclusion', 'createdAt', 'databaseId', 'event', 'headBranch', 'headSha', 'status', 'workflowDatabaseId', 'workflowName', 'startedAt', 'updatedAt'];
+  if (!run || typeof run !== 'object' || Array.isArray(run) || fields.some((field) => !Object.hasOwn(run, field))) {
+    throw new Error('CI retornou uma execução incompleta ou inválida.');
+  }
+  if (!Number.isSafeInteger(run.attempt) || run.attempt < 1 || !Number.isSafeInteger(run.databaseId) || run.databaseId < 1
+    || !Number.isSafeInteger(run.workflowDatabaseId) || run.workflowDatabaseId < 1) {
+    throw new Error('CI retornou identificadores ou tentativa inválidos.');
+  }
+  if (run.workflowName !== 'ci' || run.event !== 'push' || run.headBranch !== 'main'
+    || typeof run.headSha !== 'string' || run.headSha.toLowerCase() !== sha.toLowerCase()) {
+    throw new Error('CI retornou workflow, evento, branch ou SHA diferente do esperado.');
+  }
+  if (run.conclusion !== null && run.conclusion !== '' && typeof run.conclusion !== 'string') throw new Error('CI retornou conclusion inválida.');
+  const currentAt = ciRunTime(run);
+  if (['queued', 'in_progress', 'requested', 'waiting', 'pending'].includes(run.status)) {
+    if (run.conclusion !== null && run.conclusion !== '') throw new Error('CI pendente retornou uma conclusão inesperada.');
+  } else if (run.status !== 'completed') {
+    throw new Error(`CI retornou status desconhecido: ${run.status}.`);
+  }
+  return { ...run, currentAt };
+}
+
+export async function waitForCi(sha, {
+  exec = (args, { timeout }) => execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 1024 * 1024, timeout }),
+  now = () => performance.now(),
+  sleep = sleepFor,
+  timeoutMs = CI_WAIT_MS,
+  pollMs = CI_POLL_MS,
+} = {}) {
+  if (!/^[\da-f]{40}$/i.test(sha ?? '')) throw new Error('wait-ci exige o SHA de commit completo retornado por git rev-parse HEAD.');
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(pollMs) || pollMs <= 0) throw new Error('Prazo ou intervalo de espera inválido.');
+  const deadline = now() + timeoutMs;
+  const args = ['run', 'list', '--repo', REPO, '--workflow', 'ci.yml', '--commit', sha, '--branch', 'main', '--event', 'push', '--limit', String(CI_RUN_LIMIT), '--json', CI_RUN_FIELDS];
+
+  while (true) {
+    const remaining = deadline - now();
+    if (remaining <= 0) throw new Error(`CI de ${sha} não concluiu com sucesso em até 30 minutos.`);
+    const output = await exec(args, { timeout: Math.max(1, Math.floor(remaining)) });
+    if (deadline - now() <= 0) throw new Error(`CI de ${sha} não concluiu com sucesso em até 30 minutos.`);
+    if (typeof output !== 'string') throw new Error('gh run list retornou uma resposta inválida.');
+
+    let runs;
+    try { runs = JSON.parse(output); } catch { throw new Error('gh run list retornou JSON inválido.'); }
+    if (deadline - now() <= 0) throw new Error(`CI de ${sha} não concluiu com sucesso em até 30 minutos.`);
+    if (!Array.isArray(runs)) throw new Error('gh run list não retornou uma lista de execuções.');
+    if (runs.length >= CI_RUN_LIMIT) throw new Error('CI retornou execuções demais para determinar a tentativa mais recente.');
+    const ids = new Set();
+    const validated = runs.map((run) => {
+      const checked = validateCiRun(run, sha);
+      if (ids.has(checked.databaseId)) throw new Error('CI retornou a mesma execução mais de uma vez.');
+      ids.add(checked.databaseId);
+      return checked;
+    }).sort((a, b) => b.currentAt - a.currentAt);
+
+    if (validated.length > 0) {
+      const latest = validated[0];
+      if (validated[1]?.currentAt === latest.currentAt) throw new Error('CI tem execuções mais recentes com horário ambíguo.');
+      if (latest.status === 'completed') {
+        if (latest.conclusion !== 'success') throw new Error(`CI da tentativa ${latest.attempt} terminou com ${latest.conclusion || 'conclusão ausente'}.`);
+        if (deadline - now() <= 0) throw new Error(`CI de ${sha} não concluiu com sucesso em até 30 minutos.`);
+        return `CI aprovada para ${sha} (push em main, tentativa ${latest.attempt}).`;
+      }
+    }
+
+    const wait = deadline - now();
+    if (wait <= 0) throw new Error(`CI de ${sha} não concluiu com sucesso em até 30 minutos.`);
+    await sleep(Math.min(pollMs, wait));
+  }
+}
 
 export function checkSemver(version) {
   if (!SEMVER.test(version)) throw new Error(`"${version}" não é uma versão X.Y.Z.`);
@@ -222,11 +315,16 @@ export function verifyBody(body, notes) {
   return 'corpo da release igual às notas, sem o título.';
 }
 
-function run(argv) {
+async function run(argv) {
   const [command, ...args] = argv;
   const root = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
   const read = (path) => readFileSync(path, 'utf8');
   switch (command) {
+    case 'wait-ci': {
+      const [sha, ...extra] = args;
+      if (!sha || extra.length > 0) throw new Error('uso: wait-ci <SHA de git rev-parse HEAD>');
+      return waitForCi(sha);
+    }
     case 'check-versions': {
       const expected = args[0] ?? manifestVersions(root)['package.json'];
       checkVersions(manifestVersions(root), expected);
@@ -264,15 +362,13 @@ function run(argv) {
       return verifyBody(read(bodyFile), read(notesFile));
     }
     default:
-      throw new Error('comandos: check-versions [X.Y.Z], check-notes X.Y.Z [anterior], prepare-manifest X.Y.Z latest.json notas.md, verify-manifest X.Y.Z latest.json arquivo.sig [notas.md], verify-installer X.Y.Z instalador.exe arquivo.sig, release-body X.Y.Z corpo.md, verify-body corpo.md notas.md');
+      throw new Error('comandos: wait-ci <SHA>, check-versions [X.Y.Z], check-notes X.Y.Z [anterior], prepare-manifest X.Y.Z latest.json notas.md, verify-manifest X.Y.Z latest.json arquivo.sig [notas.md], verify-installer X.Y.Z instalador.exe arquivo.sig, release-body X.Y.Z corpo.md, verify-body corpo.md notas.md');
   }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  try {
-    console.log(run(process.argv.slice(2)));
-  } catch (error) {
+  run(process.argv.slice(2)).then(console.log).catch((error) => {
     console.error(error.message);
     process.exit(1);
-  }
+  });
 }

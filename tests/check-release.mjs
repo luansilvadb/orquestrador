@@ -1,11 +1,14 @@
-// Check das regras de release (scripts/release.mjs), sem dependências e sem rede: `node tests/check-release.mjs`.
+// Check das regras de release (scripts/release.mjs), sem rede: `node tests/check-release.mjs`.
 // Sai com 1 e mostra a falha se alguma regra quebrar. A conferência real do repositório é `node scripts/release.mjs check-versions`.
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { test as check } from 'node:test';
+import { parse as parseYaml } from 'yaml';
 import {
-  cargoLockVersions, cargoPackageVersion, checkNotes, checkVersions, installerName, installerUrl, noteProblems, prepareManifest,
+  cargoLockVersions, cargoPackageVersion, checkNotes, checkVersions, CI_WAIT_MS, installerName, installerUrl, noteProblems, prepareManifest,
   REQUIRED_SECTIONS, releaseBody, verifyBody, verifyInstaller, verifyManifest,
+  waitForCi,
 } from '../scripts/release.mjs';
 
 // Notas mínimas que passam: todas as seções, com texto suficiente em cada uma.
@@ -22,6 +25,151 @@ const validNotes = (version = '0.1.7', previous = '0.1.6') => [
   section('Instalação'),
   section('Comparação com a versão anterior', `Comparado com v${previous}, o app agora faz isso e aquilo, com a mesma base de dados e a mesma configuração do usuário.`),
 ].join('\n');
+
+const CI_SHA = 'a'.repeat(40);
+const ciRun = (overrides = {}) => ({
+  attempt: 1,
+  conclusion: 'success',
+  createdAt: '2026-10-30T10:00:00Z',
+  databaseId: 100,
+  event: 'push',
+  headBranch: 'main',
+  headSha: CI_SHA,
+  startedAt: '2026-10-30T10:00:05Z',
+  status: 'completed',
+  updatedAt: '2026-10-30T10:01:00Z',
+  workflowDatabaseId: 20,
+  workflowName: 'ci',
+  ...overrides,
+});
+const ciOutput = (...runs) => JSON.stringify(runs);
+
+check('CI: só aceita push de ci.yml em main para o SHA exato', async () => {
+  let calledWith;
+  const message = await waitForCi(CI_SHA, {
+    exec: async (args, options) => {
+      calledWith = { args, options };
+      return ciOutput(ciRun());
+    },
+  });
+  assert.match(message, new RegExp(CI_SHA));
+  const { args, options } = calledWith;
+  assert.deepEqual(args.slice(0, 3), ['run', 'list', '--repo']);
+  assert.ok(args.includes('--workflow') && args[args.indexOf('--workflow') + 1] === 'ci.yml');
+  assert.ok(args.includes('--commit') && args[args.indexOf('--commit') + 1] === CI_SHA);
+  assert.ok(args.includes('--branch') && args[args.indexOf('--branch') + 1] === 'main');
+  assert.ok(args.includes('--event') && args[args.indexOf('--event') + 1] === 'push');
+  assert.ok(args.includes('--limit') && args[args.indexOf('--limit') + 1] === '1000');
+  assert.ok(args.includes('--json'));
+  assert.ok(!args.includes('--status') && options.timeout > 0 && options.timeout <= CI_WAIT_MS);
+});
+
+check('Workflow: permissões e gates precedem alterações remotas e publicação', () => {
+  const workflow = parseYaml(readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'));
+  const steps = workflow.jobs.release.steps;
+  assert.equal(workflow.permissions.actions, 'read');
+
+  const gateSteps = steps.map((step, index) => ({ step, index }))
+    .filter(({ step }) => typeof step.run === 'string'
+      && step.run.includes('git rev-parse HEAD')
+      && step.run.includes('node scripts/release.mjs wait-ci $sha'));
+  assert.equal(gateSteps.length, 2);
+
+  const writes = steps.map((step, index) => ({ step, index }))
+    .filter(({ step }) => step.uses?.startsWith('tauri-apps/tauri-action@')
+      || /\bgh release (?:create|edit|upload|delete)\b/.test(step.run ?? ''));
+  assert.ok(writes.length > 0);
+  assert.ok(writes.every(({ index }) => gateSteps[0].index < index));
+
+  const publish = gateSteps[1].step.run;
+  const publishCommand = publish.indexOf('--draft=false --latest');
+  assert.ok(publishCommand > publish.lastIndexOf('node scripts/release.mjs wait-ci $sha'));
+});
+
+check('CI: aguarda execução ausente ou pendente e só retorna após sucesso', async () => {
+  const previous = ciRun();
+  const queued = ciRun({ databaseId: 101, createdAt: '2026-10-30T11:00:00Z', updatedAt: '2026-10-30T11:00:01Z', status: 'queued', conclusion: '', startedAt: '0001-01-01T00:00:00Z' });
+  const queuedSuccess = ciRun({ ...queued, startedAt: '2026-10-30T11:00:05Z', updatedAt: '2026-10-30T11:01:00Z', status: 'completed', conclusion: 'success' });
+  const inProgress = ciRun({ databaseId: 102, createdAt: '2026-10-30T10:59:00Z', startedAt: '2026-10-30T11:00:05Z', updatedAt: '2026-10-30T11:00:10Z', status: 'in_progress', conclusion: '' });
+  const inProgressSuccess = ciRun({ ...inProgress, updatedAt: '2026-10-30T11:01:00Z', status: 'completed', conclusion: 'success' });
+  for (const [first, second] of [[[], [ciRun()]], [[queued], [queuedSuccess]], [[previous, queued], [previous, queuedSuccess]], [[inProgress], [inProgressSuccess]]]) {
+    let calls = 0;
+    const clock = { value: 0 };
+    await waitForCi(CI_SHA, {
+      timeoutMs: 100,
+      pollMs: 20,
+      now: () => clock.value,
+      sleep: async (ms) => { clock.value += ms; },
+      exec: async () => ciOutput(...(calls++ === 0 ? first : second)),
+    });
+    assert.equal(calls, 2);
+  }
+});
+
+check('CI: conclusão terminal incoerente ou ausente bloqueia', async () => {
+  await assert.rejects(waitForCi(CI_SHA, {
+    exec: async () => ciOutput(ciRun({ status: 'in_progress', conclusion: 'success' })),
+  }), /conclusão inesperada/);
+  await assert.rejects(waitForCi(CI_SHA, {
+    exec: async () => ciOutput(ciRun({ conclusion: '' })),
+  }), /conclusão ausente/);
+});
+
+check('CI: SHA, branch, evento ou workflow retornado diferentes bloqueiam', async () => {
+  for (const run of [
+    ciRun({ headSha: 'b'.repeat(40) }),
+    ciRun({ headBranch: 'release' }),
+    ciRun({ event: 'pull_request' }),
+    ciRun({ workflowName: 'outro' }),
+  ]) {
+    await assert.rejects(waitForCi(CI_SHA, { exec: async () => ciOutput(run) }), /diferente do esperado/);
+  }
+});
+
+check('CI: falha e cancelamento da tentativa mais recente não são mascarados por sucesso anterior', async () => {
+  const previous = ciRun({ databaseId: 101, createdAt: '2026-10-30T09:00:00Z', startedAt: '2026-10-30T09:00:05Z', updatedAt: '2026-10-30T09:01:00Z' });
+  for (const conclusion of ['failure', 'cancelled', 'skipped']) {
+    const latest = ciRun({ attempt: 2, databaseId: 102, createdAt: '2026-10-30T11:00:00Z', startedAt: '2026-10-30T11:00:05Z', updatedAt: '2026-10-30T11:01:00Z', conclusion });
+    await assert.rejects(waitForCi(CI_SHA, { exec: async () => ciOutput(previous, latest) }), /tentativa 2/);
+  }
+});
+
+check('CI: tentativa reexecutada mais recentemente vence run com criação posterior', async () => {
+  const newerRun = ciRun({ databaseId: 103, createdAt: '2026-10-30T10:00:00Z', startedAt: '2026-10-30T10:00:05Z', updatedAt: '2026-10-30T10:01:00Z' });
+  const rerun = ciRun({ attempt: 2, databaseId: 104, createdAt: '2026-10-30T09:00:00Z', startedAt: '2026-10-30T11:00:05Z', updatedAt: '2026-10-30T11:01:00Z', conclusion: 'failure' });
+  await assert.rejects(waitForCi(CI_SHA, { exec: async () => ciOutput(newerRun, rerun) }), /tentativa 2/);
+});
+
+check('CI: API, JSON e campos inválidos bloqueiam sem aguardar', async () => {
+  await assert.rejects(waitForCi(CI_SHA, { exec: async () => { throw new Error('gh indisponível'); } }), /gh indisponível/);
+  await assert.rejects(waitForCi(CI_SHA, { exec: async () => '{' }), /JSON inválido/);
+  await assert.rejects(waitForCi(CI_SHA, { exec: async () => '{}' }), /não retornou uma lista/);
+  await assert.rejects(waitForCi(CI_SHA, { exec: async () => ciOutput({ ...ciRun(), updatedAt: 'inválido' }) }), /updatedAt inválido/);
+  await assert.rejects(waitForCi(CI_SHA, { exec: async () => ciOutput(ciRun({ conclusion: 0 })) }), /conclusion inválida/);
+  await assert.rejects(waitForCi(CI_SHA, { exec: async () => ciOutput(ciRun({ headSha: 42 })) }), /diferente do esperado/);
+});
+
+check('CI: ausência ou pendência persistente e sucesso depois do prazo expiram', async () => {
+  for (const output of ['[]', ciOutput(ciRun({ status: 'in_progress', conclusion: '' }))]) {
+    let clock = 0;
+    await assert.rejects(waitForCi(CI_SHA, {
+      timeoutMs: 50,
+      pollMs: 25,
+      now: () => clock,
+      sleep: async (ms) => { clock += ms; },
+      exec: async () => output,
+    }), /30 minutos/);
+  }
+
+  let clock = 0;
+  let calls = 0;
+  await assert.rejects(waitForCi(CI_SHA, {
+    timeoutMs: 50,
+    now: () => clock,
+    exec: async (_args, { timeout }) => { calls += 1; clock += timeout + 1; return ciOutput(ciRun()); },
+  }), /30 minutos/);
+  assert.equal(calls, 1);
+});
 
 // Assinatura no formato do Tauri: base64 do .sig do minisign, com o comentário confiável em tabs.
 const sigFor = (version, extra = '') => Buffer.from(

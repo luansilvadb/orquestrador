@@ -64,13 +64,13 @@ Dois formatos, da mesma fonte:
    - `npm run build` e `cargo test --manifest-path src-tauri/Cargo.toml`
 4. Faça o commit, crie a tag `vX.Y.Z` e envie a tag. O commit e a tag são do mantenedor; o workflow não cria nem move tag.
 5. O workflow `.github/workflows/release.yml` faz o resto, nesta ordem:
-   - confere a tag, as versões dos manifests, a ordem em relação à última publicada e as notas;
-   - para se já existe release publicada para a tag (não altera release publicada);
+   - confere tag e manifests; recusa release já publicada; verifica a ordem em relação à última publicada e as notas;
+   - exige CI verde de `push` em `main` para o SHA de `git rev-parse HEAD` (o commit checkout da tag), esperando até 30 minutos; PR, SHA diferente, falha, cancelamento, erro de consulta ou timeout bloqueiam a release;
    - roda `npm run build`, `check-file-tabs`, `check-release` e `cargo test`;
    - gera o instalador NSIS assinado e o `latest.json` em rascunho (`tauri-action`);
    - põe o texto das notas sem o título no corpo da release, põe o texto completo (com o H1) no `notes` do `latest.json`, e aponta a URL do instalador para a URL pública da tag;
    - confere o rascunho: baixa o instalador, o `.sig` e o `latest.json`; verifica a assinatura Minisign do instalador com a pubkey de `tauri.conf.json` (key id, assinatura do arquivo e comentário confiável); confere versão, URL, assinatura e notas do `latest.json`; e confere que o corpo da release é o texto das notas sem o título (só diferença de CRLF/LF e espaço final é ignorada; título repetido, seção faltando ou qualquer mudança de conteúdo é recusada; o campo `notes` do `latest.json` segue a regra de conteúdo, com o H1);
-   - só então publica como a última release estável.
+   - reconfere o mesmo SHA da CI, com espera de até 30 minutos, imediatamente antes de publicar como a última release estável.
 
 ## Conferências fora do workflow
 
@@ -98,8 +98,9 @@ Não mexe em tag, instalador, `.sig`, `latest.json`, versão nem nos flags de pu
 
 ## Se algo der errado
 
-A situação da release depende do momento da falha. Dois casos:
+A situação da release depende do momento da falha:
 
+- **Gate da CI** (sem execução ou ainda em andamento): cada uma das duas conferências pode aguardar até 30 minutos. Se a CI falhar ou for cancelada, a consulta der erro ou o prazo acabar, corrija a causa e execute a release de novo; cada conferência consulta a tentativa atual para o SHA checkout, sem reaproveitar sucesso anterior.
 - **Antes da publicação** (checks, build, instalador, conferência do rascunho): a release fica em rascunho, ou nem chega a ser criada. O app não a vê. Corrija a causa e rode o job de novo: o rascunho é refeito. Se o código mudou, a tag só pode ser movida enquanto não houver release publicada, e quem move é o mantenedor.
 - **Durante a publicação** (`gh release edit --draft=false --latest`): se esse passo chegou a rodar, a release já pode estar publicada e ser a última, mesmo que o job tenha falhado depois. Não rode o job de novo e não mova a tag. Confira a API (`releases/latest`) e o `latest.json` público: se apontam para a tag, a release está publicada, e qualquer correção vira versão nova.
 - Release já publicada: nenhum passo a altera. Para corrigir, publique uma versão nova.

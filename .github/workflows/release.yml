@@ -9,6 +9,7 @@ on:
       - 'v*.*.*'
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
@@ -66,6 +67,15 @@ jobs:
 
           node scripts/release.mjs check-notes $version $previous
           if ($LASTEXITCODE -ne 0) { throw "As notas de docs/releases/v$version.md não servem para publicar." }
+
+      - name: Aguardar CI verde para o commit da tag
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') { throw "Não foi possível obter o SHA do commit checkout: $sha" }
+          node scripts/release.mjs wait-ci $sha
+          if ($LASTEXITCODE -ne 0) { throw "A CI de push em main não aprovou o commit $sha." }
 
       - run: npm ci
         shell: bash
@@ -147,6 +157,11 @@ jobs:
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
+          $sha = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') { throw "Não foi possível obter o SHA do commit checkout: $sha" }
+          node scripts/release.mjs wait-ci $sha
+          if ($LASTEXITCODE -ne 0) { throw "A CI de push em main não aprovou o commit $sha." }
+
           & gh release edit $env:TAG --repo $env:REPO --draft=false --latest
           $json = & gh release view $env:TAG --repo $env:REPO --json isDraft,isPrerelease
           $state = $json | ConvertFrom-Json
