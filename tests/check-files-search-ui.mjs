@@ -33,6 +33,50 @@ const save = async (page) => { await focusEditor(page); await page.keyboard.pres
 
 // ---------- cenários ----------
 
+scenario('Explorer: clique vazio limpa seleção e Ctrl+A inclui linhas virtuais de pastas abertas', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__mock.addFolder('grande');
+    for (let i = 0; i < 180; i++) window.__mock.addFile(`grande/item-${String(i).padStart(3, '0')}.md`, `${i}\n`);
+  });
+  await page.getByRole('button', { name: 'Atualizar', exact: true }).click();
+  await treeItem(page, 'grande').waitFor();
+  await treeItem(page, 'README.md').click();
+  await focusEditor(page);
+  await page.keyboard.press('Control+a');
+  assert.ok((await page.evaluate(() => getSelection()?.toString() ?? '')).length > 0, 'editor conserva Ctrl+A');
+  const panel = page.locator('.explorer-tree');
+  const bounds = await panel.boundingBox();
+  await page.mouse.click(bounds.x + 10, bounds.y + bounds.height - 6);
+  assert.equal(await panel.evaluate((el) => el === document.activeElement), true, 'clique vazio foca o painel');
+  await page.keyboard.press('Control+a');
+  assert.equal(await selected(page, 'grande'), true, 'pasta fechada entra na seleção');
+  assert.equal(await at(page, 'grande/item-179.md').count(), 0, 'descendente fechado fica fora da árvore');
+  await expand(page, ['docs', 'grande']);
+  await panel.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: box.left + 10, clientY: box.bottom - 5 }));
+  });
+  assert.equal(await panel.evaluate((el) => el === document.activeElement), true, 'vazio foca o painel');
+  assert.equal(await selected(page, 'docs'), false, 'vazio limpa a seleção');
+  await page.keyboard.press('Control+a');
+  assert.equal(await selected(page, 'docs'), true);
+  assert.equal(await selected(page, 'grande'), true);
+  assert.equal(await at(page, 'grande/item-179.md').count(), 0, 'último arquivo fora do DOM');
+  await treeItem(page, 'grande').press('End');
+  await at(page, 'grande/item-179.md').waitFor();
+  assert.equal(await selected(page, 'item-179.md'), true, 'arquivo virtual também selecionado');
+  await treeItem(page, 'item-179.md').press('Control+a');
+  assert.equal(await selected(page, 'item-179.md'), true, 'Ctrl+A também funciona na linha');
+  await treeItem(page, 'item-179.md').click();
+  await treeItem(page, 'item-179.md').press('F2');
+  const name = page.getByRole('tree').getByRole('textbox', { name: 'Novo nome' });
+  await name.fill('outro-nome.md');
+  await name.press('Control+a');
+  assert.equal(await name.evaluate((el) => el.value.slice(el.selectionStart, el.selectionEnd)), 'outro-nome.md', 'campo conserva Ctrl+A de texto');
+  await name.press('Escape');
+  await page.screenshot({ path: join(OUT, 'files-search-select-all.png') });
+});
+
 scenario('pasta e arquivo criados dentro de pasta por clique direito; renomear pasta com rascunho mantém o texto sujo e salva no caminho novo; excluir cancelado preserva arquivo e rascunho', async ({ page }) => {
   await expand(page, ['docs']);
   // Criar dentro da pasta, não na raiz, sem diálogo: o campo do nome aparece numa linha da árvore, como no Antigravity. Esc cancela;

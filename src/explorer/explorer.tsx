@@ -583,10 +583,18 @@ export function FilesScreen({
   // Teclas. Com o foco numa linha, valem para a seleção (ou só para a linha, se ela não está selecionada). Fora de linha, valem para a raiz.
   // Shift+F10 e a tecla de contexto abrem o menu da linha (o mesmo caminho do clique direito) ou o da raiz.
   const onTreeKey = (e: ReactKeyboardEvent<HTMLElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
     const row = (e.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
     const key = row?.dataset.id ?? '';
     const real = !!row && !!key && !provisional(key);
     if (row && !real) return; // Nó provisório não tem tecla.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyA') {
+      e.preventDefault();
+      e.stopPropagation();
+      setSelection(rows.filter((item) => item.kind === 'file' || item.kind === 'dir').map((item) => item.key));
+      return;
+    }
     if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return; // Modificador sozinho não conta: Ctrl+K, soltar, e depois Ctrl+Shift+C ainda completa o acorde.
     if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') {
       e.preventDefault();
@@ -853,6 +861,15 @@ export function FilesScreen({
         tabIndex={-1}
         style={collapsed ? { display: 'none' } : undefined}
         className="explorer-tree relative min-h-0 outline-none"
+        onMouseDown={(e) => {
+          if (e.button !== 0 || (e.target as HTMLElement).closest('[role="treeitem"], button, input, textarea, select, [role="menu"]')) return;
+          const view = viewport.current;
+          if (view && e.clientX >= view.getBoundingClientRect().right - (view.offsetWidth - view.clientWidth)) return;
+          e.preventDefault();
+          panel.current?.focus({ preventScroll: true });
+          fileTree.current?.clearFocus();
+          setSelection([]);
+        }}
         onKeyDown={onTreeKey}
         onContextMenu={onPanelContextMenu}
         onDoubleClick={onDoubleClick}

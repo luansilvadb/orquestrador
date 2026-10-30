@@ -118,6 +118,7 @@ export type FileTreeHandle = {
   focus: (key: string) => boolean;
   /** Rola até a linha (a mais perto possível). Se ela ainda não está na lista, espera alguns quadros por ela. */
   scrollTo: (key: string) => void;
+  clearFocus: () => void;
 };
 
 /**
@@ -184,6 +185,7 @@ export function FileTree({ ref, viewport, rows, expanded, selected, renaming, dr
       return true;
     },
     scrollTo: (key) => request(key, false),
+    clearFocus: () => { pending.current = null; anchor.current = null; setActive(null); },
   }), []);
 
   const select = (row: TreeRow, mods: Mods) => {
