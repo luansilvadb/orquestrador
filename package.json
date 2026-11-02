@@ -12,6 +12,7 @@
     "build": "tsc && vite build",
     "check": "node --test --test-concurrency=1 tests/check-workspace.mjs tests/check-editor-store.mjs tests/check-git-stage.mjs tests/check-file-tabs.mjs tests/check-explorer.mjs tests/check-git-graph.mjs tests/check-paste.mjs tests/check-release.mjs tests/check-commands.mjs tests/check-shiki-language.mjs",
     "check:ui": "node --test --test-global-setup=tests/ui-setup.mjs --test-concurrency=4 tests/check-editor-ui.mjs tests/check-files-search-ui.mjs tests/check-git-ui.mjs tests/check-media-ui.mjs tests/check-titlebar-ui.mjs tests/check-editor-style.mjs tests/check-git-gutter-ui.mjs tests/check-shell-tabs-ui.mjs tests/check-editor-tabs-ui.mjs tests/check-project-tabs-ui.mjs tests/check-tab-lists-ui.mjs tests/check-file-icons-ui.mjs",
+    "pretauri": "node scripts/limpar-target.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
