@@ -128,14 +128,14 @@ export type Batch<T> = { done: T[]; error: string | null };
 // Colar usa o mesmo tipo: `from` é o caminho absoluto que estava no clipboard; `to` é o relativo ao projeto do que foi criado.
 export type Moved = { from: string; to: string };
 
-export type TermData = { project: string | null; id: string; seq: number; data: string };
+/** Um pedaço da saída de um terminal, já decodificado do quadro binário (`term-frame.ts`). */
+export type TermData = { project: string | null; id: string; seq: number; data: Uint8Array };
 export type Snapshot = { seq: number; data: string };
 export type NodeStateEvent = { project: string; id: string; state: NodeState; choice: Choice | null };
 export type OpenedProject = { id: string; project: string; subfolder: boolean; existing: boolean };
 export type ProjectSnapshot = { orchestratorOpen: boolean; executorsRunning: number; executorsQueued: number };
 
 export type Events = {
-  'term-data': TermData;
   'node-added': ExecutorNode & { project: string };
   'node-state': NodeStateEvent;
   'orchestrator-exit': { project: string; code: number | null };
@@ -212,6 +212,8 @@ export type Commands = {
   close_shell: { args: { project: string | null; id: string }; result: void };
   set_executor_choice: { args: ProjectArgs<{ choice: Choice }>; result: void };
   term_write: { args: { project: string | null; id: string; data: string }; result: void };
+  // Registra o canal binário da saída dos terminais (ver `onTermData` em backend.ts); o simulado não o usa.
+  term_channel: { args: { onData: unknown }; result: void };
   term_cli: { args: { project: string | null; id: string }; result: 'claude' | 'codex' | null };
   term_resize: { args: { project: string | null; id: string; cols: number; rows: number }; result: void };
   term_snapshot: { args: { project: string | null; id: string }; result: Snapshot };

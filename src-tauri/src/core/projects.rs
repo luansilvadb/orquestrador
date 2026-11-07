@@ -3,7 +3,7 @@ use crate::agents::cli::Exes;
 use crate::agents::session::Places;
 use crate::config::{self, Choice, Options};
 use crate::core::capacity::{Global, Resources};
-use crate::core::{Core, Emit};
+use crate::core::{Core, Emit, TermOut};
 use crate::proc;
 use serde::Serialize;
 use serde_json::Value;
@@ -20,6 +20,9 @@ pub struct Opened {
     pub subfolder: bool,
     pub existing: bool,
 }
+
+/// Saída dos terminais de todos os projetos: `(projeto, id, seq, bytes)`; projeto `None` é o terminal sem projeto.
+pub type TermSink = Arc<dyn Fn(Option<&str>, &str, u64, &[u8]) + Send + Sync>;
 
 pub type ProjectSnapshot = crate::core::CoreSnapshot;
 
@@ -41,6 +44,7 @@ pub struct Projects {
     places: Places,
     cfg_path: PathBuf,
     emit: Emit,
+    term_sink: Option<TermSink>,
     capacity: Arc<Global>,
     config_lock: Arc<Mutex<()>>,
     no_project: Core,
@@ -64,10 +68,18 @@ impl Projects {
             places,
             cfg_path,
             emit,
+            term_sink: None,
             capacity,
             config_lock,
             no_project,
         }
+    }
+
+    /// Liga a saída dos terminais (sem isto ela só fica nos buffers). Vale para os projetos abertos depois e para o sem projeto.
+    pub fn with_term_sink(mut self, sink: TermSink) -> Projects {
+        self.no_project.term_out = scoped_term(&sink, None);
+        self.term_sink = Some(sink);
+        self
     }
 
     pub fn open_project(&self, folder: &Path) -> Result<Opened, String> {
@@ -86,6 +98,10 @@ impl Projects {
             self.exes.clone(), self.places.clone(), self.cfg_path.clone(), scoped_emit(self.emit.clone(), Some(&id)),
             self.capacity.clone(), id.clone(), self.config_lock.clone(),
         );
+        let mut core = core;
+        if let Some(sink) = &self.term_sink {
+            core.term_out = scoped_term(sink, Some(&id));
+        }
         let opened = core.set_project(folder)?;
         let mut registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = registry.entries.iter().find(|entry| {
@@ -194,6 +210,11 @@ fn scoped_emit(emit: Emit, project: Option<&str>) -> Emit {
         }
         emit(event, payload);
     })
+}
+
+fn scoped_term(sink: &TermSink, project: Option<&str>) -> TermOut {
+    let (sink, project) = (sink.clone(), project.map(str::to_string));
+    Arc::new(move |id, seq, bytes| sink(project.as_deref(), id, seq, bytes))
 }
 
 impl Drop for Projects {

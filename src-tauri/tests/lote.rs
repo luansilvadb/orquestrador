@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const GIB: u64 = 1 << 30;
@@ -139,6 +140,8 @@ struct Bench {
     free: Arc<AtomicU64>,
     /// Tudo que `wait`, `states` e `drain` já leram dos eventos, para perguntar depois se um nó passou por um estado.
     seen: RefCell<Vec<(String, Value)>>,
+    /// Os bytes que a saída dos terminais entregou, por id: é o que o app manda ao frontend pelo canal.
+    delivered: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 
 /// Uma sessão de teste cujo temp fica em `root\<temp>`: o nome dessa pasta é o que o teste quer provar.
@@ -165,9 +168,12 @@ fn bench(tag: &str, temp: &str, cpus: Option<usize>) -> Bench {
     let (t, f) = (total.clone(), free.clone());
     let memory = move || Some(Memory { total: t.load(Ordering::SeqCst), available: f.load(Ordering::SeqCst) });
     let resources = Resources { cpus, memory: Arc::new(memory) };
-    let core = Core::new(exes, places, root.join("config.json"), emit).with_resources(resources);
+    let delivered: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
+    let sink = delivered.clone();
+    let core = Core::new(exes, places, root.join("config.json"), emit).with_resources(resources)
+        .with_term_out(Arc::new(move |id, _, bytes| sink.lock().unwrap().entry(id.to_string()).or_default().extend_from_slice(bytes)));
     core.set_project(&repo).unwrap();
-    Bench { core, events, root, total, free, seen: RefCell::new(Vec::new()) }
+    Bench { core, events, root, total, free, seen: RefCell::new(Vec::new()), delivered }
 }
 
 impl Bench {
@@ -187,9 +193,7 @@ impl Bench {
     /// Lê os eventos que já chegaram, sem esperar.
     fn drain(&self) {
         while let Ok((event, payload)) = self.events.try_recv() {
-            if event != "term-data" {
-                self.lembra(&event, &payload);
-            }
+            self.lembra(&event, &payload);
         }
     }
 
@@ -198,15 +202,13 @@ impl Bench {
         self.seen.borrow().iter().any(|(_, p)| p["id"] == id && states.contains(&p["state"].as_str().unwrap_or("")))
     }
 
-    /// O próximo evento que não seja `term-data` e que satisfaça `want`.
+    /// O próximo evento que satisfaça `want`.
     fn wait(&self, what: &str, want: impl Fn(&str, &Value) -> bool) -> Value {
         let deadline = Instant::now() + Duration::from_secs(30);
         while let Ok((event, payload)) = self.events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            if event != "term-data" {
-                self.lembra(&event, &payload);
-                if want(&event, &payload) {
-                    return payload;
-                }
+            self.lembra(&event, &payload);
+            if want(&event, &payload) {
+                return payload;
             }
         }
         panic!("o evento esperado não chegou: {what}");
@@ -359,6 +361,10 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     assert_eq!(out, expected);
     // O executor concluído já saiu: o slot foi tirado junto com o estado final, e a tela não fica guardada.
     assert_eq!(b.core.term_snapshot(&a).unwrap().seq, 0, "o slot do executor concluído saiu");
+    // A saída de cada terminal chegou à entrega: a do executor (que já saiu) e a do orquestrador.
+    let entregue = |id: &str| String::from_utf8_lossy(b.delivered.lock().unwrap().get(id).map_or(&[][..], Vec::as_slice)).into_owned();
+    assert!(entregue(&a).contains("feito: linha 2 d'água"), "a saída do executor não foi entregue: {}", entregue(&a));
+    assert!(entregue(ORCHESTRATOR).contains("eco:oi"), "a saída do orquestrador não foi entregue");
 
     // Com a escolha feita, o próximo lote abre sozinho; agora com executor Claude.
     b.core.apply_executor_choice(Choice::new("claude", "", "")).unwrap();

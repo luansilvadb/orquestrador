@@ -12,12 +12,12 @@ mod testutil;
 
 use crate::agents::{cli, session};
 use crate::config::{Choice, Options};
-use crate::core::projects::{Opened, ProjectSnapshot, Projects};
+use crate::core::projects::{Opened, ProjectSnapshot, Projects, TermSink};
 use crate::core::Snapshot;
 use crate::ide::{files, format, git, search};
 use crate::update::Gate;
 use std::sync::Arc;
-use tauri::ipc::Invoke;
+use tauri::ipc::{Channel, Invoke, InvokeResponseBody};
 use tauri::{Emitter, Manager, State, Wry};
 use tauri_plugin_dialog::DialogExt;
 
@@ -29,7 +29,7 @@ use tauri_plugin_dialog::DialogExt;
 /// `generate_handler!` não tem o tipo inferido.
 fn gated(commands: impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static) -> impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static {
     move |invoke| {
-        if !matches!(invoke.message.command(), "update_status" | "retry_update") {
+        if !matches!(invoke.message.command(), "update_status" | "retry_update" | "term_channel") {
             if let Err(e) = invoke.message.webview().state::<Gate>().ensure_open() {
                 invoke.resolver.reject(e);
                 return true;
@@ -535,6 +535,30 @@ fn term_write(projects: State<Projects>, project: Option<String>, id: String, da
     projects.shell_core(project.as_deref())?.term_write(&id, &data)
 }
 
+/// Canal por onde a saída de todos os terminais segue como quadros binários (`core::frame`). O frontend registra um por carga da
+/// página; um novo (recarga) substitui o anterior. Sem canal, ou com o webview ainda sem escutar, a saída só entra no buffer de
+/// cada terminal: o retrato (`term_snapshot`) cobre o que o canal não levou, e o `seq` descarta o que ele repetir.
+#[derive(Clone, Default)]
+struct TermChannel(Arc<std::sync::Mutex<Option<Channel<InvokeResponseBody>>>>);
+
+impl TermChannel {
+    fn send(&self, project: Option<&str>, id: &str, seq: u64, bytes: &[u8]) {
+        let Some(channel) = self.0.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+        if channel.send(InvokeResponseBody::Raw(core::frame::encode(project, id, seq, bytes))).is_err() {
+            // Webview fechado: o canal morto sai, a não ser que já tenha sido trocado por outro.
+            let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            if slot.as_ref().is_some_and(|c| c.id() == channel.id()) {
+                *slot = None;
+            }
+        }
+    }
+}
+
+#[tauri::command(async)]
+fn term_channel(state: State<TermChannel>, on_data: Channel<InvokeResponseBody>) {
+    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(on_data);
+}
+
 /// O CLI que roda agora no terminal `id` (`claude`, `codex` ou nenhum), para a colagem de arquivo e imagem.
 #[tauri::command(async)]
 fn term_cli(projects: State<Projects>, project: Option<String>, id: String) -> Result<Option<&'static str>, String> {
@@ -612,7 +636,10 @@ pub fn run(context: tauri::Context, initial_paths: Vec<std::path::PathBuf>) {
             app.manage(open_paths::OpenPaths::new(initial_paths));
             // Sem LOCALAPPDATA o app abre mesmo assim; o erro aparece em `get_options`.
             let cfg_path = config::config_path().unwrap_or_default();
-            app.manage(Projects::new(cli::Exes::real(), session::Places::real(), cfg_path, emit.clone()));
+            let channel = TermChannel::default();
+            app.manage(channel.clone());
+            let sink: TermSink = Arc::new(move |project, id, seq, bytes| channel.send(project, id, seq, bytes));
+            app.manage(Projects::new(cli::Exes::real(), session::Places::real(), cfg_path, emit.clone()).with_term_sink(sink));
             // Build de desenvolvimento libera o uso direto. O instalado confere a versão antes de liberar.
             let gate = Gate::new(cfg!(debug_assertions), emit);
             app.manage(gate.clone());
@@ -692,6 +719,7 @@ pub fn run(context: tauri::Context, initial_paths: Vec<std::path::PathBuf>) {
             close_shell,
             set_executor_choice,
             term_write,
+            term_channel,
             term_cli,
             term_resize,
             term_snapshot,

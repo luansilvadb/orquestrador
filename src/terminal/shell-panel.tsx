@@ -5,7 +5,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, Plus, SquareTer
 import { ActionIcon, Button, DraggablePanel, TabsIndicator, TabsList, TabsRoot, TabsTab, Text } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import type { TermView } from './term';
-import { TermHost } from './terminals';
+import { TermHost, termPane } from './terminals';
 import { dragShift, revealTab, trackTabDrag, type TabDrag, wheelToScroll } from '../shared/tab-strip';
 import { TabListMenu, type TabListItem } from '../shared/tab-list-menu';
 
@@ -243,7 +243,7 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
           </Flexbox>
           <div className="relative min-h-0 flex-1 overflow-hidden bg-terminal">
             {tabs.map((tab) => (
-              <div key={tab.id} className={`absolute inset-0${tab.id !== active ? ' invisible' : ''}`}>
+              <div key={tab.id} {...termPane(tab.id === active)}>
                 <TermHost id={tab.id} project={tab.project} writable onReady={(view) => onReady(tab.id, view)} />
               </div>
             ))}

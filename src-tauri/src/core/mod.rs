@@ -1,6 +1,7 @@
 //! O estado do app: o orquestrador, os lotes delegados, a fila e os executores. Não conhece o
 //! Tauri: os eventos saem por `Emit`, que os testes trocam por um canal.
 pub mod capacity;
+pub mod frame;
 pub mod projects;
 pub mod pty;
 
@@ -9,7 +10,7 @@ use crate::agents::delegate;
 use crate::agents::session::{self, Places, Session};
 use crate::config::{self, Choice, Options};
 use crate::core::capacity::{Global, Resources};
-use crate::core::pty::{Buffer, Shared, Term};
+use crate::core::pty::{write_to, Buffer, Shared, Term, WeakWriter};
 use crate::ide::files;
 use crate::ide::git;
 use crate::proc;
@@ -22,6 +23,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
+/// Saída dos terminais, fora do `Emit` (que é JSON): `(id, seq, bytes)`, na ordem de cada terminal.
+pub type TermOut = Arc<dyn Fn(&str, u64, &[u8]) + Send + Sync>;
+/// Entrada dos terminais por id, fora do lock do `Core`: escrever uma tecla não espera o laço da sessão.
+type Writers = Arc<Mutex<HashMap<String, WeakWriter>>>;
 
 pub const ORCHESTRATOR: &str = "orchestrator";
 /// Os ids de shell são `shell-<n>`, gerados pelo frontend. Não colidem com `exec-<n>` nem com `orchestrator`.
@@ -236,6 +241,8 @@ pub struct Opened {
 pub struct Core {
     inner: Arc<Mutex<Inner>>,
     emit: Emit,
+    term_out: TermOut,
+    writers: Writers,
     capacity: Arc<Global>,
     config_lock: Arc<Mutex<()>>,
     owner: String,
@@ -272,7 +279,14 @@ impl Core {
             epoch: 0,
             git_exclusive: false,
         };
-        Core { inner: Arc::new(Mutex::new(inner)), emit, capacity, config_lock, owner }
+        let term_out: TermOut = Arc::new(|_, _, _| {});
+        Core { inner: Arc::new(Mutex::new(inner)), emit, term_out, writers: Writers::default(), capacity, config_lock, owner }
+    }
+
+    /// Para onde vai a saída dos terminais; sem isto ela só fica no buffer (o retrato).
+    pub fn with_term_out(mut self, term_out: TermOut) -> Core {
+        self.term_out = term_out;
+        self
     }
 
     /// Troca de onde vêm CPU e memória para o teto. O app usa `Resources::real()`, que `new` já põe; os testes
@@ -457,12 +471,14 @@ impl Core {
 
     /// Só o orquestrador e os shells recebem teclado; os executores são somente leitura e qualquer outro id é ignorado.
     pub fn term_write(&self, id: &str, data: &str) -> Result<(), String> {
-        let mut inner = self.lock()?;
         if id != ORCHESTRATOR && !is_shell(id) {
             return Ok(());
         }
-        if let Some(term) = inner.slots.get_mut(id).and_then(|s| s.term.as_mut()) {
-            term.write(data.as_bytes());
+        // O lock dos escritores é curto e só dele: o do `Core` pode estar com o laço da sessão (que lê o disco). A escrita
+        // em si segue o lock de cada terminal, então as teclas de um terminal saem na ordem em que chegam.
+        let writer = self.writers.lock().map_err(|_| INTERNAL_ERROR.to_string())?.get(id).and_then(WeakWriter::upgrade);
+        if let Some(writer) = writer {
+            write_to(&writer, data.as_bytes());
         }
         Ok(())
     }
@@ -593,15 +609,21 @@ impl Core {
         if let Some(size) = size {
             slot.size = size;
         }
-        let (emit, data_id) = (self.emit.clone(), id.to_string());
+        let (out, data_id) = (self.term_out.clone(), id.to_string());
         let (core, exit_id) = (self.clone(), id.to_string());
         let term = Term::spawn(
             spawn,
             slot.size,
             slot.buffer.clone(),
-            move |seq, bytes| emit("term-data", json!({ "id": data_id, "seq": seq, "data": B64.encode(bytes) })),
+            move |seq, bytes| out(&data_id, seq, bytes),
             move |code| core.on_exit(&exit_id, gen, code),
         )?;
+        {
+            // Quem saiu já não tem `Weak` vivo: sai da tabela aqui, no próximo início.
+            let mut writers = self.writers.lock().unwrap_or_else(|e| e.into_inner());
+            writers.retain(|_, w| w.strong_count() > 0);
+            writers.insert(id.to_string(), term.writer());
+        }
         slot.term = Some(term);
         Ok(())
     }
@@ -746,7 +768,7 @@ impl Core {
 
     fn request_start(&self, id: &str) {
         let inner = Arc::downgrade(&self.inner);
-        let emit = self.emit.clone();
+        let (emit, term_out, writers) = (self.emit.clone(), self.term_out.clone(), self.writers.clone());
         let owner = self.owner.clone();
         let capacity = Arc::downgrade(&self.capacity);
         let config_lock = self.config_lock.clone();
@@ -757,7 +779,7 @@ impl Core {
                 return;
             };
             let Some(capacity) = capacity.upgrade() else { return };
-            let core = Core { inner, emit, capacity: capacity.clone(), config_lock, owner };
+            let core = Core { inner, emit, term_out, writers, capacity: capacity.clone(), config_lock, owner };
             if !matches!(core.start_granted(&job), Ok(true)) {
                 capacity.release();
             }
@@ -1182,6 +1204,54 @@ mod tests {
         assert!(saida.get("code").is_some(), "o payload traz o código: {saida}");
         assert_eq!(core.term_snapshot("shell-1").unwrap().seq, 0, "o slot saiu com o processo");
         assert!(core.start_shell_in("shell-1", 80, 24, None).is_ok(), "depois da saída, o mesmo id volta a abrir");
+        core.shutdown();
+    }
+
+    /// Com o lock do `Core` preso (o laço da sessão lendo o disco), a tecla chega ao shell do mesmo jeito.
+    #[cfg(windows)]
+    #[test]
+    fn term_write_nao_espera_o_lock_do_core() {
+        let (core, _root) = git_core("write-sem-lock");
+        core.start_shell_in("shell-1", 80, 24, None).unwrap();
+        let preso = core.inner.lock().unwrap();
+        let (c, (tx, rx)) = (core.clone(), std::sync::mpsc::channel());
+        std::thread::spawn(move || tx.send(c.term_write("shell-1", "echo oi
+")).unwrap());
+        let feito = rx.recv_timeout(Duration::from_secs(5));
+        drop(preso);
+        assert!(matches!(feito, Ok(Ok(()))), "term_write ficou esperando o lock do Core: {feito:?}");
+        assert!(espera(|| core.term_snapshot("shell-1").map(|s| s.data).is_ok_and(|d| !d.is_empty())), "o shell não respondeu");
+        // Terminal que não existe, ou que não recebe teclado: sem erro, como antes.
+        core.term_write("shell-9", "x").unwrap();
+        core.term_write("exec-1", "x").unwrap();
+        core.shutdown();
+    }
+
+    /// A saída agrupada continua inteira e em ordem: um `seq` por entrega, sem buraco, e os bytes entregues são os do buffer.
+    #[cfg(windows)]
+    #[test]
+    fn saida_agrupada_chega_inteira_e_em_ordem() {
+        let (mut core, root) = git_core("saida-agrupada");
+        type Entregas = Arc<Mutex<Vec<(u64, Vec<u8>)>>>;
+        let entregas: Entregas = Arc::default();
+        let guarda = entregas.clone();
+        core.term_out = Arc::new(move |id, seq, bytes| {
+            assert_eq!(id, "shell-1");
+            guarda.lock().unwrap().push((seq, bytes.to_vec()));
+        });
+        let linhas: String = (1..=4000).map(|n| format!("linha-{n} çãõ\n")).collect();
+        write(&root.0.join("repo"), "grande.txt", &linhas);
+        core.start_shell_in("shell-1", 120, 30, None).unwrap();
+        core.term_write("shell-1", "Get-Content -Encoding utf8 grande.txt\r").unwrap();
+        let pronto = |d: &[u8]| String::from_utf8_lossy(d).contains("linha-4000");
+        assert!(espera(|| pronto(&entregas.lock().unwrap().iter().flat_map(|(_, b)| b.clone()).collect::<Vec<u8>>())), "a saída não terminou");
+        std::thread::sleep(Duration::from_millis(800));
+        let entregas = entregas.lock().unwrap().clone();
+        assert!(entregas.iter().enumerate().all(|(i, (seq, _))| *seq == i as u64 + 1), "seq com buraco ou fora de ordem");
+        let juntos: Vec<u8> = entregas.iter().flat_map(|(_, b)| b.clone()).collect();
+        let snap = core.term_snapshot("shell-1").unwrap();
+        assert_eq!(B64.decode(snap.data).unwrap(), juntos, "o buffer difere do que foi entregue");
+        assert_eq!(snap.seq, entregas.len() as u64);
         core.shutdown();
     }
 

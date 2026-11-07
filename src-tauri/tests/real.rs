@@ -7,21 +7,14 @@ use orquestrador_lib::agents::cli::Exes;
 use orquestrador_lib::agents::session::Places;
 use orquestrador_lib::config::Choice;
 use orquestrador_lib::core::{Core, Emit, ORCHESTRATOR};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::mpsc::channel;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 fn screen(core: &Core, id: &str) -> String {
     let raw = base64::engine::general_purpose::STANDARD.decode(core.term_snapshot(id).unwrap().data).unwrap();
     String::from_utf8_lossy(&raw).to_string()
-}
-
-/// Acrescenta ao log do nó os bytes de um evento `term-data`.
-fn guarda(logs: &mut HashMap<String, Vec<u8>>, payload: &Value) {
-    let raw = base64::engine::general_purpose::STANDARD.decode(payload["data"].as_str().unwrap()).unwrap();
-    logs.entry(payload["id"].as_str().unwrap().to_string()).or_default().extend(raw);
 }
 
 #[test]
@@ -34,7 +27,11 @@ fn lote_real() {
     let exes = Exes { app: env!("CARGO_BIN_EXE_orquestrador").to_string(), ..Exes::real() };
     let (tx, events) = channel();
     let emit: Emit = Arc::new(move |event, payload| drop(tx.send((event.to_string(), payload))));
-    let core = Core::new(exes, Places::real(), std::env::temp_dir().join("orq-real-config.json"), emit);
+    // O slot do executor sai quando ele termina, então o log dele é montado dos pedaços que a saída entrega.
+    let logs: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
+    let sink = logs.clone();
+    let core = Core::new(exes, Places::real(), std::env::temp_dir().join("orq-real-config.json"), emit)
+        .with_term_out(Arc::new(move |id, _, bytes| sink.lock().unwrap().entry(id.to_string()).or_default().extend_from_slice(bytes)));
     core.set_project(std::path::Path::new(&repo)).unwrap();
     core.start_orchestrator(cheap(orchestrator), 120, 40).unwrap();
     core.apply_executor_choice(cheap(executor)).unwrap();
@@ -55,17 +52,11 @@ fn lote_real() {
     std::thread::sleep(Duration::from_millis(800));
     core.term_write(ORCHESTRATOR, "\r").unwrap();
 
-    // O slot do executor sai quando ele termina, então o log dele é montado dos `term-data` que chegam.
-    let mut logs: HashMap<String, Vec<u8>> = HashMap::new();
     let deadline = Instant::now() + Duration::from_secs(420);
     let (mut done, mut total, mut ids) = (0, 0, Vec::new());
     while done < 2 {
         let Ok((event, payload)) = events.recv_timeout(deadline.saturating_duration_since(Instant::now())) else { break };
         match event.as_str() {
-            "term-data" => {
-                guarda(&mut logs, &payload);
-                continue;
-            }
             "node-added" => {
                 total += 1;
                 ids.push(payload["id"].as_str().unwrap().to_string());
@@ -78,14 +69,9 @@ fn lote_real() {
     }
     // Um instante para o orquestrador receber a saída e responder; o que os executores escreverem até lá também entra.
     std::thread::sleep(Duration::from_secs(25));
-    while let Ok((event, payload)) = events.try_recv() {
-        if event == "term-data" {
-            guarda(&mut logs, &payload);
-        }
-    }
     std::fs::write(std::env::temp_dir().join("orq-real-orchestrator.log"), screen(&core, ORCHESTRATOR)).unwrap();
     for id in &ids {
-        let log = logs.remove(id).unwrap_or_default();
+        let log = logs.lock().unwrap().remove(id).unwrap_or_default();
         std::fs::write(std::env::temp_dir().join(format!("orq-real-{id}.log")), log).unwrap();
     }
     for entry in std::fs::read_dir(session.join("results")).unwrap().flatten() {

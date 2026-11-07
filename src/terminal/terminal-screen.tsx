@@ -8,7 +8,7 @@ import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
 import { SECONDARY } from '../shared/text-style';
 import { OpenProjectPrompt } from '../shared/open-project';
-import { TermHost, terminals } from './terminals';
+import { TermHost, termPane, terminals } from './terminals';
 import { revealTab, wheelToScroll } from '../shared/tab-strip';
 import { TabListMenu, type TabListItem } from '../shared/tab-list-menu';
 import { ORCHESTRATOR, TOOL_NAME, type Choice, type ExecutorNode, type NodeState, type Tool } from '../backend/types';
@@ -236,15 +236,12 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
 
           <div className="relative min-h-0 flex-1 overflow-hidden bg-terminal">
             {orchestrator && (
-              <div className={`absolute inset-0${active !== ORCHESTRATOR ? ' invisible' : ''}`}>
+              <div {...termPane(active === ORCHESTRATOR)}>
                 <TermHost id={ORCHESTRATOR} project={projectId} writable />
               </div>
             )}
             {orchestrator && executors.map((e) => (
-              <div
-                key={e.id}
-                className={`absolute inset-0${active !== e.id ? ' invisible' : ''}`}
-              >
+              <div key={e.id} {...termPane(active === e.id)}>
                 <TermHost id={e.id} project={projectId} writable={false} onReady={(view) => { view.setLive(); void view.attach(); }} />
                 {COVER_TEXT[e.state] && (
                   <Cover>

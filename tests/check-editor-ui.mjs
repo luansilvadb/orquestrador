@@ -697,3 +697,45 @@ scenario('abertura rápida: Enter com texto novo não abre o arquivo da lista an
   await page.waitForFunction(() => [...document.querySelectorAll('[data-group="A"] [data-tab]')].some((el) => el.textContent?.includes('README.md')), undefined, { timeout: 5000 });
   assert.ok((await tabTitles(page)).some((t) => t.includes('README.md')), 'o Enter com a resposta do texto atual abre o arquivo');
 });
+
+// Poll de 2,5 s: setState com valor equivalente não pode deixar update na fila dos hooks (cada um segura a base do arquivo aberto).
+scenario('arquivo aberto parado: o poll não enfileira updates equivalentes nos hooks', async ({ page }) => {
+  await openApp(page);
+  await treeItem(page, 'README.md').dblclick();
+  await page.locator('.cm-content:visible').first().waitFor();
+  const count = () => page.evaluate(() => window.__mock.calls.filter((c) => c.cmd === 'git_file_base').length);
+  const start = await count();
+  await page.waitForFunction((n) => window.__mock.calls.filter((c) => c.cmd === 'git_file_base').length >= n + 4, start, { timeout: 15000 });
+  await page.waitForTimeout(300);
+  const pending = await page.evaluate(() => {
+    // `#root` guarda a fiber do HostRoot em `__reactContainer$*`; `stateNode.current` é a árvore atual. Anda por child/sibling.
+    const root = document.getElementById('root');
+    const key = Object.keys(root).find((k) => k.startsWith('__reactContainer$'));
+    if (!key) throw new Error('container do React não encontrado em #root');
+    const nameOf = (f) => f.type?.displayName ?? f.type?.name ?? f.type?.render?.name ?? '';
+    const found = [];
+    let inside = 0;
+    // Só a subárvore do editor: outros pollers do app (git, explorador) têm os próprios testes. Update isolado espera o próximo render
+    // (normal); o vazamento do poll empilha vários no mesmo hook, então só conta fila com 2 ou mais.
+    const walk = (fiber, scoped) => {
+      for (let f = fiber; f; f = f.sibling) {
+        const here = scoped || nameOf(f) === 'EditorWorkspace';
+        if (here) inside++;
+        if (here && (f.tag === 0 || f.tag === 11 || f.tag === 14 || f.tag === 15)) {
+          let hook = 0;
+          for (let h = f.memoizedState; h && typeof h === 'object' && 'baseQueue' in h; h = h.next, hook++) {
+            const last = h.queue?.pending;
+            let n = last ? 1 : 0;
+            for (let u = last?.next; last && u !== last; u = u.next) n++;
+            if (n >= 2) found.push(`${nameOf(f)}#${hook} (${n} updates)`);
+          }
+        }
+        walk(f.child, here);
+      }
+    };
+    walk(root[key].stateNode?.current ?? root[key], false);
+    if (inside < 20) throw new Error(`subárvore do EditorWorkspace não encontrada (${inside} fibers)`);
+    return found;
+  });
+  assert.deepEqual(pending, [], `updates retidos na fila dos hooks: ${pending.join(', ')}`);
+});

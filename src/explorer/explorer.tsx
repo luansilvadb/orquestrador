@@ -300,6 +300,22 @@ export function FilesScreen({
   const backend = useBackend();
   const [tree, setTree] = useState<ExplorerTree>({ children: {}, expanded: [] });
   const [error, setError] = useState('');
+  // Valores atuais espelhados: o poll só chama o setter quando o valor muda. `setTree(fn)` ou `setError` com valor equivalente o React
+  // descarta sem renderizar mas mantém na fila do hook (a árvore inteira, por update) até o próximo render. O ref e o estado mudam
+  // juntos: todo caminho que altera a árvore passa por `updateTree`, e o erro por `showError`.
+  const treeRef = useRef(tree);
+  const errorRef = useRef('');
+  const updateTree = (change: (prev: ExplorerTree) => ExplorerTree) => {
+    const next = change(treeRef.current);
+    if (next === treeRef.current) return;
+    treeRef.current = next;
+    setTree(next);
+  };
+  const showError = (text: string) => {
+    if (errorRef.current === text) return;
+    errorRef.current = text;
+    setError(text);
+  };
   // Seleção própria da árvore. Vazia, o arquivo aberto aparece marcado.
   const [selection, setSelection] = useState<string[]>([]);
   // Estados do formulário inline de Renomear e Criar, e do diálogo de Excluir. Cada um guarda o que o usuário digitou (ou o motivo de recusa) e se a ação está rodando.
@@ -327,7 +343,7 @@ export function FilesScreen({
   // Aplica as respostas do `list_dirs` (uma por caminho, na ordem pedida) às pastas que continuam abertas: a que
   // fechou durante a consulta não se aplica, e a que não abre mais sai da árvore sem derrubar as outras.
   function applyListings(paths: string[], results: DirListing[]) {
-    setTree((prev) => {
+    updateTree((prev) => {
       let next = prev;
       paths.forEach((path, i) => {
         const r = results[i];
@@ -353,11 +369,11 @@ export function FilesScreen({
     try {
       results = await backend.listDirs(paths);
     } catch (e) {
-      setError(message(e));
+      showError(message(e));
       return;
     }
     const root = results[0];
-    setError(root?.kind === 'error' ? root.message : '');
+    showError(root?.kind === 'error' ? root.message : '');
     applyListings(paths, results);
   }, 1500, active && !collapsed);
 
@@ -366,19 +382,19 @@ export function FilesScreen({
     try {
       const first = (await backend.listDirs([path]))[0];
       if (first?.kind !== 'ok') throw new Error(first?.message ?? `Pasta não encontrada: ${path}`);
-      setTree((prev) => ({
+      updateTree((prev) => ({
         children: { ...prev.children, [path]: first.entries },
         expanded: prev.expanded.includes(path) || !path ? prev.expanded : [...prev.expanded, path],
       }));
     } catch {
       // A pasta sumiu antes de abrir: sai da árvore sem erro na tela, como na atualização.
-      setTree((prev) => drop(prev, path));
+      updateTree((prev) => drop(prev, path));
     }
   }
 
   async function toggle(path: string, isOpen: boolean) {
     // Fechar só tira a pasta (e as de dentro) da lista de abertas: a lista guardada fica para a próxima abertura.
-    if (isOpen) return setTree((prev) => ({ ...prev, expanded: prev.expanded.filter((p) => !under(path, p)) }));
+    if (isOpen) return updateTree((prev) => ({ ...prev, expanded: prev.expanded.filter((p) => !under(path, p)) }));
     await openDir(path);
   }
 
@@ -392,7 +408,7 @@ export function FilesScreen({
   // Depois de uma ação em lote, com ou sem erro: tira do estado o que saiu do lugar (`gone`), leva a seleção para onde os itens foram
   // (`moves`) e relê as pastas envolvidas (`dirs`). Só o que o backend devolveu como feito entra em `gone` e `moves`.
   function settle(dirs: string[], gone: string[], moves: Moved[] = []) {
-    gone.forEach((path) => setTree((prev) => drop(prev, path)));
+    gone.forEach((path) => updateTree((prev) => drop(prev, path)));
     setSelection((prev) => prev.map((p) => remapPath(p, moves)).filter((p) => !gone.some((g) => under(g, p))));
     void reloadDirs(dirs);
   }
@@ -850,7 +866,7 @@ export function FilesScreen({
           <HeaderAction icon={FilePlus} label="Novo Arquivo..." onClick={() => startCreate('file', barDir())} />
           <HeaderAction icon={FolderPlus} label="Nova Pasta..." onClick={() => startCreate('dir', barDir())} />
           <HeaderAction icon={RefreshCw} label="Atualizar" onClick={() => void reloadAll()} />
-          <HeaderAction icon={ChevronsDownUp} label="Recolher Tudo" onClick={() => setTree((prev) => ({ ...prev, expanded: [] }))} />
+          <HeaderAction icon={ChevronsDownUp} label="Recolher Tudo" onClick={() => updateTree((prev) => ({ ...prev, expanded: [] }))} />
         </Flexbox>
       </Flexbox>
       {/* Seção do projeto, como a da pasta no VS Code: recolhe a árvore inteira. */}

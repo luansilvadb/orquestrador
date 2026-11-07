@@ -4,7 +4,9 @@ use crate::platform::Job;
 use crate::proc::cli_do_job;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 /// Tudo o que um terminal já escreveu. `seq` conta os pedaços: retrato vazio é 0, o primeiro
 /// `term-data` é 1.
@@ -16,9 +18,27 @@ pub struct Buffer {
 
 pub type Shared = Arc<Mutex<Buffer>>;
 
+/// Entrada do PTY, com lock próprio: quem escreve não passa pelo lock do `Core`. O `Term` é o dono; quem só escreve guarda
+/// um `Weak`, que deixa de valer quando o terminal sai.
+pub type Writer = Arc<Mutex<Box<dyn Write + Send>>>;
+pub type WeakWriter = Weak<Mutex<Box<dyn Write + Send>>>;
+
+/// Escreve em `writer`, com o flush. Erro de PTY fechado é ignorado, como sempre.
+pub fn write_to(writer: &Writer, data: &[u8]) {
+    let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = w.write_all(data).and_then(|_| w.flush());
+}
+
+/// Intervalo mínimo entre dois envios de um mesmo terminal. Depois de silêncio o primeiro pedaço sai na hora (o eco de uma
+/// tecla não espera nada); só o que chega logo depois de um envio é agrupado, até o intervalo fechar, para uma saída
+/// contínua não virar uma mensagem de IPC por leitura.
+const MIN_GAP: Duration = Duration::from_millis(4);
+/// Teto de um envio agrupado.
+const MAX_BATCH: usize = 256 << 10;
+
 pub struct Term {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: Writer,
     job: Option<Job>,
     killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
 }
@@ -58,6 +78,9 @@ impl Term {
         const QUERY: &[u8] = b"\x1b[6n";
         let _ = writer.write_all(b"\x1b[1;1R");
 
+        // Duas threads: a de leitura só lê e repassa; a de envio guarda no buffer e entrega, agrupando o que chega com
+        // o intervalo ainda aberto. O buffer e o `seq` seguem juntos, então um envio agrupado é um único `seq`.
+        let (tx, rx) = channel::<Vec<u8>>();
         std::thread::spawn(move || {
             let mut chunk = [0u8; 16384];
             let mut first = true;
@@ -69,8 +92,20 @@ impl Term {
                 if std::mem::take(&mut first) && bytes.starts_with(QUERY) {
                     bytes = &bytes[QUERY.len()..];
                 }
-                if bytes.is_empty() {
-                    continue;
+                if !bytes.is_empty() && tx.send(bytes.to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        std::thread::spawn(move || {
+            let mut last: Option<Instant> = None;
+            while let Ok(mut batch) = rx.recv() {
+                let deadline = last.map_or_else(Instant::now, |t| t + MIN_GAP);
+                while batch.len() < MAX_BATCH {
+                    match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                        Ok(more) => batch.extend_from_slice(&more),
+                        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break,
+                    }
                 }
                 let mut buf = buffer.lock().unwrap();
                 // Teto de memória: passou de 16 MB, a metade mais antiga sai.
@@ -78,17 +113,24 @@ impl Term {
                     let half = buf.data.len() / 2;
                     buf.data.drain(..half);
                 }
-                buf.data.extend_from_slice(bytes);
+                buf.data.extend_from_slice(&batch);
                 buf.seq += 1;
-                on_data(buf.seq, bytes);
+                on_data(buf.seq, &batch);
+                drop(buf);
+                last = Some(Instant::now());
             }
         });
         std::thread::spawn(move || on_exit(child.wait().ok().map(|s| s.exit_code())));
-        Ok(Term { master: pair.master, writer, job, killer })
+        Ok(Term { master: pair.master, writer: Arc::new(Mutex::new(writer)), job, killer })
     }
 
+    /// Escrita direta, para quem tem o `Term`. O `Core` escreve por `writer`, sem o seu lock.
     pub fn write(&mut self, data: &[u8]) {
-        let _ = self.writer.write_all(data).and_then(|_| self.writer.flush());
+        write_to(&self.writer, data);
+    }
+
+    pub fn writer(&self) -> WeakWriter {
+        Arc::downgrade(&self.writer)
     }
 
     /// O CLI (`claude` ou `codex`) que roda agora neste terminal, pelos processos dele (ver `cli_do_job`).

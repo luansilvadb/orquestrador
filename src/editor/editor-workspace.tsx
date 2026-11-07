@@ -243,6 +243,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const [askState, setAskState] = useState<(Ask & { resolve: (key: string | null) => void }) | null>(null);
   const wsRef = useRef(ws);
   const dataRef = useRef(data);
+  const statusRef = useRef(status);
+  const diskRef = useRef(disk);
   const cursors = useRef<Record<string, Cursor>>(boot.cursors);
   // Rolagem por arquivo (docId): a vista que monta de novo (aba movida, app reaberto) volta para o mesmo ponto.
   const scrolls = useRef<Record<string, Scroll>>(boot.scrolls);
@@ -273,6 +275,20 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     dataRef.current = next;
     setDataState(next);
   };
+  // O polling chama estes a cada 2,5 s com resultado quase sempre igual. `setX(fn)` com resultado igual faz o React sair sem renderizar, mas
+  // manter o update na fila do hook até o próximo render; comparar contra o ref e só chamar `setX` quando muda evita enfileirar.
+  const updateStatus = (change: (s: Record<string, Status>) => Record<string, Status>) => {
+    const next = change(statusRef.current);
+    if (next === statusRef.current) return;
+    statusRef.current = next;
+    setStatus(next);
+  };
+  const updateDisk = (change: (d: Record<string, DiskVersion>) => Record<string, DiskVersion>) => {
+    const next = change(diskRef.current);
+    if (next === diskRef.current) return;
+    diskRef.current = next;
+    setDisk(next);
+  };
   const patchBuffer = (docId: string, change: (b: Buffer) => Buffer) => {
     const current = dataRef.current.buffers[docId];
     if (!current) return;
@@ -290,12 +306,12 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   };
   const allTabs = () => wsRef.current.groups.flatMap((g) => g.tabs);
   // Só troca quando o estado muda: o polling chama isto a cada 2,5 s e não pode re-renderizar a área à toa.
-  const setStatusOf = (docId: string, value: Status) => setStatus((s) => {
+  const setStatusOf = (docId: string, value: Status) => updateStatus((s) => {
     const cur = s[docId];
     if (cur && cur.error === value.error && !!cur.binary === !!value.binary && !!cur.large === !!value.large) return s;
     return { ...s, [docId]: value };
   });
-  const clearDisk = (docId: string) => setDisk((d) => {
+  const clearDisk = (docId: string) => updateDisk((d) => {
     if (!(docId in d)) return d;
     const rest = { ...d };
     delete rest[docId];
@@ -618,8 +634,8 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
     const conflicts = Object.fromEntries(Object.entries(current.conflicts).filter(([key]) => keys.has(key)));
     for (const id of Object.keys(scrolls.current)) if (!docIds.has(id)) delete scrolls.current[id];
     for (const id of Object.keys(cursors.current)) if (!docIds.has(id)) delete cursors.current[id];
-    setDisk((d) => keepDocs(d, docIds));
-    setStatus((st) => keepDocs(st, docIds));
+    updateDisk((d) => keepDocs(d, docIds));
+    updateStatus((st) => keepDocs(st, docIds));
     setData({ buffers, conflicts });
   };
 
@@ -646,7 +662,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         return backend.readFile(buffer.path)
           .then((file) => {
             if (normalizeNewlines(file.text) !== normalizeNewlines(buffer.raw) || file.bom !== buffer.bom) {
-              setDisk((d) => ({ ...d, [docId]: { text: file.text, bom: file.bom, readOnly: file.readOnly } }));
+              updateDisk((d) => ({ ...d, [docId]: { text: file.text, bom: file.bom, readOnly: file.readOnly } }));
               setStatusOf(docId, {});
             } else {
               setStatusOf(docId, { error: reason });
@@ -881,7 +897,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       patchBuffer(docId, () => ({ ...buffer, raw: file.text, bom: file.bom, newline: newlineOf(file.text), draft: normalizeNewlines(file.text), readOnly: file.readOnly }));
       return;
     }
-    setDisk((d) => ({ ...d, [docId]: { text: file.text, bom: file.bom, readOnly: file.readOnly } }));
+    updateDisk((d) => ({ ...d, [docId]: { text: file.text, bom: file.bom, readOnly: file.readOnly } }));
   };
 
   const activeFileIds = (state: WorkspaceState) => state.groups.flatMap((g) => {
@@ -1008,7 +1024,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   const remap = (from: string, to: string) => {
     setWs(remapPath(wsRef.current, from, to));
     setData(remapData(dataRef.current, from, to));
-    setStatus({});
+    updateStatus(() => ({}));
   };
   const remove = (paths: string[]) => {
     const hit = (p: string) => paths.some((base) => isWithin(p, base));
@@ -1655,6 +1671,9 @@ function useGitBase(path: string, raw: string, shown: boolean, active: boolean):
   base: FileBase | null | undefined; reload: () => Promise<void> } {
   const backend = useBackend();
   const [base, setBase] = useState<FileBase | null | undefined>(undefined);
+  // Valor atual espelhado: comparar aqui evita chamar `setBase` com base equivalente, que o React descarta sem renderizar mas mantém
+  // na fila do hook (cada update segura o `{head, index}` inteiro) até o próximo render.
+  const baseRef = useRef<FileBase | null | undefined>(undefined);
   const pathRef = useRef(path);
   useLayoutEffect(() => {
     pathRef.current = path;
@@ -1666,7 +1685,10 @@ function useGitBase(path: string, raw: string, shown: boolean, active: boolean):
       ? { head: found.head === null ? null : normalizeNewlines(found.head), index: found.index === null ? null : normalizeNewlines(found.index) }
       : null;
     if (pathRef.current !== path) return;
-    setBase((prev) => (prev === next || (prev && next && prev.head === next.head && prev.index === next.index) ? prev : next));
+    const prev = baseRef.current;
+    if (prev === next || (prev && next && prev.head === next.head && prev.index === next.index)) return;
+    baseRef.current = next;
+    setBase(next);
   };
   usePolling(load, POLL_MS, active && shown && path !== '' && !isAbsolutePath(path) && path);
   const seenRaw = useRef(raw);

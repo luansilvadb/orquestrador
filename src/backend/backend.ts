@@ -1,16 +1,19 @@
 // Único ponto de contato com o Tauri. Fora do app (navegador, em desenvolvimento) entra o simulado.
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { Channel, convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isAbsolutePath } from '../shared/file-tab-actions';
+import { decodeTermFrame } from './term-frame';
 import type {
-  Choice, ClipboardSnapshot, CommandName, Commands, Events, HunkRef, NoArgs, ReplaceQuery, ReplaceRequest, SearchFilter, SearchOptions,
+  Choice, ClipboardSnapshot, CommandName, Commands, Events, HunkRef, NoArgs, ReplaceQuery, ReplaceRequest, SearchFilter, SearchOptions, TermData,
 } from './types';
 
 export interface Transport {
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
   /** Responde o cancelamento da escuta. */
   listen<K extends keyof Events>(event: K, handler: (payload: Events[K]) => void): Promise<() => void>;
+  /** Saída dos terminais, de todos os projetos. Fora do `listen`: no app vem por um canal binário, não por evento. Responde o cancelamento da escuta. */
+  onTermData(handler: (data: TermData) => void): Promise<() => void>;
   /** `mayClose` responde se a janela pode fechar. */
   onCloseRequested(mayClose: () => Promise<boolean>): Promise<void>;
   minimize(): Promise<void>;
@@ -25,9 +28,33 @@ export interface Transport {
   mediaUrl(path: string, project: string | null): string;
 }
 
+// Um canal por carga da página, compartilhado pelas escutas de todos os projetos (o backend guarda só o último registrado).
+const termListeners = new Set<(data: TermData) => void>();
+let termChannel: Promise<void> | null = null;
+
+function registerTermChannel() {
+  const channel = new Channel<ArrayBuffer>();
+  channel.onmessage = (buffer) => {
+    const data = decodeTermFrame(buffer);
+    for (const listener of termListeners) listener(data);
+  };
+  return invoke<void>('term_channel', { onData: channel });
+}
+
 const tauri: Transport = {
   invoke,
   listen: (event, handler) => listen(event, (e) => handler(e.payload as never)),
+  onTermData: async (handler) => {
+    termListeners.add(handler);
+    try {
+      await (termChannel ??= registerTermChannel());
+    } catch (error) {
+      termListeners.delete(handler);
+      termChannel = null;
+      throw error;
+    }
+    return () => void termListeners.delete(handler);
+  },
   onCloseRequested: async (mayClose) =>
     void (await getCurrentWindow().onCloseRequested(async (event) => {
       if (!(await mayClose())) event.preventDefault();

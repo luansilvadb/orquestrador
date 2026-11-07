@@ -60,10 +60,13 @@ export async function waitForServer() {
   throw new Error(`Vite não respondeu em ${BASE}`);
 }
 
-/** Browser headless do Chromium local; quem chama fecha. `options` vai junto para o `launch` do Playwright. */
+/**
+ * Browser headless do Chromium local; quem chama fecha. `options` vai junto para o `launch` do Playwright.
+ * Sem `args`, o WebGL fica desligado: o terminal cai no renderizador DOM e os testes leem o texto em `.xterm-rows`.
+ */
 export async function launchBrowser(options = {}) {
   const { chromium } = await import(pathToFileURL(findPlaywright()).href);
-  return chromium.launch({ headless: true, executablePath: findChrome(), ...options });
+  return chromium.launch({ headless: true, executablePath: findChrome(), args: ['--disable-3d-apis'], ...options });
 }
 
 /** Contexto novo (sem nada da sessão anterior), com o app já escolhido e a árvore pronta. */

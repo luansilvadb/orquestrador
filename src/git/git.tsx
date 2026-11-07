@@ -49,20 +49,31 @@ export function usePolled<T>(read: () => Promise<T>, enabled: boolean) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState('');
   const last = useRef('');
+  // Erro atual espelhado: `setError` com o mesmo texto o React descarta sem renderizar mas mantém na fila do hook até o próximo render,
+  // e o poll repete isso a cada volta. O ref e o estado mudam juntos, aqui.
+  const errorRef = useRef('');
+  const showError = (text: string) => {
+    if (errorRef.current === text) return;
+    errorRef.current = text;
+    setError(text);
+  };
   const refresh = async () => {
     if (!enabled) return;
     try {
       const next = await read();
       const text = JSON.stringify(next);
-      setError('');
+      showError('');
       if (text !== last.current) {
         last.current = text;
         setData(next);
       }
     } catch (e) {
-      last.current = '';
-      setData(null);
-      setError(message(e));
+      // `last` vazio é "sem dado": só zera o estado se havia dado.
+      if (last.current !== '') {
+        last.current = '';
+        setData(null);
+      }
+      showError(message(e));
     }
   };
   usePolling(refresh, 1500, enabled);

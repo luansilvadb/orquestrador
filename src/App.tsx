@@ -271,6 +271,13 @@ export function App() {
   const [active, setActive] = useState<string | null>(null);
   const [mounted, setMounted] = useState<string[]>([]);
   const [busyByProject, setBusyByProject] = useState<Record<string, number>>({});
+  // Valor atual espelhado: o poll de 1,5 s compara aqui e só chama o setter quando muda. Um setter com updater que devolve o mesmo
+  // valor é descartado pelo React sem renderizar, mas o update fica na fila do hook até o próximo render.
+  const busyRef = useRef<Record<string, number>>({});
+  const replaceBusy = (next: Record<string, number>) => {
+    busyRef.current = next;
+    setBusyByProject(next);
+  };
   const [recentProjects, setRecentProjects] = useState(readRecentProjects);
   const [ready, setReady] = useState(false);
   // Etapa da abertura, mostrada até os projetos salvos voltarem.
@@ -332,7 +339,9 @@ export function App() {
     setMounted((ids) => ids.filter((item) => item !== id));
     const nextActive = activeRef.current === id ? next[Math.max(0, projectsRef.current.findIndex((item) => item.id === id) - 1)]?.id ?? next[0]?.id ?? null : activeRef.current;
     persist(next, nextActive);
-    setBusyByProject((items) => { const rest = { ...items }; delete rest[id]; return rest; });
+    const rest = { ...busyRef.current };
+    delete rest[id];
+    replaceBusy(rest);
   };
   const moveProject = (id: string, target: number) => {
     const next = [...projectsRef.current];
@@ -395,7 +404,7 @@ export function App() {
     const timer = window.setInterval(() => {
       for (const item of projectsRef.current) void backend.projectSnapshot(item.id).then((snapshot) => {
         const busy = snapshot.executorsRunning + snapshot.executorsQueued;
-        setBusyByProject((current) => (current[item.id] === busy ? current : { ...current, [item.id]: busy }));
+        if (busyRef.current[item.id] !== busy) replaceBusy({ ...busyRef.current, [item.id]: busy });
       }).catch(() => {});
     }, 1500);
     return () => window.clearInterval(timer);
@@ -695,7 +704,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
           updateEvents.current++;
           dispatch({ type: 'update', status });
         }),
-        host().listen('term-data', (data) => {
+        host().onTermData((data) => {
           if (data.project === stateRef.current.projectId || stateRef.current.shells.some((shell) => shell.id === data.id && shell.project === data.project)) terminals.push(data);
         }),
         host().listen('node-added', (node) => {

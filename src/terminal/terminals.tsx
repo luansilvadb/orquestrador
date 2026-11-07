@@ -27,6 +27,17 @@ export const terminals = {
   },
 };
 
+/**
+ * Props do contêiner de cada terminal da pilha (`absolute inset-0`, dentro de um pai com overflow hidden). A aba inativa continua com o
+ * tamanho (sem resize/reflow ao trocar), mas é deslocada para fora do pai: o IntersectionObserver do RenderService do xterm passa a ver "não
+ * intersecta" e pausa a renderização (a saída segue sendo processada; ao voltar, o xterm repinta tudo). `visibility: hidden` sozinho não
+ * muda a interseção. `invisible` e `inert` tiram o escondido do foco, dos cliques e da árvore de acessibilidade.
+ */
+export const termPane = (shown: boolean) => ({
+  className: `absolute inset-0${shown ? '' : ' invisible -translate-x-[200%]'}`,
+  inert: !shown,
+});
+
 export function TermHost({ id, project = null, writable, onReady }: { id: string; project?: string | null; writable: boolean; onReady?: (view: TermView) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const ready = useRef(onReady);

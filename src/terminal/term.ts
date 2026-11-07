@@ -1,5 +1,6 @@
 // Um xterm ligado a um terminal do backend: retrato inicial + fluxo numerado, sem perda nem repetição.
 import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { toast } from '@lobehub/ui/base-ui';
@@ -15,16 +16,50 @@ const theme = {
   brightBlue: '#8fb6f2', brightMagenta: '#c9a6ee', brightCyan: '#7dd3d9', brightWhite: '#f2f3f5',
 };
 
+type RenderServiceInternals = {
+  _isPaused: boolean;
+  _needsFullRefresh: boolean;
+  _needsSelectionRefresh: boolean;
+  _selectionState: { start: unknown; end: unknown; columnSelectMode: boolean };
+  handleSelectionChanged(start: unknown, end: unknown, columnSelectMode: boolean): void;
+};
+
+/**
+ * No xterm 6, a rolagem agenda `SelectionService.refresh` a cada quadro e ele chega a `RenderService.handleSelectionChanged`, que ignora a
+ * pausa do IntersectionObserver e repinta todas as linhas no renderizador DOM: um terminal escondido com saída contínua continuaria
+ * renderizando. Pausado, só guarda a seleção e marca o repintar para quando o terminal voltar a intersectar (é o que `_renderRows` já faz
+ * com `_needsSelectionRefresh`). API interna do xterm: se a forma mudar, nada é trocado e o teste de terminal escondido acusa.
+ */
+function deferSelectionRedraw(term: Terminal) {
+  const service = (term as unknown as { _core?: { _renderService?: RenderServiceInternals } })._core?._renderService;
+  if (!service || typeof service.handleSelectionChanged !== 'function' || typeof service._isPaused !== 'boolean') return;
+  const redraw = service.handleSelectionChanged;
+  service.handleSelectionChanged = function (this: RenderServiceInternals, start, end, columnSelectMode) {
+    if (!this._isPaused) return redraw.call(this, start, end, columnSelectMode);
+    this._selectionState = { start, end, columnSelectMode };
+    this._needsSelectionRefresh = true;
+    this._needsFullRefresh = true;
+  };
+}
+
 export class TermView {
   readonly term: Terminal;
   private fitAddon = new FitAddon();
   private observer: ResizeObserver;
+  /** Quem esconde o terminal é a classe do contêiner de `host` (`termPane`: invisible + deslocado, sem mudar o tamanho): o ResizeObserver não avisa. */
+  private shown: MutationObserver;
   private frame = 0;
-  /** Enquanto o retrato não chega, os `term-data` esperam aqui. */
-  private pending: { seq: number; data: string }[] | null = [];
+  /** Enquanto o retrato não chega, os pedaços da saída esperam aqui. */
+  private pending: { seq: number; data: Uint8Array }[] | null = [];
   private seq = -1;
   /** Há um PTY do outro lado para avisar do tamanho? */
   private live = false;
+  /** Renderizador WebGL: só o terminal visível o tem (o Chromium limita ~16 contextos); os escondidos voltam ao DOM. */
+  private webgl: WebglAddon | null = null;
+  /** Sem WebGL2 neste ambiente: não tenta de novo. */
+  private noWebgl = false;
+  /** O contexto foi perdido: só tenta de novo depois que o terminal for escondido e reaparecer. */
+  private lost = false;
 
   /** `writable` liga o teclado ao backend; sem ele o terminal é só leitura por construção. */
   constructor(readonly id: string, host: HTMLElement, writable: boolean, readonly project: string | null) {
@@ -34,6 +69,9 @@ export class TermView {
     });
     this.term.loadAddon(this.fitAddon);
     this.term.open(host);
+    deferSelectionRedraw(this.term);
+    // Gancho de medição (scripts/medir-desempenho.mjs): só existe se o script o definir na página; sem ele, nada acontece.
+    (globalThis as { __orqMedir?: (id: string, term: Terminal) => void }).__orqMedir?.(id, this.term);
     // Ctrl+C com texto selecionado copia; Ctrl+V cola pelo evento nativo (que o xterm trata).
     this.term.attachCustomKeyEventHandler((e) => {
       const key = e.ctrlKey && !e.altKey ? e.key.toLowerCase() : '';
@@ -44,10 +82,51 @@ export class TermView {
     this.term.onResize(() => this.sendSize());
     this.observer = new ResizeObserver(() => {
       cancelAnimationFrame(this.frame);
-      this.frame = requestAnimationFrame(() => this.fit());
+      this.frame = requestAnimationFrame(() => {
+        this.renderer();
+        this.fit();
+      });
     });
     this.observer.observe(host);
+    this.shown = new MutationObserver(() => this.renderer());
+    if (host.parentElement) this.shown.observe(host.parentElement, { attributes: true, attributeFilter: ['class', 'inert'] });
+    this.renderer();
     this.fit();
+  }
+
+  /** WebGL enquanto visível; escondido (display none, inert ou visibility hidden), solta o contexto e o xterm volta ao renderizador DOM. Falha ou perda de contexto também cai no DOM. */
+  private renderer() {
+    const el = this.term.element;
+    const visible = !!el?.offsetParent && !el.closest('[inert]') && getComputedStyle(el).visibility !== 'hidden';
+    if (!visible) {
+      this.lost = false;
+      this.release();
+      return;
+    }
+    if (this.webgl || this.noWebgl || this.lost) return;
+    const addon = new WebglAddon();
+    try {
+      addon.onContextLoss(() => {
+        if (this.webgl !== addon) return;
+        this.release();
+        this.lost = true;
+      });
+      this.term.loadAddon(addon);
+      this.webgl = addon;
+    } catch {
+      addon.dispose();
+      this.noWebgl = true;
+    }
+  }
+
+  /** Solta o WebGL. O addon só remove o canvas; o contexto ficaria vivo até o GC e contaria no limite do Chromium, então é perdido de propósito. */
+  private release() {
+    const addon = this.webgl;
+    if (!addon) return;
+    this.webgl = null;
+    const canvas = this.term.element?.querySelector<HTMLCanvasElement>('.xterm-screen canvas:not(.xterm-link-layer)');
+    addon.dispose();
+    canvas?.getContext('webgl2')?.getExtension('WEBGL_lose_context')?.loseContext();
   }
 
   /** O CLI do terminal: fixo no orquestrador (`startOrchestrator`); vazio num shell, onde o backend olha o processo a cada colagem. */
@@ -107,17 +186,18 @@ export class TermView {
     for (const chunk of waiting) this.push(chunk.seq, chunk.data);
   }
 
-  push(seq: number, data: string) {
+  push(seq: number, data: Uint8Array) {
     if (this.pending) this.pending.push({ seq, data });
     else if (seq > this.seq) {
       this.seq = seq;
-      this.term.write(Uint8Array.fromBase64(data));
+      this.term.write(data);
     }
   }
 
   dispose() {
     cancelAnimationFrame(this.frame);
     this.observer.disconnect();
+    this.shown.disconnect();
     this.term.element?.removeEventListener('paste', this.onPaste, true);
     this.term.dispose();
   }

@@ -34,7 +34,7 @@ import {
   type Batch, type Choice, type DirListing, type ExecutorNode, type NodeStateEvent, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events, type FormatterInfo,
   type FileBase, type GitCommitHoverDetail, type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
   type ReplaceApplied, type ReplacePreview, type ReplaceQuery, type ReplaceRequest, type ReviewDiff, type SearchMatch,
-  type SearchResults, type SkipReason,
+  type SearchResults, type SkipReason, type TermData,
 } from './types';
 
 type Handler = (payload: never) => void;
@@ -59,6 +59,7 @@ const handlers = new Map<string, Handler[]>();
 const emit = <K extends keyof Events>(event: K, payload: Events[K]) =>
   handlers.get(event)?.forEach((h) => (h as (p: Events[K]) => void)(payload));
 
+const termListeners = new Set<(data: TermData) => void>();
 const base64 = (text: string) => new TextEncoder().encode(text).toBase64();
 // Terminais e shells por `(projeto, id)`: os ids são locais a cada projeto, como no backend.
 const termKey = (id: string, project: string | null) => `${project ?? ''}\0${id}`;
@@ -67,7 +68,8 @@ function out(id: string, text: string, project: string | null = null) {
   const term = terms.get(termKey(id, project)) ?? { seq: 0, text: '', project };
   terms.set(termKey(id, project), term);
   term.text += text;
-  emit('term-data', { project: term.project, id, seq: ++term.seq, data: base64(text) });
+  const data = { project: term.project, id, seq: ++term.seq, data: new TextEncoder().encode(text) };
+  termListeners.forEach((listener) => listener(data));
 }
 
 // Árvore simulada do projeto, em memória. Pastas são `Folder`; arquivos são `{ dir: false }`.
@@ -1227,6 +1229,7 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   git_file_base: ({ path }: { path: string }) => fileBase(path),
   git_write_index: ({ path, text, expected }: { path: string; text: string; expected: string }) => { writeIndex(path, text, expected); return null; },
   search: ({ query }: { query: ReplaceQuery }): SearchResults => searchText(query),
+  term_channel: () => undefined,
   term_resize: () => undefined,
   term_snapshot: ({ project, id }: { project: string | null; id: string }) => {
     const term = terms.get(termKey(id, project));
@@ -1259,6 +1262,10 @@ export const mock: Transport = {
   listen: async (event, handler) => {
     handlers.set(event, [...(handlers.get(event) ?? []), handler as Handler]);
     return () => void handlers.set(event, (handlers.get(event) ?? []).filter((h) => h !== handler));
+  },
+  onTermData: async (handler) => {
+    termListeners.add(handler);
+    return () => void termListeners.delete(handler);
   },
   onCloseRequested: async (mayClose) => { closeHandler = mayClose; },
   // Janela simulada: minimizar e maximizar não fazem nada; fechar segue o mesmo caminho de `__mock.close()`.
