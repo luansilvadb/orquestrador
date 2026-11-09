@@ -1,9 +1,9 @@
 // Os terminais xterm: cada um é um TermView criado quando o TermHost monta e descartado quando ele sai.
 import { memo, useEffect, useLayoutEffect, useRef } from 'react';
 import { TermView } from './term';
+import { termKey as key } from './term-key';
 import type { TermData } from '../backend/types';
 
-const key = (id: string, project?: string | null) => `${project ?? ''}\0${id}`;
 const views = new Map<string, TermView>();
 /** Dados que chegam antes de o terminal montar; sem isso o começo do fluxo se perderia. */
 const early = new Map<string, TermData[]>();

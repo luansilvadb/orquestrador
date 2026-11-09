@@ -75,12 +75,13 @@ dom('terminal escondido não gera mutação no DOM, nem com saída intensa; ao v
     const chunk = Array.from({ length: 200 }, (_, i) => `linha ${i} ${'x'.repeat(60)}
 
 `).join('');
-    await Promise.all(window.__terms.map(({ term }, n) => new Promise((resolve) => {
-      for (let i = 0; i < 20; i++) term.write(chunk);
-      term.write(`MARCA-${n}
-
-`, resolve);
-    })));
+    // Pelo fluxo do backend: escondido, a saída vai ao espelho no worker, não ao xterm da tela.
+    window.__terms.forEach(({ id }, n) => {
+      for (let i = 0; i < 20; i++) window.__mock.termOut(id, chunk, 'project-1');
+      window.__mock.termOut(id, `MARCA-${n}
+`, 'project-1');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   });
   const after = await state();

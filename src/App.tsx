@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { Flexbox } from '@lobehub/ui';
 import { Alert, Button, DraggablePanel, Modal, Progress, setActiveScope, Text, toast } from '@lobehub/ui/base-ui';
 import { backend, connect, host, message, projectBackend } from './backend/backend';
@@ -10,7 +10,7 @@ import { Nav, type Route } from './window/nav';
 import { StatusBar } from './window/status-bar';
 import { fileName } from './shared/file-tabs';
 import { createGitGuard } from './git/git-guard';
-import { GitSidebar, usePolled } from './git/git';
+import { GitSidebar, type PolledStore, usePolled, usePolledSelector } from './git/git';
 import { type HistoryRequest } from './git/git-history';
 import { copy, join, splitPath } from './shared/paths';
 import { QuickOpen } from './editor/quick-open';
@@ -116,6 +116,8 @@ const initial: State = {
   executorChoice: null, executors: [], notice: '', shells: [], shellActive: '', shellOpen: false,
 };
 
+const sameChoice = (a: Choice | null | undefined, b: Choice | null | undefined) => a === b || (!!a && !!b && a.tool === b.tool && a.model === b.model && a.effort === b.effort);
+
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'update':
@@ -146,8 +148,7 @@ function reducer(state: State, action: Action): State {
       if (!node) return state;
       // Executor que terminou fecha a própria aba; a resposta dele já seguiu para o orquestrador.
       if (FINISHED.includes(action.state)) return { ...state, executors: state.executors.filter((e) => e !== node) };
-      const same = node.choice === action.choice || (!!node.choice && !!action.choice && node.choice.tool === action.choice.tool && node.choice.model === action.choice.model && node.choice.effort === action.choice.effort);
-      if (node.state === action.state && same) return state;
+      if (node.state === action.state && sameChoice(node.choice, action.choice)) return state;
       return { ...state, executors: state.executors.map((e) => (e === node ? { ...e, state: action.state, choice: action.choice } : e)) };
     }
     case 'reset':
@@ -429,10 +430,10 @@ export function App() {
     if (ready) for (const item of projects) if (!(item.id in busyRef.current)) refreshBusy(item.id);
   }, [ready, projects]);
 
+  const tabs: ProjectTab[] = useMemo(() => projects.map((item) => ({ id: item.id, path: item.project, busy: busyByProject[item.id] })), [projects, busyByProject]);
   if (!ready) return <Screen connected={false} description={(
     <Text as="p" fontSize={14} style={SECONDARY} role="status" aria-live="polite">{stage}</Text>
   )}>{null}</Screen>;
-  const tabs: ProjectTab[] = projects.map((item) => ({ id: item.id, path: item.project, busy: busyByProject[item.id] }));
   if (projects.length === 0) return <ProjectApp projects={tabs} onSelect={selectProject} onClose={dropManagedProject} onMove={moveProject} onOpen={addProject} recentProjects={recentProjects} />;
   return <div className="relative h-dvh w-full overflow-hidden">
     {projects.map((item) => <div key={item.id} className={`absolute inset-0${active === item.id ? '' : ' invisible -translate-x-[200%]'}`}>
@@ -445,6 +446,19 @@ export function App() {
 let updateChecked = false;
 // Programa do último shell aberto (vale para todos os projetos): a aba nova já nasce com ele e não muda de largura quando o backend responde.
 let lastShellProgram = '';
+
+type GitStore = PolledStore<GitState>;
+// Leitores do store do Git: só eles re-renderizam quando o status muda.
+function GitFilesScreen({ store, ...props }: Omit<ComponentProps<typeof FilesScreen>, 'git'> & { store: GitStore }) {
+  const status = usePolledSelector(store, (s) => (s.data?.kind === 'repo' ? s.data.status : null));
+  return <FilesScreen {...props} git={status} />;
+}
+function GitStatusBar({ store, repo, syncing, ...props }: Omit<ComponentProps<typeof StatusBar>, 'git'> & { store: GitStore; repo: boolean; syncing: boolean }) {
+  const branch = usePolledSelector(store, (s) => (s.data?.kind === 'repo' ? s.data.status.branch : ''));
+  const ahead = usePolledSelector(store, (s) => (s.data?.kind === 'repo' ? s.data.status.ahead : 0));
+  const behind = usePolledSelector(store, (s) => (s.data?.kind === 'repo' ? s.data.status.behind : 0));
+  return <StatusBar {...props} git={repo ? { branch, ahead, behind, syncing } : undefined} />;
+}
 
 // `onClose` fecha o projeto no backend e tira a aba; rejeita com o erro, e nada muda.
 function ProjectApp({ initialProject, active = true, projects, onSelect, onClose, onMove, onOpen, recentProjects }: {
@@ -1048,7 +1062,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
   // Sincronizar da barra de status, como o do VS Code: recebe e, havendo commits a enviar, envia. Com executores trabalhando o
   // backend recusa o recebimento, então nem começa; a trava compartilhada impede duas operações do Git ao mesmo tempo.
   async function sync() {
-    if (state.executors.some((e) => !FINISHED.includes(e.state))) {
+    if (state.executors.length > 0) {
       toast.warning({ title: 'Há executores trabalhando. Espere o lote terminar.', duration: 4000 });
       return;
     }
@@ -1081,12 +1095,15 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
   // Memo: o painel Terminal mede a faixa a cada `tabs` novo, e o App re-renderiza a cada evento de executor e a cada poll do Git.
   const shellTabs = useMemo(() => state.shells.map((s) => ({ id: s.id, title: s.program ? (folder ? `${folder} — ${s.program}` : s.program) : folder || 'Terminal', n: s.n, program: s.program, project: s.project })), [state.shells, folder]);
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
-  const busy = executors.some((e) => !FINISHED.includes(e.state));
+  // O reducer tira o executor que terminou: os que restam estão trabalhando.
+  const busy = executors.length > 0;
   const awaiting = executors.some((e) => e.state === 'awaiting-choice');
   // Contador da navegação, branch e Histórico Git só existem no modo `repo`.
-  const changed = state.project && git.data?.kind === 'repo' ? git.data.status.files.length : 0;
-  const repoStatus = state.project && git.data?.kind === 'repo' ? git.data.status : undefined;
-  const noGitFix = state.project && git.data && git.data.kind !== 'repo' ? NO_GIT_FIX[git.data.kind] : null;
+  // Do status só o tipo e a contagem: o resto é lido por quem usa (barra, árvore, painel Git), sem re-renderizar o ProjectApp a cada poll.
+  const gitKind = usePolledSelector(git, (s) => s.data?.kind ?? null);
+  const changed = usePolledSelector(git, (s) => (s.data?.kind === 'repo' ? s.data.status.files.length : 0));
+  const isRepo = !!state.project && gitKind === 'repo';
+  const noGitFix = state.project && gitKind && gitKind !== 'repo' ? NO_GIT_FIX[gitKind] : null;
   // Texto do fechamento: a lista de arquivos (o caminho desambigua nomes iguais) e a menção aos terminais, quando há.
   const closeFiles = closeAsk?.files ?? [];
   const closeUnsaved = closeFiles.length === 1
@@ -1102,7 +1119,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
     rename: renameFile,
     removeMany,
     move: moveItems,
-    history: git.data?.kind === 'repo' ? (path) => {
+    history: gitKind === 'repo' ? (path) => {
       setHistoryRequest({ path });
       setRoute('git');
     } : null,
@@ -1177,7 +1194,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
       } : undefined} />
 
       <Flexbox ref={rowRef} horizontal flex={1} className="min-h-0">
-        <Nav route={sideShown ? route : null} changed={changed} onGo={go} />
+        <Nav route={sideShown ? route : null} changed={state.project ? changed : 0} onGo={go} />
         <main className="relative min-h-0 min-w-0 flex-1">
           <Flexbox horizontal height="100%">
             {/* Faixa da esquerda: árvore, pesquisa ou Git, todas montadas; só a da rota aparece. A borda direita arrasta a largura. */}
@@ -1191,8 +1208,8 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
               <div className="relative h-full">
                 <div className={shown('arquivos')}>
                   {state.project ? (
-                    <FilesScreen openPath={activeTarget && activeTarget.kind !== 'draft' ? activeTarget.path : null} onOpen={openIn} onPrefetch={(path) => editor.current?.prefetch(path)} reveal={treeReveal} actions={fileActions}
-                      project={folder} git={git.data?.kind === 'repo' ? git.data.status : null} active={active && route === 'arquivos'}
+                    <GitFilesScreen store={git} openPath={activeTarget && activeTarget.kind !== 'draft' ? activeTarget.path : null} onOpen={openIn} onPrefetch={(path) => editor.current?.prefetch(path)} reveal={treeReveal} actions={fileActions}
+                      project={folder} active={active && route === 'arquivos'}
                     />
                   ) : <OpenProjectPrompt onOpen={chooseProject} description="Abra uma pasta para explorar os arquivos." />}
                 </div>
@@ -1268,8 +1285,8 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
         </div>
       </Flexbox>
 
-      <StatusBar
-        git={repoStatus && { branch: repoStatus.branch, ahead: repoStatus.ahead, behind: repoStatus.behind, syncing }}
+      <GitStatusBar
+        store={git} repo={isRepo} syncing={syncing}
         terminalOpen={state.shellOpen} onToggleTerminal={toggleShell} onOpenGit={() => setRoute('git')} onSync={() => void sync()}
       />
 

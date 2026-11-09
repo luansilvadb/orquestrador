@@ -86,17 +86,19 @@ impl Term {
         // o intervalo ainda aberto. O buffer e o `seq` seguem juntos, então um envio agrupado é um único `seq`.
         let (tx, rx) = channel::<Vec<u8>>();
         std::thread::spawn(move || {
-            let mut chunk = [0u8; 16384];
             let mut first = true;
-            while let Ok(n) = reader.read(&mut chunk) {
-                if n == 0 {
-                    break;
-                }
-                let mut bytes = &chunk[..n];
+            loop {
+                // Lê direto no Vec que vai pelo canal: sem cópia até o lote.
+                let mut bytes = vec![0u8; 16384];
+                let n = match reader.read(&mut bytes) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                bytes.truncate(n);
                 if std::mem::take(&mut first) && bytes.starts_with(QUERY) {
-                    bytes = &bytes[QUERY.len()..];
+                    bytes.drain(..QUERY.len());
                 }
-                if !bytes.is_empty() && tx.send(bytes.to_vec()).is_err() {
+                if !bytes.is_empty() && tx.send(bytes).is_err() {
                     break;
                 }
             }

@@ -1,7 +1,7 @@
 // Painel Git da barra lateral, em duas abas: o controle de versão (branch, commit, Preparadas, Alterações e Gráfico) e o histórico do projeto ou de um arquivo.
 // Clique num arquivo abre a revisão em prévia; duplo clique abre de vez; conflito abre o conflito. O histórico abre o arquivo de um commit.
-// Tudo roda na pasta do projeto e só por clique do usuário. O status atualiza sozinho (usePolled, no App); cada ação atualiza na hora.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+// Tudo roda na pasta do projeto e só por clique do usuário. O status atualiza sozinho (store de usePolled, criado no App); cada ação atualiza na hora.
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, DropdownMenu, Input, Popover, TabsIndicator, TabsList, TabsRoot, TabsTab, Text, TextArea, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, GitBranch, LoaderCircle, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
@@ -41,46 +41,71 @@ async function run(task: () => Promise<unknown>, refresh: () => Promise<void>): 
   }
 }
 
+/** Último resultado de uma consulta repetida: `data` nulo é "sem dado"; `error` guarda a mensagem da última falha. */
+export type Polled<T> = { data: T | null; error: string };
+/** Store externo de uma consulta repetida: lido com `usePolledSelector`, só re-renderiza quem lê a parte que mudou. */
+export type PolledStore<T> = {
+  subscribe: (listener: () => void) => () => void;
+  get: () => Polled<T>;
+  refresh: () => Promise<void>;
+};
+
 /**
- * Consulta repetida (usePolling) e a mesma consulta sob demanda (`refresh`). O estado só muda quando a resposta é outra, para não piscar.
- * `enabled` falso não consulta. Consulta que falha zera o dado e guarda a mensagem de erro.
+ * Consulta repetida (usePolling) e a mesma consulta sob demanda (`refresh`), num store estável. O snapshot só muda quando a resposta é outra, para não piscar.
+ * `enabled` falso não consulta. Consulta que falha zera o dado e guarda a mensagem de erro. O componente que chama não re-renderiza pelo poll.
  */
-export function usePolled<T>(read: () => Promise<T>, enabled: boolean) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState('');
-  const last = useRef('');
-  // Erro atual espelhado: `setError` com o mesmo texto o React descarta sem renderizar mas mantém na fila do hook até o próximo render,
-  // e o poll repete isso a cada volta. O ref e o estado mudam juntos, aqui.
-  const errorRef = useRef('');
-  const showError = (text: string) => {
-    if (errorRef.current === text) return;
-    errorRef.current = text;
-    setError(text);
-  };
-  const refresh = async () => {
-    if (!enabled) return;
-    try {
-      const next = await read();
-      const text = JSON.stringify(next);
-      showError('');
-      if (text !== last.current) {
-        last.current = text;
-        setData(next);
-      }
-    } catch (e) {
-      // `last` vazio é "sem dado": só zera o estado se havia dado.
-      if (last.current !== '') {
-        last.current = '';
-        setData(null);
-      }
-      showError(message(e));
-    }
-  };
-  usePolling(refresh, 1500, enabled);
-  return { data, error, refresh };
+export function usePolled<T>(read: () => Promise<T>, enabled: boolean): PolledStore<T> {
+  const readRef = useRef(read);
+  const enabledRef = useRef(enabled);
+  useLayoutEffect(() => {
+    readRef.current = read;
+    enabledRef.current = enabled;
+  });
+  const [store] = useState(() => {
+    let snap: Polled<T> = { data: null, error: '' };
+    let last = '';
+    const listeners = new Set<() => void>();
+    const set = (next: Polled<T>) => {
+      snap = next;
+      for (const l of listeners) l();
+    };
+    const s: PolledStore<T> = {
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      get: () => snap,
+      refresh: async () => {
+        if (!enabledRef.current) return;
+        try {
+          const next = await readRef.current();
+          const text = JSON.stringify(next);
+          if (text !== last) {
+            last = text;
+            set({ data: next, error: '' });
+          } else if (snap.error !== '') set({ ...snap, error: '' });
+        } catch (e) {
+          const error = message(e);
+          // `last` vazio é "sem dado": só zera o dado se havia dado.
+          if (last !== '' || snap.error !== error) {
+            last = '';
+            set({ data: null, error });
+          }
+        }
+      },
+    };
+    return s;
+  });
+  usePolling(store.refresh, 1500, enabled);
+  return store;
 }
 
-type GitPoll = ReturnType<typeof usePolled<GitState>>;
+/** Parte do snapshot de um `PolledStore`; o seletor deve devolver primitivo ou referência estável do snapshot. */
+export function usePolledSelector<T, R>(store: PolledStore<T>, select: (s: Polled<T>) => R): R {
+  return useSyncExternalStore(store.subscribe, () => select(store.get()));
+}
+
+type GitPoll = PolledStore<GitState>;
 export type GitSidebarProps = {
   git: GitPoll;
   locked: boolean;
@@ -656,7 +681,8 @@ export function GitSidebar({
     setView('history');
   }, [historyRequest]);
 
-  const { data, error, refresh } = git;
+  const { data, error } = usePolledSelector(git, (s) => s);
+  const { refresh } = git;
   if (data && data.kind !== 'repo') {
     return (
       <Flexbox height="100%" className="min-h-0">

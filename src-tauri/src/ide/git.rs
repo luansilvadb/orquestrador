@@ -64,11 +64,12 @@ pub struct Branches {
     pub local: Vec<String>,
 }
 
-/// O estado do repositório. A branch segue a regra de `proc::branch`: o nome, ou o hash em HEAD destacado.
+/// O estado do repositório. A branch segue a regra de `proc::branch`: o nome, ou o hash curto em HEAD destacado,
+/// lidos das linhas `# branch.*` do próprio status, sem outro processo.
 pub fn status(dir: &Path) -> Result<Status, String> {
     // `-z` põe os caminhos sem aspas e separa os registros com NUL; `core.quotepath` já vem desligado (ver `proc`).
     let out = proc::git_saida(dir, &["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"])?;
-    Ok(parse_status(proc::branch(dir)?, &out))
+    Ok(parse_status(&out))
 }
 
 /// Como o projeto se liga ao Git. Sem repositório ou com o Git ausente, não há lista de alterações.
@@ -117,10 +118,25 @@ pub fn modo(dir: &Path) -> Result<Modo, String> {
     }
 }
 
-/// O estado do Git para a tela: a lista só existe no modo `Repo`.
+/// Pastas já vistas como raiz de repositório: o poll do painel pula o `rev-parse --show-toplevel`.
+static RAIZES: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// O estado do Git para a tela: a lista só existe no modo `Repo`. Com a raiz em cache, roda só o `status`; se ele
+/// falhar (repositório removido ou movido), o cache sai e o modo é lido de novo.
 pub fn estado(dir: &Path) -> Result<Estado, String> {
+    let raizes = || RAIZES.lock().unwrap_or_else(|e| e.into_inner());
+    if raizes().iter().any(|p| p == dir) {
+        match status(dir) {
+            Ok(status) => return Ok(Estado::Repo { status }),
+            Err(_) => raizes().retain(|p| p != dir),
+        }
+    }
     Ok(match modo(dir)? {
-        Modo::Repo => Estado::Repo { status: status(dir)? },
+        Modo::Repo => {
+            let status = status(dir)?;
+            raizes().push(dir.to_path_buf());
+            Estado::Repo { status }
+        }
         Modo::NoRepo => Estado::NoRepo,
         Modo::NoGit => Estado::NoGit,
         Modo::RepoAbove(root) => Estado::RepoAbove { root },
@@ -140,11 +156,17 @@ pub fn init(dir: &Path) -> Result<(), String> {
 
 /// Lê a saída de `status --porcelain=v2 --branch -z`. Cada registro acaba em NUL; o renomeado traz o caminho
 /// de origem no registro seguinte.
-fn parse_status(branch: String, out: &str) -> Status {
-    let mut st = Status { branch, head: String::new(), ahead: 0, behind: 0, files: Vec::new() };
+fn parse_status(out: &str) -> Status {
+    let mut st = Status { branch: String::new(), head: String::new(), ahead: 0, behind: 0, files: Vec::new() };
+    let mut detached = false;
     let mut records = out.split('\0');
     while let Some(rec) = records.next() {
-        if let Some(oid) = rec.strip_prefix("# branch.oid ") {
+        if let Some(head) = rec.strip_prefix("# branch.head ") {
+            detached = head == "(detached)";
+            if !detached {
+                st.branch = head.to_string();
+            }
+        } else if let Some(oid) = rec.strip_prefix("# branch.oid ") {
             // `(initial)` é o repositório sem commit: o HEAD não tem hash.
             st.head = if oid == "(initial)" { String::new() } else { oid.to_string() };
         } else if let Some(ab) = rec.strip_prefix("# branch.ab ") {
@@ -173,6 +195,10 @@ fn parse_status(branch: String, out: &str) -> Status {
         } else if let Some(path) = rec.strip_prefix("? ") {
             st.files.push(GitFile { path: path.to_string(), orig_path: None, staged: None, unstaged: Some(Kind::Untracked) });
         }
+    }
+    if detached {
+        // Os 7 primeiros, como o `rev-parse --short` padrão.
+        st.branch = st.head.chars().take(7).collect();
     }
     st.files.sort_by(|a, b| a.path.cmp(&b.path));
     st

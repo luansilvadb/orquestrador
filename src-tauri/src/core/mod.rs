@@ -41,6 +41,11 @@ pub fn is_shell(id: &str) -> bool {
     id.starts_with(SHELL_PREFIX)
 }
 
+/// Se `id` é de um terminal com teclado (o orquestrador ou um shell): saída com agrupamento curto e envio urgente.
+pub fn is_interactive(id: &str) -> bool {
+    id == ORCHESTRATOR || is_shell(id)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NodeState {
@@ -610,7 +615,7 @@ impl Core {
         }
         let (out, data_id) = (self.term_out.clone(), id.to_string());
         let (core, exit_id) = (self.clone(), id.to_string());
-        let gap = if id == ORCHESTRATOR || is_shell(id) { pty::INTERACTIVE_GAP } else { pty::READ_ONLY_GAP };
+        let gap = if is_interactive(id) { pty::INTERACTIVE_GAP } else { pty::READ_ONLY_GAP };
         let term = Term::spawn(
             spawn,
             slot.size,

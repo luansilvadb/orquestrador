@@ -562,7 +562,7 @@ impl TermChannel {
         let (outbox, ready) = &*self.outbox;
         let mut out = outbox.lock().unwrap_or_else(|e| e.into_inner());
         core::frame::push(&mut out.frames, project, id, seq, bytes);
-        out.urgent |= id == core::ORCHESTRATOR || core::is_shell(id);
+        out.urgent |= core::is_interactive(id);
         ready.notify_one();
     }
 

@@ -7,6 +7,7 @@ import { toast } from '@lobehub/ui/base-ui';
 import { backend, message } from '../backend/backend';
 import { decodeTermFrame } from '../backend/term-frame';
 import { mirror } from './mirror';
+import { termKey } from './term-key';
 import { clipboardFiles, clipboardPaste, type Cli, type Paste } from './paste';
 
 const theme = {
@@ -50,7 +51,7 @@ function deferSelectionRedraw(term: Terminal) {
  * há mais tempo solta o dele, já pausado, então o renderizador DOM que entra no lugar não pinta nada.
  */
 export const WEBGL_MAX = 4;
-/** Linhas de histórico do espelho de um executor: é o que o terminal recebe ao aparecer. Menos linhas, troca de aba mais rápida. */
+/** Linhas de histórico do espelho de um terminal: é o que o terminal recebe ao aparecer. Menos linhas, troca de aba mais rápida. */
 const MIRROR_SCROLLBACK = 2000;
 
 export class TermView {
@@ -65,10 +66,10 @@ export class TermView {
   /** Do usado há mais tempo ao mais recente (ver `WEBGL_MAX`). */
   private static webglViews: TermView[] = [];
   /**
-   * Executor (só leitura): o espelho no worker processa toda a saída, e o xterm daqui só enquanto aparece. Escondido, ele é zerado ('stale');
-   * ao aparecer, recebe o estado serializado do espelho ('syncing') e volta a seguir o fluxo ('live').
+   * O espelho no worker processa toda a saída, e o xterm daqui só enquanto aparece. Escondido, ele é zerado ('stale'); ao aparecer, recebe
+   * o estado serializado do espelho ('syncing') e volta a seguir o fluxo ('live'). Escondido não recebe teclado; as respostas a consultas
+   * (DSR, DA) da saída que só o espelho viu vêm dele.
    */
-  private readonly mirrored: boolean;
   private readonly key: string;
   private sync: 'live' | 'stale' | 'syncing' = 'live';
   /** Conta as trocas de `sync`: um retrato serializado que chega depois de outra troca é descartado. */
@@ -95,12 +96,10 @@ export class TermView {
       fontSize: 13, lineHeight: 1.15, scrollback: 10000, cursorBlink: writable, disableStdin: !writable,
     });
     this.term.loadAddon(this.fitAddon);
-    this.mirrored = !writable;
-    this.key = `${project ?? ''}\0${id}`;
-    if (this.mirrored) {
-      mirror.open(this.key, this.term.cols, this.term.rows, MIRROR_SCROLLBACK);
-      if (!shown) this.sync = 'stale';
-    }
+    this.key = termKey(id, project);
+    const reply = writable ? (data: string) => void backend.termWrite(id, data, project).catch(() => {}) : undefined;
+    mirror.open(this.key, this.term.cols, this.term.rows, MIRROR_SCROLLBACK, reply);
+    if (!shown) this.sync = 'stale';
     this.term.open(host);
     deferSelectionRedraw(this.term);
     // Gancho de medição (scripts/medir-desempenho.mjs): só existe se o script o definir na página; sem ele, nada acontece.
@@ -110,10 +109,10 @@ export class TermView {
       const key = e.ctrlKey && !e.altKey ? e.key.toLowerCase() : '';
       return !((key === 'c' && this.term.hasSelection()) || key === 'v');
     });
-    if (writable) this.term.onData((data) => void backend.termWrite(id, data, project).catch(() => {}));
+    if (reply) this.term.onData(reply);
     if (writable) this.term.element?.addEventListener('paste', this.onPaste, true);
     this.term.onResize(({ cols, rows }) => {
-      if (this.mirrored) mirror.resize(this.key, cols, rows);
+      mirror.resize(this.key, cols, rows);
       this.sendSize();
     });
     // Escondido, o terminal mantém o tamanho: redimensionar o painel com N executores não faz N reflows nem N redesenhos de CLI.
@@ -134,13 +133,11 @@ export class TermView {
     this.shown = shown;
     if (!shown) {
       this.lost = false;
-      if (this.mirrored) {
-        // O espelho guarda o estado: zerar solta a memória do histórico daqui, e a saída deixa de passar pelo xterm da tela.
-        this.syncGen++;
-        this.sync = 'stale';
-        this.backlog = [];
-        this.term.reset();
-      }
+      // O espelho guarda o estado: zerar solta a memória do histórico daqui, e a saída deixa de passar pelo xterm da tela.
+      this.syncGen++;
+      this.sync = 'stale';
+      this.backlog = [];
+      this.term.reset();
       return;
     }
     this.acquire();
@@ -272,8 +269,7 @@ export class TermView {
   }
 
   private write(data: Uint8Array) {
-    if (!this.mirrored) return this.term.write(data);
-    mirror.write(this.key, data);
+    mirror.write(this.key, data, this.sync === 'stale');
     if (this.sync === 'live') this.term.write(data);
     else if (this.sync === 'syncing') this.backlog.push(data);
   }
@@ -281,7 +277,7 @@ export class TermView {
   dispose() {
     cancelAnimationFrame(this.frame);
     this.syncGen++;
-    if (this.mirrored) mirror.close(this.key);
+    mirror.close(this.key);
     this.release();
     this.observer.disconnect();
     this.term.element?.removeEventListener('paste', this.onPaste, true);
