@@ -1,7 +1,7 @@
 // Painel Git da barra lateral, em duas abas: o controle de versão (branch, commit, Preparadas, Alterações e Gráfico) e o histórico do projeto ou de um arquivo.
 // Clique num arquivo abre a revisão em prévia; duplo clique abre de vez; conflito abre o conflito. O histórico abre o arquivo de um commit.
 // Tudo roda na pasta do projeto e só por clique do usuário. O status atualiza sozinho (usePolled, no App); cada ação atualiza na hora.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, DropdownMenu, Input, Popover, TabsIndicator, TabsList, TabsRoot, TabsTab, Text, TextArea, toast } from '@lobehub/ui/base-ui';
 import { Flexbox } from '@lobehub/ui';
 import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, GitBranch, LoaderCircle, Minus, Plus, RefreshCw, SquareArrowOutUpRight } from 'lucide-react';
@@ -164,6 +164,21 @@ function ChangesPanel({
   const [marked, setMarked] = useState<Set<string>>(new Set());
   const refreshGraph = () => setGraphTick((n) => n + 1);
 
+  // Lista virtual: cabeçalhos e linhas têm 22 px, então a posição de cada item sai do índice. Só a janela visível (com folga) é montada.
+  const [listEl, setListEl] = useState<HTMLElement | null>(null);
+  const [listHeight, setListHeight] = useState(0);
+  const [first, setFirst] = useState(0);
+  useLayoutEffect(() => {
+    if (!listEl) return;
+    const measure = () => setListHeight(listEl.clientHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(listEl);
+    return () => observer.disconnect();
+  }, [listEl]);
+  // Re-renderiza só quando o primeiro índice visível muda, não a cada pixel rolado.
+  const onListScroll = () => { if (listEl) setFirst(Math.floor(listEl.scrollTop / ROW)); };
+
   if (!status) {
     return (
       <Flexbox className="min-h-0" flex={1} padding={12}>
@@ -281,6 +296,9 @@ function ChangesPanel({
     stageAll: (side) => void stagePaths([], side === 'staged'),
   };
 
+  const win: Win = [first - OVERSCAN, first + Math.ceil(listHeight / ROW) + OVERSCAN];
+  const unstagedBase = staged.length > 0 ? 1 + (collapsed.staged ? 0 : staged.length) : 0;
+
   return (
     <Flexbox className="min-h-0" flex={1}>
       <Flexbox paddingInline={12} gap={2} className="pt-1.5">
@@ -346,17 +364,17 @@ function ChangesPanel({
         {!staged.length && <Text as="p" fontSize={12} type="secondary">{hint}</Text>}
       </Flexbox>
 
-      <Flexbox className="min-h-0 overflow-y-auto overflow-x-hidden" flex={1}>
+      <Flexbox ref={setListEl} onScroll={onListScroll} className="min-h-0 overflow-y-auto overflow-x-hidden" flex={1}>
         {/* Sem arquivos preparados, a seção some (como no VS Code); o estado de recolhido continua no ChangesPanel. */}
         {staged.length > 0 && (
           <FileSection
             title="Preparadas" side="staged" files={staged} collapsed={collapsed.staged} onToggle={() => toggle('staged')}
-            busy={busy !== null} marked={marked} open={selected} actions={actions}
+            busy={busy !== null} marked={marked} open={selected} actions={actions} base={0} win={win}
           />
         )}
         <FileSection
           title="Alterações" side="unstaged" files={unstaged} collapsed={collapsed.unstaged} onToggle={() => toggle('unstaged')}
-          busy={busy !== null} marked={marked} open={selected} actions={actions}
+          busy={busy !== null} marked={marked} open={selected} actions={actions} base={unstagedBase} win={win}
         />
       </Flexbox>
 
@@ -507,7 +525,13 @@ function BranchPicker({
  * Uma seção do painel: cabeçalho com o chevron, o título e a contagem à direita, e ao lado as ações de tudo (irmãs, não aninhadas).
  * Recolhida, mostra só o cabeçalho. Vazia, mostra o aviso no lugar da lista. Cada linha tem o menu de contexto (clique direito ou Shift+F10).
  */
-function FileSection({ title, side, files, collapsed, onToggle, busy, marked, open, actions }: {
+// Altura fixa de cabeçalho e linha (22 px) e folga de itens montados fora da vista, acima e abaixo.
+const ROW = 22;
+const OVERSCAN = 10;
+// Janela de índices montados [início, fim) na lista achatada (cabeçalhos e linhas das duas seções).
+type Win = [number, number];
+
+function FileSection({ title, side, files, collapsed, onToggle, busy, marked, open, actions, base, win }: {
   title: string;
   side: DiffSide;
   files: GitFile[];
@@ -517,8 +541,13 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
   marked: Set<string>;
   open: TabTarget | null | undefined;
   actions: RowActions;
+  base: number;
+  win: Win;
 }) {
   const staged = side === 'staged';
+  // Linhas da seção na janela: o índice da linha i é base + 1 + i; o resto vira espaço vazio no topo e no pé do ul.
+  const lo = Math.max(0, Math.min(files.length, win[0] - base - 1));
+  const hi = Math.max(lo, Math.min(files.length, win[1] - base - 1));
   const allLabel = staged ? 'Tirar todas do preparo' : 'Preparar todas';
   const markedHere = files.filter((f) => marked.has(keyOf(side, f.path))).length;
   return (
@@ -540,8 +569,8 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
       </Flexbox>
       {!collapsed && (files.length ? (
         // A coluna não pode crescer com o nome: sem o minmax(0,1fr), o texto nowrap empurra a lista para fora da seção.
-        <ul className="grid grid-cols-[minmax(0,1fr)]">
-          {files.map((f) => {
+        <ul className="grid grid-cols-[minmax(0,1fr)]" style={{ paddingTop: lo * ROW, paddingBottom: (files.length - hi) * ROW }}>
+          {files.slice(lo, hi).map((f) => {
             const kind = f[side] as GitKind;
             const { letter, title: word } = KIND[kind];
             const { name, dir } = splitPath(f.path);

@@ -312,6 +312,8 @@ const debug = { close: async () => {
   // Arquivo novo no disco simulado (fixture de teste): aparece na árvore com o texto dado.
   addFile: (rel: string, text = '') => { const { dir, name } = splitPath(rel); addFile(dir, name); TEXTS[rel] = text; },
   addGitFile: (rel: string, base: string, text: string) => addGitFile(rel, base, text),
+  // Lote de alterações (fixture de desempenho): `n` arquivos não rastreados `prefix/arquivo-0001.ts`..., vazios.
+  addGitFiles: (n: number, prefix = 'lote') => { for (let i = 1; i <= n; i++) { const rel = `${prefix}/arquivo-${String(i).padStart(4, '0')}.ts`; TEXTS[rel] = ''; files.push(entry(rel, null, 'untracked')); } },
   // Pasta nova no disco simulado (fixture de teste): aparece na árvore. Pasta-mãe que não existe é ignorada.
   addFolder: (rel: string) => { const { dir, name } = splitPath(rel); const parent = folderAt(dir); if (parent && !parent.children[name]) parent.children[name] = folder(); },
   // Falha de transporte simulada nas próximas N consultas de `list_dirs`: a chamada inteira rejeita, como um erro de IPC.

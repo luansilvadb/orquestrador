@@ -1644,3 +1644,37 @@ scenario('troca em tempo de execução: o painel vai do estado vazio ao normal (
   await section(page, 'Alterações').waitFor();
   assert.equal(await page.evaluate(() => window.__semRecarregar), 1, 'a página não recarregou');
 });
+
+// Desempenho com muitas alterações: a lista só monta as linhas visíveis e nenhum spinner ocioso anima.
+scenario('5000 alterações: sem animação infinita, lista virtual, rolar ao fim e Ctrl+clique com menu', async ({ page }) => {
+  const infinite = () => page.evaluate(() => document.getAnimations()
+    .filter((a) => a.playState === 'running' && a.effect?.getTiming().iterations === Infinity).length);
+  await page.evaluate(() => window.__mock.addGitFiles(5000));
+  await openGit(page);
+  await row(page, 'unstaged', 'lote/arquivo-0001.ts').waitFor({ timeout: 60000 });
+  await page.waitForTimeout(300);
+  assert.equal(await infinite(), 0, 'animações infinitas com a tela Git aberta');
+  const rows = section(page, SIDE.unstaged).locator('li');
+  const mounted = await rows.count();
+  assert.ok(mounted > 0 && mounted <= 100, `linhas montadas: ${mounted}`);
+  // Último arquivo da lista, na ordem do status que a tela recebeu.
+  const status = (await calls(page, 'git_status')).at(-1).result.status;
+  const last = status.files.filter((f) => f.unstaged).at(-1).path;
+  const list = section(page, SIDE.unstaged).locator('xpath=..');
+  await list.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await row(page, 'unstaged', last).waitFor();
+  assert.ok(await row(page, 'unstaged', last).isVisible(), `${last} visível no fim`);
+  assert.ok(await rows.count() <= 100, 'continua virtual depois de rolar');
+  // Ctrl+clique em duas linhas depois de rolar: o menu oferece preparar as duas.
+  const a = row(page, 'unstaged', 'lote/arquivo-4990.ts');
+  // A linha 4990 fica perto do fim (antes dos arquivos src/...), já montada pela folga ou pela vista.
+  await a.scrollIntoViewIfNeeded();
+  await a.click({ modifiers: ['Control'] });
+  await row(page, 'unstaged', 'lote/arquivo-4991.ts').click({ modifiers: ['Control'] });
+  await a.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Preparar (2)' }).waitFor();
+  await page.keyboard.press('Escape');
+  await openRoute(page, 'Arquivos');
+  await page.waitForTimeout(300);
+  assert.equal(await infinite(), 0, 'animações infinitas na tela Arquivos');
+});

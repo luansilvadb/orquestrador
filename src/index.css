@@ -351,3 +351,9 @@ html .app-toasts > :is([role="dialog"], [role="alertdialog"]) > div > div > div 
     gap: 8px;
     align-items: baseline;
 }
+
+/* O Button do @lobehub/ui (base do ActionIcon) mantém o spinner montado mesmo sem loading, girando para sempre escondido; com milhares
+   de botões (lista Git), o estilo é recalculado a cada quadro. Só o slot ocioso (aria-hidden="true") para; com loading ele gira. */
+button > span[aria-hidden="true"] > span {
+    animation: none;
+}
