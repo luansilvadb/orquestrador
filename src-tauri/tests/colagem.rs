@@ -5,7 +5,7 @@
 //!   $env:ORQ_PASTE = 'codex'   # ou 'claude'
 //!   cargo test --test colagem -- --ignored --nocapture
 use orquestrador_lib::agents::cli::Spawn;
-use orquestrador_lib::core::pty::{Buffer, Shared, Term};
+use orquestrador_lib::core::pty::{Buffer, Shared, Term, INTERACTIVE_GAP};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -44,7 +44,7 @@ fn abrir_cli(cli: &str, dir: &Path, size: (u16, u16)) -> (Term, Shared) {
     let env = if cli == "claude" { vec![("CLAUDE_CODE_SANDBOXED".to_string(), "1".to_string())] } else { Vec::new() };
     let spawn = Spawn { program: cli.to_string(), args, cwd: dir_s, env };
     let buffer: Shared = Arc::new(Mutex::new(Buffer::default()));
-    let mut term = Term::spawn(&spawn, size, buffer.clone(), |_, _| {}, |_| {}).expect("não iniciou o CLI");
+    let mut term = Term::spawn(&spawn, size, INTERACTIVE_GAP, buffer.clone(), |_, _| {}, |_| {}).expect("não iniciou o CLI");
 
     // Diálogo de confiança (Claude pergunta; o Codex já recebe a confiança por -c): Enter aceita a opção padrão.
     std::thread::sleep(Duration::from_secs(8));
@@ -147,7 +147,7 @@ fn cli_real_no_shell_abre_e_sai() {
     std::fs::create_dir_all(&dir).unwrap();
     let dir_s = dir.to_string_lossy().to_string();
     let buffer: Shared = Arc::new(Mutex::new(Buffer::default()));
-    let mut term = Term::spawn(&shell("pwsh.exe", &dir_s), (160, 40), buffer.clone(), |_, _| {}, |_| {}).expect("não iniciou o PowerShell");
+    let mut term = Term::spawn(&shell("pwsh.exe", &dir_s), (160, 40), INTERACTIVE_GAP, buffer.clone(), |_, _| {}, |_| {}).expect("não iniciou o PowerShell");
     std::thread::sleep(Duration::from_secs(3));
     assert_eq!(term.cli(), None, "o PowerShell sozinho não é CLI");
     // O Codex recebe a confiança na pasta por -c; o Claude pula o diálogo com a variável, como em `abrir_cli`.

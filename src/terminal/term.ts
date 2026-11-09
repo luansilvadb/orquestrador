@@ -5,6 +5,8 @@ import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { toast } from '@lobehub/ui/base-ui';
 import { backend, message } from '../backend/backend';
+import { decodeTermFrame } from '../backend/term-frame';
+import { mirror } from './mirror';
 import { clipboardFiles, clipboardPaste, type Cli, type Paste } from './paste';
 
 const theme = {
@@ -42,19 +44,43 @@ function deferSelectionRedraw(term: Terminal) {
   };
 }
 
+/**
+ * Terminais com WebGL ao mesmo tempo, somando painéis e projetos. O Chromium perde contextos acima de ~16. Escondido, o terminal fica com o
+ * seu (pausado pelo IntersectionObserver, sem custo de GPU), e voltar a ele não recria contexto nem atlas; passou do teto, o escondido usado
+ * há mais tempo solta o dele, já pausado, então o renderizador DOM que entra no lugar não pinta nada.
+ */
+export const WEBGL_MAX = 4;
+/** Linhas de histórico do espelho de um executor: é o que o terminal recebe ao aparecer. Menos linhas, troca de aba mais rápida. */
+const MIRROR_SCROLLBACK = 2000;
+
 export class TermView {
   readonly term: Terminal;
   private fitAddon = new FitAddon();
   private observer: ResizeObserver;
-  /** Quem esconde o terminal é a classe do contêiner de `host` (`termPane`: invisible + deslocado, sem mudar o tamanho): o ResizeObserver não avisa. */
-  private shown: MutationObserver;
   private frame = 0;
+  /** O React diz se o terminal aparece (`setShown`): aba ativa, painel aberto e projeto ativo. */
+  private shown: boolean;
+  /** O contêiner mudou de tamanho com o terminal escondido: o ajuste fica para quando ele aparecer. */
+  private stale = false;
+  /** Do usado há mais tempo ao mais recente (ver `WEBGL_MAX`). */
+  private static webglViews: TermView[] = [];
+  /**
+   * Executor (só leitura): o espelho no worker processa toda a saída, e o xterm daqui só enquanto aparece. Escondido, ele é zerado ('stale');
+   * ao aparecer, recebe o estado serializado do espelho ('syncing') e volta a seguir o fluxo ('live').
+   */
+  private readonly mirrored: boolean;
+  private readonly key: string;
+  private sync: 'live' | 'stale' | 'syncing' = 'live';
+  /** Conta as trocas de `sync`: um retrato serializado que chega depois de outra troca é descartado. */
+  private syncGen = 0;
+  /** Saída que chegou depois do pedido de retrato ao espelho; vai ao xterm logo depois dele. */
+  private backlog: Uint8Array[] = [];
   /** Enquanto o retrato não chega, os pedaços da saída esperam aqui. */
   private pending: { seq: number; data: Uint8Array }[] | null = [];
   private seq = -1;
   /** Há um PTY do outro lado para avisar do tamanho? */
   private live = false;
-  /** Renderizador WebGL: só o terminal visível o tem (o Chromium limita ~16 contextos); os escondidos voltam ao DOM. */
+  /** Renderizador WebGL: o visível e, até `WEBGL_MAX`, os escondidos usados por último; os outros ficam no DOM. */
   private webgl: WebglAddon | null = null;
   /** Sem WebGL2 neste ambiente: não tenta de novo. */
   private noWebgl = false;
@@ -62,12 +88,19 @@ export class TermView {
   private lost = false;
 
   /** `writable` liga o teclado ao backend; sem ele o terminal é só leitura por construção. */
-  constructor(readonly id: string, host: HTMLElement, writable: boolean, readonly project: string | null) {
+  constructor(readonly id: string, host: HTMLElement, writable: boolean, readonly project: string | null, shown: boolean) {
+    this.shown = shown;
     this.term = new Terminal({
       theme, fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace',
       fontSize: 13, lineHeight: 1.15, scrollback: 10000, cursorBlink: writable, disableStdin: !writable,
     });
     this.term.loadAddon(this.fitAddon);
+    this.mirrored = !writable;
+    this.key = `${project ?? ''}\0${id}`;
+    if (this.mirrored) {
+      mirror.open(this.key, this.term.cols, this.term.rows, MIRROR_SCROLLBACK);
+      if (!shown) this.sync = 'stale';
+    }
     this.term.open(host);
     deferSelectionRedraw(this.term);
     // Gancho de medição (scripts/medir-desempenho.mjs): só existe se o script o definir na página; sem ele, nada acontece.
@@ -79,31 +112,67 @@ export class TermView {
     });
     if (writable) this.term.onData((data) => void backend.termWrite(id, data, project).catch(() => {}));
     if (writable) this.term.element?.addEventListener('paste', this.onPaste, true);
-    this.term.onResize(() => this.sendSize());
+    this.term.onResize(({ cols, rows }) => {
+      if (this.mirrored) mirror.resize(this.key, cols, rows);
+      this.sendSize();
+    });
+    // Escondido, o terminal mantém o tamanho: redimensionar o painel com N executores não faz N reflows nem N redesenhos de CLI.
     this.observer = new ResizeObserver(() => {
       cancelAnimationFrame(this.frame);
       this.frame = requestAnimationFrame(() => {
-        this.renderer();
-        this.fit();
+        if (this.shown) this.fit();
+        else this.stale = true;
       });
     });
     this.observer.observe(host);
-    this.shown = new MutationObserver(() => this.renderer());
-    if (host.parentElement) this.shown.observe(host.parentElement, { attributes: true, attributeFilter: ['class', 'inert'] });
-    this.renderer();
+    if (shown) this.acquire();
     this.fit();
   }
 
-  /** WebGL enquanto visível; escondido (display none, inert ou visibility hidden), solta o contexto e o xterm volta ao renderizador DOM. Falha ou perda de contexto também cai no DOM. */
-  private renderer() {
-    const el = this.term.element;
-    const visible = !!el?.offsetParent && !el.closest('[inert]') && getComputedStyle(el).visibility !== 'hidden';
-    if (!visible) {
+  setShown(shown: boolean) {
+    if (shown === this.shown) return;
+    this.shown = shown;
+    if (!shown) {
       this.lost = false;
-      this.release();
+      if (this.mirrored) {
+        // O espelho guarda o estado: zerar solta a memória do histórico daqui, e a saída deixa de passar pelo xterm da tela.
+        this.syncGen++;
+        this.sync = 'stale';
+        this.backlog = [];
+        this.term.reset();
+      }
       return;
     }
-    if (this.webgl || this.noWebgl || this.lost) return;
+    this.acquire();
+    // O ajuste vem antes do retrato: o espelho é redimensionado antes de serializar, e o retrato chega no tamanho da tela.
+    if (this.stale) {
+      this.stale = false;
+      this.fit();
+    }
+    if (this.sync === 'stale') this.resync();
+  }
+
+  private resync() {
+    const gen = ++this.syncGen;
+    this.sync = 'syncing';
+    void mirror.serialize(this.key).then((text) => {
+      if (gen !== this.syncGen) return;
+      this.term.reset();
+      this.term.write(text);
+      for (const data of this.backlog) this.term.write(data);
+      this.backlog = [];
+      this.sync = 'live';
+    });
+  }
+
+  /** Falha ou perda de contexto cai no DOM. */
+  private acquire() {
+    const views = TermView.webglViews;
+    if (this.webgl) {
+      views.push(...views.splice(views.indexOf(this), 1));
+      return;
+    }
+    if (this.noWebgl || this.lost) return;
     const addon = new WebglAddon();
     try {
       addon.onContextLoss(() => {
@@ -113,9 +182,16 @@ export class TermView {
       });
       this.term.loadAddon(addon);
       this.webgl = addon;
+      views.push(this);
     } catch {
       addon.dispose();
       this.noWebgl = true;
+    }
+    // Só depois de carregar o novo: o atlas de glifos tem dono e é reaproveitado.
+    while (views.length > WEBGL_MAX) {
+      const oldest = views.find((view) => !view.shown);
+      if (!oldest) break;
+      oldest.release();
     }
   }
 
@@ -124,6 +200,7 @@ export class TermView {
     const addon = this.webgl;
     if (!addon) return;
     this.webgl = null;
+    TermView.webglViews.splice(TermView.webglViews.indexOf(this), 1);
     const canvas = this.term.element?.querySelector<HTMLCanvasElement>('.xterm-screen canvas:not(.xterm-link-layer)');
     addon.dispose();
     canvas?.getContext('webgl2')?.getExtension('WEBGL_lose_context')?.loseContext();
@@ -178,11 +255,11 @@ export class TermView {
 
   /** Busca o que já saiu e passa a aplicar o fluxo; o que chegou no meio do caminho está em `pending`. */
   async attach() {
-    const snapshot = await backend.termSnapshot(this.id, this.project).catch(() => ({ seq: -1, data: '' }));
+    const snapshot = await backend.termSnapshot(this.id, this.project).then(decodeTermFrame, () => ({ seq: -1, data: new Uint8Array() }));
     const waiting = this.pending ?? [];
     this.pending = null;
     this.seq = snapshot.seq;
-    if (snapshot.data) this.term.write(Uint8Array.fromBase64(snapshot.data));
+    if (snapshot.data.length) this.write(snapshot.data);
     for (const chunk of waiting) this.push(chunk.seq, chunk.data);
   }
 
@@ -190,14 +267,23 @@ export class TermView {
     if (this.pending) this.pending.push({ seq, data });
     else if (seq > this.seq) {
       this.seq = seq;
-      this.term.write(data);
+      this.write(data);
     }
+  }
+
+  private write(data: Uint8Array) {
+    if (!this.mirrored) return this.term.write(data);
+    mirror.write(this.key, data);
+    if (this.sync === 'live') this.term.write(data);
+    else if (this.sync === 'syncing') this.backlog.push(data);
   }
 
   dispose() {
     cancelAnimationFrame(this.frame);
+    this.syncGen++;
+    if (this.mirrored) mirror.close(this.key);
+    this.release();
     this.observer.disconnect();
-    this.shown.disconnect();
     this.term.element?.removeEventListener('paste', this.onPaste, true);
     this.term.dispose();
   }

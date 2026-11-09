@@ -5,6 +5,7 @@
 // `__mock.openPath(path)` simula um pedido de abertura vindo do Explorer ou de outra instância.
 // `__mock.addNode(node)` simula o orquestrador delegando: um executor chega ao projeto ativo (o orquestrador precisa estar aberto).
 // `__mock.nodeState(event)` simula a troca de estado de um executor (`done`, `stopped` ou `failed` fecham a aba).
+// `__mock.termOut(id, texto, projeto)` simula saída de um terminal (executor, orquestrador ou shell).
 // `__mock.remove('src/App.tsx')` apaga um arquivo da árvore do projeto.
 // A árvore (`list_dirs`) é em memória e muda com as ações do menu e com `__mock.remove`; `__mock.failListDirs = 1`
 // faz a próxima consulta inteira falhar (a chamada rejeita, como um erro de transporte), não só uma pasta.
@@ -60,7 +61,16 @@ const emit = <K extends keyof Events>(event: K, payload: Events[K]) =>
   handlers.get(event)?.forEach((h) => (h as (p: Events[K]) => void)(payload));
 
 const termListeners = new Set<(data: TermData) => void>();
-const base64 = (text: string) => new TextEncoder().encode(text).toBase64();
+// O retrato no quadro de `core::frame` sem projeto nem id, como o backend: [0][0][u64 seq LE][bytes].
+const snapshotFrame = (seq: number, text: string) => {
+  const data = new TextEncoder().encode(text);
+  const out = new Uint8Array(10 + data.length);
+  const view = new DataView(out.buffer);
+  view.setUint32(2, seq % 2 ** 32, true);
+  view.setUint32(6, Math.floor(seq / 2 ** 32), true);
+  out.set(data, 10);
+  return out.buffer;
+};
 // Terminais e shells por `(projeto, id)`: os ids são locais a cada projeto, como no backend.
 const termKey = (id: string, project: string | null) => `${project ?? ''}\0${id}`;
 const terms = new Map<string, { seq: number; text: string; project: string | null }>();
@@ -303,6 +313,7 @@ const debug = { close: async () => {
   return closed;
 }, openPath: (path: string) => { pendingOpenPaths.push(path); emit('open-paths', undefined); },
   addNode: (node: ExecutorNode & { project: string }) => emit('node-added', node), nodeState: (event: NodeStateEvent) => emit('node-state', event), remove: (path: string) => removePath(path),
+  termOut: (id: string, text: string, project: string | null = null) => out(id, text, project),
   // Clipboard simulado: o que as cópias e recortes do simulado puseram nele. Nunca toca no clipboard do Windows.
   clipboard: () => structuredClone(clip),
   // Edição externa: outro programa gravou o arquivo. Só troca o texto que o disco simulado devolve (o que `read_file` e `write_file_checked` comparam).
@@ -1235,7 +1246,7 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   term_resize: () => undefined,
   term_snapshot: ({ project, id }: { project: string | null; id: string }) => {
     const term = terms.get(termKey(id, project));
-    return { seq: term?.seq ?? 0, data: base64(term?.text ?? '') };
+    return snapshotFrame(term?.seq ?? 0, term?.text ?? '');
   },
   stop_executor: () => {},
   has_running: () => orchestrators.size > 0,

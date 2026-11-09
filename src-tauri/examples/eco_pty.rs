@@ -279,7 +279,7 @@ mod medida {
     /// argumentos da variante.
     pub fn medir_app(programa: &str, args: &[&str], amostras: usize, cfg: &Cfg) -> Result<Resultado, String> {
         use orquestrador_lib::agents::cli::Spawn;
-        use orquestrador_lib::core::pty::{Buffer, Term};
+        use orquestrador_lib::core::pty::{Buffer, Term, INTERACTIVE_GAP};
         let (tx, rx) = mpsc::channel::<Chunk>();
         let spawn = Spawn {
             program: programa.to_string(),
@@ -288,7 +288,7 @@ mod medida {
             env: vec![],
         };
         let buffer = std::sync::Arc::new(std::sync::Mutex::new(Buffer::default()));
-        let mut term = Term::spawn(&spawn, cfg.tam, buffer, move |_, b| drop(tx.send((Instant::now(), b.to_vec()))), |_| {})?;
+        let mut term = Term::spawn(&spawn, cfg.tam, INTERACTIVE_GAP, buffer, move |_, b| drop(tx.send((Instant::now(), b.to_vec()))), |_| {})?;
         if let Some((c, r)) = cfg.resize_ja {
             term.resize(c, r);
         }

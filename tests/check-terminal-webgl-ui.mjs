@@ -1,5 +1,5 @@
-// QA do renderizador WebGL do terminal, em Chrome headless contra o app simulado: só o terminal visível tem canvas WebGL (os escondidos
-// voltam ao DOM, por causa do limite de ~16 contextos), e sem WebGL2 o terminal segue no DOM. Uso: node tests/check-terminal-webgl-ui.mjs
+// QA do renderizador WebGL do terminal, em Chrome headless contra o app simulado: o terminal visível tem canvas WebGL, e só os últimos
+// usados mantêm o seu (WEBGL_MAX em term.ts, por causa do limite de ~16 contextos); sem WebGL2 o terminal segue no DOM. Uso: node tests/check-terminal-webgl-ui.mjs
 import assert from 'node:assert/strict';
 import { openApp, uiSuite } from './editor-ui-harness.mjs';
 
@@ -10,37 +10,38 @@ const dom = uiSuite('terminal-dom-ui', { launch: { args: ['--disable-3d-apis'] }
 const GL = '.xterm-link-layer';
 const count = (page) => page.locator(GL).count();
 const waitCount = (page, n) => page.waitForFunction(([sel, c]) => document.querySelectorAll(sel).length === c, [GL, n]);
+const MAX = 4;
 
-// Um terminal por vez, esperando o anterior largar o contexto (como o usuário abre): o Chromium avisa no console acima de ~16 contextos vivos.
+// Um terminal por vez (como o usuário abre): o Chromium avisa no console acima de ~16 contextos vivos.
 async function openShells(page, n, gl = true) {
   await page.keyboard.press('Control+Backquote');
   await page.locator('.xterm').first().waitFor();
   for (let i = 1; i < n; i++) {
     await page.getByRole('button', { name: 'Novo terminal' }).click();
     await page.waitForFunction((c) => document.querySelectorAll('.xterm').length === c, i + 1);
-    if (gl && n > 2) await waitCount(page, 1);
+    if (gl) await waitCount(page, Math.min(i + 1, MAX));
   }
 }
 
-webgl('WebGL: só o terminal visível tem canvas; trocar de aba passa o contexto; muitos terminais não passam de um contexto', async ({ page }) => {
+webgl('WebGL: o terminal visível tem canvas; trocar de aba mantém os últimos usados; muitos terminais não passam do teto', async ({ page }) => {
   await openShells(page, 20);
-  await waitCount(page, 1);
+  await waitCount(page, MAX);
   assert.equal(await page.locator('.xterm').count(), 20, '20 terminais montados');
   const tabs = page.locator('[data-shell] [role="tab"]');
   await tabs.first().click();
-  await waitCount(page, 1);
+  await waitCount(page, MAX);
   const visible = await page.evaluate(() => [...document.querySelectorAll('.xterm')].filter((el) => getComputedStyle(el).visibility === 'visible').length);
   assert.equal(visible, 1, 'um terminal visível');
   assert.equal(await page.locator('.xterm').evaluateAll((els) => els.filter((el) => getComputedStyle(el).visibility === 'visible' && el.querySelector('.xterm-link-layer')).length), 1, 'o visível é o que tem o canvas');
-  // Esconde o painel (Ctrl+`): nenhum contexto fica preso; reabrir devolve o WebGL ao terminal visível.
+  // Esconde o painel (Ctrl+`): os contextos ficam, sem passar do teto; reabrir não cria outro.
   await page.keyboard.press('Control+Backquote');
-  await waitCount(page, 0);
   await page.keyboard.press('Control+Backquote');
-  await waitCount(page, 1);
+  await waitCount(page, MAX);
+  assert.equal(await page.locator('.xterm').evaluateAll((els) => els.filter((el) => getComputedStyle(el).visibility === 'visible' && el.querySelector('.xterm-link-layer')).length), 1, 'o visível segue com o canvas');
 });
 
 dom('sem WebGL2: o terminal segue no DOM, com o texto em .xterm-rows', async ({ page }) => {
-  await openShells(page, 2);
+  await openShells(page, 2, false);
   await page.waitForFunction(() => [...document.querySelectorAll('.xterm-rows')].some((rows) => rows.textContent.includes('PS ')));
   assert.equal(await count(page), 0, 'nenhum canvas');
 });
@@ -101,4 +102,37 @@ dom('terminal escondido não gera mutação no DOM, nem com saída intensa; ao v
   }
   const end = await state();
   assert.deepEqual(end.map((t) => [t.cols, t.rows]), after.map((t) => [t.cols, t.rows]), 'trocar de aba não redimensiona');
+});
+
+// Executor escondido: a saída vai ao espelho no worker, não ao xterm da tela (zerado ao esconder). Ao entrar na aba, o retrato serializado
+// mostra o que saiu, com cores, e o fluxo segue; voltar ao orquestrador zera o xterm do executor de novo.
+dom('executor escondido não processa saída na tela; ao entrar na aba, mostra o que saiu e segue o fluxo', async ({ page }) => {
+  await openApp(page);
+  await page.getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('tab', { name: 'Orquestrador' }).waitFor();
+  await page.evaluate(() => window.__mock.addNode({
+    project: 'project-1', id: 'e0', batch: 'b', index: 0, title: 'T0', state: 'running', choice: { tool: 'claude', model: 'opus', effort: 'high' },
+  }));
+  const tab = page.locator('[role="tab"][data-tab="e0"]');
+  await tab.waitFor();
+  const rows = () => page.evaluate(() => document.querySelector('[data-tab="e0"]') && [...document.querySelectorAll('.xterm')]
+    .find((el) => el.closest('[inert]') === null && el.closest('.bg-terminal') && getComputedStyle(el).visibility === 'visible')
+    ?.querySelector('.xterm-rows').textContent);
+  const hidden = () => page.evaluate(() => [...document.querySelectorAll('.bg-terminal [inert] .xterm-rows')].map((r) => r.textContent).join(''));
+  await page.evaluate(() => {
+    for (let i = 0; i < 50; i++) window.__mock.termOut('e0', `linha ${i}\r\n`, 'project-1');
+    window.__mock.termOut('e0', '\x1b[31mVERMELHO\x1b[0m\r\n', 'project-1');
+  });
+  await page.waitForTimeout(300);
+  assert.ok(!(await hidden()).includes('VERMELHO'), 'o xterm do executor escondido não recebeu a saída');
+  await tab.click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.bg-terminal .xterm-rows')].some((r) => r.textContent.includes('VERMELHO')));
+  const red = await page.evaluate(() => [...document.querySelectorAll('.bg-terminal .xterm-rows span')].some((el) => el.textContent.includes('VERMELHO') && /xterm-fg-1\b/.test(el.className)));
+  assert.ok(red, 'a cor vem no retrato');
+  await page.evaluate(() => window.__mock.termOut('e0', 'DEPOIS\r\n', 'project-1'));
+  await page.waitForFunction(() => [...document.querySelectorAll('.bg-terminal .xterm-rows')].some((r) => r.textContent.includes('DEPOIS')));
+  assert.ok((await rows())?.includes('linha 49'), 'o histórico está no visível');
+  await page.getByRole('tab', { name: 'Orquestrador' }).click();
+  await page.waitForFunction(() => ![...document.querySelectorAll('.bg-terminal [inert] .xterm-rows')].some((r) => r.textContent.includes('DEPOIS')));
 });

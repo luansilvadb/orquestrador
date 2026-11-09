@@ -13,10 +13,10 @@ mod testutil;
 use crate::agents::{cli, session};
 use crate::config::{Choice, Options};
 use crate::core::projects::{Opened, ProjectSnapshot, Projects, TermSink};
-use crate::core::Snapshot;
 use crate::ide::{files, format, git, search};
 use crate::update::Gate;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 use tauri::ipc::{Channel, Invoke, InvokeResponseBody};
 use tauri::{Emitter, Manager, State, Wry};
 use tauri_plugin_dialog::DialogExt;
@@ -538,15 +538,56 @@ fn term_write(projects: State<Projects>, project: Option<String>, id: String, da
 /// Canal por onde a saída de todos os terminais segue como quadros binários (`core::frame`). O frontend registra um por carga da
 /// página; um novo (recarga) substitui o anterior. Sem canal, ou com o webview ainda sem escutar, a saída só entra no buffer de
 /// cada terminal: o retrato (`term_snapshot`) cobre o que o canal não levou, e o `seq` descarta o que ele repetir.
+///
+/// Cada envio custa ao webview um eval e um fetch de IPC. Os quadros de todos os terminais esperam juntos até `BATCH_WINDOW` e vão num
+/// envio só; um quadro de terminal com teclado (shell, orquestrador) sai na hora e leva os que estavam esperando.
 #[derive(Clone, Default)]
-struct TermChannel(Arc<std::sync::Mutex<Option<Channel<InvokeResponseBody>>>>);
+struct TermChannel {
+    channel: Arc<Mutex<Option<Channel<InvokeResponseBody>>>>,
+    outbox: Arc<(Mutex<Outbox>, Condvar)>,
+}
+
+/// Quadros à espera do próximo envio, no formato de `core::frame::push`.
+#[derive(Default)]
+struct Outbox {
+    frames: Vec<u8>,
+    urgent: bool,
+}
+
+/// Espera máxima de um quadro de executor: um quadro de 60 Hz.
+const BATCH_WINDOW: Duration = Duration::from_millis(16);
 
 impl TermChannel {
     fn send(&self, project: Option<&str>, id: &str, seq: u64, bytes: &[u8]) {
-        let Some(channel) = self.0.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
-        if channel.send(InvokeResponseBody::Raw(core::frame::encode(project, id, seq, bytes))).is_err() {
+        let (outbox, ready) = &*self.outbox;
+        let mut out = outbox.lock().unwrap_or_else(|e| e.into_inner());
+        core::frame::push(&mut out.frames, project, id, seq, bytes);
+        out.urgent |= id == core::ORCHESTRATOR || core::is_shell(id);
+        ready.notify_one();
+    }
+
+    /// A thread de envio: espera o primeiro quadro, depois a janela (ou um urgente), e entrega tudo de uma vez.
+    fn start(&self) {
+        let this = self.clone();
+        std::thread::spawn(move || loop {
+            let (outbox, ready) = &*this.outbox;
+            let mut out = ready.wait_while(outbox.lock().unwrap_or_else(|e| e.into_inner()), |o| o.frames.is_empty())
+                .unwrap_or_else(|e| e.into_inner());
+            if !out.urgent {
+                out = ready.wait_timeout_while(out, BATCH_WINDOW, |o| !o.urgent).unwrap_or_else(|e| e.into_inner()).0;
+            }
+            let frames = std::mem::take(&mut out.frames);
+            out.urgent = false;
+            drop(out);
+            this.deliver(frames);
+        });
+    }
+
+    fn deliver(&self, frames: Vec<u8>) {
+        let Some(channel) = self.channel.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+        if channel.send(InvokeResponseBody::Raw(frames)).is_err() {
             // Webview fechado: o canal morto sai, a não ser que já tenha sido trocado por outro.
-            let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            let mut slot = self.channel.lock().unwrap_or_else(|e| e.into_inner());
             if slot.as_ref().is_some_and(|c| c.id() == channel.id()) {
                 *slot = None;
             }
@@ -556,7 +597,7 @@ impl TermChannel {
 
 #[tauri::command(async)]
 fn term_channel(state: State<TermChannel>, on_data: Channel<InvokeResponseBody>) {
-    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(on_data);
+    *state.channel.lock().unwrap_or_else(|e| e.into_inner()) = Some(on_data);
 }
 
 /// O CLI que roda agora no terminal `id` (`claude`, `codex` ou nenhum), para a colagem de arquivo e imagem.
@@ -572,9 +613,11 @@ fn term_resize(
     projects.shell_core(project.as_deref())?.term_resize(&id, cols, rows)
 }
 
+/// O retrato vai em bytes crus, no quadro de `core::frame` (sem projeto nem id): até 16 MB sem base64 nem JSON.
 #[tauri::command(async)]
-fn term_snapshot(projects: State<Projects>, project: Option<String>, id: String) -> Result<Snapshot, String> {
-    projects.shell_core(project.as_deref())?.term_snapshot(&id)
+fn term_snapshot(projects: State<Projects>, project: Option<String>, id: String) -> Result<tauri::ipc::Response, String> {
+    let snap = projects.shell_core(project.as_deref())?.term_snapshot(&id)?;
+    Ok(tauri::ipc::Response::new(core::frame::encode(None, "", snap.seq, &snap.data)))
 }
 
 #[tauri::command(async)]
@@ -637,6 +680,7 @@ pub fn run(context: tauri::Context, initial_paths: Vec<std::path::PathBuf>) {
             // Sem LOCALAPPDATA o app abre mesmo assim; o erro aparece em `get_options`.
             let cfg_path = config::config_path().unwrap_or_default();
             let channel = TermChannel::default();
+            channel.start();
             app.manage(channel.clone());
             let sink: TermSink = Arc::new(move |project, id, seq, bytes| channel.send(project, id, seq, bytes));
             app.manage(Projects::new(cli::Exes::real(), session::Places::real(), cfg_path, emit.clone()).with_term_sink(sink));

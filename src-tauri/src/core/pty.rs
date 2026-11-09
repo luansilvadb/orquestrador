@@ -29,10 +29,13 @@ pub fn write_to(writer: &Writer, data: &[u8]) {
     let _ = w.write_all(data).and_then(|_| w.flush());
 }
 
-/// Intervalo mínimo entre dois envios de um mesmo terminal. Depois de silêncio o primeiro pedaço sai na hora (o eco de uma
-/// tecla não espera nada); só o que chega logo depois de um envio é agrupado, até o intervalo fechar, para uma saída
+/// Intervalo mínimo entre dois envios de um terminal com teclado. Depois de silêncio o primeiro pedaço sai na hora (o eco de
+/// uma tecla não espera nada); só o que chega logo depois de um envio é agrupado, até o intervalo fechar, para uma saída
 /// contínua não virar uma mensagem de IPC por leitura.
-const MIN_GAP: Duration = Duration::from_millis(4);
+pub const INTERACTIVE_GAP: Duration = Duration::from_millis(4);
+/// Executor: ninguém digita nele, então agrupa por ~2 quadros. Com N executores em paralelo, o webview recebe 30 mensagens/s
+/// de cada um em vez de 250.
+pub const READ_ONLY_GAP: Duration = Duration::from_millis(32);
 /// Teto de um envio agrupado.
 const MAX_BATCH: usize = 256 << 10;
 
@@ -49,10 +52,11 @@ fn size(cols: u16, rows: u16) -> PtySize {
 
 impl Term {
     /// `on_data(seq, bytes)` roda na thread de leitura, já com o pedaço guardado; `on_exit(código)`
-    /// roda quando o processo termina.
+    /// roda quando o processo termina. `gap`: intervalo mínimo entre dois envios.
     pub fn spawn(
         cmd: &Spawn,
         (cols, rows): (u16, u16),
+        gap: Duration,
         buffer: Shared,
         on_data: impl Fn(u64, &[u8]) + Send + 'static,
         on_exit: impl FnOnce(Option<u32>) + Send + 'static,
@@ -100,7 +104,7 @@ impl Term {
         std::thread::spawn(move || {
             let mut last: Option<Instant> = None;
             while let Ok(mut batch) = rx.recv() {
-                let deadline = last.map_or_else(Instant::now, |t| t + MIN_GAP);
+                let deadline = last.map_or_else(Instant::now, |t| t + gap);
                 while batch.len() < MAX_BATCH {
                     match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                         Ok(more) => batch.extend_from_slice(&more),
@@ -115,8 +119,10 @@ impl Term {
                 }
                 buf.data.extend_from_slice(&batch);
                 buf.seq += 1;
-                on_data(buf.seq, &batch);
+                let seq = buf.seq;
+                // O IPC sai sem o lock: o retrato não espera o envio. Um retrato no meio já contém o pedaço, e o `seq` o descarta no frontend.
                 drop(buf);
+                on_data(seq, &batch);
                 last = Some(Instant::now());
             }
         });

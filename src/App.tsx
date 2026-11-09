@@ -103,7 +103,6 @@ type Action =
   | { type: 'executorChoice'; choice: Choice }
   | { type: 'nodeAdded'; node: ExecutorNode }
   | { type: 'nodeState'; id: string; state: NodeState; choice: Choice | null }
-  | { type: 'removed'; ids: string[] }
   | { type: 'reset'; notice: string }
   | { type: 'shellAdd'; id: string; program: string; cwd?: string; project: string | null }
   | { type: 'shellProgram'; id: string; program: string }
@@ -142,13 +141,15 @@ function reducer(state: State, action: Action): State {
       while (state.executors.some((e) => e.n === n)) n += 1;
       return { ...state, executors: [...state.executors, { ...action.node, n }] };
     }
-    case 'nodeState':
-      return {
-        ...state,
-        executors: state.executors.map((e) => (e.id === action.id ? { ...e, state: action.state, choice: action.choice } : e)),
-      };
-    case 'removed':
-      return { ...state, executors: state.executors.filter((e) => !action.ids.includes(e.id)) };
+    case 'nodeState': {
+      const node = state.executors.find((e) => e.id === action.id);
+      if (!node) return state;
+      // Executor que terminou fecha a própria aba; a resposta dele já seguiu para o orquestrador.
+      if (FINISHED.includes(action.state)) return { ...state, executors: state.executors.filter((e) => e !== node) };
+      const same = node.choice === action.choice || (!!node.choice && !!action.choice && node.choice.tool === action.choice.tool && node.choice.model === action.choice.model && node.choice.effort === action.choice.effort);
+      if (node.state === action.state && same) return state;
+      return { ...state, executors: state.executors.map((e) => (e === node ? { ...e, state: action.state, choice: action.choice } : e)) };
+    }
     case 'reset':
       return { ...state, orchestrator: null, executorChoice: null, executors: [], notice: action.notice };
     case 'shellAdd': {
@@ -400,15 +401,33 @@ export function App() {
     return () => { live = false; };
   }, []);
 
+  // Ocupação de cada projeto, sem poll: o backend é consultado ao abrir o projeto e a cada evento de executor ou do orquestrador dele (os
+  // únicos que mudam a contagem). Os eventos de um lote chegam juntos e viram uma consulta por projeto.
+  const refreshBusy = (id: string) => void backend.projectSnapshot(id).then((snapshot) => {
+    const busy = snapshot.executorsRunning + snapshot.executorsQueued;
+    if (busyRef.current[id] !== busy) replaceBusy({ ...busyRef.current, [id]: busy });
+  }).catch(() => {});
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      for (const item of projectsRef.current) void backend.projectSnapshot(item.id).then((snapshot) => {
-        const busy = snapshot.executorsRunning + snapshot.executorsQueued;
-        if (busyRef.current[item.id] !== busy) replaceBusy({ ...busyRef.current, [item.id]: busy });
-      }).catch(() => {});
-    }, 1500);
-    return () => window.clearInterval(timer);
-  }, []);
+    if (!ready) return;
+    const pending = new Set<string>();
+    let timer = 0;
+    const queue = ({ project }: { project: string }) => {
+      pending.add(project);
+      if (!timer) timer = window.setTimeout(() => {
+        timer = 0;
+        for (const id of pending) refreshBusy(id);
+        pending.clear();
+      }, 50);
+    };
+    const offs = [host().listen('node-added', queue), host().listen('node-state', queue), host().listen('orchestrator-exit', queue)];
+    return () => {
+      window.clearTimeout(timer);
+      for (const off of offs) void off.then((unlisten) => unlisten());
+    };
+  }, [ready]);
+  useEffect(() => {
+    if (ready) for (const item of projects) if (!(item.id in busyRef.current)) refreshBusy(item.id);
+  }, [ready, projects]);
 
   if (!ready) return <Screen connected={false} description={(
     <Text as="p" fontSize={14} style={SECONDARY} role="status" aria-live="polite">{stage}</Text>
@@ -416,7 +435,7 @@ export function App() {
   const tabs: ProjectTab[] = projects.map((item) => ({ id: item.id, path: item.project, busy: busyByProject[item.id] }));
   if (projects.length === 0) return <ProjectApp projects={tabs} onSelect={selectProject} onClose={dropManagedProject} onMove={moveProject} onOpen={addProject} recentProjects={recentProjects} />;
   return <div className="relative h-dvh w-full overflow-hidden">
-    {projects.map((item) => <div key={item.id} className={`absolute inset-0 ${active === item.id ? '' : 'invisible'}`}>
+    {projects.map((item) => <div key={item.id} className={`absolute inset-0${active === item.id ? '' : ' invisible -translate-x-[200%]'}`}>
       {mounted.includes(item.id) && <ProjectApp initialProject={item} active={active === item.id} projects={tabs} onSelect={selectProject} onClose={dropManagedProject} onMove={moveProject} onOpen={addProject} recentProjects={recentProjects} />}
     </div>)}
   </div>;
@@ -715,11 +734,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
           dispatch({ type: 'nodeState', id, state: next, choice });
           // O estado vivo: o PTY já existe, então setLive só reenvia o tamanho. Não recria nem zera o terminal.
           if (next === 'running') terminals.get(id, project)?.setLive();
-          // Executor que terminou fecha a própria aba; a resposta dele já seguiu para o orquestrador.
-          if (FINISHED.includes(next)) {
-            terminals.forget(id, project, true);
-            dispatch({ type: 'removed', ids: [id] });
-          }
+          if (FINISHED.includes(next)) terminals.forget(id, project, true);
         }),
         host().listen('orchestrator-exit', ({ project, code }) => {
           if (project !== stateRef.current.projectId) return;
@@ -799,6 +814,17 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
     }
   }
 
+  // Arquivos não salvos e trabalho do projeto `id` (orquestrador, executores e fila): pergunta antes de fechar a aba.
+  async function mayCloseProject(id: string) {
+    const work = await backend.projectSnapshot(id);
+    const busy = hasWork(work);
+    const list = editorOf(id);
+    if (unsavedOf(list).length > 0) return settleUnsaved(list, busy, busy ? work : undefined);
+    if (busy && (await askClose([], true, work)) !== 'close') return false;
+    for (const { editor } of list) editor.flushRecovery();
+    return true;
+  }
+
   async function closeProject() {
     const id = stateRef.current.projectId;
     if (!id || stateRef.current.projectBusy) return;
@@ -812,16 +838,6 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
     dispatch({ type: 'projectBusy', busy: false });
   }
 
-  // Arquivos não salvos e trabalho do projeto `id` (orquestrador, executores e fila): pergunta antes de fechar a aba.
-  async function mayCloseProject(id: string) {
-    const work = await backend.projectSnapshot(id);
-    const busy = hasWork(work);
-    const list = editorOf(id);
-    if (unsavedOf(list).length > 0) return settleUnsaved(list, busy, busy ? work : undefined);
-    if (busy && (await askClose([], true, work)) !== 'close') return false;
-    for (const { editor } of list) editor.flushRecovery();
-    return true;
-  }
 
   async function closeTab(id: string) {
     if (id === stateRef.current.projectId) return closeProject();
@@ -1062,10 +1078,11 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
   }, [ready]);
   // Título da aba: nome da pasta do projeto (último segmento do caminho) e o programa.
   const folder = folderName(state.project);
-  const shellTabs = state.shells.map((s) => ({ id: s.id, title: s.program ? (folder ? `${folder} — ${s.program}` : s.program) : folder || 'Terminal', n: s.n, program: s.program, project: s.project }));
+  // Memo: o painel Terminal mede a faixa a cada `tabs` novo, e o App re-renderiza a cada evento de executor e a cada poll do Git.
+  const shellTabs = useMemo(() => state.shells.map((s) => ({ id: s.id, title: s.program ? (folder ? `${folder} — ${s.program}` : s.program) : folder || 'Terminal', n: s.n, program: s.program, project: s.project })), [state.shells, folder]);
   // Enquanto algum executor não terminou, pull, troca e criação de branch ficam travados (o backend recusa do mesmo jeito).
   const busy = executors.some((e) => !FINISHED.includes(e.state));
-  const count = (state: NodeState) => executors.filter((e) => e.state === state).length;
+  const awaiting = executors.some((e) => e.state === 'awaiting-choice');
   // Contador da navegação, branch e Histórico Git só existem no modo `repo`.
   const changed = state.project && git.data?.kind === 'repo' ? git.data.status.files.length : 0;
   const repoStatus = state.project && git.data?.kind === 'repo' ? git.data.status : undefined;
@@ -1224,7 +1241,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
                 </div>
               </div>
               <ShellPanel
-                open={state.shellOpen} maxHeight={centerHeight - FILE_MIN_HEIGHT}
+                open={state.shellOpen} visible={active} maxHeight={centerHeight - FILE_MIN_HEIGHT}
                 height={shellHeight} onHeightChange={setShellHeight}
                 tabs={shellTabs} active={state.shellActive}
                 onSelect={(id) => dispatch({ type: 'shellSelect', id })} onMove={(id, index) => dispatch({ type: 'shellMove', id, index })} onAdd={addShell}
@@ -1236,7 +1253,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
         {/* Painel do Orquestrador, à direita de tudo e em todas as telas: nenhuma rota o desmonta nem muda o tamanho dele. Sem projeto fica oculto, sem desmontar. */}
         <div className={state.project ? 'contents' : 'hidden'}>
         <TerminalsScreen
-          projectId={state.projectId} projectOpen={!!state.project} onOpenProject={chooseProject}
+          projectId={state.projectId} visible={active} projectOpen={!!state.project} onOpenProject={chooseProject}
           orchestrator={orchestrator}
           executors={executors}
           executorChoice={state.executorChoice}
@@ -1274,13 +1291,13 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
             onCancel={() => resetOrchestrator()} onConfirm={startOrchestrator} onClosed={focusOrchestrator}
           />
           <ChoiceForm
-            open={orchestrator?.overlay === 'executor' || count('awaiting-choice') > 0}
-            title={count('awaiting-choice') > 0 ? 'Escolha dos executores' : 'Executores'}
-            hint={count('awaiting-choice') > 0
+            open={orchestrator?.overlay === 'executor' || awaiting}
+            title={awaiting ? 'Escolha dos executores' : 'Executores'}
+            hint={awaiting
               ? 'Vale para este e para os próximos executores enquanto o orquestrador estiver aberto.'
               : 'Ferramenta, modelo e esforço dos próximos executores. Os que já estão rodando não mudam.'}
             options={options} initial={state.executorChoice ?? options.last.executor} confirmLabel="Usar nos executores"
-            onCancel={count('awaiting-choice') > 0 ? undefined : () => dispatch({ type: 'overlay', overlay: null })}
+            onCancel={awaiting ? undefined : () => dispatch({ type: 'overlay', overlay: null })}
             onConfirm={(choice) => saveExecutorChoice(choice)} onClosed={focusOrchestrator}
           />
         </>

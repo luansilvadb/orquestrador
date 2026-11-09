@@ -34,8 +34,10 @@ function shellLabel(tab: ShellTab) {
 }
 
 /** Escondido com `hidden` (display none): sai do layout e a área do arquivo cresce. Os TermHost ficam montados. */
-export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, active, onSelect, onMove, onAdd, onHide, onClose, onReady }: {
+export function ShellPanel({ open, visible, maxHeight, height, onHeightChange, tabs, active, onSelect, onMove, onAdd, onHide, onClose, onReady }: {
   open: boolean;
+  /** O projeto é o da aba ativa. */
+  visible: boolean;
   maxHeight: number;
   /** Altura que o usuário deu ao painel (o App guarda e restaura). Só controla o tamanho: não mexe nos shells. */
   height: number;
@@ -71,10 +73,10 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
     const room = [...header.querySelectorAll<HTMLElement>('button[aria-label^="Abas"]')]
       .reduce((sum, el) => sum + el.getBoundingClientRect().width + gap, 0);
     setOverflow(box.scrollWidth > box.clientWidth + room + 1);
-    setEdge({
-      before: box.scrollLeft > 0,
-      after: box.scrollLeft + box.clientWidth < box.scrollWidth - 1,
-    });
+    const before = box.scrollLeft > 0;
+    const after = box.scrollLeft + box.clientWidth < box.scrollWidth - 1;
+    // Sem mudança, o mesmo objeto: rolar a faixa não re-renderiza o painel a cada evento.
+    setEdge((edge) => (edge.before === before && edge.after === after ? edge : { before, after }));
   }
 
   // Adicionar, selecionar, fechar a ativa, reabrir o painel, trocar de modo e aparecer/sumir as setas (a faixa encolhe ou cresce): a aba ativa entra na área visível.
@@ -244,7 +246,7 @@ export function ShellPanel({ open, maxHeight, height, onHeightChange, tabs, acti
           <div className="relative min-h-0 flex-1 overflow-hidden bg-terminal">
             {tabs.map((tab) => (
               <div key={tab.id} {...termPane(tab.id === active)}>
-                <TermHost id={tab.id} project={tab.project} writable onReady={(view) => onReady(tab.id, view)} />
+                <TermHost id={tab.id} project={tab.project} writable shown={visible && open && tab.id === active} onReady={(view) => onReady(tab.id, view)} />
               </div>
             ))}
           </div>

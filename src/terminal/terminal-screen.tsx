@@ -8,6 +8,7 @@ import ClaudeIcon from '@lobehub/icons/es/Claude';
 import CodexIcon from '@lobehub/icons/es/Codex';
 import { SECONDARY } from '../shared/text-style';
 import { OpenProjectPrompt } from '../shared/open-project';
+import type { TermView } from './term';
 import { TermHost, termPane, terminals } from './terminals';
 import { revealTab, wheelToScroll } from '../shared/tab-strip';
 import { TabListMenu, type TabListItem } from '../shared/tab-list-menu';
@@ -42,7 +43,17 @@ const TOOL_ICON: Record<Tool, ComponentType<{ size?: number; className?: string 
 };
 
 // Acha a aba pelo `data-tab` e a revela na faixa (a regra de rolagem está em tab-strip).
-const reveal = (box: HTMLElement, id: string) => revealTab(box, [...box.querySelectorAll<HTMLElement>('[data-tab]')].find((el) => el.dataset.tab === id));
+const reveal = (box: HTMLElement, id: string) => revealTab(box, box.querySelector<HTMLElement>(`[data-tab="${id}"]`));
+
+// Constante de módulo: o executor liga o PTY e busca o retrato ao montar.
+const startExecutor = (view: TermView) => { view.setLive(); void view.attach(); };
+
+/** Ícone do estado na cor dele. O giro fica num span: transform animado num elemento HTML vai para o compositor, sem repintar a faixa a cada quadro. */
+const StateIcon = ({ state, className }: { state: NodeState; className: string }) => {
+  const { icon: Icon, color } = STATES[state];
+  const icon = <Icon className={className} style={{ color: colorsPreset(color) }} />;
+  return state === 'running' ? <span className="inline-flex shrink-0 animate-spin">{icon}</span> : icon;
+};
 
 /** Texto completo da escolha, para o tooltip e o aria-label. */
 const choiceLabel = (choice: Choice) => [TOOL_NAME[choice.tool], choice.model || 'padrão do CLI', choice.effort].filter(Boolean).join(' · ');
@@ -72,6 +83,8 @@ export type ExecutorTab = ExecutorNode & { n: number };
 
 type TerminalsProps = {
   projectId: string | null;
+  /** O projeto é o da aba ativa: sem isso nenhum terminal aparece. */
+  visible: boolean;
   projectOpen: boolean;
   onOpenProject: () => void;
   orchestrator: { choice: Choice | null } | null;
@@ -89,7 +102,7 @@ type TerminalsProps = {
 };
 
 /** Painel à direita: abas em cima (orquestrador fixo, um executor por aba) e, embaixo, o terminal da aba ativa. */
-export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchestrator, executors, executorChoice, notice, width, maxWidth, onWidthChange, onOpen, onExecutorChoice, onStop }: TerminalsProps) {
+export function TerminalsScreen({ projectId, visible, projectOpen, onOpenProject, orchestrator, executors, executorChoice, notice, width, maxWidth, onWidthChange, onOpen, onExecutorChoice, onStop }: TerminalsProps) {
   const [picked, setPicked] = useState<string>(ORCHESTRATOR);
   // Aba de executor que sumiu (executor que terminou, reset do orquestrador) volta para o orquestrador.
   const active = executors.some((e) => e.id === picked) ? picked : ORCHESTRATOR;
@@ -124,16 +137,13 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
   // Rótulo e ícone de cada executor, calculados uma vez: o menu e a faixa usam os mesmos.
   const rows = executors.map((e) => {
     const info = STATES[e.state];
-    return {
-      e, Icon: info.icon, color: colorsPreset(info.color), spin: e.state === 'running' ? ' animate-spin' : '',
-      label: `Executor #${e.n}, ${info.label}: ${e.title}`, state: info.label,
-    };
+    return { e, label: `Executor #${e.n}, ${info.label}: ${e.title}`, state: info.label };
   });
   const tabMenu: TabListItem[] = [
     { key: ORCHESTRATOR, title: 'Orquestrador', icon: <OrchestratorIcon className="size-3.5" />, label: 'Orquestrador', onSelect: () => choose(ORCHESTRATOR) },
-    ...rows.map(({ e, Icon, color, spin, label: title, state }) => ({
+    ...rows.map(({ e, label: title, state }) => ({
       key: e.id, title, state,
-      icon: <Icon className={`size-3.5${spin}`} style={{ color }} />,
+      icon: <StateIcon state={e.state} className="size-3.5" />,
       label: <><span className="tabular-nums">#{e.n}</span>&ensp;{e.title}</>,
       onSelect: () => choose(e.id),
     })),
@@ -164,14 +174,12 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
                   <OrchestratorIcon className="size-3.5 shrink-0" />
                   Orquestrador
                 </TabsTab>
-                {orchestrator && rows.map(({ e, Icon, color, spin, label }) => {
-                  return (
-                    <TabsTab key={e.id} value={e.id} data-tab={e.id} title={label} aria-label={label} className="flex-none gap-1.5 px-3">
-                      <Icon className={`size-3.5 shrink-0${spin}`} style={{ color }} />
-                      <Text as="span" className="tabular-nums">#{e.n}</Text>
-                    </TabsTab>
-                  );
-                })}
+                {orchestrator && rows.map(({ e, label }) => (
+                  <TabsTab key={e.id} value={e.id} data-tab={e.id} title={label} aria-label={label} className="flex-none gap-1.5 px-3">
+                    <StateIcon state={e.state} className="size-3.5 shrink-0" />
+                    <Text as="span" className="tabular-nums">#{e.n}</Text>
+                  </TabsTab>
+                ))}
               </TabsList>
             </TabsRoot>
           </Flexbox>
@@ -237,12 +245,12 @@ export function TerminalsScreen({ projectId, projectOpen, onOpenProject, orchest
           <div className="relative min-h-0 flex-1 overflow-hidden bg-terminal">
             {orchestrator && (
               <div {...termPane(active === ORCHESTRATOR)}>
-                <TermHost id={ORCHESTRATOR} project={projectId} writable />
+                <TermHost id={ORCHESTRATOR} project={projectId} writable shown={visible && active === ORCHESTRATOR} />
               </div>
             )}
             {orchestrator && executors.map((e) => (
               <div key={e.id} {...termPane(active === e.id)}>
-                <TermHost id={e.id} project={projectId} writable={false} onReady={(view) => { view.setLive(); void view.attach(); }} />
+                <TermHost id={e.id} project={projectId} writable={false} shown={visible && active === e.id} onReady={startExecutor} />
                 {COVER_TEXT[e.state] && (
                   <Cover>
                     <Text as="p" type="secondary" fontSize={14} align="center" className="max-w-[300px]">{COVER_TEXT[e.state]}</Text>

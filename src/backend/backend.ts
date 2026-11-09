@@ -3,7 +3,7 @@ import { Channel, convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isAbsolutePath } from '../shared/file-tab-actions';
-import { decodeTermFrame } from './term-frame';
+import { decodeTermFrames } from './term-frame';
 import type {
   Choice, ClipboardSnapshot, CommandName, Commands, Events, HunkRef, NoArgs, ReplaceQuery, ReplaceRequest, SearchFilter, SearchOptions, TermData,
 } from './types';
@@ -35,8 +35,7 @@ let termChannel: Promise<void> | null = null;
 function registerTermChannel() {
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (buffer) => {
-    const data = decodeTermFrame(buffer);
-    for (const listener of termListeners) listener(data);
+    for (const data of decodeTermFrames(buffer)) for (const listener of termListeners) listener(data);
   };
   return invoke<void>('term_channel', { onData: channel });
 }

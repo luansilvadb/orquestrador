@@ -1,7 +1,6 @@
 //! O ciclo inteiro sem modelo: o app de verdade (Core), o servidor MCP dele (`orquestrador --mcp <pasta da sessão>`)
 //! falado por um cliente de teste em JSON-RPC pela entrada e saída padrão, e CLIs falsos (examples/fake_cli.rs) no
 //! lugar do claude e do codex.
-use base64::Engine;
 use orquestrador_lib::agents::cli::Exes;
 use orquestrador_lib::agents::delegate;
 use orquestrador_lib::agents::session::Places;
@@ -284,7 +283,7 @@ impl Bench {
 
     fn screen(&self, id: &str) -> String {
         let snap = self.core.term_snapshot(id);
-        String::from_utf8_lossy(&base64::engine::general_purpose::STANDARD.decode(snap.unwrap().data).unwrap()).to_string()
+        String::from_utf8_lossy(&snap.unwrap().data).to_string()
     }
 }
 
@@ -328,7 +327,7 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     // Nó ainda sem PTY: retrato vazio com seq 0, e o tamanho pedido fica guardado.
     let empty = b.core.term_snapshot(&a);
     let empty = empty.unwrap();
-    assert_eq!((empty.seq, empty.data.as_str()), (0, ""));
+    assert_eq!((empty.seq, empty.data.is_empty()), (0, true));
     b.core.term_resize(&a, 90, 25).unwrap();
     assert_eq!(b.core.term_snapshot("não existe").unwrap().seq, 0);
 

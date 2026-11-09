@@ -130,7 +130,6 @@ export type Moved = { from: string; to: string };
 
 /** Um pedaço da saída de um terminal, já decodificado do quadro binário (`term-frame.ts`). */
 export type TermData = { project: string | null; id: string; seq: number; data: Uint8Array };
-export type Snapshot = { seq: number; data: string };
 export type NodeStateEvent = { project: string; id: string; state: NodeState; choice: Choice | null };
 export type OpenedProject = { id: string; project: string; subfolder: boolean; existing: boolean };
 export type ProjectSnapshot = { orchestratorOpen: boolean; executorsRunning: number; executorsQueued: number };
@@ -216,7 +215,7 @@ export type Commands = {
   term_channel: { args: { onData: unknown }; result: void };
   term_cli: { args: { project: string | null; id: string }; result: 'claude' | 'codex' | null };
   term_resize: { args: { project: string | null; id: string; cols: number; rows: number }; result: void };
-  term_snapshot: { args: { project: string | null; id: string }; result: Snapshot };
+  term_snapshot: { args: { project: string | null; id: string }; result: ArrayBuffer };
   stop_executor: { args: ProjectArgs<{ id: string }>; result: void };
   has_running: { args: NoArgs; result: boolean };
   update_status: { args: NoArgs; result: UpdateStatus };

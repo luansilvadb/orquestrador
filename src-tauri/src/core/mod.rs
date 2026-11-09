@@ -14,7 +14,6 @@ use crate::core::pty::{write_to, Buffer, Shared, Term, WeakWriter};
 use crate::ide::files;
 use crate::ide::git;
 use crate::proc;
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -69,10 +68,10 @@ pub struct ExecutorNode {
     pub choice: Option<Choice>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct Snapshot {
     pub seq: u64,
-    pub data: String,
+    pub data: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -509,9 +508,9 @@ impl Core {
         match buffer {
             Some(buffer) => {
                 let buf = buffer.lock().map_err(|_| INTERNAL_ERROR.to_string())?;
-                Ok(Snapshot { seq: buf.seq, data: B64.encode(&buf.data) })
+                Ok(Snapshot { seq: buf.seq, data: buf.data.clone() })
             }
-            None => Ok(Snapshot { seq: 0, data: String::new() }),
+            None => Ok(Snapshot { seq: 0, data: Vec::new() }),
         }
     }
 
@@ -611,9 +610,11 @@ impl Core {
         }
         let (out, data_id) = (self.term_out.clone(), id.to_string());
         let (core, exit_id) = (self.clone(), id.to_string());
+        let gap = if id == ORCHESTRATOR || is_shell(id) { pty::INTERACTIVE_GAP } else { pty::READ_ONLY_GAP };
         let term = Term::spawn(
             spawn,
             slot.size,
+            gap,
             slot.buffer.clone(),
             move |seq, bytes| out(&data_id, seq, bytes),
             move |code| core.on_exit(&exit_id, gen, code),
@@ -643,7 +644,7 @@ impl Core {
             (self.emit)("shell-exit", json!({ "id": id, "code": code }));
         } else if let Some(i) = inner.nodes.iter().position(|n| n.info.id == id && n.info.state == NodeState::Running) {
             // O sinal de fim pode ter chegado junto com a saída do processo.
-            match self.signal(&inner.nodes[i]) {
+            match signal(&inner.nodes[i].dir, &inner.nodes[i].prompt) {
                 Some(text) => self.finish(&mut inner, i, NodeState::Done, Outcome { text, exit: "0".into(), ok: true }),
                 None => {
                     let code = code.map_or("desconhecido".to_string(), |c| c.to_string());
@@ -660,16 +661,30 @@ impl Core {
         let mut turns = 0u32;
         loop {
             std::thread::sleep(Duration::from_millis(200));
+            // O sinal de fim de cada executor é lido no disco sem o lock do `Core`: com muitos executores, os comandos dos terminais
+            // (tamanho, retrato, escrita) não esperam essa leitura.
+            let running: Vec<(String, PathBuf, String)> = {
+                let Ok(inner) = self.lock() else { return };
+                if inner.epoch != epoch {
+                    return;
+                }
+                inner.nodes.iter()
+                    .filter(|n| n.info.state == NodeState::Running)
+                    .map(|n| (n.info.id.clone(), n.dir.clone(), n.prompt.clone()))
+                    .collect()
+            };
+            let ended: Vec<(String, String)> = running.into_iter()
+                .filter_map(|(id, dir, prompt)| Some((id, signal(&dir, &prompt)?)))
+                .collect();
             let Ok(mut inner) = self.lock() else { return };
             if inner.epoch != epoch {
                 return;
             }
             self.accept_batches(&mut inner);
-            for i in 0..inner.nodes.len() {
-                if inner.nodes[i].info.state == NodeState::Running {
-                    if let Some(text) = self.signal(&inner.nodes[i]) {
-                        self.finish(&mut inner, i, NodeState::Done, Outcome { text, exit: "0".into(), ok: true });
-                    }
+            for (id, text) in ended {
+                // Entre as duas voltas do lock o executor pode ter sido parado: só termina quem ainda roda.
+                if let Some(i) = inner.nodes.iter().position(|n| n.info.id == id && n.info.state == NodeState::Running) {
+                    self.finish(&mut inner, i, NodeState::Done, Outcome { text, exit: "0".into(), ok: true });
                 }
             }
             // Só aqui, fora do laço por índice: o resultado do nó final já está no lote, então ele pode sair da lista.
@@ -680,20 +695,6 @@ impl Core {
                 self.schedule(&mut inner);
             }
         }
-    }
-
-    fn signal(&self, node: &Node) -> Option<String> {
-        let mut files: Vec<PathBuf> = std::fs::read_dir(node.dir.join("hook")).ok()?.flatten().map(|e| e.path()).collect();
-        files.retain(|f| f.extension().is_some_and(|e| e == "json"));
-        files.sort();
-        files.iter().find_map(|file| {
-            let Ok(bytes) = std::fs::read(file) else { return None };
-            let found = turn_end(&String::from_utf8_lossy(&bytes), &node.prompt);
-            if found.is_none() {
-                let _ = std::fs::remove_file(file);
-            }
-            found
-        })
     }
 
     fn accept_batches(&self, inner: &mut Inner) {
@@ -875,6 +876,21 @@ impl Core {
     }
 }
 
+/// O fim de turno do executor na pasta `hook` (`dir` é a pasta dele), conferido contra o `prompt`; o que não é o fim sai do disco.
+fn signal(dir: &Path, prompt: &str) -> Option<String> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir.join("hook")).ok()?.flatten().map(|e| e.path()).collect();
+    files.retain(|f| f.extension().is_some_and(|e| e == "json"));
+    files.sort();
+    files.iter().find_map(|file| {
+        let Ok(bytes) = std::fs::read(file) else { return None };
+        let found = turn_end(&String::from_utf8_lossy(&bytes), prompt);
+        if found.is_none() {
+            let _ = std::fs::remove_file(file);
+        }
+        found
+    })
+}
+
 /// Um lote que não pôde ser lido não roda nada: a falha vai no lugar do resultado, para o `delegar` que espera não
 /// ficar pendurado. Sem a seção de Git: nada foi executado e nenhum executor chegou a abrir.
 fn fail_batch(session: Option<&Session>, batch: &str, why: &str) {
@@ -1029,11 +1045,10 @@ mod tests {
         std::fs::create_dir_all(hook.join("x.json")).unwrap();
         write(&root.0, "hook/y.json", "inválido");
         std::fs::write(hook.join("z.json"), [0xff, 0xfe, 0x00]).unwrap();
-        let core = core_vazio(&root.0, Arc::new(|_: &str, _: Value| {}));
         let mut node = test_node(0, NodeState::Running);
         node.dir = root.0.clone();
 
-        assert_eq!(core.signal(&node), None);
+        assert_eq!(signal(&node.dir, &node.prompt), None);
         assert!(hook.join("x.json").is_dir());
         assert!(!hook.join("y.json").exists());
         assert!(!hook.join("z.json").exists());
@@ -1250,7 +1265,7 @@ mod tests {
         assert!(entregas.iter().enumerate().all(|(i, (seq, _))| *seq == i as u64 + 1), "seq com buraco ou fora de ordem");
         let juntos: Vec<u8> = entregas.iter().flat_map(|(_, b)| b.clone()).collect();
         let snap = core.term_snapshot("shell-1").unwrap();
-        assert_eq!(B64.decode(snap.data).unwrap(), juntos, "o buffer difere do que foi entregue");
+        assert_eq!(snap.data, juntos, "o buffer difere do que foi entregue");
         assert_eq!(snap.seq, entregas.len() as u64);
         core.shutdown();
     }

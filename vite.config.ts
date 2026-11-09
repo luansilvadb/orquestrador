@@ -8,6 +8,8 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   plugins: [react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss()],
   clearScreen: false,
+  // O `module` do @xterm/headless 6.0.0 aponta para `lib/xterm.mjs`, que o pacote não traz.
+  resolve: { alias: [{ find: /^@xterm\/headless$/, replacement: '@xterm/headless/lib-headless/xterm-headless.mjs' }] },
   server: { port: 1420, strictPort: true, watch: { ignored: ['**/src-tauri/**'] } },
   build: { target: 'es2022' },
   // O worker do realce do diff (@pierre/diffs) importa o WASM do shiki sob demanda: só o formato ES divide o worker em chunks.
