@@ -26,6 +26,11 @@
     --radius-lg: var(--ant-border-radius);
 }
 
+@theme {
+    /* Giro em 30 passos (20 quadros/s), como o loading do VS Code: o linear faz o compositor redesenhar na taxa do monitor. */
+    --animate-spin: spin 1.5s steps(30) infinite;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

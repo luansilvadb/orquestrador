@@ -137,3 +137,35 @@ dom('executor escondido não processa saída na tela; ao entrar na aba, mostra o
   await page.getByRole('tab', { name: 'Orquestrador' }).click();
   await page.waitForFunction(() => ![...document.querySelectorAll('.bg-terminal [inert] .xterm-rows')].some((r) => r.textContent.includes('DEPOIS')));
 });
+
+// Spinner em passos (src/index.css, --animate-spin): com executores rodando, todo `animate-spin` gira em 30 passos por 1,5 s (20 quadros/s),
+// e nada contínuo (linear infinito) anima dentro da faixa de abas dos executores, que faria o compositor redesenhar na taxa do monitor.
+dom('executores rodando: o ícone gira em passos e a faixa de abas não tem animação linear infinita', async ({ page }) => {
+  await openApp(page);
+  await page.getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('tab', { name: 'Orquestrador' }).waitFor();
+  await page.evaluate(() => { for (let i = 0; i < 4; i++) window.__mock.addNode({
+    project: 'project-1', id: `e${i}`, batch: 'b', index: i, title: `T${i}`, state: 'running', choice: { tool: 'claude', model: 'opus', effort: 'high' },
+  }); });
+  await page.locator('[role="tab"][data-tab="e3"]').waitFor();
+  await page.waitForTimeout(300);
+  const anims = await page.evaluate(() => {
+    const strip = document.querySelector('[data-tab="e0"]').closest('[role="tablist"]') ?? document.querySelector('[data-tab="e0"]').parentElement;
+    return document.getAnimations().filter((a) => a.playState === 'running').map((a) => {
+      const t = a.effect.getTiming();
+      const el = a.effect.target;
+      // Em animação CSS, o animation-timing-function vai para cada keyframe; a timing do efeito fica `linear`.
+      const easing = t.easing !== 'linear' ? t.easing : (a.effect.getKeyframes()[0]?.easing ?? 'linear');
+      return { name: a.animationName ?? a.constructor.name, easing, duration: t.duration, iterations: t.iterations,
+        spin: el.classList.contains('animate-spin'), inStrip: strip.contains(el) };
+    });
+  });
+  const spins = anims.filter((a) => a.spin);
+  assert.ok(spins.length >= 4, `um spinner por executor (${spins.length})`);
+  for (const a of spins) {
+    assert.match(a.easing, /^steps\(30(, ?end)?\)$/, `easing do spin: ${a.easing}`);
+    assert.equal(a.duration, 1500, 'duração do spin');
+  }
+  assert.deepEqual(anims.filter((a) => a.inStrip && a.iterations === Infinity && a.easing === 'linear'), [], 'linear infinito na faixa');
+});
