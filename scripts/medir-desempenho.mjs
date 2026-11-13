@@ -3,15 +3,21 @@
 //
 // Uso:   node scripts/medir-desempenho.mjs [--build] [--out <pasta>] [--abertura-novo 5] [--abertura-existente 5] [--amostras 250]
 //            [--taxa 6000] [--segundos-a 70] [--segundos-b 40] [--segundos-c 20] [--limite-mb 5500] [--prazo-eco 20000]
-//            [--sem-abertura] [--sem-cenario] [--sem-heap]
+//            [--sem-abertura] [--sem-cenario] [--sem-heap] [--porta-cdp 9333]
+//        node scripts/medir-desempenho.mjs --executores 4 [--segundos-exec 190] [--ocioso-s 60] [--amostras 250] [--perfil] [--spin-linear] [--build]
+//            (cenário de executores falsos e fase ociosa, no lugar da abertura e do cenário padrão)
 //        node scripts/medir-desempenho.mjs --analisar <arquivo.heapsnapshot> [saida.json] [--inspecionar <texto|prop:nome>]   (só analisa um heap snapshot)
 // Saída: <out>/resultado.json (padrão %TEMP%\orq-medir-<data>\), renderer.heapsnapshot e heap-analise.json na mesma pasta; resumo no stdout.
 //        Roda do zero, sem intervenção (~6 min). Sem argumentos usa os valores acima como padrão: é o cenário de base para comparar depois.
 //
 // Como mede (detalhes e limites em docs/desempenho-base.md):
-// - Executável: src-tauri/target/debug/orquestrador.exe, compilado por `npx tauri build --debug --no-bundle` com CARGO_PROFILE_DEV_OPT_LEVEL=3
-//   (Rust otimizado como o release, mas com debug_assertions: sem o plugin single-instance e sem a verificação de atualização, que atuariam
-//   sobre a instância instalada). Só compila se o exe não existir ou com `--build`. O frontend é o `dist` de produção (React em modo produção).
+// - Executável: src-tauri/target/debug/orquestrador.exe, compilado por `npx tauri build --debug --no-bundle --config <patch>` com
+//   CARGO_PROFILE_DEV_OPT_LEVEL=3 (Rust otimizado como o release, mas com debug_assertions: sem o plugin single-instance e sem a verificação de
+//   atualização, que atuariam sobre a instância instalada). O frontend é o `dist` de produção (React em modo produção).
+//   O WebView2 157 ignora WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: a porta CDP entra no build por um patch (JSON Merge Patch sobre o
+//   tauri.conf.json, gravado fora do projeto) que repete a janela com `additionalBrowserArgs`. Definir o campo apaga os argumentos padrão do
+//   wry, que o patch repete. Ao lado do exe fica `orquestrador.exe.medir.json` (porta e hash): compila de novo se faltar, se o exe mudou
+//   (`cargo test` o sobrescreve), se a porta for outra ou com `--build`.
 // - Isolamento: WEBVIEW2_USER_DATA_FOLDER e LOCALAPPDATA do filho apontam para pastas temporárias (perfil do WebView2 e config.json do app); a
 //   instância instalada não é lida nem escrita. O PSReadLine grava o histórico no APPDATA real (pela API do Windows): os terminais desligam a
 //   gravação e a predição, e o fim do script remove do arquivo as linhas digitadas aqui. Só se encerra a árvore iniciada aqui (taskkill /PID <raiz> /T).
@@ -25,17 +31,25 @@
 //   MutationObserver e textContent, como na base); 'buffer' se está em WebGL (sem linhas no DOM): o script injeta, antes dos scripts da página
 //   (Page.addScriptToEvaluateOnNewDocument + reload; --sem-gancho desliga), `window.__orqMedir`, que src/terminal/term.ts chama ao criar cada xterm.
 //   Eco "renderizado" = onRender do xterm cobre a linha do prompt e o buffer já tem a letra; saída "consumida" = a última linha do gerador está
-//   nas últimas 60 linhas do buffer do terminal. Sem o gancho no app (build antigo), cai no método 'dom'.
+//   nas últimas 60 linhas do buffer do terminal visível ou, desde a v0.1.45 (o xterm escondido é zerado e a saída vai ao espelho no worker),
+//   confirmada no espelho: o gancho vê a linha passar ao worker e pede a ele um retrato ('serialize'), que só sai depois de processar tudo o que
+//   veio antes. Sem o gancho no app (build antigo), cai no método 'dom'.
+// - Cenário --executores N: claude.exe falso (examples/fake_cli.rs) por ORQ_CLAUDE_EXE (lido só no build de debug). O orquestrador falso delega N tarefas pelo
+//   servidor MCP; cada executor desenha uma TUI por --segundos-exec. Na janela com os N vivos: CPU e RAM por tipo de processo, eco num shell do
+//   painel Terminal, quadros, animações infinitas e, com --perfil, perfis de CPU da thread principal e do worker do espelho. Depois, a fase
+//   ociosa: --ocioso-s com a janela em foco e --ocioso-s visível sem foco (uma janela pequena do script, fora do retângulo do app, em primeiro
+//   plano), com CPU e chamadas IPC por comando (contadas no fetch a ipc.localhost pelo gancho).
 import { spawn, spawnSync, execFile } from 'node:child_process';
-import { createServer } from 'node:net';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, createWriteStream } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, createWriteStream, openSync, writeSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const EXE = join(ROOT, 'src-tauri', 'target', 'debug', 'orquestrador.exe');
+const MARCADOR = `${EXE}.medir.json`;
+const FAKE_EXE = join(ROOT, 'src-tauri', 'target', 'debug', 'examples', 'fake_cli.exe');
 
 // ---------------------------------------------------------------- argumentos
 const argv = process.argv.slice(2);
@@ -59,6 +73,14 @@ const ARGS = {
   semCenario: flag('sem-cenario'),
   semHeap: flag('sem-heap'),
   semGancho: flag('sem-gancho'),
+  portaCdp: nopt('porta-cdp', 9333),
+  executores: flag('executores') ? (Number.isFinite(nopt('executores', 4)) ? nopt('executores', 4) : 4) : 0,
+  segundosExec: nopt('segundos-exec', 190),
+  ociosoS: nopt('ocioso-s', 60),
+  perfil: flag('perfil'),
+  spinLinear: flag('spin-linear'),
+  css: opt('css', null),
+  trace: flag('trace'),
 };
 const STAMP = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const OUT = opt('out', join(tmpdir(), `orq-medir-${STAMP}`));
@@ -94,13 +116,7 @@ async function until(fn, { timeout = 30000, every = 50, what = 'condição' } = 
   }
 }
 const sha = (file) => (existsSync(file) ? createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 16) : null);
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once('error', reject);
-    s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
-  });
-}
+const shaInteiro = (file) => (existsSync(file) ? createHash('sha256').update(readFileSync(file)).digest('hex') : null);
 
 function findPlaywright() {
   if (process.env.PLAYWRIGHT_CORE) return process.env.PLAYWRIGHT_CORE;
@@ -172,7 +188,8 @@ function psSample(rootPid, udf, full = false) {
 // Classifica cada processo: grupos do app (orquestrador, webview2 por tipo) contam no total; shells e filhos ficam à parte.
 function classificar(row) {
   const name = row.name.toLowerCase();
-  if (name === 'orquestrador.exe') return { side: 'app', group: 'orquestrador.exe' };
+  // O servidor MCP do orquestrador e os hooks dos executores são o mesmo exe com outro modo.
+  if (name === 'orquestrador.exe') return { side: 'app', group: /\s--(mcp|hook|allow)\b/.test(row.cmd ?? '') ? 'orquestrador.exe-auxiliar' : 'orquestrador.exe' };
   if (name === 'msedgewebview2.exe') {
     const type = /--type=([\w-]+)/.exec(row.cmd ?? '')?.[1];
     if (!type) return { side: 'app', group: 'webview2-browser' };
@@ -226,13 +243,16 @@ function instalarAgente() {
   if (window.__medir) return;
   const A = (window.__medir = { state: null, obs: null, lastMut: 0, fps: null });
   const norm = (s) => s.replace(/\u00a0/g, ' ').replace(/\s+$/, '');
-  A.visibleRows = () => [...document.querySelectorAll('.xterm-rows')].find((el) => getComputedStyle(el).visibility !== 'hidden') ?? null;
+  // `raiz`: seletor do contêiner do terminal medido (no cenário de executores, o shell do painel Terminal; o do orquestrador também aparece).
+  A.raiz = null;
+  const naRaiz = (el) => !A.raiz || !!el.closest(A.raiz);
+  A.visibleRows = () => [...document.querySelectorAll('.xterm-rows')].find((el) => naRaiz(el) && getComputedStyle(el).visibility !== 'hidden') ?? null;
   // Dois métodos. 'dom': o terminal visível tem `.xterm-rows` (renderizador DOM); mutações do DOM e textContent. 'buffer': o visível está em WebGL
   // (sem linhas no DOM); lê o buffer do xterm e o evento onRender pelo gancho `window.__orqMedir` (GANCHO_JS, injetado pelo script).
   A.modo = 'dom';
   A.rec = null;
   A.recs = () => { const l = window.__orqMedirTerms ?? []; return [...document.querySelectorAll('.xterm')].map((el) => l.find((r) => r.term.element === el)).filter(Boolean); };
-  A.recVisivel = () => A.recs().find((r) => r.term.element.offsetParent && getComputedStyle(r.term.element).visibility !== 'hidden') ?? null;
+  A.recVisivel = () => A.recs().find((r) => naRaiz(r.term.element) && r.term.element.offsetParent && getComputedStyle(r.term.element).visibility !== 'hidden') ?? null;
   A.bufLinha = (rec, y) => norm(rec.term.buffer.active.getLine(y)?.translateToString(true) ?? '');
   // Última linha não vazia da tela do terminal: { y: linha dentro da tela, texto }.
   A.bufUltima = (rec) => {
@@ -247,8 +267,10 @@ function instalarAgente() {
     for (let i = r.children.length - 1; i >= 0; i--) { const t = norm(r.children[i].textContent ?? ''); if (t) return t; }
     return '';
   };
-  // A última linha do gerador já está no terminal `i` (posição no DOM)? 'buffer': nas últimas 60 linhas do buffer (processado); 'dom': no DOM.
+  // A última linha do gerador já está no terminal `i` (posição no DOM)? Confirmada no espelho do worker (ver GANCHO_JS) ou, como antes da
+  // v0.1.45, 'buffer': nas últimas 60 linhas do buffer do xterm da tela (processado; o escondido agora é zerado); 'dom': no DOM.
   A.consumido = (needles) => needles.map(([i, n]) => {
+    if (window.__orqMedirEspelho?.consumido(n)) return true;
     if (A.modo === 'buffer') {
       const rec = A.recs()[i];
       if (!rec) return false;
@@ -260,9 +282,9 @@ function instalarAgente() {
     return ([...document.querySelectorAll('.xterm-rows')][i]?.textContent ?? '').replace(/\s+/g, '').includes(n);
   });
   // Gancho do modo 'buffer': escrita processada = atividade; render que cobre a linha do prompt com a letra esperada = "renderizado".
-  A.onWrite = (rec) => { if (rec === A.rec) A.lastMut = performance.now(); };
+  A.onWrite = (rec) => { if (!A.pausa && rec === A.rec) A.lastMut = performance.now(); };
   A.onRender = (rec, e) => {
-    if (rec !== A.rec) return;
+    if (A.pausa || rec !== A.rec) return;
     const s = A.state;
     if (!s || s.t0 === null || s.tMut !== null) return;
     const u = A.bufUltima(rec);
@@ -278,7 +300,9 @@ function instalarAgente() {
       requestAnimationFrame(() => { s.tRaf = performance.now(); s.done = true; });
     }
   };
-  A.watch = () => {
+  A.watch = (raiz) => {
+    A.pausa = false;
+    if (raiz !== undefined) A.raiz = raiz;
     A.obs?.disconnect();
     A.obs = null;
     A.rec = null;
@@ -297,6 +321,8 @@ function instalarAgente() {
     A.lastMut = performance.now();
     return true;
   };
+  // Pausa os ganchos por render/escrita, o MutationObserver e o embrulho do worker; watch() religa.
+  A.pausar = () => { A.pausa = true; A.obs?.disconnect(); A.obs = null; A.rec = null; A.state = null; window.__orqMedirEspelho?.alvos.clear(); };
   A.arm = (expect) => { A.state = { expect, t0: null, tMut: null, tRaf: null, done: false }; };
   A.take = () => { const s = A.state; A.state = null; return s && s.done ? { eco: s.tMut - s.t0, quadro: s.tRaf - s.t0 } : null; };
   A.quiet = (ms, cap) => new Promise((resolve) => {
@@ -317,6 +343,19 @@ function instalarAgente() {
     requestAnimationFrame(tick);
   };
   A.fpsStop = () => { const f = A.fps; f.run = false; f.po?.disconnect(); A.fps = null; return { dts: f.dts, long: f.long }; };
+  // Animações CSS/Web infinitas tocando agora, agrupadas pelo nome e pelo elemento.
+  A.animacoes = () => {
+    const vivas = document.getAnimations().filter((a) => a.playState === 'running' && a.effect?.getTiming().iterations === Infinity);
+    const porNome = {};
+    for (const a of vivas) {
+      const el = a.effect?.target;
+      const kf = a.effect?.getKeyframes?.() ?? [];
+      const easing = [...new Set(kf.map((f) => f.easing))].join(',') || a.effect?.getTiming().easing;
+      const k = `${a.animationName ?? a.constructor.name} ${a.effect?.getTiming().duration}ms ${easing} @ ${el ? `${el.tagName.toLowerCase()}.${[...el.classList].slice(0, 3).join('.')}` : '?'}`;
+      porNome[k] = (porNome[k] ?? 0) + 1;
+    }
+    return { total: vivas.length, porNome, documentHidden: document.hidden, hasFocus: document.hasFocus(), visibilityState: document.visibilityState };
+  };
   A.mem = () => {
     const m = performance.memory;
     return {
@@ -335,9 +374,56 @@ const GANCHO_JS = `window.__orqMedirTerms = [];
 window.__orqMedir = (id, term) => {
   const rec = { id, term };
   window.__orqMedirTerms.push(rec);
-  term.onRender((e) => window.__medir?.onRender(rec, e));
-  term.onWriteParsed(() => window.__medir?.onWrite(rec));
-};`;
+  term.onRender((e) => { if (!window.__medir?.pausa) window.__medir?.onRender(rec, e); });
+  term.onWriteParsed(() => { if (!window.__medir?.pausa) window.__medir?.onWrite(rec); });
+};
+// Chamadas IPC por comando: o invoke do Tauri é um fetch a http://ipc.localhost/<comando> (o invoke em si não é gravável).
+window.__orqMedirIpc = {};
+const fetchOriginal = window.fetch;
+window.fetch = function (input, init) {
+  try {
+    const u = typeof input === 'string' ? input : input instanceof URL ? input.href : input?.url;
+    if (u && u.includes('ipc.localhost')) { const c = decodeURIComponent(new URL(u).pathname.slice(1)); window.__orqMedirIpc[c] = (window.__orqMedirIpc[c] ?? 0) + 1; }
+  } catch {}
+  return fetchOriginal.apply(this, arguments);
+};
+// Espelho dos terminais (src/terminal/mirror.ts): o worker é embrulhado para ver a saída que vai a ele. Armada uma linha (arm), quando ela passa,
+// o gancho pede um 'serialize' com id negativo (o app ignora ids que não pediu); a resposta vem depois de o espelho processar tudo o que
+// veio antes, e confirma o consumo se o retrato contém a linha.
+{
+  const E = (window.__orqMedirEspelho = { alvos: new Map(), feitos: new Set(), cauda: new Map(), workers: [], id: 0 });
+  const dec = new TextDecoder('latin1');
+  const limpar = (t) => t.replace(/\\x1b\\[[0-9;:?<>=!]*[ -\\/]*[@-~]/g, '').replace(/\\s+/g, '');
+  E.arm = (bruto, chave) => E.alvos.set(bruto, chave);
+  E.consumido = (chave) => E.feitos.has(chave);
+  const W = window.Worker;
+  window.Worker = class extends W {
+    constructor(...a) {
+      super(...a);
+      E.workers.push(this);
+      this.addEventListener('message', ({ data }) => {
+        const p = data && typeof data.id === 'number' && data.id < 0 ? E.pedidos?.get(data.id) : null;
+        if (!p) return;
+        E.pedidos.delete(data.id);
+        if (limpar(data.text).includes(p.chave)) E.feitos.add(p.chave);
+        else setTimeout(() => this.pedir(p.key, p.chave), 300);
+      });
+    }
+    pedir(key, chave) {
+      const id = --E.id;
+      (E.pedidos ??= new Map()).set(id, { key, chave });
+      super.postMessage({ type: 'serialize', key, id });
+    }
+    postMessage(msg, t) {
+      if (E.alvos.size && msg?.type === 'data') {
+        const texto = (E.cauda.get(msg.key) ?? '') + dec.decode(msg.data);
+        for (const [bruto, chave] of E.alvos) if (texto.includes(bruto)) { E.alvos.delete(bruto); queueMicrotask(() => this.pedir(msg.key, chave)); }
+        E.cauda.set(msg.key, texto.slice(-80));
+      }
+      return super.postMessage(msg, t);
+    }
+  };
+}`;
 
 // Espera o marco "interface principal interativa": navegação lateral, aba do projeto selecionada, árvore de arquivos e botão do painel Terminal.
 function esperarMarco() {
@@ -415,20 +501,23 @@ async function conectar(port, limite = 60000) {
 }
 
 /** Sobe o exe com o ambiente isolado. `state` = { udf, local, roam } (pastas temporárias). */
-async function subir(state, projectDir) {
+async function subir(state, projectDir, envExtra = {}) {
   for (const d of Object.values(state)) mkdirSync(d, { recursive: true });
-  const port = await freePort();
+  const port = ARGS.portaCdp;
+  if (await fetch(`http://127.0.0.1:${port}/json/version`).then(() => true, () => false)) throw new Error(`a porta CDP ${port} já está em uso`);
   const doneDir = join(WORK, 'flood');
   mkdirSync(doneDir, { recursive: true });
   const env = {
     ...process.env,
     WEBVIEW2_USER_DATA_FOLDER: state.udf,
-    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
     LOCALAPPDATA: state.local,
     APPDATA: state.roam,
     ORQ_FLOOD: join(WORK, 'flood.mjs'),
     ORQ_DONE_DIR: doneDir,
+    ...envExtra,
   };
+  // No Windows o ambiente herdado traz `Path`: com `PATH` também, o filho fica com um dos dois. O de envExtra vale sozinho.
+  if (envExtra.PATH) for (const k of Object.keys(env)) if (k !== 'PATH' && k.toUpperCase() === 'PATH') delete env[k];
   const t0 = Date.now();
   const child = spawn(EXE, [projectDir], { cwd: WORK, stdio: 'ignore', windowsHide: true, env });
   child.on('error', (e) => log('erro ao iniciar o exe:', e.message));
@@ -555,7 +644,7 @@ async function digitar(cdp, texto) { for (const ch of texto) { await tecla(cdp, 
 // PRNG fixo: os intervalos entre teclas são os mesmos em toda execução.
 function prng(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
 
-async function medirLatencia(page, cdp, n, rotulo, aindaCarregando) {
+async function medirLatencia(page, cdp, n, rotulo, aindaCarregando, prazoMs = ARGS.timeoutEcoMs) {
   const rnd = prng(20260101);
   const eco = [], quadro = [], censuradas = [], cargaAoLongo = [];
   const letras = 'abcdefghijklmnopqrstuvwxyz';
@@ -580,18 +669,19 @@ async function medirLatencia(page, cdp, n, rotulo, aindaCarregando) {
     const ch = letras[i % letras.length];
     await page.evaluate((expect) => window.__medir.arm(expect), prompt + ch);
     await tecla(cdp, ch);
-    const ok = await page.waitForFunction(() => window.__medir.state?.done === true, null, { polling: 'raf', timeout: ARGS.timeoutEcoMs }).then(() => true, () => false);
+    const ok = await page.waitForFunction(() => window.__medir.state?.done === true, null, { polling: 'raf', timeout: prazoMs }).then(() => true, () => false);
     const s = await page.evaluate(() => window.__medir.take());
     if (ok && s) { eco.push(s.eco); quadro.push(s.quadro); }
-    else { censuradas.push({ i, limpo }); eco.push(ARGS.timeoutEcoMs); quadro.push(ARGS.timeoutEcoMs); } // sem eco no prazo: entra como o prazo (limite inferior)
+    else { censuradas.push({ i, limpo }); eco.push(prazoMs); quadro.push(prazoMs); } // sem eco no prazo: entra como o prazo (limite inferior)
     await tecla(cdp, 'Escape');
+    if (i === 2 && censuradas.length === 3) throw new Error(`eco (${rotulo}): as 3 primeiras amostras ficaram sem resposta em ${prazoMs} ms; o foco do teclado não está no terminal medido?`);
     await page.evaluate(() => window.__medir.quiet(60, 3000));
     await sleep(Math.round(20 + rnd() * 60));
     if (aindaCarregando && (i === 0 || i === Math.floor(n / 2) || i === n - 1)) cargaAoLongo.push({ amostra: i, tSeg: Math.round((Date.now() - tInicio) / 100) / 10, terminais: await aindaCarregando() });
   }
   const arr = (a) => a.map((x) => Math.round(x * 100) / 100);
   return {
-    rotulo, metodo, amostras: eco.length, semEcoNoPrazo: censuradas.length, prazoMs: ARGS.timeoutEcoMs, duracaoS: Math.round((Date.now() - tInicio) / 100) / 10, cargaAoLongo,
+    rotulo, metodo, amostras: eco.length, semEcoNoPrazo: censuradas.length, prazoMs, duracaoS: Math.round((Date.now() - tInicio) / 100) / 10, cargaAoLongo,
     eco_dom_ms: resumo(eco), eco_quadro_ms: resumo(quadro), brutas: { eco: arr(eco), quadro: arr(quadro) },
   };
 }
@@ -706,6 +796,8 @@ async function cenario(projectDir) {
     const linhasA = ARGS.taxa * ARGS.segundosA, linhasB = ARGS.taxa * ARGS.segundosB, linhasC = ARGS.taxa * ARGS.segundosC;
     const flood = async (id, tag, n) => {
       linhasDe[tag] = n;
+      const ult = String(n - 1).padStart(7, '0');
+      await page.evaluate(([bruto, chave]) => window.__orqMedirEspelho?.arm(bruto, chave), [`[${tag}] ${ult}`, `[${tag}]${ult}`]);
       await selecionar(id);
       await digitar(cdp, `node $env:ORQ_FLOOD ${n} ${tag} ${ARGS.taxa}`);
       await tecla(cdp, 'Enter');
@@ -848,6 +940,494 @@ async function cenario(projectDir) {
     browser = null;
   } finally {
     clearInterval(guarda);
+    const sobras = await encerrar(app);
+    out.processosRestantes = sobras;
+    if (sobras?.length) log('ATENÇÃO: processos restantes após encerrar:', sobras);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- build de medição
+function compilar() {
+  const marca = existsSync(MARCADOR) ? JSON.parse(readFileSync(MARCADOR, 'utf8')) : null;
+  const atual = existsSync(EXE) ? shaInteiro(EXE) : null;
+  const motivo = ARGS.build ? '--build' : !atual ? 'exe ausente' : !marca ? 'sem marcador de medição' : marca.porta !== ARGS.portaCdp ? `porta ${marca.porta} no exe, pedida ${ARGS.portaCdp}`
+    : marca.sha256 !== atual ? 'exe diferente do compilado para medição (cargo test o sobrescreve)' : null;
+  if (motivo) {
+    const conf = JSON.parse(readFileSync(join(ROOT, 'src-tauri', 'tauri.conf.json'), 'utf8'));
+    const args = `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=${ARGS.portaCdp}`;
+    const patch = { app: { windows: conf.app.windows.map((w) => ({ ...w, additionalBrowserArgs: args })) } };
+    const arquivo = join(WORK, 'tauri-medir.json');
+    writeFileSync(arquivo, JSON.stringify(patch, null, 2));
+    log(`compilando (${motivo}): npx tauri build --debug --no-bundle --config ${arquivo}, opt-level 3…`);
+    const r = spawnSync('npx.cmd', ['tauri', 'build', '--debug', '--no-bundle', '--config', `"${arquivo}"`], { cwd: ROOT, stdio: 'inherit', shell: true, env: { ...process.env, CARGO_PROFILE_DEV_OPT_LEVEL: '3' } });
+    if (r.status !== 0) throw new Error(`build falhou (código ${r.status})`);
+    writeFileSync(MARCADOR, JSON.stringify({ porta: ARGS.portaCdp, sha256: shaInteiro(EXE), additionalBrowserArgs: args, compiladoEm: new Date().toISOString() }, null, 2));
+  }
+  const m = JSON.parse(readFileSync(MARCADOR, 'utf8'));
+  return { caminho: EXE, tamanhoMB: mb(statSync(EXE).size), modificadoEm: statSync(EXE).mtime.toISOString(), compilado: motivo ?? 'reaproveitado', marcador: m };
+}
+
+/** A linha de comando do msedgewebview2 (browser) traz a porta do build? Lida da amostra de processos. */
+async function conferirPortaNaLinhaDeComando(app) {
+  const s = await psSample(app.pid, app.udf, false);
+  const browser = s.rows.find((r) => r.name.toLowerCase() === 'msedgewebview2.exe' && !/--type=/.test(r.cmd ?? ''));
+  const cmd = browser?.cmd ?? '';
+  return { portaNaLinhaDeComando: cmd.includes(`--remote-debugging-port=${ARGS.portaCdp}`), argumentosDoWry: cmd.includes('--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection'), linhaDeComando: cmd.slice(0, 600) };
+}
+
+// ---------------------------------------------------------------- janela do app (Win32)
+const PS_JANELA = String.raw`param([string]$Acao, [int]$AppPid)
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class OrqJanela {
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint f);
+  public static IntPtr Principal(uint pid) {
+    IntPtr best = IntPtr.Zero; long area = 0;
+    EnumWindows((h, l) => {
+      uint p; GetWindowThreadProcessId(h, out p);
+      RECT r;
+      if (p == pid && IsWindowVisible(h) && GetWindowRect(h, out r)) { long a = (long)(r.R - r.L) * (r.B - r.T); if (a > area) { area = a; best = h; } }
+      return true;
+    }, IntPtr.Zero);
+    return best;
+  }
+  public static bool Focar(IntPtr h) {
+    IntPtr fg = GetForegroundWindow(); uint x;
+    uint t1 = GetWindowThreadProcessId(fg, out x), t2 = GetCurrentThreadId();
+    AttachThreadInput(t2, t1, true);
+    if (IsIconic(h)) ShowWindow(h, 9);
+    BringWindowToTop(h); SetForegroundWindow(h);
+    AttachThreadInput(t2, t1, false);
+    if (GetForegroundWindow() != h) { keybd_event(0x12, 0, 0, UIntPtr.Zero); keybd_event(0x12, 0, 2, UIntPtr.Zero); SetForegroundWindow(h); }
+    return GetForegroundWindow() == h;
+  }
+  // Fração de uma grade 9x9 dentro da janela em que o ponto da tela pertence a ela (1 = nada a cobre).
+  public static double Visivel(IntPtr h) {
+    RECT r; GetWindowRect(h, out r); int ok = 0, n = 0;
+    for (int i = 1; i <= 9; i++) for (int j = 1; j <= 9; j++) {
+      POINT p; p.X = r.L + (r.R - r.L) * i / 10; p.Y = r.T + (r.B - r.T) * j / 10; n++;
+      if (GetAncestor(WindowFromPoint(p), 2) == h) ok++;
+    }
+    return (double)ok / n;
+  }
+}
+'@
+$h = [OrqJanela]::Principal([uint32]$AppPid)
+if ($h -eq [IntPtr]::Zero) { @{ erro = 'janela do app não encontrada' } | ConvertTo-Json -Compress; exit }
+$r = New-Object OrqJanela+RECT; [void][OrqJanela]::GetWindowRect($h, [ref]$r)
+$info = { @{ hwnd = [int64]$h; rect = @($r.L, $r.T, $r.R, $r.B); emPrimeiroPlano = ([OrqJanela]::GetForegroundWindow() -eq $h); minimizada = [OrqJanela]::IsIconic($h); fracaoVisivel = [OrqJanela]::Visivel($h) } }
+if ($Acao -eq 'focar') { [void][OrqJanela]::Focar($h); Start-Sleep -Milliseconds 300 }
+if ($Acao -ne 'desfocar') { & $info | ConvertTo-Json -Compress; exit }
+# Uma janela pequena fora do retângulo do app, em primeiro plano até este processo ser encerrado.
+Add-Type -AssemblyName System.Windows.Forms
+$W = 240; $H = 90
+$pos = $null
+foreach ($t in ([System.Windows.Forms.Screen]::AllScreens | ForEach-Object { $_.WorkingArea })) {
+  foreach ($c in @(@($t.Left, $t.Top), @(($t.Right - $W), $t.Top), @($t.Left, ($t.Bottom - $H)), @(($t.Right - $W), ($t.Bottom - $H)))) {
+    if ($c[0] + $W -le $r.L -or $c[0] -ge $r.R -or $c[1] + $H -le $r.T -or $c[1] -ge $r.B) { $pos = $c; break }
+  }
+  if ($pos) { break }
+}
+if (-not $pos) { @{ erro = 'sem lugar fora da janela do app' } | ConvertTo-Json -Compress; exit }
+$f = New-Object System.Windows.Forms.Form
+$f.StartPosition = 'Manual'; $f.Left = $pos[0]; $f.Top = $pos[1]; $f.Width = $W; $f.Height = $H; $f.Text = 'medir-desempenho: foco'; $f.ShowInTaskbar = $false
+$f.Add_Shown({
+  [void][OrqJanela]::Focar($f.Handle)
+  $o = & $info; $o.janelaDoScript = @($f.Left, $f.Top, $W, $H); $o.scriptEmPrimeiroPlano = ([OrqJanela]::GetForegroundWindow() -eq $f.Handle)
+  [Console]::Out.WriteLine(($o | ConvertTo-Json -Compress)); [Console]::Out.Flush()
+})
+[System.Windows.Forms.Application]::Run($f)
+`;
+const JANELA_FILE = join(WORK, 'janela.ps1');
+if (!ANALISE) writeFileSync(JANELA_FILE, PS_JANELA);
+const psJanela = (acao, pid) => new Promise((resolve) => execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', JANELA_FILE, '-Acao', acao, '-AppPid', String(pid)], { windowsHide: true },
+  (e, out, err) => { try { resolve(JSON.parse(out)); } catch { resolve({ erro: `${e?.message ?? ''} ${err} ${out}`.trim().slice(0, 400) }); } }));
+/** Põe outra janela (do script) em primeiro plano, fora do retângulo do app; devolve o processo (para encerrar) e o estado lido. */
+function desfocar(pid) {
+  const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', JANELA_FILE, '-Acao', 'desfocar', '-AppPid', String(pid)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  return new Promise((resolve) => {
+    let buf = '';
+    const fim = setTimeout(() => resolve({ child, estado: { erro: 'sem resposta da janela do script' } }), 30000);
+    child.stdout.on('data', (d) => {
+      buf += d;
+      const linha = buf.split(/\r?\n/).find((l) => l.trim().startsWith('{'));
+      if (linha) { clearTimeout(fim); try { resolve({ child, estado: JSON.parse(linha) }); } catch { resolve({ child, estado: { erro: linha } }); } }
+    });
+    child.on('exit', () => { clearTimeout(fim); resolve({ child, estado: { erro: `a janela do script saiu: ${buf}` } }); });
+  });
+}
+
+// ---------------------------------------------------------------- CDP cru (worker do espelho)
+// O Playwright não roteia sessões filhas: um cliente WebSocket próprio à página, com auto-attach "flatten", chega ao worker dedicado.
+async function cdpCru(port) {
+  const lista = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const alvo = lista.find((t) => t.type === 'page' && t.url.includes('tauri.localhost'));
+  if (!alvo) throw new Error('página do app não listada no CDP');
+  const ws = new WebSocket(alvo.webSocketDebuggerUrl);
+  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error('WebSocket CDP falhou')); });
+  let id = 0;
+  const pend = new Map();
+  const ouvintes = [];
+  ws.onmessage = ({ data }) => {
+    const m = JSON.parse(data);
+    if (m.id != null && pend.has(m.id)) { const p = pend.get(m.id); pend.delete(m.id); if (m.error) p.rej(new Error(m.error.message)); else p.res(m.result); }
+    else for (const f of ouvintes) f(m);
+  };
+  const send = (method, params = {}, sessionId) => new Promise((res, rej) => { const i = ++id; pend.set(i, { res, rej }); ws.send(JSON.stringify({ id: i, method, params, ...(sessionId ? { sessionId } : {}) })); });
+  return { send, on: (f) => ouvintes.push(f), close: () => ws.close() };
+}
+async function anexarWorkerDoEspelho(port) {
+  const c = await cdpCru(port);
+  const anexos = [];
+  c.on((m) => { if (m.method === 'Target.attachedToTarget') anexos.push(m.params); });
+  await c.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+  const w = await until(() => anexos.find((a) => a.targetInfo.type === 'worker'), { timeout: 10000, what: 'worker do espelho no CDP' });
+  const outros = anexos.filter((a) => a.targetInfo.type === 'worker').length;
+  return { ...c, url: w.targetInfo.url, workers: outros, sendW: (method, params) => c.send(method, params, w.sessionId) };
+}
+
+// ---------------------------------------------------------------- CPU por tipo de processo
+// Diferença de cpuSeconds (soma dos núcleos) entre duas amostras, por grupo, em % de 1 núcleo. Processo novo conta desde zero.
+function cpuEntre(a, b) {
+  const ms = b.t - a.t;
+  const antes = new Map(a.rows.map((r) => [r.pid, r.cpuSeconds]));
+  const grupos = {};
+  let app = 0;
+  for (const r of b.rows) {
+    const c = classificar(r);
+    const d = Math.max(0, r.cpuSeconds - (antes.get(r.pid) ?? 0));
+    const g = c.side === 'app' ? c.group : `fora:${c.group}`;
+    grupos[g] = (grupos[g] ?? 0) + d;
+    if (c.side === 'app') app += d;
+  }
+  const pct = (s) => Math.round((s / (ms / 1000)) * 1000) / 10;
+  return { duracaoS: Math.round(ms / 100) / 10, pctDeUmNucleo: Object.fromEntries(Object.entries(grupos).sort((x, y) => y[1] - x[1]).map(([k, v]) => [k, pct(v)])), totalAppPct: pct(app) };
+}
+const ramPorTipo = (m) => ({ totalApp: m.totalApp, grupos: Object.fromEntries(Object.entries(m.grupos).map(([k, g]) => [k, { processos: g.processos, privateMB: g.privateMB, privateWorkingSetMB: g.privateWorkingSetMB, workingSetMB: g.workingSetMB }])) });
+const executoresVivos = (s) => s.rows.filter((r) => r.name.toLowerCase() === 'claude.exe' && !(r.cmd ?? '').includes('--mcp-config')).length;
+
+function resumirPerfilCPUCompleto(p) {
+  const r = resumirPerfilCPU(p);
+  const porId = new Map(p.nodes.map((n) => [n.id, n]));
+  let total = 0, ocioso = 0, programa = 0, gc = 0;
+  for (let i = 0; i < p.samples.length; i++) {
+    const dt = p.timeDeltas[i + 1] ?? p.timeDeltas[i] ?? 0;
+    const nome = porId.get(p.samples[i]).callFrame.functionName;
+    total += dt;
+    if (nome === '(idle)') ocioso += dt; else if (nome === '(program)') programa += dt; else if (nome === '(garbage collector)') gc += dt;
+  }
+  const pc = (x) => Math.round((x / total) * 1000) / 10;
+  const ativo = total - ocioso;
+  return {
+    ...r, ociosoPct: pc(ocioso), programaPct: pc(programa), gcPct: pc(gc), ativoMs: Math.round(ativo / 1000),
+    topPorTempoProprio: r.topPorTempoProprio.map((f) => ({ ...f, pctDoAtivo: f.funcao.startsWith('(idle)') ? null : Math.round(((f.msProprios * 1000) / ativo) * 1000) / 10 })),
+  };
+}
+
+// ---------------------------------------------------------------- cenário de executores
+const TRACE_CATS = ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'cc', 'viz', 'gpu', 'blink.animations', 'benchmark', 'blink', 'toplevel', '__metadata'];
+async function iniciarTrace(browser) {
+  const s = await browser.newBrowserCDPSession();
+  const ev = [];
+  s.on('Tracing.dataCollected', (m) => { for (const e of m.value) ev.push(e); });
+  await s.send('Tracing.start', { transferMode: 'ReportEvents', traceConfig: { recordMode: 'recordContinuously', includedCategories: TRACE_CATS, excludedCategories: ['*'] } });
+  return {
+    parar: async () => {
+      const fim = new Promise((r) => s.once('Tracing.tracingComplete', r));
+      await s.send('Tracing.end');
+      await fim;
+      await s.detach().catch(() => {});
+      return ev;
+    },
+  };
+}
+function resumirTrace(ev) {
+  const proc = new Map(), thr = new Map();
+  for (const e of ev) if (e.ph === 'M') {
+    if (e.name === 'process_name') proc.set(e.pid, e.args?.name);
+    if (e.name === 'thread_name') thr.set(`${e.pid}:${e.tid}`, e.args?.name);
+  }
+  let t0 = Infinity, t1 = -Infinity;
+  for (const e of ev) if (e.ph !== 'M' && e.ts) { if (e.ts < t0) t0 = e.ts; if (e.ts > t1) t1 = e.ts; }
+  const durS = (t1 - t0) / 1e6;
+  const grupo = (e) => {
+    const p = proc.get(e.pid) ?? `pid${e.pid}`, t = thr.get(`${e.pid}:${e.tid}`) ?? `tid${e.tid}`;
+    if (/Renderer/i.test(p)) return t === 'CrRendererMain' ? 'renderer.principal' : t === 'Compositor' ? 'renderer.compositor' : /Raster|TileWorker/i.test(t) ? 'renderer.rasterizacao' : `renderer.${t}`;
+    if (/GPU/i.test(p)) return `gpu.${t}`;
+    if (/Browser/i.test(p)) return `browser.${t}`;
+    return `${p}.${t}`;
+  };
+  const porGrupo = {}, cont = {}, alvos = {};
+  const ALVO = new Set(['Paint', 'Layout', 'UpdateLayoutTree', 'ScheduleStyleRecalculation', 'InvalidateLayout', 'PaintImage', 'StyleRecalcInvalidationTracking', 'StyleInvalidatorInvalidationTracking', 'LayoutInvalidationTracking', 'PaintInvalidationTracking']);
+  for (const e of ev) {
+    if (e.ph === 'M') continue;
+    const g = grupo(e);
+    const k = (porGrupo[g] ??= {});
+    const x = (k[e.name] ??= { n: 0, ms: 0 });
+    if (e.ph === 'X' || e.ph === 'B' || e.ph === 'I' || e.ph === 'i' || e.ph === 'n' || e.ph === 'b' || e.ph === 'R') x.n++;
+    if (e.ph === 'X' && e.dur) x.ms += e.dur / 1000;
+    if (e.ph !== 'E' && e.ph !== 'e') cont[e.name] = (cont[e.name] ?? 0) + 1;
+    if (ALVO.has(e.name)) {
+      const d = e.args?.data ?? e.args?.beginData ?? e.args ?? {};
+      const chave = [d.nodeName, d.selector, d.reason, d.invalidatedSelectorId, d.changedClass, d.changedAttribute, d.changedPseudo, d.nodeId != null ? `#${d.nodeId}` : null, d.clip ? `clip:${d.clip.slice(0, 8).map(Math.round).join(',')}` : null, d.stackTrace?.[0] ? `${d.stackTrace[0].functionName}@${(d.stackTrace[0].url ?? '').split('/').pop()}:${d.stackTrace[0].lineNumber}` : null].filter(Boolean).join(' ') || '(sem dados)';
+      const a = (alvos[e.name] ??= {});
+      a[chave] = (a[chave] ?? 0) + 1;
+    }
+  }
+  const top = {};
+  for (const [g, k] of Object.entries(porGrupo)) {
+    const lista = Object.entries(k).map(([nome, v]) => ({ nome, n: v.n, porS: Math.round((v.n / durS) * 10) / 10, ms: Math.round(v.ms * 10) / 10 }));
+    if (lista.reduce((a, b) => a + b.n, 0) < 5) continue;
+    top[g] = lista.sort((a, b) => b.ms - a.ms || b.n - a.n).slice(0, 40);
+  }
+  const ps = (nome) => Math.round(((cont[nome] ?? 0) / durS) * 10) / 10;
+  const NOMES = ['DrawFrame', 'BeginFrame', 'BeginImplFrameToSendBeginMainFrame', 'ActivateLayerTree', 'Commit', 'BeginMainThreadFrame', 'Graphics.Pipeline', 'PipelineReporter', 'Display::DrawAndSwap', 'SubmitCompositorFrame', 'UpdateLayoutTree', 'Layout', 'Paint', 'PrePaint', 'Layerize', 'RasterTask', 'Animation', 'AnimationFrame', 'ScheduleStyleRecalculation', 'InvalidateLayout', 'UpdateLayer', 'CompositeLayers', 'FireAnimationFrame', 'TimerFire', 'EventDispatch', 'FunctionCall', 'v8.execute', 'ParseHTML', 'HitTest', 'NeedsBeginFrameChanged', 'Scheduler::BeginFrame', 'ProxyMain::BeginMainFrame', 'LayerTreeHostImpl::PrepareToDraw', 'SkiaOutputSurfaceImplOnGpu::SwapBuffers', 'GLES2DecoderImpl::HandleDrawArrays', 'WebGLRenderingContext::drawArrays'];
+  const porSegundo = Object.fromEntries(NOMES.map((n) => [n, ps(n)]));
+  const nos = Object.fromEntries(Object.entries(alvos).map(([n, m]) => [n, Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => ({ k, n: v }))]));
+  return { duracaoS: Math.round(durS * 10) / 10, eventos: ev.length, processos: Object.fromEntries(proc), porSegundo, nosMaisFrequentes: nos, maisCarosPorThread: top };
+}
+
+async function cenarioExecutores(projectDir) {
+  const N = ARGS.executores, S = ARGS.segundosExec;
+  const state = { udf: join(WORK, 'exec', 'udf'), local: join(WORK, 'exec', 'local'), roam: join(WORK, 'exec', 'roam') };
+  // claude.exe falso: cópia do exemplo compilado. O portable-pty 0.9 (CommandBuilder::new) refaz o Path do filho pelo registro, então o
+  // PATH do app não chega ao CLI; o build de debug lê ORQ_CLAUDE_EXE (Exes::real) e abre esta cópia. A proteção abaixo confere o processo aberto.
+  const bin = join(WORK, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const falso = join(bin, 'claude.exe');
+  writeFileSync(falso, readFileSync(FAKE_EXE));
+  const app = await subir(state, projectDir, { ORQ_CLAUDE_EXE: falso, ORQ_CODEX_EXE: falso, ORQ_FAKE_DELEGAR: String(N), ORQ_FAKE_SEGUNDOS: String(S) });
+  const out = { executores: N, segundosPorExecutor: S, erros: [] };
+  let browser, guarda, foco = null, worker = null;
+  try {
+    const conn = await conectar(app.port);
+    browser = conn.browser;
+    const { page } = conn;
+    page.setDefaultTimeout(30000);
+    page.on('pageerror', (e) => out.erros.push(`pageerror: ${e.message}`));
+    await page.evaluate(esperarMarco);
+    out.cdp = await conferirPortaNaLinhaDeComando(app);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Page.enable');
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: GANCHO_JS });
+    await page.reload();
+    await page.evaluate(esperarMarco);
+    await page.evaluate(instalarAgente);
+    // --spin-linear: o giro de antes de daab5a0, para comparar no mesmo build.
+    if (ARGS.spinLinear) await page.addStyleTag({ content: '.animate-spin { animation: spin 1s linear infinite !important; }' });
+    out.spinLinear = ARGS.spinLinear;
+    // --css: folha extra injetada antes da fase dos executores.
+    if (ARGS.css) await page.addStyleTag({ content: ARGS.css });
+    out.css = ARGS.css;
+    await cdp.send('Profiler.enable');
+    guarda = setInterval(async () => {
+      try {
+        const s = agregarMomento(await psSample(app.pid, app.udf, false));
+        if (s.totalApp.privateMB > ARGS.limiteMB) {
+          log(`ABORTADO: RAM privada do app ${s.totalApp.privateMB} MB acima do limite de ${ARGS.limiteMB} MB`);
+          await encerrar(app);
+          process.exit(2);
+        }
+      } catch { /* a próxima volta tenta de novo */ }
+    }, 5000);
+    out.janelaInicio = await psJanela('focar', app.pid);
+    log('janela do app:', JSON.stringify(out.janelaInicio));
+
+    // Shell do painel Terminal, onde se mede o eco.
+    await page.locator('button[title^="Painel Terminal"]').click();
+    await page.locator('[data-shell]').first().waitFor();
+    const shellId = await page.locator('[data-shell]').first().getAttribute('data-shell');
+    // `data-shell` marca só a aba; o xterm do shell fica noutro ramo. Marca o elemento do xterm do shell (pelo registro do gancho) como raiz.
+    const raizShell = '[data-medir-shell]';
+    const focarShell = async () => {
+      await page.locator(`[data-shell="${shellId}"] [role="tab"]`).click();
+      await page.waitForFunction((id) => {
+        const r = (window.__orqMedirTerms ?? []).find((x) => x.id === id);
+        if (!r?.term.element) return false;
+        document.querySelectorAll('[data-medir-shell]').forEach((el) => el !== r.term.element && el.removeAttribute('data-medir-shell'));
+        r.term.element.setAttribute('data-medir-shell', '');
+        return true;
+      }, shellId, { timeout: 30000 });
+      const ta = page.locator(`${raizShell} .xterm-helper-textarea`).first();
+      await ta.waitFor({ state: 'attached' });
+      const focoNoShell = () => page.evaluate((r) => !!document.activeElement?.closest(r), raizShell);
+      for (let t = 0; ; t++) {
+        await page.locator(`${raizShell} .xterm-screen`).first().click().catch(() => {});
+        await ta.focus().catch(() => {});
+        await sleep(150);
+        if (await focoNoShell()) break;
+        if (t >= 4) throw new Error(`foco do teclado fora do shell ${raizShell}: activeElement=${await page.evaluate(() => { const a = document.activeElement; return a ? `${a.tagName}.${a.className} em ${a.closest('[data-shell],[data-term],[id]')?.outerHTML.slice(0, 120) ?? '?'}` : 'nenhum'; })}`);
+        await sleep(300);
+      }
+      await page.evaluate((r) => window.__medir.watch(r), raizShell);
+      await page.evaluate(() => window.__medir.quiet(800, 20000));
+    };
+    await focarShell();
+    await digitar(cdp, HISTORICO_OFF);
+    await tecla(cdp, 'Enter');
+    await page.evaluate(() => window.__medir.quiet(800, 20000));
+
+    // Orquestrador e executores: ferramenta Claude (o falso), modelo e esforço padrão do formulário.
+    const escolher = async (titulo, confirmar) => {
+      const dlg = page.getByRole('dialog').filter({ hasText: titulo }).last();
+      await dlg.waitFor({ timeout: 60000 });
+      await dlg.getByText('Claude', { exact: true }).first().click();
+      await dlg.getByRole('button', { name: confirmar }).click();
+      await dlg.waitFor({ state: 'hidden', timeout: 30000 });
+    };
+    await page.getByRole('button', { name: 'Abrir terminal', exact: true }).first().click();
+    await escolher('Orquestrador', 'Abrir terminal');
+    log('orquestrador aberto; esperando a primeira delegação');
+    // Proteção: um claude.exe fora da pasta falsa seria o CLI real (com a conta do usuário); encerra a medição.
+    const clis = await until(async () => { const r = (await psSample(app.pid, app.udf, false)).rows.filter((x) => x.name.toLowerCase() === 'claude.exe'); return r.length ? r : null; }, { timeout: 30000, every: 300, what: 'CLI do orquestrador aberto' });
+    out.cliDoOrquestrador = clis.map((r) => r.cmd?.slice(0, 160));
+    const reais = clis.filter((r) => !(r.cmd ?? '').toLowerCase().includes(bin.toLowerCase()));
+    if (reais.length) throw new Error(`claude.exe fora de ${bin}: ${reais.map((r) => r.cmd?.slice(0, 80)).join(' | ')}`);
+    const tDeleg = Date.now();
+    await escolher('Escolha dos executores', 'Usar nos executores');
+    out.formularioDosExecutoresMs = Date.now() - tDeleg;
+    const tEsc = Date.now();
+    await until(async () => executoresVivos(await psSample(app.pid, app.udf, false)) >= N, { timeout: 60000, every: 500, what: `${N} executores vivos` });
+    out.executoresVivosEmMs = Date.now() - tEsc;
+    log(`${N} executores vivos em ${out.executoresVivosEmMs} ms`);
+    // O formulário devolve o foco do teclado ao orquestrador: volta ao shell, com a janela em primeiro plano.
+    await focarShell();
+    out.janelaNaFase = await psJanela('focar', app.pid);
+    if (ARGS.perfil) {
+      worker = await anexarWorkerDoEspelho(app.port).catch((e) => { out.erros.push(`worker: ${e.message}`); return null; });
+      await cdp.send('Profiler.setSamplingInterval', { interval: 1000 });
+      if (worker) { await worker.sendW('Profiler.enable'); await worker.sendW('Profiler.setSamplingInterval', { interval: 1000 }); }
+    }
+    // Janela com os N vivos: eco (cpuComEco); trecho sem sonda de pelo menos 40 s (out.cpu, perfil; nenhum gancho do script ativo, só as
+    // amostras de processo nas pontas); trecho com a sonda de quadros de 20 s (fps, tarefas longas, cpuComSondaDeQuadros). Tudo até S - 20 s.
+    const SONDA_MS = 20000;
+    const fimJanela = tEsc + Math.max(60, S - 20) * 1000;
+    const e0 = await psSample(app.pid, app.udf, true);
+    log('janela com executores: eco no shell');
+    out.latencia = await medirLatencia(page, cdp, ARGS.amostras, `${N} executores com TUI`, undefined, 3000);
+    const e1 = await psSample(app.pid, app.udf, true);
+    out.cpuComEco = cpuEntre(e0, e1);
+    const meio = agregarMomento(e1);
+    await page.evaluate(() => window.__medir.quiet(1000, 10000));
+    const fimQuieto = Math.max(fimJanela, Date.now() + 40000 + SONDA_MS);
+    if (fimQuieto > tEsc + (S - 5) * 1000) out.erros.push('o trecho quieto passa do fim das TUIs; reduza --amostras ou aumente --segundos-exec');
+    const anim = [await page.evaluate(() => { window.__medir.pausar(); return window.__medir.animacoes(); })];
+    if (ARGS.perfil) { await cdp.send('Profiler.start'); if (worker) await worker.sendW('Profiler.start'); }
+    let tr = null;
+    if (ARGS.trace) tr = await iniciarTrace(browser);
+    const s0 = await psSample(app.pid, app.udf, true);
+    log('janela com executores: trecho sem sonda');
+    await sleep(Math.max(0, fimQuieto - SONDA_MS - Date.now()));
+    const s1 = await psSample(app.pid, app.udf, true);
+    if (tr) {
+      const ev = await tr.parar();
+      const arq = join(OUT, 'trace.json');
+      out.trace = { arquivo: arq, categorias: TRACE_CATS, ...resumirTrace(ev) };
+      // Grava em pedaços: o trace inteiro passa do limite de uma string.
+      const fd = openSync(arq, 'w');
+      writeSync(fd, '{"traceEvents":[\n');
+      for (let i = 0; i < ev.length; i += 5000) writeSync(fd, ev.slice(i, i + 5000).map((e) => JSON.stringify(e)).join(',\n') + (i + 5000 < ev.length ? ',\n' : '\n'));
+      writeSync(fd, ']}\n');
+      closeSync(fd);
+      out.avisoTrace = 'rodada com --trace: o trace ficou ligado no trecho sem sonda; a CPU desta rodada não vale como métrica';
+    }
+    if (ARGS.perfil) {
+      const cpu = (await cdp.send('Profiler.stop')).profile;
+      writeFileSync(join(OUT, 'renderer-principal.cpuprofile'), JSON.stringify(cpu));
+      out.perfilPrincipal = { arquivo: join(OUT, 'renderer-principal.cpuprofile'), trecho: 'sem sonda', ...resumirPerfilCPUCompleto(cpu) };
+      if (worker) {
+        const wp = (await worker.sendW('Profiler.stop')).profile;
+        writeFileSync(join(OUT, 'worker-espelho.cpuprofile'), JSON.stringify(wp));
+        out.perfilWorker = { arquivo: join(OUT, 'worker-espelho.cpuprofile'), url: worker.url, workersAnexados: worker.workers, trecho: 'sem sonda', ...resumirPerfilCPUCompleto(wp) };
+      }
+      out.avisoPerfil = 'rodada com --perfil: o perfilador ficou ligado no trecho sem sonda; a CPU desta rodada não vale como métrica';
+    }
+    anim.push(await page.evaluate(() => window.__medir.animacoes()));
+    out.cpu = cpuEntre(s0, s1);
+    log('janela com executores: trecho com sonda de quadros');
+    const q0 = await psSample(app.pid, app.udf, true);
+    await page.evaluate(() => window.__medir.fpsStart());
+    while (Date.now() < fimQuieto) await sleep(500);
+    const fpsRaw = await page.evaluate(() => window.__medir.fpsStop());
+    const q1 = await psSample(app.pid, app.udf, true);
+    out.cpuComSondaDeQuadros = cpuEntre(q0, q1);
+    out.vivosNoFimDaJanela = executoresVivos(q1);
+    if (out.vivosNoFimDaJanela < N) out.erros.push(`só ${out.vivosNoFimDaJanela} de ${N} executores vivos no fim da janela`);
+    out.janelaFim = await psJanela('info', app.pid);
+    out.ram = { inicio: ramPorTipo(agregarMomento(e0)), meio: ramPorTipo(meio), fim: ramPorTipo(agregarMomento(q1)) };
+    const dts = fpsRaw.dts.slice(1);
+    out.quadros = { trecho: 'com sonda de quadros', fpsMedio: Math.round((dts.length / (dts.reduce((a, b) => a + b, 0) / 1000)) * 10) / 10, tempoDeQuadroMs: resumo(dts), quadrosAcima50ms: dts.filter((x) => x > 50).length, tarefasLongas: { n: fpsRaw.long.length, totalMs: Math.round(fpsRaw.long.reduce((a, b) => a + b, 0)), maxMs: Math.round(Math.max(0, ...fpsRaw.long)) } };
+    out.animacoesInfinitas = anim;
+    log(`janela encerrada: sem sonda ${out.cpu.duracaoS} s, app ${out.cpu.totalAppPct}% de um núcleo; com sonda ${out.cpuComSondaDeQuadros.duracaoS} s, ${out.cpuComSondaDeQuadros.totalAppPct}%; com eco ${out.cpuComEco.duracaoS} s, ${out.cpuComEco.totalAppPct}%`);
+
+    // --- fase ociosa: executores terminados, orquestrador falso aberto
+    await until(async () => executoresVivos(await psSample(app.pid, app.udf, false)) === 0, { timeout: (S + 120) * 1000, every: 1000, what: 'fim dos executores' })
+      .catch((e) => out.erros.push(e.message));
+    out.loteEntregue = await page.waitForFunction(() => window.__orqMedirTerms.some((r) => {
+      const b = r.term.buffer.active;
+      for (let y = 0; y < b.length; y++) if (b.getLine(y)?.translateToString(true).includes('lote entregue')) return true;
+      return false;
+    }), null, { timeout: 30000 }).then(() => true, () => false);
+    await sleep(10000);
+    const ipc = () => page.evaluate(() => ({ ...window.__orqMedirIpc }));
+    const metade = async (rotulo) => {
+      const i0 = await ipc();
+      const a = await psSample(app.pid, app.udf, false);
+      const est0 = await page.evaluate(() => window.__medir.animacoes());
+      await sleep(ARGS.ociosoS * 1000);
+      const b = await psSample(app.pid, app.udf, true);
+      const est1 = await page.evaluate(() => window.__medir.animacoes());
+      const i1 = await ipc();
+      const min = (b.t - a.t) / 60000;
+      const porMin = Object.fromEntries(Object.keys(i1).map((k) => [k, Math.round(((i1[k] - (i0[k] ?? 0)) / min) * 10) / 10]).filter(([, v]) => v > 0).sort((x, y) => y[1] - x[1]));
+      return { rotulo, cpu: cpuEntre(a, b), ram: ramPorTipo(agregarMomento(b)), ipcPorMinuto: porMin, ipcTotalPorMinuto: Math.round(Object.values(porMin).reduce((x, y) => x + y, 0) * 10) / 10, estadoInicio: est0, estadoFim: est1 };
+    };
+    // O Playwright liga a emulação de foco (document.hasFocus() fica true com a janela em segundo plano); desliga para a fase sem foco valer.
+    await page.evaluate(() => window.__medir.pausar());
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch((e) => out.erros.push(`emulação de foco: ${e.message}`));
+    out.ocioso = { janelaAntes: await psJanela('focar', app.pid) };
+    log('ocioso com foco');
+    out.ocioso.comFoco = await metade('janela em foco');
+    log('ocioso sem foco');
+    foco = await desfocar(app.pid);
+    out.ocioso.janelaSemFoco = foco.estado;
+    await sleep(1000);
+    out.ocioso.semFoco = await metade('janela visível sem foco');
+    out.ocioso.janelaSemFocoFim = await psJanela('info', app.pid);
+    await browser.close().catch(() => {});
+    browser = null;
+  } catch (e) {
+    // Diagnóstico da falha: tela, processos da árvore (com a linha de comando) e o texto dos terminais.
+    await browser?.contexts().flatMap((c) => c.pages())[0]?.screenshot({ path: join(OUT, 'falha.png') }).catch(() => {});
+    await psSample(app.pid, app.udf, false).then((s) => writeFileSync(join(OUT, 'falha-processos.json'), JSON.stringify(s.rows, null, 2))).catch(() => {});
+    await browser?.contexts().flatMap((c) => c.pages())[0]?.evaluate(() => (window.__orqMedirTerms ?? []).map((r) => {
+      const b = r.term.buffer.active; const l = [];
+      for (let y = Math.max(0, b.length - 40); y < b.length; y++) l.push(b.getLine(y)?.translateToString(true));
+      return { id: r.id, linhas: l.join(String.fromCharCode(10)).trimEnd() };
+    })).then((t) => writeFileSync(join(OUT, 'falha-terminais.json'), JSON.stringify(t, null, 2))).catch(() => {});
+    throw e;
+  } finally {
+    clearInterval(guarda);
+    if (foco?.child) spawnSync('taskkill', ['/PID', String(foco.child.pid), '/T', '/F'], { windowsHide: true });
+    worker?.close();
     const sobras = await encerrar(app);
     out.processosRestantes = sobras;
     if (sobras?.length) log('ATENÇÃO: processos restantes após encerrar:', sobras);
@@ -1087,6 +1667,28 @@ function resumoTexto(r) {
     for (const k of ['latenciaSemCarga', 'latenciaComCarga']) if (c[k]) L.push(`Latência ${c[k].rotulo} [${c[k].metodo}]: n=${c[k].amostras} sem-eco-no-prazo=${c[k].semEcoNoPrazo} dom p50/p95/p99/max=${c[k].eco_dom_ms.p50}/${c[k].eco_dom_ms.p95}/${c[k].eco_dom_ms.p99}/${c[k].eco_dom_ms.max} ms; até o quadro seguinte p50/p95/p99/max=${c[k].eco_quadro_ms.p50}/${c[k].eco_quadro_ms.p95}/${c[k].eco_quadro_ms.p99}/${c[k].eco_quadro_ms.max} ms`);
     if (c.quadrosDurante) L.push(`Quadros durante a saída: ${c.quadrosDurante.fpsMedio} fps, p95=${c.quadrosDurante.tempoDeQuadroMs.p95} ms, >50ms: ${c.quadrosDurante.quadrosAcima50ms}`);
   }
+  if (r.executores) {
+    const e = r.executores;
+    const cpu = (c) => `${Object.entries(c.pctDeUmNucleo).map(([k, v]) => `${k}=${v}`).join(' ')}; total do app=${c.totalAppPct}% (${c.duracaoS} s)`;
+    L.push(`CDP: porta na linha de comando do WebView2=${e.cdp?.portaNaLinhaDeComando}, argumentos do wry=${e.cdp?.argumentosDoWry}`);
+    L.push(`Executores: ${e.executores} vivos em ${e.executoresVivosEmMs} ms; vivos no fim da janela=${e.vivosNoFimDaJanela}; janela visível=${e.janelaNaFase?.fracaoVisivel} em primeiro plano=${e.janelaNaFase?.emPrimeiroPlano}`);
+    if (e.cpuComEco) L.push(`CPU com executores, trecho com eco (% de 1 núcleo): ${cpu(e.cpuComEco)}`);
+    if (e.cpu) L.push(`CPU com executores, trecho sem sonda (% de 1 núcleo): ${cpu(e.cpu)}`);
+    if (e.cpuComSondaDeQuadros) L.push(`CPU com executores, trecho com sonda de quadros (% de 1 núcleo): ${cpu(e.cpuComSondaDeQuadros)}`);
+    if (e.avisoPerfil) L.push(e.avisoPerfil);
+    for (const [k, m] of Object.entries(e.ram ?? {})) L.push(`RAM ${k}: app private=${m.totalApp.privateMB} MB, wsPrivate=${m.totalApp.privateWorkingSetMB} MB; ${Object.entries(m.grupos).map(([g, x]) => `${g}=${x.privateMB}/${x.privateWorkingSetMB}`).join(' ')}`);
+    if (e.latencia) L.push(`Eco no shell [${e.latencia.metodo}]: n=${e.latencia.amostras} sem-eco=${e.latencia.semEcoNoPrazo} p50/p95/p99=${e.latencia.eco_dom_ms.p50}/${e.latencia.eco_dom_ms.p95}/${e.latencia.eco_dom_ms.p99} ms; quadro p50/p95/p99=${e.latencia.eco_quadro_ms.p50}/${e.latencia.eco_quadro_ms.p95}/${e.latencia.eco_quadro_ms.p99} ms`);
+    if (e.quadros) L.push(`Quadros: ${e.quadros.fpsMedio} fps, p95=${e.quadros.tempoDeQuadroMs.p95} ms, >50ms=${e.quadros.quadrosAcima50ms}, tarefas longas=${e.quadros.tarefasLongas.n} (${e.quadros.tarefasLongas.totalMs} ms)`);
+    if (e.animacoesInfinitas) L.push(`Animações infinitas ativas: ${e.animacoesInfinitas.map((a) => a.total).join(' / ')} ${JSON.stringify(e.animacoesInfinitas[1]?.porNome ?? {})}`);
+    for (const k of ['perfilPrincipal', 'perfilWorker']) if (e[k]) L.push(`${k}: ocioso=${e[k].ociosoPct}% gc=${e[k].gcPct}% ativo=${e[k].ativoMs} ms; top: ${e[k].topPorTempoProprio.slice(0, 10).map((f) => `${f.funcao} ${f.pct}%`).join(' | ')}`);
+    for (const k of ['comFoco', 'semFoco']) {
+      const o = e.ocioso?.[k];
+      if (!o) continue;
+      L.push(`Ocioso ${o.rotulo} (hasFocus=${o.estadoFim.hasFocus}, hidden=${o.estadoFim.documentHidden}): CPU ${cpu(o.cpu)}`);
+      L.push(`  IPC/min (total ${o.ipcTotalPorMinuto}): ${Object.entries(o.ipcPorMinuto).map(([c, v]) => `${c}=${v}`).join(' ')}`);
+    }
+    if (e.erros?.length) L.push(`Erros: ${e.erros.join(' | ')}`);
+  }
   return L.join('\n');
 }
 
@@ -1099,18 +1701,21 @@ async function main() {
   const instalados = await new Promise((res) => execFile('powershell.exe', ['-NoProfile', '-Command', "(Get-Process orquestrador -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*\\AppData\\Local\\orquestrador\\*' } | ForEach-Object { $_.Id }) -join ','"], { windowsHide: true }, (e, out) => res(out.trim())));
   resultado.protecoes.instanciaInstaladaPidsAntes = instalados;
 
-  if (ARGS.build || !existsSync(EXE)) {
-    log('compilando (npx tauri build --debug --no-bundle, opt-level 3)…');
-    const r = spawnSync('npx.cmd', ['tauri', 'build', '--debug', '--no-bundle'], { cwd: ROOT, stdio: 'inherit', shell: true, env: { ...process.env, CARGO_PROFILE_DEV_OPT_LEVEL: '3' } });
-    if (r.status !== 0) throw new Error(`build falhou (código ${r.status})`);
+  if (ARGS.executores) {
+    log('compilando o CLI falso (cargo build --example fake_cli)…');
+    const r = spawnSync('cargo', ['build', '--example', 'fake_cli'], { cwd: join(ROOT, 'src-tauri'), stdio: 'inherit', env: { ...process.env, CARGO_PROFILE_DEV_OPT_LEVEL: '3' } });
+    if (r.status !== 0) throw new Error(`build do fake_cli falhou (código ${r.status})`);
   }
-  resultado.executavel = { caminho: EXE, tamanhoMB: mb(statSync(EXE).size), modificadoEm: statSync(EXE).mtime.toISOString() };
+  resultado.executavel = compilar();
   writeFileSync(join(WORK, 'flood.mjs'), FLOOD_JS);
   const projectDir = join(WORK, 'p');
   criarProjeto(projectDir);
   resultado.projeto = projectDir;
 
-  if (!ARGS.semAbertura) {
+  if (ARGS.executores) {
+    resultado.executores = await cenarioExecutores(projectDir);
+  }
+  if (!ARGS.semAbertura && !ARGS.executores) {
     const grupos = {};
     const novo = [];
     for (let i = 0; i < ARGS.aberturaNovo; i++) {
@@ -1134,7 +1739,7 @@ async function main() {
     resultado.abertura = { marco: 'nav[aria-label=Telas] + aba de projeto selecionada + treeitem + botão "Painel Terminal" presentes no DOM (Date.now() dentro da página, MutationObserver)', grupos };
   }
 
-  if (!ARGS.semCenario) {
+  if (!ARGS.semCenario && !ARGS.executores) {
     resultado.cenario = await cenario(projectDir);
     if (resultado.cenario.heapSnapshot) {
       log('analisando o heap snapshot…');

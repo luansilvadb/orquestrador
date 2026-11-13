@@ -21,8 +21,15 @@ impl Exes {
     /// prompt pelo `cmd.exe`.
     pub fn real() -> Exes {
         let me = std::env::current_exe().unwrap_or_default();
-        Exes { claude: "claude.exe".into(), codex: "codex.exe".into(), app: me.to_string_lossy().to_string() }
+        // Só no debug: scripts/medir-desempenho.mjs troca o CLI pelo falso, já que o portable-pty refaz o Path do filho pelo registro.
+        let var = |k: &str| if cfg!(debug_assertions) { std::env::var(k).ok() } else { None };
+        Exes { claude: exe(var("ORQ_CLAUDE_EXE"), "claude.exe"), codex: exe(var("ORQ_CODEX_EXE"), "codex.exe"), app: me.to_string_lossy().to_string() }
     }
+}
+
+/// O caminho de `troca` se definido e não vazio; senão, `padrao`.
+fn exe(troca: Option<String>, padrao: &str) -> String {
+    troca.filter(|v| !v.trim().is_empty()).unwrap_or_else(|| padrao.into())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -192,6 +199,13 @@ mod tests {
     fn clis_reais_sao_os_binarios_nativos() {
         let real = Exes::real();
         assert_eq!((real.claude.as_str(), real.codex.as_str()), ("claude.exe", "codex.exe"));
+    }
+
+    #[test]
+    fn troca_do_cli_so_com_valor() {
+        assert_eq!(exe(None, "claude.exe"), "claude.exe");
+        assert_eq!(exe(Some("  ".into()), "claude.exe"), "claude.exe");
+        assert_eq!(exe(Some(r"C:	\claude.exe".into()), "claude.exe"), r"C:	\claude.exe");
     }
 
     fn session(tag: &str, tool: &str) -> (Session, Tmp) {
