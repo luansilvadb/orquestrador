@@ -43,6 +43,19 @@ function serialize(m: Mirror) {
 }
 
 self.onmessage = ({ data: msg }: MessageEvent<MirrorIn>) => {
+  if (msg.type === 'data') {
+    for (const { key, data, answer } of msg.items) {
+      const m = mirrors.get(key);
+      if (!m) continue;
+      // A escrita é enfileirada: o callback vazio marca, na ordem do parser, de quem é a vez de responder.
+      if (m.queued !== answer) {
+        m.queued = answer;
+        m.term.write('', () => { m.answer = answer; });
+      }
+      m.term.write(data);
+    }
+    return;
+  }
   const mirror = mirrors.get(msg.key);
   switch (msg.type) {
     case 'open': {
@@ -59,17 +72,6 @@ self.onmessage = ({ data: msg }: MessageEvent<MirrorIn>) => {
         if (m.answer) self.postMessage({ key, reply } satisfies MirrorOut);
       });
       mirrors.set(key, m);
-      break;
-    }
-    case 'data': {
-      const m = mirror;
-      if (!m) break;
-      // A escrita é enfileirada: o callback vazio marca, na ordem do parser, de quem é a vez de responder.
-      if (m.queued !== msg.answer) {
-        const answer = (m.queued = msg.answer);
-        m.term.write('', () => { m.answer = answer; });
-      }
-      m.term.write(msg.data);
       break;
     }
     case 'resize':

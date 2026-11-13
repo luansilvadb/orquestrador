@@ -249,7 +249,7 @@ mod tests {
         let places = Places { temp: root.0.join("temp"), codex_rules: root.0.join("rules") };
         let resources = Resources {
             cpus: Some(4),
-            memory: Arc::new(|| Some(Memory { total: 64 << 30, available: 64 << 30, commit: None })),
+            memory: Arc::new(|| Some(Memory { total: 64 << 30, available: 64 << 30, commit: u64::MAX })),
         };
         let projects = Projects::with_resources(exes, places, root.0.join("config.json"), emit, resources);
         (projects, root, a, rx)

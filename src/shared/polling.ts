@@ -50,12 +50,13 @@ export function usePolling(task: () => Promise<void>, ms = POLL_MS, key: unknown
     let timer = 0;
     let resume: (() => void) | null = null;
     let since = 0;
+    const fire = () => {
+      const r = resume;
+      resume = null;
+      r?.();
+    };
     const arm = (delay: number) => {
-      timer = window.setTimeout(() => {
-        const r = resume;
-        resume = null;
-        r?.();
-      }, delay);
+      timer = window.setTimeout(fire, delay);
     };
     // Pedido de rodada imediata que chegou durante uma rodada: sai logo depois dela (no máximo uma pendente).
     let pending = false;
@@ -64,9 +65,7 @@ export function usePolling(task: () => Promise<void>, ms = POLL_MS, key: unknown
       wake: (now?: boolean) => {
         if (resume) {
           window.clearTimeout(timer);
-          const r = resume;
-          resume = null;
-          r();
+          fire();
         } else if (now) pending = true;
       },
       retime: () => {
@@ -94,8 +93,7 @@ export function usePolling(task: () => Promise<void>, ms = POLL_MS, key: unknown
       stop = true;
       pollers.delete(poller);
       window.clearTimeout(timer);
-      resume?.();
-      resume = null;
+      fire();
     };
   }, [key, ms, group]);
 }

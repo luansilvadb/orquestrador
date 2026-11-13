@@ -31,6 +31,7 @@ import { parseDiffFromFile } from '@pierre/diffs';
 import type { Transport } from './backend';
 import { fileNameError } from '../shared/file-tab-actions';
 import { splitPath } from '../shared/paths';
+import { termKey } from '../terminal/term-key';
 import {
   type Batch, type Choice, type DirListing, type ExecutorNode, type NodeStateEvent, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events, type FormatterInfo,
   type FileBase, type GitCommitHoverDetail, type GitDiff, type GitFile, type GitKind, type GitRef, type GraphCommit, type HunkRef, type Moved, type Options, type QuickOpen,
@@ -72,7 +73,6 @@ const snapshotFrame = (seq: number, text: string) => {
   return out.buffer;
 };
 // Terminais e shells por `(projeto, id)`: os ids são locais a cada projeto, como no backend.
-const termKey = (id: string, project: string | null) => `${project ?? ''}\0${id}`;
 const terms = new Map<string, { seq: number; text: string; project: string | null }>();
 function out(id: string, text: string, project: string | null = null) {
   const term = terms.get(termKey(id, project)) ?? { seq: 0, text: '', project };
@@ -590,20 +590,28 @@ function unstagePaths(paths: string[]) {
 // `parents` são os pais, o primeiro é a linha principal. O commit de merge (4b2e8d0) lista os arquivos contra o primeiro pai.
 type Rec = Commit & { parents: string[]; files: CommitFile[] };
 // Grafo: a `main` segue a linha de a2c4e6f; `feat/painel-git` (d7e1a9c) sai dela e volta pelo merge 4b2e8d0. HEAD é 9f3a1c2, uma à frente de origin/main.
+// Datas relativas à carga: 4 e 6 dias caem em "há N dias"; 16 e 20, em "há N semanas" (relativeDate em src/git/git-history.tsx).
+const daysAgo = (n: number, hhmm: string) => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  const [h, m] = hhmm.split(':').map(Number);
+  d.setHours(h, m, 0, 0);
+  return d.toISOString();
+};
 const commits: Rec[] = [
-  { hash: '9f3a1c2b7d4e5f60718293a4b5c6d7e8f9a0b1c2', short: '9f3a1c2', author: 'Luan', date: '2026-10-10T18:42:00-03:00',
+  { hash: '9f3a1c2b7d4e5f60718293a4b5c6d7e8f9a0b1c2', short: '9f3a1c2', author: 'Luan', date: daysAgo(4, '18:42'),
     subject: 'Prepara v0.1.7 com notas completas e publicação validada', parents: ['4b2e8d0a1c3f5e7b9d2a4c6e8f0b1d3a5c7e9f11'],
     files: [{ path: 'README.md', origPath: null, kind: 'modified' }, { path: 'docs/releases/v0.1.7.md', origPath: null, kind: 'added' }] },
-  { hash: '4b2e8d0a1c3f5e7b9d2a4c6e8f0b1d3a5c7e9f11', short: '4b2e8d0', author: 'Luan', date: '2026-10-08T11:05:00-03:00',
+  { hash: '4b2e8d0a1c3f5e7b9d2a4c6e8f0b1d3a5c7e9f11', short: '4b2e8d0', author: 'Luan', date: daysAgo(6, '11:05'),
     subject: 'Abre e edita arquivos no meio da tela', parents: ['a2c4e6f8b0d2e4f6a8c0b2d4e6f8a0c2e4b6d8f0', 'd7e1a9c3b5f7081a2c4e6f8a0b2d4f6e8a0c2e4b'],
     files: [
       { path: 'src/App.tsx', origPath: null, kind: 'modified' }, { path: 'src/lib/utils.ts', origPath: 'src/utils.ts', kind: 'renamed' },
       { path: 'src/components/ui/card.tsx', origPath: null, kind: 'modified' }, { path: 'docs/design-system.md', origPath: null, kind: 'modified' },
     ] },
-  { hash: 'd7e1a9c3b5f7081a2c4e6f8a0b2d4f6e8a0c2e4b', short: 'd7e1a9c', author: 'Luan', date: '2026-10-05T09:30:00-03:00',
+  { hash: 'd7e1a9c3b5f7081a2c4e6f8a0b2d4f6e8a0c2e4b', short: 'd7e1a9c', author: 'Luan', date: daysAgo(16, '09:30'),
     subject: 'Corrige a ordem das pastas na árvore', parents: ['a2c4e6f8b0d2e4f6a8c0b2d4e6f8a0c2e4b6d8f0'],
     files: [{ path: 'src/components/ui/card.tsx', origPath: null, kind: 'modified' }, { path: 'docs/design-system.md', origPath: null, kind: 'modified' }] },
-  { hash: 'a2c4e6f8b0d2e4f6a8c0b2d4e6f8a0c2e4b6d8f0', short: 'a2c4e6f', author: 'Luan', date: '2026-10-01T16:00:00-03:00',
+  { hash: 'a2c4e6f8b0d2e4f6a8c0b2d4e6f8a0c2e4b6d8f0', short: 'a2c4e6f', author: 'Luan', date: daysAgo(20, '16:00'),
     subject: 'Versão inicial do explorador', parents: [],
     files: [
       { path: 'README.md', origPath: null, kind: 'added' }, { path: 'src/App.tsx', origPath: null, kind: 'added' }, { path: 'src/main.tsx', origPath: null, kind: 'added' },

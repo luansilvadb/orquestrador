@@ -87,18 +87,17 @@ impl Term {
         let (tx, rx) = channel::<Vec<u8>>();
         std::thread::spawn(move || {
             let mut first = true;
+            let mut chunk = [0u8; 16384];
             loop {
-                // Lê direto no Vec que vai pelo canal: sem cópia até o lote.
-                let mut bytes = vec![0u8; 16384];
-                let n = match reader.read(&mut bytes) {
+                let n = match reader.read(&mut chunk) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
-                bytes.truncate(n);
+                let mut bytes = &chunk[..n];
                 if std::mem::take(&mut first) && bytes.starts_with(QUERY) {
-                    bytes.drain(..QUERY.len());
+                    bytes = &bytes[QUERY.len()..];
                 }
-                if !bytes.is_empty() && tx.send(bytes).is_err() {
+                if !bytes.is_empty() && tx.send(bytes.to_vec()).is_err() {
                     break;
                 }
             }

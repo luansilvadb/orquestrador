@@ -115,8 +115,8 @@ async function until(fn, { timeout = 30000, every = 50, what = 'condição' } = 
     await sleep(every);
   }
 }
-const sha = (file) => (existsSync(file) ? createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 16) : null);
 const shaInteiro = (file) => (existsSync(file) ? createHash('sha256').update(readFileSync(file)).digest('hex') : null);
+const sha = (file) => shaInteiro(file)?.slice(0, 16) ?? null;
 
 function findPlaywright() {
   if (process.env.PLAYWRIGHT_CORE) return process.env.PLAYWRIGHT_CORE;
@@ -688,16 +688,24 @@ async function medirLatencia(page, cdp, n, rotulo, aindaCarregando, prazoMs = AR
 
 // ---------------------------------------------------------------- perfis do V8 (CDP) resumidos
 const nomeFrame = (cf) => `${cf.functionName || '(anônima)'} ${(cf.url || '').split('/').pop().split('?')[0]}:${cf.lineNumber + 1}`;
-function resumirPerfilCPU(p) {
+// Uma passada pelas amostras: tempo próprio por nó e os totais dos pseudo-frames do V8.
+function percorrerPerfilCPU(p) {
   const porId = new Map(p.nodes.map((n) => [n.id, n]));
   const us = new Map();
-  for (let i = 0; i < p.samples.length; i++) us.set(p.samples[i], (us.get(p.samples[i]) ?? 0) + (p.timeDeltas[i + 1] ?? p.timeDeltas[i] ?? 0));
+  let ocioso = 0, programa = 0, gc = 0;
+  for (let i = 0; i < p.samples.length; i++) {
+    const dt = p.timeDeltas[i + 1] ?? p.timeDeltas[i] ?? 0;
+    us.set(p.samples[i], (us.get(p.samples[i]) ?? 0) + dt);
+    const nome = porId.get(p.samples[i]).callFrame.functionName;
+    if (nome === '(idle)') ocioso += dt; else if (nome === '(program)') programa += dt; else if (nome === '(garbage collector)') gc += dt;
+  }
   const agg = new Map();
   let total = 0;
   for (const [id, t] of us) { const k = nomeFrame(porId.get(id).callFrame); agg.set(k, (agg.get(k) ?? 0) + t); total += t; }
   const lista = [...agg.entries()].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([funcao, t]) => ({ funcao, msProprios: Math.round(t / 1000), pct: Math.round((t / total) * 1000) / 10 }));
-  return { duracaoMs: Math.round(total / 1000), amostras: p.samples.length, topPorTempoProprio: lista };
+  return { resumo: { duracaoMs: Math.round(total / 1000), amostras: p.samples.length, topPorTempoProprio: lista }, total, ocioso, programa, gc };
 }
+const resumirPerfilCPU = (p) => percorrerPerfilCPU(p).resumo;
 function resumirPerfilAlocacoes(p) {
   const agg = new Map();
   let total = 0;
@@ -950,7 +958,7 @@ async function cenario(projectDir) {
 // ---------------------------------------------------------------- build de medição
 function compilar() {
   const marca = existsSync(MARCADOR) ? JSON.parse(readFileSync(MARCADOR, 'utf8')) : null;
-  const atual = existsSync(EXE) ? shaInteiro(EXE) : null;
+  const atual = shaInteiro(EXE);
   const motivo = ARGS.build ? '--build' : !atual ? 'exe ausente' : !marca ? 'sem marcador de medição' : marca.porta !== ARGS.portaCdp ? `porta ${marca.porta} no exe, pedida ${ARGS.portaCdp}`
     : marca.sha256 !== atual ? 'exe diferente do compilado para medição (cargo test o sobrescreve)' : null;
   if (motivo) {
@@ -1125,15 +1133,7 @@ const ramPorTipo = (m) => ({ totalApp: m.totalApp, grupos: Object.fromEntries(Ob
 const executoresVivos = (s) => s.rows.filter((r) => r.name.toLowerCase() === 'claude.exe' && !(r.cmd ?? '').includes('--mcp-config')).length;
 
 function resumirPerfilCPUCompleto(p) {
-  const r = resumirPerfilCPU(p);
-  const porId = new Map(p.nodes.map((n) => [n.id, n]));
-  let total = 0, ocioso = 0, programa = 0, gc = 0;
-  for (let i = 0; i < p.samples.length; i++) {
-    const dt = p.timeDeltas[i + 1] ?? p.timeDeltas[i] ?? 0;
-    const nome = porId.get(p.samples[i]).callFrame.functionName;
-    total += dt;
-    if (nome === '(idle)') ocioso += dt; else if (nome === '(program)') programa += dt; else if (nome === '(garbage collector)') gc += dt;
-  }
+  const { resumo: r, total, ocioso, programa, gc } = percorrerPerfilCPU(p);
   const pc = (x) => Math.round((x / total) * 1000) / 10;
   const ativo = total - ocioso;
   return {

@@ -2,7 +2,7 @@
 
 export type MirrorIn =
   | { type: 'open'; key: string; cols: number; rows: number; scrollback: number }
-  | { type: 'data'; key: string; data: Uint8Array; answer: boolean }
+  | { type: 'data'; items: { key: string; data: Uint8Array; answer: boolean }[] }
   | { type: 'resize'; key: string; cols: number; rows: number }
   | { type: 'serialize'; key: string; id: number }
   | { type: 'close'; key: string };
@@ -14,7 +14,25 @@ const waiting = new Map<number, (text: string) => void>();
 const replies = new Map<string, (reply: string) => void>();
 let nextId = 0;
 
-function post(msg: MirrorIn, transfer: Transferable[] = []) {
+// Escritas de um mesmo envio do canal vão numa só mensagem ao worker.
+let queue: { key: string; data: Uint8Array; answer: boolean }[] = [];
+let flushing = false;
+
+function flush() {
+  flushing = false;
+  if (!queue.length) return;
+  const items = queue;
+  queue = [];
+  send({ type: 'data', items }, items.map((i) => i.data.buffer));
+}
+
+/** Esvazia a fila antes, para nenhuma mensagem passar na frente de dados escritos antes dela. */
+function post(msg: MirrorIn) {
+  flush();
+  send(msg);
+}
+
+function send(msg: MirrorIn, transfer: Transferable[] = []) {
   if (!worker) {
     worker = new Worker(new URL('./mirror-worker.ts', import.meta.url), { type: 'module' });
     worker.onmessage = ({ data }: MessageEvent<MirrorOut>) => {
@@ -32,11 +50,16 @@ export const mirror = {
     if (onReply) replies.set(key, onReply);
     post({ type: 'open', key, cols, rows, scrollback });
   },
-  /** Copia: `data` costuma ser uma vista do buffer do canal, que a tela ainda pode usar; a cópia vai transferida, sem outra cópia. */
-  /** `answer`: o espelho responde às consultas deste pedaço, porque o xterm da tela não o verá. */
+  /**
+   * Copia: `data` costuma ser uma vista do buffer do canal, que a tela ainda pode usar; a cópia vai transferida, sem outra cópia.
+   * `answer`: o espelho responde às consultas deste pedaço, porque o xterm da tela não o verá.
+   */
   write(key: string, data: Uint8Array, answer = false) {
-    const copy = data.slice();
-    post({ type: 'data', key, data: copy, answer }, [copy.buffer]);
+    queue.push({ key, data: data.slice(), answer });
+    if (!flushing) {
+      flushing = true;
+      queueMicrotask(flush);
+    }
   },
   resize: (key: string, cols: number, rows: number) => post({ type: 'resize', key, cols, rows }),
   /** O estado em sequências VT, com tudo o que foi escrito antes do pedido. */

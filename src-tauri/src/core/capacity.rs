@@ -23,12 +23,12 @@ const MAX: usize = 16;
 /// Teto quando CPU ou memória não puderam ser lidas: conservador, e o app abre do mesmo jeito.
 const FALLBACK: usize = 2;
 
-/// Memória, em bytes. `available` é a física livre agora; `commit`, o commit disponível (`None` se ilegível).
+/// Memória, em bytes. `available` é a física livre agora; `commit`, o commit disponível.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Memory {
     pub total: u64,
     pub available: u64,
-    pub commit: Option<u64>,
+    pub commit: u64,
 }
 
 /// De onde vêm CPU e memória. `cpus` é lido uma vez, ao criar o Core; `memory` é lido a cada passe da fila.
@@ -150,27 +150,24 @@ impl Resources {
 /// O teto de admissão de um passe: `min(CPU, RAM total, vivos + min(vagas pela RAM livre, vagas pelo commit))`, com
 /// pelo menos um quando nada está vivo, para a fila não parar. `starting` são os admitidos ainda na partida (no
 /// máximo `live`): descontam 1 GiB da RAM livre e 2 GiB do commit cada. Sem a memória, o teto cai para o
-/// conservador; sem o commit, vale só a RAM. Quem chama passa `live` como os vivos agora: nunca manda parar
+/// conservador. Quem chama passa `live` como os vivos agora: nunca manda parar
 /// ninguém, só deixa de abrir novos enquanto `live` for igual ou maior.
 pub fn admission(cpus: Option<usize>, memory: Option<Memory>, live: usize, starting: usize) -> usize {
     // Teto pela CPU: metade das lógicas, de 1 a 16.
     let cpu = cpus.map_or(FALLBACK, |n| (n / 2).clamp(MIN, MAX));
     let Some(memory) = memory else { return cpu.min(FALLBACK) };
     // Pela memória (a total dá o teto, a livre agora dá as vagas): o que sobra depois da reserva, um executor por 1 GiB.
-    let slots = |b: u64| (b.saturating_sub(RESERVA) / POR_EXECUTOR).min(MAX as u64) as usize;
+    let slots = |b: u64, reserva: u64, por: u64| (b.saturating_sub(reserva) / por).min(MAX as u64) as usize;
     let starting = starting.min(live) as u64;
     let free = memory.available.saturating_sub(starting.saturating_mul(POR_EXECUTOR));
-    let mut vagas = slots(free);
-    if let Some(commit) = memory.commit {
-        let livre = commit.saturating_sub(starting.saturating_mul(COMMIT_POR_EXECUTOR));
-        vagas = vagas.min((livre.saturating_sub(RESERVA_COMMIT) / COMMIT_POR_EXECUTOR).min(MAX as u64) as usize);
-    }
-    let admitted = cpu.min(slots(memory.total).max(MIN)).min(live.saturating_add(vagas));
+    let commit = memory.commit.saturating_sub(starting.saturating_mul(COMMIT_POR_EXECUTOR));
+    let vagas = slots(free, RESERVA, POR_EXECUTOR).min(slots(commit, RESERVA_COMMIT, COMMIT_POR_EXECUTOR));
+    let admitted = cpu.min(slots(memory.total, RESERVA, POR_EXECUTOR).max(MIN)).min(live.saturating_add(vagas));
     if live == 0 { admitted.max(MIN) } else { admitted }
 }
 
 fn memory() -> Option<Memory> {
-    crate::platform::memoria().map(|(total, available, commit)| Memory { total, available, commit: Some(commit) })
+    crate::platform::memoria().map(|(total, available, commit)| Memory { total, available, commit })
 }
 
 #[cfg(test)]
@@ -178,7 +175,7 @@ mod tests {
     use super::*;
 
     fn mem(total_gib: u64, available_gib: u64) -> Option<Memory> {
-        Some(Memory { total: total_gib * GIB, available: available_gib * GIB, commit: None })
+        Some(Memory { total: total_gib * GIB, available: available_gib * GIB, commit: u64::MAX })
     }
 
     #[test]
@@ -224,12 +221,12 @@ mod tests {
 
     #[test]
     fn valores_extremos_nao_estouram() {
-        let cheio = Some(Memory { total: u64::MAX, available: u64::MAX, commit: Some(u64::MAX) });
+        let cheio = Some(Memory { total: u64::MAX, available: u64::MAX, commit: u64::MAX });
         assert_eq!(admission(Some(64), cheio, usize::MAX, usize::MAX), 16);
     }
 
     fn com_commit(total_gib: u64, available_gib: u64, commit_gib: u64) -> Option<Memory> {
-        Some(Memory { commit: Some(commit_gib * GIB), ..mem(total_gib, available_gib).unwrap() })
+        Some(Memory { commit: commit_gib * GIB, ..mem(total_gib, available_gib).unwrap() })
     }
 
     #[test]
@@ -247,11 +244,11 @@ mod tests {
     }
 
     #[test]
-    fn commit_curto_bloqueia_e_ilegivel_nao() {
+    fn commit_curto_bloqueia_e_folgado_nao() {
         assert_eq!(admission(Some(32), com_commit(64, 64, 3), 3, 0), 3, "3 - 2 de reserva: nem 2 GiB para um executor");
         assert_eq!(admission(Some(32), com_commit(64, 64, 8), 3, 0), 6, "8 - 2: três de 2 GiB");
         assert_eq!(admission(Some(32), com_commit(64, 64, 8), 3, 1), 5, "um na partida desconta 2 GiB do commit");
-        assert_eq!(admission(Some(32), mem(64, 64), 3, 0), 16, "commit ilegível: só a RAM física");
+        assert_eq!(admission(Some(32), mem(64, 64), 3, 0), 16, "commit folgado: só a RAM física");
         assert_eq!(admission(Some(32), com_commit(64, 64, 0), 0, 0), 1, "sem vivos, um começa mesmo sem commit");
     }
 
@@ -318,6 +315,6 @@ mod tests {
         let real = Resources::real();
         assert!(real.cpus.is_some_and(|n| n >= 1), "available_parallelism devolve pelo menos 1");
         let m = (real.memory)().expect("o Windows responde GlobalMemoryStatusEx");
-        assert!(m.total > 0 && m.available <= m.total && m.commit.is_some(), "{m:?}");
+        assert!(m.total > 0 && m.available <= m.total && m.commit > 0, "{m:?}");
     }
 }

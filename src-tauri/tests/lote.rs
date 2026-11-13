@@ -165,7 +165,7 @@ fn bench(tag: &str, temp: &str, cpus: Option<usize>) -> Bench {
     let total = Arc::new(AtomicU64::new(64 * GIB));
     let free = Arc::new(AtomicU64::new(64 * GIB));
     let (t, f) = (total.clone(), free.clone());
-    let memory = move || Some(Memory { total: t.load(Ordering::SeqCst), available: f.load(Ordering::SeqCst), commit: None });
+    let memory = move || Some(Memory { total: t.load(Ordering::SeqCst), available: f.load(Ordering::SeqCst), commit: u64::MAX });
     let resources = Resources { cpus, memory: Arc::new(memory) };
     let delivered: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
     let sink = delivered.clone();

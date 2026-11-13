@@ -1104,7 +1104,9 @@ scenario('gráfico: hover busca detalhes uma vez, mantém o popover interativo e
   const text = await hover.innerText();
   assert.match(text, /Luan/);
   assert.match(text, /há /);
-  assert.match(text, /10 de outubro de 2026/);
+  const topDate = new Date();
+  topDate.setDate(topDate.getDate() - 4);
+  assert.ok(text.includes(topDate.toLocaleDateString('pt-BR', { dateStyle: 'long' })), 'data absoluta do commit, 4 dias antes da carga');
   assert.match(text, /Ana Exemplo \(coautor\)/);
   assert.match(text, /Consolida as notas e valida o instalador\./);
   assert.match(text, /2 arquivos alterados, 14 inserções\(\+\), 3 remoções\(-\)/);

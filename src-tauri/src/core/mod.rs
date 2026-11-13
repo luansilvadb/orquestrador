@@ -475,7 +475,7 @@ impl Core {
 
     /// Só o orquestrador e os shells recebem teclado; os executores são somente leitura e qualquer outro id é ignorado.
     pub fn term_write(&self, id: &str, data: &str) -> Result<(), String> {
-        if id != ORCHESTRATOR && !is_shell(id) {
+        if !is_interactive(id) {
             return Ok(());
         }
         // O lock dos escritores é curto e só dele: o do `Core` pode estar com o laço da sessão (que lê o disco). A escrita
@@ -491,7 +491,7 @@ impl Core {
     /// muda quando o CLI abre e quando sai. Só o orquestrador e os shells, que recebem teclado; `None` para o resto.
     pub fn term_cli(&self, id: &str) -> Result<Option<&'static str>, String> {
         let inner = self.lock()?;
-        if id != ORCHESTRATOR && !is_shell(id) {
+        if !is_interactive(id) {
             return Ok(None);
         }
         Ok(inner.slots.get(id).and_then(|s| s.term.as_ref()).and_then(Term::cli))

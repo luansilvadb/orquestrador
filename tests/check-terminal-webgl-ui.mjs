@@ -1,6 +1,7 @@
 // QA do renderizador WebGL do terminal, em Chrome headless contra o app simulado: o terminal visível tem canvas WebGL, e só os últimos
 // usados mantêm o seu (WEBGL_MAX em term.ts, por causa do limite de ~16 contextos); sem WebGL2 o terminal segue no DOM. Uso: node tests/check-terminal-webgl-ui.mjs
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { openApp, uiSuite } from './editor-ui-harness.mjs';
 
 const webgl = uiSuite('terminal-webgl-ui', { launch: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] } });
@@ -10,7 +11,18 @@ const dom = uiSuite('terminal-dom-ui', { launch: { args: ['--disable-3d-apis'] }
 const GL = '.xterm-link-layer';
 const count = (page) => page.locator(GL).count();
 const waitCount = (page, n) => page.waitForFunction(([sel, c]) => document.querySelectorAll(sel).length === c, [GL, n]);
-const MAX = 4;
+const MAX = Number(readFileSync(new URL('../src/terminal/term.ts', import.meta.url), 'utf8').match(/export const WEBGL_MAX = (\d+)/)?.[1]);
+if (!MAX) throw new Error('WEBGL_MAX não encontrado em src/terminal/term.ts');
+
+// Abre o terminal na aba Orquestrador e cria `n` executores rodando (e0..e{n-1}).
+async function openOrchestrator(page, n) {
+  await page.getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Abrir terminal' }).click();
+  await page.getByRole('tab', { name: 'Orquestrador' }).waitFor();
+  await page.evaluate((k) => { for (let i = 0; i < k; i++) window.__mock.addNode({
+    project: 'project-1', id: `e${i}`, batch: 'b', index: i, title: `T${i}`, state: 'running', choice: { tool: 'claude', model: 'opus', effort: 'high' },
+  }); }, n);
+}
 
 // Um terminal por vez (como o usuário abre): o Chromium avisa no console acima de ~16 contextos vivos.
 async function openShells(page, n, gl = true) {
@@ -109,12 +121,7 @@ dom('terminal escondido não gera mutação no DOM, nem com saída intensa; ao v
 // mostra o que saiu, com cores, e o fluxo segue; voltar ao orquestrador zera o xterm do executor de novo.
 dom('executor escondido não processa saída na tela; ao entrar na aba, mostra o que saiu e segue o fluxo', async ({ page }) => {
   await openApp(page);
-  await page.getByRole('button', { name: 'Abrir terminal' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Abrir terminal' }).click();
-  await page.getByRole('tab', { name: 'Orquestrador' }).waitFor();
-  await page.evaluate(() => window.__mock.addNode({
-    project: 'project-1', id: 'e0', batch: 'b', index: 0, title: 'T0', state: 'running', choice: { tool: 'claude', model: 'opus', effort: 'high' },
-  }));
+  await openOrchestrator(page, 1);
   const tab = page.locator('[role="tab"][data-tab="e0"]');
   await tab.waitFor();
   const rows = () => page.evaluate(() => document.querySelector('[data-tab="e0"]') && [...document.querySelectorAll('.xterm')]
@@ -142,12 +149,7 @@ dom('executor escondido não processa saída na tela; ao entrar na aba, mostra o
 // e nada contínuo (linear infinito) anima dentro da faixa de abas dos executores, que faria o compositor redesenhar na taxa do monitor.
 dom('executores rodando: o ícone gira em passos e a faixa de abas não tem animação linear infinita', async ({ page }) => {
   await openApp(page);
-  await page.getByRole('button', { name: 'Abrir terminal' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Abrir terminal' }).click();
-  await page.getByRole('tab', { name: 'Orquestrador' }).waitFor();
-  await page.evaluate(() => { for (let i = 0; i < 4; i++) window.__mock.addNode({
-    project: 'project-1', id: `e${i}`, batch: 'b', index: i, title: `T${i}`, state: 'running', choice: { tool: 'claude', model: 'opus', effort: 'high' },
-  }); });
+  await openOrchestrator(page, 4);
   await page.locator('[role="tab"][data-tab="e3"]').waitFor();
   await page.waitForTimeout(300);
   const anims = await page.evaluate(() => {

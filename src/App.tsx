@@ -855,7 +855,6 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
     dispatch({ type: 'projectBusy', busy: false });
   }
 
-
   async function closeTab(id: string) {
     if (id === stateRef.current.projectId) return closeProject();
     try {
