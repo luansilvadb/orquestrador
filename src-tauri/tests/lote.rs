@@ -154,9 +154,12 @@ fn bench(tag: &str, temp: &str, cpus: Option<usize>) -> Bench {
     std::fs::create_dir_all(root.join(temp)).unwrap();
     assert!(Command::new("git").arg("init").arg("-q").arg(&repo).status().unwrap().success());
     std::fs::write(repo.join("novo.txt"), "x").unwrap();
-    // target\debug\deps\lote-*.exe -> target\debug\examples\fake_cli.exe
-    let fake = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("examples").join("fake_cli.exe");
-    assert!(fake.is_file(), "falta {} (rode `cargo test`, que compila os exemplos)", fake.display());
+    // Primeiro ancestral com examples\fake_cli.exe: vale para target\debug\deps\lote-*.exe (até o Cargo 1.99) e
+    // target\debug\build\<pacote>\<hash>\out\lote-*.exe (a partir do 1.100).
+    let exe = std::env::current_exe().unwrap();
+    let fake = exe.ancestors().map(|d| d.join("examples").join("fake_cli.exe")).find(|p| p.is_file()).unwrap_or_else(|| {
+        panic!("falta examples\\fake_cli.exe em algum ancestral de {} (rode `cargo test`, que compila os exemplos)", exe.display())
+    });
     let fake = fake.to_string_lossy().to_string();
     let exes = Exes { claude: fake.clone(), codex: fake, app: env!("CARGO_BIN_EXE_orquestrador").to_string() };
     let places = Places { temp: root.join(temp), codex_rules: root.join("rules") };
