@@ -66,7 +66,7 @@ pub fn situacao_do_processo(_pid: u32) -> Situacao {
     Situacao::Ilegivel
 }
 
-pub fn memoria() -> Option<(u64, u64)> {
+pub fn memoria() -> Option<(u64, u64, u64)> {
     None
 }
 

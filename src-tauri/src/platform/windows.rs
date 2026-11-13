@@ -229,8 +229,8 @@ pub fn situacao_do_processo(pid: u32) -> Situacao {
     }
 }
 
-/// Memória física em bytes: (total, livre agora). `None` se a API falhar.
-pub fn memoria() -> Option<(u64, u64)> {
+/// Memória em bytes: (física total, física livre agora, commit disponível). `None` se a API falhar.
+pub fn memoria() -> Option<(u64, u64, u64)> {
     // SAFETY: MEMORYSTATUSEX é só números; a estrutura é zerada e `dwLength` é o tamanho dela, como a API exige.
     let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
     status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
@@ -238,7 +238,7 @@ pub fn memoria() -> Option<(u64, u64)> {
     if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
         return None;
     }
-    Some((status.ullTotalPhys, status.ullAvailPhys))
+    Some((status.ullTotalPhys, status.ullAvailPhys, status.ullAvailPageFile))
 }
 
 /// `%LOCALAPPDATA%`, se estiver definido e não for vazio.
