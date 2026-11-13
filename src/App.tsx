@@ -21,6 +21,7 @@ import type { TermView } from './terminal/term';
 import { terminals } from './terminal/terminals';
 import { folderName, TitleBar, type ProjectTab, type TitleBarMenu } from './window/titlebar';
 import { SECONDARY } from './shared/text-style';
+import { pokePolling } from './shared/polling';
 import { pathText, relativeTo } from './shared/file-tab-actions';
 import { OpenProjectPrompt } from './shared/open-project';
 import { isWithin, type TabTarget } from './editor/workspace-model';
@@ -418,6 +419,8 @@ export function App() {
         timer = 0;
         for (const id of pending) refreshBusy(id);
         pending.clear();
+        // Executor iniciado ou terminado, lote entregue, fim do orquestrador: é quando os arquivos mudam.
+        pokePolling('files');
       }, 50);
     };
     const offs = [host().listen('node-added', queue), host().listen('node-state', queue), host().listen('orchestrator-exit', queue)];

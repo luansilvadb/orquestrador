@@ -375,7 +375,7 @@ export function FilesScreen({
     const root = results[0];
     showError(root?.kind === 'error' ? root.message : '');
     applyListings(paths, results);
-  }, 1500, active && !collapsed);
+  }, 1500, active && !collapsed, 'files');
 
   async function openDir(path: string) {
     // A lista chega antes da pasta abrir: ela abre já com o conteúdo, sem o nó provisório.

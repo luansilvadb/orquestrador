@@ -96,7 +96,7 @@ export function usePolled<T>(read: () => Promise<T>, enabled: boolean): PolledSt
     };
     return s;
   });
-  usePolling(store.refresh, 1500, enabled);
+  usePolling(store.refresh, 1500, enabled, 'files');
   return store;
 }
 
