@@ -718,7 +718,7 @@ export function SearchScreen({
                 rowActions.current.mark(h);
                 rowActions.current.onOpen(h.path, h.line, h.col, { permanent: true });
               }}
-              className={`flex h-full min-w-0 flex-1 items-center pl-[30px] pr-2 text-left text-[13px] leading-[22px] outline-none`}
+              className="flex h-full min-w-0 flex-1 items-center pl-[30px] pr-2 text-left text-[13px] leading-[22px] outline-none"
             >
               <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre">
                 {before}
@@ -752,7 +752,7 @@ export function SearchScreen({
         <div key={row.key} className="group/file relative flex h-[22px] items-center hover:bg-[var(--ant-color-fill-tertiary)]" style={indent}>
           <button
             type="button" data-result data-key={row.key} aria-expanded={open} title={row.path} onClick={() => rowActions.current.toggleRow(row.key)}
-            className={`flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none`}
+            className="flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none"
           >
             {twistie}
             <FileIcon path={row.path} dir className="ml-1.5 size-4" />
@@ -771,7 +771,7 @@ export function SearchScreen({
           <button
             type="button" data-result data-key={row.key} aria-expanded={open} title={row.path} onClick={() => rowActions.current.toggleRow(row.key)}
             aria-label={`${plural(row.hits.length, 'resultado', 'resultados')} em ${row.path}`}
-            className={`flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none`}
+            className="flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none"
             onKeyDown={(e) => {
               if (e.key !== 'Delete') return;
               e.preventDefault();
@@ -838,7 +838,7 @@ export function SearchScreen({
           <button
             type="button" aria-label="Ativar/Desativar Substituição" aria-expanded={replaceOpen} title="Ativar/Desativar Substituição"
             onClick={() => { setReplaceOpen((v) => !v); setReport(null); }}
-            className={`absolute top-0 left-0 flex h-full w-4 items-center justify-center rounded-sm text-[var(--ant-color-text-secondary)] outline-none hover:bg-[var(--ant-color-fill-tertiary)]`}
+            className="absolute top-0 left-0 flex h-full w-4 items-center justify-center rounded-sm text-[var(--ant-color-text-secondary)] outline-none hover:bg-[var(--ant-color-fill-tertiary)]"
           >
             <ChevronRight className={`size-4 transition-transform${replaceOpen ? ' rotate-90' : ''}`} aria-hidden />
           </button>
@@ -904,7 +904,7 @@ export function SearchScreen({
           <button
             type="button" aria-label="Ativar/Desativar os Detalhes da Pesquisa" aria-expanded={detailsOpen} title="Ativar/Desativar os Detalhes da Pesquisa"
             onClick={() => setDetailsOpen((v) => !v)}
-            className={`absolute -right-0.5 top-0 z-10 flex h-4 w-[25px] items-center justify-center rounded-sm text-[var(--ant-color-text-secondary)] outline-none hover:bg-[var(--ant-color-fill-tertiary)]`}
+            className="absolute -right-0.5 top-0 z-10 flex h-4 w-[25px] items-center justify-center rounded-sm text-[var(--ant-color-text-secondary)] outline-none hover:bg-[var(--ant-color-fill-tertiary)]"
           >
             <Ellipsis className="size-4" aria-hidden />
           </button>

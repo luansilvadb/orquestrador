@@ -1,7 +1,8 @@
 // Os terminais xterm: cada um é um TermView criado quando o TermHost monta e descartado quando ele sai.
-import { memo, useEffect, useLayoutEffect, useRef } from 'react';
+import { memo, useContext, useEffect, useLayoutEffect, useRef } from 'react';
 import { TermView } from './term';
 import { termKey as key } from './term-key';
+import { LinkTargetContext } from './term-links';
 import type { TermData } from '../backend/types';
 
 const views = new Map<string, TermView>();
@@ -48,6 +49,7 @@ export const TermHost = memo(function TermHost({ id, project = null, writable, s
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<TermView | null>(null);
   const shownNow = useRef(shown);
+  const links = useContext(LinkTargetContext);
   // Antes da pintura: quem aparece já pinta com WebGL, sem um quadro no renderizador DOM.
   useLayoutEffect(() => {
     shownNow.current = shown;
@@ -55,7 +57,7 @@ export const TermHost = memo(function TermHost({ id, project = null, writable, s
   }, [shown]);
 
   useEffect(() => {
-    const created = new TermView(id, host.current!, writable, project, shownNow.current);
+    const created = new TermView(id, host.current!, writable, project, shownNow.current, links);
     const k = key(id, project);
     views.set(k, created);
     view.current = created;

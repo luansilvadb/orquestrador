@@ -41,14 +41,16 @@ export function mediaOf(path: string): { kind: MediaKind; mime: string } | null 
 
 type Source = { url: string } | { error: string } | null;
 
-export function MediaView({
-  path, shown }: { path: string; shown: boolean }) {
+/**
+ * Blob local de uma imagem (`readMedia`), por caminho relativo ao projeto. Uma leitura por caminho: a troca de caminho (renomear) descarta o
+ * blob anterior, e a resposta tardia de um caminho velho não entra. Fora de imagem (ou `null`), não lê.
+ */
+export function useMediaBlob(path: string | null): Source {
   const backend = useBackend();
-  const media = mediaOf(path);
   const [source, setSource] = useState<Source>(null);
-  // Uma leitura por caminho: a troca de caminho (renomear) descarta o blob anterior, e a resposta tardia de um caminho velho não entra.
   useEffect(() => {
-    if (!media || media.kind !== 'image') return;
+    const media = path ? mediaOf(path) : null;
+    if (!path || media?.kind !== 'image') return;
     let live = true;
     let url: string | null = null;
     setSource(null);
@@ -65,6 +67,14 @@ export function MediaView({
       if (url) URL.revokeObjectURL(url);
     };
   }, [path]);
+  return source;
+}
+
+export function MediaView({
+  path, shown }: { path: string; shown: boolean }) {
+  const backend = useBackend();
+  const media = mediaOf(path);
+  const source = useMediaBlob(path);
 
   if (!media) return null;
   if (media.kind === 'video' || media.kind === 'audio') {

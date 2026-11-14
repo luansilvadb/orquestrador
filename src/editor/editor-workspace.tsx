@@ -28,7 +28,7 @@
 // abre o diálogo "Salvar como"; depois de salvo, vira arquivo do projeto (caminho relativo) ou solto (absoluto).
 // Recuperação: localStorage por projeto (`orquestrador.editor:<project normalizado>`) e uma chave fixa no modo sem projeto.
 import {
-  forwardRef, Fragment, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, lazy, Suspense,
+  forwardRef, Fragment, lazy, Suspense, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
 } from 'react';
 import { ActionIcon, Button, ContextMenuTrigger, type ContextMenuItem, DropdownMenu, Modal, Text, toast } from '@lobehub/ui/base-ui';
 import { Center, Flexbox } from '@lobehub/ui';
@@ -37,9 +37,7 @@ import { EditorView } from '@codemirror/view';
 import { FileIcon } from '../shared/file-icon';
 import { AppMark } from '../window/app-mark';
 import { Breadcrumbs } from './breadcrumbs';
-import { isMarkdown, MarkdownSwitch, type MarkdownMode } from './markdown-switch';
-
-const MarkdownPreview = lazy(() => import('./markdown-preview'));
+import { isMarkdown, MarkdownSwitch } from './markdown-switch';
 import { message } from '../backend/backend';
 import { useBackend } from '../backend/backend-context';
 import { useWorkerPool } from '@pierre/diffs/react';
@@ -53,7 +51,7 @@ import { isAbsolutePath, pathText, relativeTo } from '../shared/file-tab-actions
 import { copy, splitPath } from '../shared/paths';
 import {
   activate, closeTabs, createWorkspace, draftName, isDirty, isSafePath, isWithin, joinGroups, liveDocIds, loadWorkspace, markEdited, moveTab, navigate,
-  openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, retargetDoc, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
+  openDraft, openPermanent, openPreview, planClose, promoteDraft, remapPath, reopenClosed, retargetDoc, setView, splitTab, targetKey, togglePin, type CloseScope, type EditorTab, type GroupId, type TabTarget, type WorkspaceState,
 } from './workspace-model';
 import { dragShift, revealTab, trackTabDrag, type TabDrag, wheelToScroll } from '../shared/tab-strip';
 import { TabListMenu, type TabListItem } from '../shared/tab-list-menu';
@@ -64,6 +62,8 @@ import {
 } from './workspace-store';
 import type { GitGuard } from '../git/git-guard';
 import type { FileBase, FileContent } from '../backend/types';
+
+const MarkdownPreview = lazy(() => import('./markdown-preview'));
 
 export type OpenOptions = { permanent?: boolean; line?: number; col?: number; side?: GroupId };
 export type EditorWorkspaceHandle = {
@@ -237,8 +237,6 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
   });
 
   const [ws, setWsState] = useState<WorkspaceState>(boot.ws);
-  // Modo Preview/Markdown por aba, só em memória: guardar na aba exigiria nova versão de `WORKSPACE_VERSION`.
-  const [mdModes, setMdModes] = useState<Record<string, MarkdownMode>>({});
   const [data, setDataState] = useState<EditorData>(boot.data);
   const [status, setStatus] = useState<Record<string, Status>>({});
   const [disk, setDisk] = useState<Record<string, DiskVersion>>({});
@@ -1328,16 +1326,11 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
       );
     }
     if (target.kind === 'file' && mediaOf(target.path)) return <MediaView path={target.path} shown={shown} />;
-    const preview = target.kind === 'file' && mdModes[tab.id] === 'preview';
+    // Markdown: o FileBody fica montado sob uma div escondida no Preview (o CodeMirror guarda cursor e histórico).
+    const markdown = target.kind === 'file' && isMarkdown(target.path);
+    const preview = markdown && tab.view === 'preview';
     const buffer = data.buffers[target.docId];
-    return (
-      <>
-      {preview && (
-        <Suspense fallback={<Reading text="Carregando o preview…" />}>
-          <MarkdownPreview path={target.path} text={buffer?.draft ?? ''} onOpen={(path) => openFile(path)} />
-        </Suspense>
-      )}
-      <div className={preview ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}>
+    const body = (
       <FileBody
         project={project}
         active={active}
@@ -1378,7 +1371,16 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
         onCompare={(mode) => openCompare(target.docId, target.kind === 'file' ? target.path : '', mode)}
         onRetry={() => void syncFile(target.docId)}
       />
-      </div>
+    );
+    if (!markdown) return body;
+    return (
+      <>
+        {preview && (
+          <Suspense fallback={<Reading text="Carregando o preview…" />}>
+            <MarkdownPreview path={target.path} text={buffer?.draft ?? ''} onOpen={(path) => openFile(path)} />
+          </Suspense>
+        )}
+        <div className={preview ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}>{body}</div>
       </>
     );
   };
@@ -1566,7 +1568,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
           <Breadcrumbs
             path={current.target.path} onOpen={(path) => openFile(path)}
             extra={isMarkdown(current.target.path) && (
-              <MarkdownSwitch value={mdModes[current.id] ?? 'source'} onChange={(mode) => setMdModes((m) => ({ ...m, [current.id]: mode }))} />
+              <MarkdownSwitch value={current.view === 'preview' ? 'preview' : 'source'} onChange={(mode) => setWs(setView(wsRef.current, current.id, mode === 'preview' ? 'preview' : undefined))} />
             )}
           />
         )}

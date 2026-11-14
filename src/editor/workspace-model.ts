@@ -33,9 +33,11 @@ export type TabTarget =
   | { kind: 'commit'; hash: string; path: string }
   | { kind: 'conflict'; path: string }
   | { kind: 'draft'; docId: string; num: number }; // sem path: "Sem título-<num>"
-export type EditorTab = { id: string; target: TabTarget; pinned: boolean; preview: boolean };
+/** `view: 'preview'`: aba de Markdown mostrando o documento renderizado; ausente, o texto. Opcional, sem mudar `WORKSPACE_VERSION`. */
+export type TabView = 'preview';
+export type EditorTab = { id: string; target: TabTarget; pinned: boolean; preview: boolean; view?: TabView };
 export type EditorGroup = { id: GroupId; tabs: EditorTab[]; active: string | null };
-export type ClosedTab = { group: GroupId; target: TabTarget };
+export type ClosedTab = { group: GroupId; target: TabTarget; view?: TabView };
 export type WorkspaceState = {
   version: typeof WORKSPACE_VERSION;
   groups: EditorGroup[]; // ordem = esquerda → direita
@@ -124,6 +126,11 @@ export function markEdited(state: WorkspaceState, tabId: string): WorkspaceState
   return updateTab(state, tabId, (tab) => ({ ...tab, preview: false }));
 }
 
+/** Troca o modo de exibição da aba (`undefined` volta ao texto). */
+export function setView(state: WorkspaceState, tabId: string, view: TabView | undefined): WorkspaceState {
+  return updateTab(state, tabId, ({ view: _old, ...tab }) => (view ? { ...tab, view } : tab));
+}
+
 /** Fixa ou desafixa. Fixar torna a aba permanente; a fixada vai para o começo do grupo. */
 export function togglePin(state: WorkspaceState, tabId: string): WorkspaceState {
   return updateTab(state, tabId, (tab) => ({ ...tab, pinned: !tab.pinned, preview: false }));
@@ -156,7 +163,7 @@ export function closeTabs(state: WorkspaceState, tabIds: readonly string[]): Wor
   const closing = new Set(tabIds);
   const closed: ClosedTab[] = [];
   const groups = state.groups.map((group) => {
-    for (const tab of group.tabs) if (closing.has(tab.id) && tab.target.kind !== 'draft') closed.push({ group: group.id, target: tab.target });
+    for (const tab of group.tabs) if (closing.has(tab.id) && tab.target.kind !== 'draft') closed.push({ group: group.id, target: tab.target, ...viewOf(tab) });
     return dropFromGroup(group, closing);
   });
   return tidy({
@@ -173,7 +180,7 @@ export function reopenClosed(state: WorkspaceState, resolve: (target: TabTarget)
   if (!last) return state;
   const rest: WorkspaceState = { ...state, closed: state.closed.slice(0, -1) };
   const group = rest.groups.find((g) => g.id === last.group) ?? rest.groups[0];
-  return openAt(rest, group.id, resolve(last.target), false, NO_DIRTY);
+  return openAt(rest, group.id, resolve(last.target), false, NO_DIRTY, last.view);
 }
 
 /** Anterior (-1) ou próxima (1) aba do grupo focado; dá a volta no fim e no começo. */
@@ -222,7 +229,7 @@ export function splitTab(state: WorkspaceState, tabId: string): WorkspaceState {
   const base = state.groups.some((g) => g.id === otherId)
     ? state
     : { ...state, groups: [...state.groups, { id: otherId, tabs: [], active: null }] };
-  return openAt(base, otherId, found.tab.target, false, NO_DIRTY);
+  return openAt(base, otherId, found.tab.target, false, NO_DIRTY, found.tab.view);
 }
 
 /** Une o segundo grupo ao primeiro. Identidade repetida fica uma vez (a do primeiro); fixada ou permanente vence. Mantém a ativa do primeiro. */
@@ -285,13 +292,13 @@ export function loadWorkspace(text: string, allowDrafts = false): Loaded {
         continue;
       }
       tabIds.add(tab.id);
-      tabs.push({ id: tab.id, target: tab.target, pinned: tab.pinned === true, preview: tab.preview === true });
+      tabs.push({ id: tab.id, target: tab.target, pinned: tab.pinned === true, preview: tab.preview === true, ...viewOf(tab) });
     }
     groups.push({ id: group.id, tabs, active: typeof group.active === 'string' ? group.active : null });
   }
   const closed: ClosedTab[] = [];
   for (const entry of asArray(raw.closed)) {
-    if (isRecord(entry) && isGroupId(entry.group) && isSafeTarget(entry.target, allowDrafts)) closed.push({ group: entry.group, target: entry.target });
+    if (isRecord(entry) && isGroupId(entry.group) && isSafeTarget(entry.target, allowDrafts)) closed.push({ group: entry.group, target: entry.target, ...viewOf(entry) });
     else notes.push('Aba fechada inválida descartada.');
   }
   const nextId = typeof raw.nextId === 'number' && Number.isSafeInteger(raw.nextId) && raw.nextId >= 1 && raw.nextId < Number.MAX_SAFE_INTEGER ? raw.nextId : 1;
@@ -301,7 +308,12 @@ export function loadWorkspace(text: string, allowDrafts = false): Loaded {
 
 // ---- internos ----
 
-function openAt(state: WorkspaceState, groupId: GroupId, target: TabTarget, preview: boolean, dirty: ReadonlySet<string>): WorkspaceState {
+/** Só o valor conhecido de `view` passa; o resto some. */
+function viewOf(value: { view?: unknown }): { view?: TabView } {
+  return value.view === 'preview' ? { view: 'preview' } : {};
+}
+
+function openAt(state: WorkspaceState, groupId: GroupId, target: TabTarget, preview: boolean, dirty: ReadonlySet<string>, view?: TabView): WorkspaceState {
   const group = state.groups.find((g) => g.id === groupId);
   if (!group) return state;
   const key = targetKey(target);
@@ -311,7 +323,7 @@ function openAt(state: WorkspaceState, groupId: GroupId, target: TabTarget, prev
     return activate(kept, same.id);
   }
   const { state: minted, id } = mint(state);
-  const tab: EditorTab = { id, target, pinned: false, preview };
+  const tab: EditorTab = { id, target, pinned: false, preview, ...viewOf({ view }) };
   const previewTab = group.tabs.find((t) => t.preview);
   let tabs: EditorTab[];
   if (preview && previewTab && !isDirty(previewTab.target, dirty)) {

@@ -31,6 +31,7 @@ import { parseDiffFromFile } from '@pierre/diffs';
 import type { Transport } from './backend';
 import { fileNameError } from '../shared/file-tab-actions';
 import { splitPath } from '../shared/paths';
+import { isWebUrl } from '../shared/urls';
 import { termKey } from '../terminal/term-key';
 import {
   type Batch, type Choice, type DirListing, type ExecutorNode, type NodeStateEvent, type ClipboardSnapshot, type CommandName, type Commands, type Commit, type CommitDetail, type CommitFile, type Conflict, type Events, type FormatterInfo,
@@ -1119,7 +1120,8 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   },
   reveal_file: ({ path }: { path: string }) => void requireFile(path),
   open_url: ({ url }: { url: string }) => {
-    if (!/^https?:\/\//i.test(url)) throw 'Só é permitido abrir links http(s).';
+    // Mesma regra de `url_aberta` (src-tauri/src/lib.rs).
+    if (!isWebUrl(url) || /[\p{White_Space}"\p{Cc}]/u.test(url)) throw 'Só é permitido abrir links http(s).';
     return null;
   },
   // Área vazia da raiz: cria de verdade na árvore (e a lista relê). Pasta que não existe é recusada antes.

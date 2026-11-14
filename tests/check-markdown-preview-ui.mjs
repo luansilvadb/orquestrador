@@ -45,3 +45,16 @@ scenario('seletor alterna Preview e Markdown, reflete o buffer não salvo e some
   await preview.locator('h1').waitFor();
   assert.equal(await group.getByRole('radio', { name: 'Preview' }).getAttribute('aria-checked'), 'true', 'modo sobrevive à troca de aba');
 });
+
+scenario('modo Preview sobrevive a recarregar a página', async ({ page }) => {
+  await openApp(page);
+  await treeItem(page, 'README.md').dblclick();
+  const group = page.getByRole('radiogroup', { name: 'Modo do Markdown' });
+  await group.getByRole('radio', { name: 'Preview' }).click();
+  await page.locator('[data-markdown-preview]').waitFor();
+  await page.waitForFunction(() => Object.keys(localStorage).some((k) => k.startsWith('orquestrador.editor:') && localStorage.getItem(k).replaceAll('\\', '').includes('"view":"preview"')));
+  await page.reload();
+  await openApp(page);
+  await page.locator('[data-markdown-preview]').waitFor();
+  assert.equal(await group.getByRole('radio', { name: 'Preview' }).getAttribute('aria-checked'), 'true', 'modo restaurado');
+});

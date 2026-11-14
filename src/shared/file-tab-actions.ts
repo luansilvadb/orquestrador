@@ -56,6 +56,19 @@ export function fileNameError(name: string): string | null {
   return null;
 }
 
+/** Segmentos sem `''` e `.`, com `..` aplicado; null se `..` sair acima do primeiro. */
+export function normalizeSegments(segments: readonly string[]): string[] | null {
+  const out: string[] = [];
+  for (const seg of segments) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      if (!out.length) return null;
+      out.pop();
+    } else out.push(seg);
+  }
+  return out;
+}
+
 /** Caminho relativo ("/") de `abs` dentro de `project`, ou null se está fora (ou é o próprio projeto, ou não há projeto). Sem diferença de caixa nem de barra, como no Windows. */
 export function relativeTo(project: string, abs: string): string | null {
   if (!project) return null;

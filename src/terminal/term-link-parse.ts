@@ -1,4 +1,5 @@
 // Acha URLs e caminhos de arquivo numa linha lógica do terminal. Puro, para o check (tests/check-term-links.mjs).
+import { normalizeSegments } from '../shared/file-tab-actions.ts';
 
 export type TermLinkMatch =
   | { kind: 'url'; start: number; end: number; url: string }
@@ -56,13 +57,6 @@ export function resolveTermPath(path: string, root: string | null): string | nul
   const abs = /^[A-Za-z]:\//.test(p) ? p : root ? `${root.replace(/\\/g, '/').replace(/\/+$/, '')}/${p}` : null;
   if (!abs) return null;
   const [drive, ...rest] = abs.split('/');
-  const parts: string[] = [];
-  for (const part of rest) {
-    if (!part || part === '.') continue;
-    if (part === '..') {
-      if (!parts.length) return null;
-      parts.pop();
-    } else parts.push(part);
-  }
-  return [drive, ...parts].join('/');
+  const parts = normalizeSegments(rest);
+  return parts ? [drive, ...parts].join('/') : null;
 }

@@ -18,7 +18,7 @@ import { SearchScreen } from './search/search';
 import { SHELL_HEIGHT, SHELL_MIN, ShellPanel } from './terminal/shell-panel';
 import { type ExecutorTab, FINISHED, PANEL_MIN, PANEL_WIDTH, TerminalsScreen } from './terminal/terminal-screen';
 import type { TermView } from './terminal/term';
-import { setLinkTarget } from './terminal/term-links';
+import { type LinkTarget, LinkTargetContext } from './terminal/term-links';
 import { terminals } from './terminal/terminals';
 import { folderName, TitleBar, type ProjectTab, type TitleBarMenu } from './window/titlebar';
 import { SECONDARY } from './shared/text-style';
@@ -565,11 +565,12 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
   }
 
   // Ctrl+clique nos terminais deste projeto: arquivo abre no editor (na linha), pasta é revelada na árvore.
-  useEffect(() => setLinkTarget(state.projectId, {
-    root: state.project || null,
+  // Estável: lê o projeto e o editor na hora do clique.
+  const linkTarget = useMemo<LinkTarget>(() => ({
+    root: () => stateRef.current.project || null,
     openFile: (path, line, col) => editor.current?.openFile(path, { permanent: true, line, col }),
     revealDir: (path) => { setTreeReveal({ path }); setRoute('arquivos'); },
-  }), [state.projectId, state.project]);
+  }), []);
 
   useEffect(() => {
     if (initialProject) {
@@ -1210,6 +1211,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
   };
   return (
     <BackendProvider projectId={state.projectId}>
+    <LinkTargetContext value={linkTarget}>
     <Flexbox height="100dvh">
       <TitleBar connected={connected} project={state.project} titleActive={active} menu={titlebarMenu} projectTabs={projects ? {
         projects, active: initialProject?.id ?? null, onSelect: (id) => onSelect?.(id), onClose: (id) => void closeTab(id),
@@ -1418,6 +1420,7 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
         </Flexbox>
       </Modal>
     </Flexbox>
+    </LinkTargetContext>
     </BackendProvider>
   );
 }
