@@ -7,12 +7,14 @@ App para Windows (Tauri) que põe CLIs de IA para trabalhar sobre a pasta de um 
 ## Instalar
 
 1. Baixe o instalador `Orquestrador_<versão>_x64-setup.exe` na [página da última release](https://github.com/luansilvadb/orquestrador/releases/latest) e execute-o. A instalação é por usuário, sem administrador.
-2. Abra o app. Ele confere a versão e se atualiza sozinho quando há uma nova ([detalhes](docs/atualizacao.md)).
+2. Abra o app. Ele confere a versão e se atualiza sozinho quando há uma nova; depois instala ou atualiza os CLIs `claude` e `codex` ([detalhes](docs/atualizacao.md)).
+3. Na primeira vez de cada CLI, faça o login pedido no terminal dele.
 
 Requisitos:
 
 - Windows com WebView2.
-- Os CLIs `claude.exe` e/ou `codex.exe` (binários nativos; o atalho do npm não serve) no `PATH`, instalados e **já autenticados**. Só os que você for usar.
+- Internet na abertura, para conferir o app e os CLIs.
+- Conta no Claude e no ChatGPT para autenticar os CLIs. O app instala e atualiza os dois; a autenticação fica com você.
 - Git (recomendado). Sem ele, o app abre a pasta, mas sem os recursos de Git.
 
 ## Usar

@@ -156,7 +156,7 @@ impl Projects {
             let _config = self.config_lock.lock().unwrap_or_else(|e| e.into_inner());
             config::read(&self.cfg_path)?
         };
-        Ok(config::options(&cfg, &self.exes.codex))
+        Ok(config::options(&cfg, &self.exes.codex()))
     }
 
     /// Vale só para o projeto `id`; a configuração global guarda a última escolha para preencher o formulário.
@@ -245,7 +245,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let emit: Emit = Arc::new(move |event, payload| drop(tx.send((event.to_string(), payload))));
         let fake = "fake".to_string();
-        let exes = Exes { claude: fake.clone(), codex: fake.clone(), app: fake };
+        let exes = Exes::new(fake.clone(), fake.clone(), fake);
         let places = Places { temp: root.0.join("temp"), codex_rules: root.0.join("rules") };
         let resources = Resources {
             cpus: Some(4),
@@ -253,6 +253,20 @@ mod tests {
         };
         let projects = Projects::with_resources(exes, places, root.0.join("config.json"), emit, resources);
         (projects, root, a, rx)
+    }
+
+    /// O caminho que a etapa da abertura resolve depois de o `Projects` existir chega a ele, aos projetos abertos e ao
+    /// sem projeto, que é de onde saem os spawns e o `codex debug models` de `options`.
+    #[test]
+    fn caminho_resolvido_depois_chega_aos_projetos() {
+        let (projects, _root, a_path, _) = fixture("caminho-resolvido");
+        let a = projects.open_project(&a_path).unwrap();
+        projects.exes.clone().set(crate::clis::Caminhos { claude: r"C:\c\claude.exe".into(), codex: r"C:\c\codex.exe".into() });
+        let core = projects.core(&a.id).unwrap();
+        for exes in [projects.exes.clone(), core.lock().unwrap().exes.clone(), projects.no_project.lock().unwrap().exes.clone()] {
+            assert_eq!((exes.claude().as_str(), exes.codex().as_str()), (r"C:\c\claude.exe", r"C:\c\codex.exe"));
+        }
+        projects.shutdown();
     }
 
     #[test]

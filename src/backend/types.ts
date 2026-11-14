@@ -20,10 +20,14 @@ export type ExecutorNode = {
 };
 
 // Atualização na abertura: o uso só é liberado quando o estado chega a `ready`.
+export type CliStep = 'checking' | 'installing' | 'updating' | 'ready';
+export type CliStatus = { step: CliStep; version: string | null };
+// `clis`: o app está em dia e o backend garante `claude.exe` e `codex.exe` (localiza, instala, atualiza) antes do `ready`.
 export type UpdateStatus =
   | { phase: 'checking' }
   | { phase: 'downloading'; version: string; downloaded: number; total: number | null }
   | { phase: 'installing'; version: string }
+  | { phase: 'clis'; claude: CliStatus; codex: CliStatus }
   | { phase: 'ready' }
   | { phase: 'failed'; message: string };
 

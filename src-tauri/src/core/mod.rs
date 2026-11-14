@@ -380,7 +380,7 @@ impl Core {
     pub fn options(&self) -> Result<Options, String> {
         let (path, codex) = {
             let inner = self.lock()?;
-            (inner.cfg_path.clone(), inner.exes.codex.clone())
+            (inner.cfg_path.clone(), inner.exes.codex())
         };
         let cfg = {
             let _config = self.config_lock();
@@ -1028,7 +1028,7 @@ mod tests {
     /// Um Core sem projeto, com CLIs falsas e a configuração e as sessões na pasta `root`.
     fn core_vazio(root: &Path, emit: Emit) -> Core {
         let fake = String::from("fake");
-        let exes = Exes { claude: fake.clone(), codex: fake.clone(), app: fake };
+        let exes = Exes::new(fake.clone(), fake.clone(), fake);
         let places = session::Places { temp: root.join("temp"), codex_rules: root.join("rules") };
         Core::new(exes, places, root.join("config.json"), emit)
     }

@@ -161,7 +161,7 @@ fn bench(tag: &str, temp: &str, cpus: Option<usize>) -> Bench {
         panic!("falta examples\\fake_cli.exe em algum ancestral de {} (rode `cargo test`, que compila os exemplos)", exe.display())
     });
     let fake = fake.to_string_lossy().to_string();
-    let exes = Exes { claude: fake.clone(), codex: fake, app: env!("CARGO_BIN_EXE_orquestrador").to_string() };
+    let exes = Exes::new(fake.clone(), fake, env!("CARGO_BIN_EXE_orquestrador"));
     let places = Places { temp: root.join(temp), codex_rules: root.join("rules") };
     let (tx, events) = channel();
     let emit: Emit = Arc::new(move |event, payload| drop(tx.send((event.to_string(), payload))));

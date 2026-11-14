@@ -134,3 +134,17 @@ pub fn clear_if_same(_expected: &Snapshot) {}
 pub fn set_files(_paths: &[PathBuf], _cut: bool) -> Result<(), String> {
     Err(AINDA_NAO.into())
 }
+
+/// Sem registro: as pastas do PATH do processo.
+pub fn pastas_do_path_registrado() -> Vec<PathBuf> {
+    std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default()
+}
+
+pub fn local_padrao_do_cli(_exe: &str) -> Option<PathBuf> {
+    None
+}
+
+/// Sem o Windows PowerShell: a instalação falha com o motivo.
+pub fn powershell_do_sistema() -> Option<PathBuf> {
+    None
+}

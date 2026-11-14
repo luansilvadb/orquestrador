@@ -1044,7 +1044,10 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
     if (info.kind !== 'cli') throw info.kind === 'unavailable' ? info.reason : 'O simulado não executa formatadores de linha de comando.';
     return text.trimEnd() + '\n';
   },
-  update_status: () => ({ phase: 'ready' }),
+  // `?update=clis`: o portão fica parado na fase dos CLIs, para ver a tela.
+  update_status: () => (params.get('update') === 'clis'
+    ? { phase: 'clis', claude: { step: 'updating', version: '2.1.325' }, codex: { step: 'installing', version: null } }
+    : { phase: 'ready' }),
   retry_update: () => ({ phase: 'ready' }),
   take_open_paths: () => pendingOpenPaths.splice(0),
   choose_project: () => {

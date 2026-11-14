@@ -24,7 +24,8 @@ fn lote_real() {
     let pair = std::env::var("ORQ_REAL").unwrap_or("codex,claude".into());
     let (orchestrator, executor) = pair.split_once(',').unwrap();
     let cheap = |tool: &str| if tool == "claude" { Choice::new("claude", "haiku", "") } else { Choice::new("codex", "", "low") };
-    let exes = Exes { app: env!("CARGO_BIN_EXE_orquestrador").to_string(), ..Exes::real() };
+    let real = Exes::real();
+    let exes = Exes::new(real.claude(), real.codex(), env!("CARGO_BIN_EXE_orquestrador"));
     let (tx, events) = channel();
     let emit: Emit = Arc::new(move |event, payload| drop(tx.send((event.to_string(), payload))));
     // O slot do executor sai quando ele termina, então o log dele é montado dos pedaços que a saída entrega.

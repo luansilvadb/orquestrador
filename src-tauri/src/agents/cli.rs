@@ -5,31 +5,49 @@ use crate::agents::roles::{self, EXECUTOR};
 use crate::agents::session::Session;
 use crate::config::Choice;
 use serde_json::{json, Value};
+use crate::clis::{self, Caminhos};
 use std::path::Path;
+use std::sync::{Arc, RwLock};
 
 /// Os executáveis: os dois CLIs e o próprio app, que serve de servidor MCP do orquestrador (`--mcp`) e de
-/// manipulador dos hooks.
+/// manipulador dos hooks. Os caminhos dos CLIs são compartilhados entre as cópias: a etapa da abertura
+/// (`clis.rs`) os troca pelos absolutos com `set`, antes de liberar o uso, e todos os spawns passam a usá-los.
 #[derive(Clone, Debug)]
 pub struct Exes {
-    pub claude: String,
-    pub codex: String,
+    clis: Arc<RwLock<Caminhos>>,
     pub app: String,
 }
 
 impl Exes {
-    /// Os binários nativos: o atalho do npm (`codex` sem extensão, `codex.cmd`) não abre num PTY, e o `.cmd` passaria o
-    /// prompt pelo `cmd.exe`.
-    pub fn real() -> Exes {
-        let me = std::env::current_exe().unwrap_or_default();
-        // Só no debug: scripts/medir-desempenho.mjs troca o CLI pelo falso, já que o portable-pty refaz o Path do filho pelo registro.
-        let var = |k: &str| if cfg!(debug_assertions) { std::env::var(k).ok() } else { None };
-        Exes { claude: exe(var("ORQ_CLAUDE_EXE"), "claude.exe"), codex: exe(var("ORQ_CODEX_EXE"), "codex.exe"), app: me.to_string_lossy().to_string() }
+    pub fn new(claude: impl Into<String>, codex: impl Into<String>, app: impl Into<String>) -> Exes {
+        Exes { clis: Arc::new(RwLock::new(Caminhos { claude: claude.into(), codex: codex.into() })), app: app.into() }
     }
-}
 
-/// O caminho de `troca` se definido e não vazio; senão, `padrao`.
-fn exe(troca: Option<String>, padrao: &str) -> String {
-    troca.filter(|v| !v.trim().is_empty()).unwrap_or_else(|| padrao.into())
+    /// Os binários nativos: o atalho do npm (`codex` sem extensão, `codex.cmd`) não abre num PTY, e o `.cmd` passaria o
+    /// prompt pelo `cmd.exe`. No instalado, o nome fica até a etapa da abertura trocá-lo pelo caminho absoluto; no
+    /// debug, que não passa pela etapa, só localiza.
+    pub fn real() -> Exes {
+        let me = std::env::current_exe().unwrap_or_default().to_string_lossy().to_string();
+        if !cfg!(debug_assertions) {
+            return Exes::new("claude.exe", "codex.exe", me);
+        }
+        // Só no debug: scripts/medir-desempenho.mjs troca o CLI pelo falso, já que o portable-pty refaz o Path do filho pelo registro.
+        let var = |k: &str| std::env::var(k).ok();
+        let c = clis::localizar_sem_rodar(&clis::Real, var("ORQ_CLAUDE_EXE"), var("ORQ_CODEX_EXE"));
+        Exes::new(c.claude, c.codex, me)
+    }
+
+    pub fn claude(&self) -> String {
+        self.clis.read().unwrap().claude.clone()
+    }
+
+    pub fn codex(&self) -> String {
+        self.clis.read().unwrap().codex.clone()
+    }
+
+    pub fn set(&self, caminhos: Caminhos) {
+        *self.clis.write().unwrap() = caminhos;
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -125,7 +143,7 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, project: &str, session: &Sessi
         args.extend(codex_mcp(&exes.app, &dir));
         // O AGENTS.md lido é o do projeto; o papel entra como instrução de desenvolvedor, chave de topo do config.
         args.extend(["-c".to_string(), format!("developer_instructions={}", toml(&roles::orchestrator(project)))]);
-        (exes.codex.clone(), args, vec![])
+        (exes.codex(), args, vec![])
     } else {
         // Sem --restricted e sem --strict-mcp-config, o Claude mantém os MCPs e os hooks do usuário e do projeto; o
         // --mcp-config soma o servidor do orquestrador. (Medido no 2.1.300: com --restricted, nenhum MCP de usuário ou
@@ -137,7 +155,7 @@ pub fn orchestrator(exes: &Exes, choice: &Choice, project: &str, session: &Sessi
         args.extend(strs(&CLAUDE_BYPASS));
         args.push("--append-system-prompt-file".to_string());
         args.push(session.dir.join("AGENTS.md").to_string_lossy().to_string());
-        (exes.claude.clone(), args, claude_env())
+        (exes.claude(), args, claude_env())
     };
     args.extend(choice.cli_args());
     Spawn { program, args, cwd: project.to_string(), env }
@@ -164,7 +182,7 @@ pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, pr
     let hook_dir = node_dir.join("hook").to_string_lossy().to_string();
     let mut spawn = Spawn { program: String::new(), args: vec![], cwd: project.to_string(), env: vec![] };
     let settings = if choice.tool == "codex" {
-        spawn.program = exes.codex.clone();
+        spawn.program = exes.codex();
         spawn.args = codex_base(project);
         let notify = [exes.app.as_str(), "--hook", &hook_dir].map(toml).join(",");
         spawn.args.extend(["-c".to_string(), format!("notify=[{notify}]")]);
@@ -172,7 +190,7 @@ pub fn executor(exes: &Exes, choice: &Choice, project: &str, node_dir: &Path, pr
         // confirmação e o evento não dispara.
         None
     } else {
-        spawn.program = exes.claude.clone();
+        spawn.program = exes.claude();
         spawn.args = strs(&CLAUDE_BYPASS);
         spawn.args.extend(["--settings".to_string(), node_dir.join("settings.json").to_string_lossy().to_string()]);
         spawn.env.extend(claude_env());
@@ -191,21 +209,35 @@ mod tests {
     use crate::testutil::Tmp;
 
     fn exes() -> Exes {
-        Exes { claude: "claude".into(), codex: "codex".into(), app: r"C:\Program Files\Orq\o'rq.exe".into() }
+        Exes::new("claude", "codex", r"C:\Program Files\Orq\o'rq.exe")
     }
 
-    /// Medido com o portable-pty 0.9: `codex` acha antes o atalho do npm sem extensão e falha com `os error 193`.
+    /// Medido com o portable-pty 0.9: `codex` acha antes o atalho do npm sem extensão e falha com `os error 193`. No
+    /// debug, ou o binário nativo localizado por caminho absoluto, ou o nome dele.
     #[test]
     fn clis_reais_sao_os_binarios_nativos() {
         let real = Exes::real();
-        assert_eq!((real.claude.as_str(), real.codex.as_str()), ("claude.exe", "codex.exe"));
+        for (got, exe, var) in [(real.claude(), "claude.exe", "ORQ_CLAUDE_EXE"), (real.codex(), "codex.exe", "ORQ_CODEX_EXE")] {
+            match std::env::var(var).ok().filter(|v| !v.trim().is_empty()) {
+                Some(troca) => assert_eq!(got, troca),
+                None => assert!(got == exe || (Path::new(&got).is_absolute() && got.to_lowercase().ends_with(&format!(r"\{exe}"))), "{got}"),
+            }
+        }
     }
 
+    /// O caminho resolvido pela etapa da abertura chega às cópias já entregues, e dali aos spawns.
     #[test]
-    fn troca_do_cli_so_com_valor() {
-        assert_eq!(exe(None, "claude.exe"), "claude.exe");
-        assert_eq!(exe(Some("  ".into()), "claude.exe"), "claude.exe");
-        assert_eq!(exe(Some(r"C:	\claude.exe".into()), "claude.exe"), r"C:	\claude.exe");
+    fn caminho_resolvido_chega_aos_spawns() {
+        let (s, _tmp) = session("cli-set", "claude");
+        let exes = exes();
+        let copia = exes.clone();
+        let (claude, codex) = (r"C:\Users\u\.local\bin\claude.exe", r"C:\Codex\bin\codex.exe");
+        exes.set(Caminhos { claude: claude.into(), codex: codex.into() });
+        let node = Path::new(r"C:\tmp\n");
+        assert_eq!(orchestrator(&copia, &Choice::new("claude", "", ""), r"C:\proj", &s).program, claude);
+        assert_eq!(orchestrator(&copia, &Choice::new("codex", "", ""), r"C:\proj", &s).program, codex);
+        assert_eq!(executor(&copia, &Choice::new("claude", "", ""), r"C:\proj", node, "P").0.program, claude);
+        assert_eq!(executor(&copia, &Choice::new("codex", "", ""), r"C:\proj", node, "P").0.program, codex);
     }
 
     fn session(tag: &str, tool: &str) -> (Session, Tmp) {
@@ -276,7 +308,7 @@ mod tests {
         let (s, r) = Session::create(&p, app, project, &cfg);
         r.unwrap();
         let dir = s.dir.to_string_lossy().to_string();
-        let exes = Exes { claude: "claude".into(), codex: "codex".into(), app: app.into() };
+        let exes = Exes::new("claude", "codex", app);
         let got = orchestrator(&exes, &Choice::new("codex", "", ""), project, &s);
         assert_eq!(got.cwd, project);
         assert_eq!(got.args[3], project);

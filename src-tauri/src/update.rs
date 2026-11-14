@@ -1,13 +1,15 @@
 //! Atualização automática na abertura. Antes de liberar o projeto ou qualquer terminal, o app confere
 //! a última versão estável no GitHub. Se houver uma superior, baixa, valida a assinatura, instala e
-//! reabre sozinho. Qualquer falha mantém o uso bloqueado, com o motivo e uma nova tentativa. O build
+//! reabre sozinho. Em dia, garante os dois CLIs (`clis.rs`) antes de liberar. Qualquer falha mantém o uso bloqueado, com o motivo e uma nova tentativa. O build
 //! de desenvolvimento libera o uso direto e não consulta nada.
+use crate::agents::cli::Exes;
+use crate::clis::{self, Andamento};
 use crate::core::Emit;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
 /// Tempo máximo da consulta ao GitHub; passado disso, é falha.
@@ -27,6 +29,8 @@ pub enum Status {
     Downloading { version: String, downloaded: u64, total: Option<u64> },
     /// Baixada e com a assinatura validada; instalando. No Windows o app encerra e o instalador o reabre.
     Installing { version: String },
+    /// App em dia; garantindo os dois CLIs (`clis.rs`), em paralelo.
+    Clis { claude: Andamento, codex: Andamento },
     /// Versão em dia: o uso está liberado.
     Ready,
     /// Falhou: o uso continua bloqueado até uma nova tentativa dar certo.
@@ -110,7 +114,7 @@ async fn attempt(app: &AppHandle, gate: &Gate) -> Status {
     let checked = async { app.updater_builder().timeout(CHECK_TIMEOUT).build()?.check().await }.await;
     let mut update = match checked {
         Ok(Some(update)) => update,
-        Ok(None) => return Status::Ready,
+        Ok(None) => return ensure_clis(app, gate).await,
         Err(why) => return Status::Failed { message: format!("Não foi possível verificar atualizações: {}.", explain(why)) },
     };
     update.timeout = Some(DOWNLOAD_TIMEOUT);
@@ -138,6 +142,25 @@ async fn attempt(app: &AppHandle, gate: &Gate) -> Status {
     match update.install(&bytes) {
         Ok(()) => app.restart(),
         Err(why) => Status::Failed { message: format!("Não foi possível instalar a atualização {version}: {}.", explain(why)) },
+    }
+}
+
+/// A etapa dos CLIs, fora do runtime async porque bloqueia. Com sucesso, os caminhos absolutos vão para o `Exes`
+/// compartilhado antes de o uso ser liberado.
+async fn ensure_clis(app: &AppHandle, gate: &Gate) -> Status {
+    let exes = app.state::<Exes>().inner().clone();
+    let progress = gate.clone();
+    let done = tauri::async_runtime::spawn_blocking(move || {
+        clis::garantir_todos(&clis::Real, |claude, codex| progress.set(Status::Clis { claude, codex }))
+    })
+    .await;
+    match done {
+        Ok(Ok(paths)) => {
+            exes.set(paths);
+            Status::Ready
+        }
+        Ok(Err(message)) => Status::Failed { message },
+        Err(_) => Status::Failed { message: "A verificação dos CLIs parou inesperadamente.".into() },
     }
 }
 
@@ -229,6 +252,18 @@ mod tests {
             json!({"phase": "downloading", "version": "0.2.0", "downloaded": 5, "total": null})
         );
         assert_eq!(v(Status::Failed { message: "x".into() }), json!({"phase": "failed", "message": "x"}));
+        assert_eq!(
+            v(Status::Clis {
+                claude: Andamento { step: clis::Passo::Checking, version: None },
+                codex: Andamento { step: clis::Passo::Updating, version: Some("0.169.0".into()) },
+            }),
+            json!({"phase":"clis","claude":{"step":"checking","version":null},"codex":{"step":"updating","version":"0.169.0"}})
+        );
+        let step = |p| serde_json::to_value(p).unwrap();
+        assert_eq!(
+            [clis::Passo::Checking, clis::Passo::Installing, clis::Passo::Updating, clis::Passo::Ready].map(step),
+            [json!("checking"), json!("installing"), json!("updating"), json!("ready")]
+        );
     }
 
     #[test]

@@ -18,18 +18,20 @@ npm run tauri build    # gera o instalador assinado em src-tauri\target\release\
 
 `npm run tauri` roda antes `scripts/limpar-target.mjs`, que executa `cargo clean` quando `src-tauri/target` passa de 30 GB (ajustável por `ORQUESTRADOR_TARGET_MAX_GB`).
 
-`npm run dev` sobe só o front-end (Vite), com um backend simulado em `src/backend/mock.ts`, fora do Tauri. `?project=none` abre sem projeto mesmo se houver um último salvo; `?projects=2` abre dois projetos simulados. Os modos sem Git ficam nas URLs `?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1`.
+`npm run dev` sobe só o front-end (Vite), com um backend simulado em `src/backend/mock.ts`, fora do Tauri. `?project=none` abre sem projeto mesmo se houver um último salvo; `?projects=2` abre dois projetos simulados. `?update=clis` deixa o portão parado na etapa dos CLIs. Os modos sem Git ficam nas URLs `?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1`.
 
 Para acrescentar um comando: escreva a função `#[tauri::command]` em `lib.rs`, registre-a no `generate_handler!`, adicione a entrada em `Commands` (`types.ts`), o método em `backend.ts` e o handler no mock; `npm run check` aponta a divergência entre o Rust e `Commands`, e o `tsc` aponta o handler que falta no mock.
 
 ## Testes
 
 ```powershell
-npm run check       # 9 checagens puras (Node, sem dependências)
-npm run check:ui    # 11 checks de interface, 4 em paralelo (Chrome headless)
+npm run check       # 10 checagens puras (Node, sem dependências)
+npm run check:ui    # 15 checks de interface, 4 em paralelo (Chrome headless)
 ```
 
 `npm run check` roda os arquivos listados em `package.json`; `npm run check:ui` sobe um Vite só na porta 1421 (`SMOKE_PORT`) pelo setup global (`tests/ui-setup.mjs`) e roda 4 arquivos de cada vez, cada um com o próprio Chromium. Um arquivo rodado sozinho (`node --test tests/check-git-ui.mjs`) sobe o próprio Vite se a porta estiver livre. Os dois saem com código diferente de 0 se algum teste falhou, e mostram o resultado de todos os arquivos.
+
+No build de debug, o portão não instala nem atualiza os CLIs: só localiza `claude.exe` e `codex.exe` (`ORQ_CLAUDE_EXE` e `ORQ_CODEX_EXE` à frente; detalhes em [atualização](atualizacao.md)).
 
 O plugin de instância única roda só em builds release. Builds debug usam o mesmo identificador do app instalado, mas não encaminham caminhos nem ativam outra instância; assim `npm run tauri dev` pode coexistir com o app instalado.
 

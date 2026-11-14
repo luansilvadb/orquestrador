@@ -2,11 +2,26 @@
 
 ## Atualização automática
 
-Em toda abertura do app instalado, antes de liberar a escolha da pasta ou qualquer terminal, ele consulta a última release **estável** de `luansilvadb/orquestrador` no GitHub (`releases/latest/download/latest.json`). Rascunhos e pré-releases não chegam ao app. Se houver versão superior, o app mostra o andamento, baixa, valida a assinatura, instala em modo silencioso (NSIS por usuário, sem administrador) e reabre sozinho na versão nova. Se já estiver em dia, libera o uso normal.
+Em toda abertura do app instalado, antes de liberar a escolha da pasta ou qualquer terminal, ele consulta a última release **estável** de `luansilvadb/orquestrador` no GitHub (`releases/latest/download/latest.json`). Rascunhos e pré-releases não chegam ao app. Se houver versão superior, o app mostra o andamento, baixa, valida a assinatura, instala em modo silencioso (NSIS por usuário, sem administrador) e reabre sozinho na versão nova. Se já estiver em dia, passa à etapa dos CLIs.
+
+### CLIs
+
+Com o app em dia, a tela mostra `Preparando os CLIs…` e uma linha por CLI com versão e passo (conferindo, instalando, atualizando, pronto). `claude` e `codex` são exigidos qualquer que seja a escolha dos papéis e correm em paralelo. Para cada um:
+
+1. Localiza o binário nativo `.exe` nas pastas do `PATH` lido do registro (máquina, depois usuário); senão, no local do instalador oficial: `%USERPROFILE%\.local\bin\claude.exe` e `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`.
+2. Se faltar, instala pelo script oficial no Windows PowerShell do sistema, sem janela e sem administrador: `irm https://claude.ai/install.ps1 | iex` e `irm https://chatgpt.com/codex/install.ps1 | iex` (este com `CODEX_NON_INTERACTIVE=1`).
+3. Confere com `--version` (prazo de 30 s). Sem resposta, roda o instalador por cima uma vez e confere de novo.
+4. Roda `claude update` ou `codex update` (prazo de 15 min cada).
+
+O caminho absoluto encontrado é o usado para abrir orquestrador e executores e para `codex debug models`; o app não depende do `PATH` do processo. O login não é conferido: na primeira vez, o CLI pede no terminal dele.
+
+Falha em qualquer passo mantém o uso bloqueado, com o CLI, o passo e o fim da saída do comando, e `Tentar novamente`, que refaz a rodada inteira. Não há opção de continuar.
+
+Medido com Claude Code 2.1.325 e Codex 0.169.0, ambos em dia: `--version` em 72 ms e 126 ms; `claude update` em 2,0 s; `codex update` em 1,5 a 2,1 s (reexecuta o script oficial). Os dois `update` saíram com código 0 com outro processo do mesmo CLI aberto; com versão nova disponível nessa situação, não foi medido. Sob a política de execução `Restricted`, os cmdlets que os scripts usam carregaram; a instalação pelos scripts não foi rodada nesta medição.
 
 Não há downgrade: só instala versão maior que a instalada, e a versão anunciada precisa ser a versão assinada (`requireSignedVersion`). A atualização troca só os arquivos do programa; `%LOCALAPPDATA%\orquestrador\config.json` e os arquivos dos projetos ficam como estão.
 
-Falha na verificação, no download ou na instalação (inclusive sem internet) mostra o motivo e **mantém o uso bloqueado**, com `Tentar novamente`. Não há opção de continuar na versão antiga. Em `npm run tauri dev` (build de debug) o uso fica liberado direto e nada é consultado. Os modos `--hook`, `--allow` e `--mcp` do executável não abrem janela nem passam pelo updater.
+Falha na verificação, no download ou na instalação (inclusive sem internet) mostra o motivo e **mantém o uso bloqueado**, com `Tentar novamente`. Não há opção de continuar na versão antiga. Em `npm run tauri dev` (build de debug) o uso fica liberado direto e nada é consultado; dos CLIs, só localiza, na mesma ordem, com `ORQ_CLAUDE_EXE` e `ORQ_CODEX_EXE` à frente, e sem achar usa o nome `claude.exe` ou `codex.exe`. Não instala nem roda `--version` ou `update`. Os modos `--hook`, `--allow` e `--mcp` do executável não abrem janela nem passam pelo portão.
 
 O repositório é público, então o app baixa a release sem token. Se o repositório virar privado, a atualização automática deixa de funcionar e a distribuição precisa mudar.
 

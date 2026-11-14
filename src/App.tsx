@@ -26,7 +26,7 @@ import { pathText, relativeTo } from './shared/file-tab-actions';
 import { OpenProjectPrompt } from './shared/open-project';
 import { isWithin, type TabTarget } from './editor/workspace-model';
 import {
-  ORCHESTRATOR, type Choice, type ExecutorNode, type GitState, type NodeState, type Options, type ProjectSnapshot, type UpdateStatus,
+  ORCHESTRATOR, type Choice, type ExecutorNode, type GitState, type NodeState, type Options, type ProjectSnapshot, type UpdateStatus, type CliStatus, type CliStep,
 } from './backend/types';
 
 const MB = 1024 * 1024;
@@ -186,6 +186,9 @@ function reducer(state: State, action: Action): State {
   }
 }
 
+const CLI_STEP: Record<CliStep, string> = { checking: 'conferindo…', installing: 'instalando…', updating: 'atualizando…', ready: 'pronto' };
+const cliLine = (name: string, cli: CliStatus) => `${name}${cli.version ? ` ${cli.version}` : ''}: ${CLI_STEP[cli.step]}`;
+
 const updateText = (status: UpdateStatus, fatal: boolean) => {
   if (fatal) return 'Não foi possível iniciar o app.';
   switch (status.phase) {
@@ -198,6 +201,8 @@ const updateText = (status: UpdateStatus, fatal: boolean) => {
     }
     case 'installing':
       return `Instalando a versão ${status.version}. O app reabre sozinho.`;
+    case 'clis':
+      return 'Preparando os CLIs…';
     case 'failed':
       return 'Não foi possível atualizar. O uso fica bloqueado até a atualização dar certo.';
     case 'ready':
@@ -1156,7 +1161,15 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
     const retry = update.phase === 'failed';
     return (
       <Screen connected={connected} still={retry} description={(
-        <Text as="p" fontSize={14} style={SECONDARY} role="status" aria-live="polite">{updateText(update, fatal)}</Text>
+        <div role="status" aria-live="polite">
+          <Text as="p" fontSize={14} style={SECONDARY}>{updateText(update, fatal)}</Text>
+          {update.phase === 'clis' && !fatal && (
+            <ul aria-label="CLIs">
+              <li><Text fontSize={14} style={SECONDARY}>{cliLine('Claude Code', update.claude)}</Text></li>
+              <li><Text fontSize={14} style={SECONDARY}>{cliLine('Codex', update.codex)}</Text></li>
+            </ul>
+          )}
+        </div>
       )}>
         {update.phase === 'downloading' && (
           // Total desconhecido (ou zero): sem percentual, a barra cheia com o brilho do status active. O Progress não tem modo indeterminado de fato.

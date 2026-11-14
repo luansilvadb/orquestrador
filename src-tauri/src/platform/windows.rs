@@ -251,6 +251,57 @@ pub fn pasta_pessoal() -> PathBuf {
     PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default())
 }
 
+/// As pastas do PATH como o registro guarda agora: o de máquina e depois o de usuário, com `%...%` expandido. O PATH
+/// do processo fica velho depois de uma instalação feita com o app aberto.
+pub fn pastas_do_path_registrado() -> Vec<PathBuf> {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    let maquina = valor_do_registro(HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment", "Path");
+    let usuario = valor_do_registro(HKEY_CURRENT_USER, "Environment", "Path");
+    [maquina, usuario]
+        .into_iter()
+        .flatten()
+        .flat_map(|path| path.split(';').map(|p| p.trim().trim_matches('"').to_string()).collect::<Vec<_>>())
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// Um valor texto do registro. Sem `RRF_NOEXPAND`, o `RegGetValueW` já expande o `REG_EXPAND_SZ`.
+fn valor_do_registro(raiz: windows_sys::Win32::System::Registry::HKEY, chave: &str, nome: &str) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
+    let (chave, nome) = (wide(OsStr::new(chave)), wide(OsStr::new(nome)));
+    let mut bytes = 0u32;
+    // SAFETY: chave e nome terminam em zero; a primeira chamada só mede, a segunda escreve no máximo `bytes`.
+    unsafe {
+        if RegGetValueW(raiz, chave.as_ptr(), nome.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), std::ptr::null_mut(), &mut bytes) != 0 {
+            return None;
+        }
+        let mut dados = vec![0u16; (bytes as usize).div_ceil(2) + 1];
+        bytes = (dados.len() * 2) as u32;
+        if RegGetValueW(raiz, chave.as_ptr(), nome.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), dados.as_mut_ptr().cast(), &mut bytes) != 0 {
+            return None;
+        }
+        let fim = dados.iter().position(|&c| c == 0).unwrap_or(dados.len());
+        Some(String::from_utf16_lossy(&dados[..fim]))
+    }
+}
+
+/// Onde o instalador oficial põe cada CLI: `%USERPROFILE%\.local\bin` (Claude) e
+/// `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` (Codex), medido no Claude Code 2.1.325 e no Codex 0.169.0.
+pub fn local_padrao_do_cli(exe: &str) -> Option<PathBuf> {
+    match exe {
+        "claude.exe" => Some(pasta_pessoal()).filter(|d| !d.as_os_str().is_empty()).map(|d| d.join(".local").join("bin").join(exe)),
+        "codex.exe" => pasta_local_do_usuario().map(|d| d.join("Programs").join("OpenAI").join("Codex").join("bin").join(exe)),
+        _ => None,
+    }
+}
+
+/// O Windows PowerShell do sistema por caminho absoluto: um `powershell.exe` de outra pasta do PATH não entra.
+pub fn powershell_do_sistema() -> Option<PathBuf> {
+    let raiz = std::env::var_os("SystemRoot").filter(|v| !v.is_empty())?;
+    Some(PathBuf::from(raiz).join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe"))
+}
+
 /// Muda o nome (ou move) sem sobrescrever: `MoveFileExW` sem `MOVEFILE_REPLACE_EXISTING` falha se o destino existir
 /// (inclusive um link). O `std::fs::rename` do Windows sobrescreve, por isso não é usado.
 pub fn mover_sem_substituir(from: &Path, to: &Path) -> io::Result<()> {

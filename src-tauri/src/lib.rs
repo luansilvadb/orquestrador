@@ -1,5 +1,6 @@
 //! Backend do app Orquestrador: terminais em que um CLI orquestra e outros executam.
 pub mod agents;
+pub mod clis;
 pub mod config;
 pub mod core;
 pub mod ide;
@@ -683,7 +684,9 @@ pub fn run(context: tauri::Context, initial_paths: Vec<std::path::PathBuf>) {
             channel.start();
             app.manage(channel.clone());
             let sink: TermSink = Arc::new(move |project, id, seq, bytes| channel.send(project, id, seq, bytes));
-            app.manage(Projects::new(cli::Exes::real(), session::Places::real(), cfg_path, emit.clone()).with_term_sink(sink));
+            let exes = cli::Exes::real();
+            app.manage(exes.clone());
+            app.manage(Projects::new(exes, session::Places::real(), cfg_path, emit.clone()).with_term_sink(sink));
             // Build de desenvolvimento libera o uso direto. O instalado confere a versão antes de liberar.
             let gate = Gate::new(cfg!(debug_assertions), emit);
             app.manage(gate.clone());
