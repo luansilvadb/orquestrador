@@ -124,6 +124,8 @@ export const projectBackend = (projectId: string | null) => ({
   // Conteúdo de um arquivo, com o mesmo caminho de `listDirs`. Erro chega como mensagem em português.
   readFile: (path: string) => isAbsolutePath(path) ? call('read_file_at', { path }) : projectCall(projectId, 'read_file', { path }),
   readFileAt: (path: string) => call('read_file_at', { path }),
+  // Tipo de cada caminho absoluto (`file`, `dir` ou `null` se não existe), na ordem pedida. Usado pelos links dos terminais.
+  pathKinds: (paths: string[]) => call('path_kinds', { paths }),
   // Bytes de uma imagem ou áudio (extensão na lista de `files.rs`), como `ArrayBuffer`. Erro chega como mensagem em português; limite de 32 MiB.
   readMedia: (path: string) => isAbsolutePath(path) ? call('read_media_at', { path }) : projectCall(projectId, 'read_media', { path }),
   // Vídeo não passa pelo IPC: o `<video>` lê a URL em pedaços.

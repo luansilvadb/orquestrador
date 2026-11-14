@@ -109,6 +109,27 @@ fn read_file_at(path: String) -> Result<files::Content, String> {
     files::read_at(std::path::Path::new(&path))
 }
 
+/// Tipo de cada caminho absoluto (`file`, `dir` ou nada se não existe ou não é absoluto), na ordem pedida. Os links dos terminais só
+/// sublinham o que existe.
+#[tauri::command(async)]
+fn path_kinds(paths: Vec<String>) -> Vec<Option<&'static str>> {
+    paths.iter().map(|p| tipo_do_caminho(std::path::Path::new(p))).collect()
+}
+
+fn tipo_do_caminho(path: &std::path::Path) -> Option<&'static str> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let meta = std::fs::metadata(path).ok()?;
+    Some(if meta.is_dir() { "dir" } else { "file" })
+}
+
+/// Só `http://` e `https://`, sem espaço nem aspas: o Explorer recebe a URL como argumento.
+fn url_aberta(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://")) && !url.chars().any(|c| c.is_whitespace() || c == '"' || c.is_control())
+}
+
 /// Bytes de uma imagem do projeto para a aba de mídia. `path` é relativo ao projeto. Vai como bytes crus (o
 /// frontend recebe `ArrayBuffer`), sem JSON nem base64; o tipo é o da extensão, decidido na tela.
 #[tauri::command(async)]
@@ -469,11 +490,11 @@ fn reveal_file(projects: State<Projects>, project: String, path: String) -> Resu
     files::reveal(&core.repo()?, &path)
 }
 
-/// Abre no navegador somente URLs HTTPS do GitHub.
+/// Abre no navegador somente URLs http(s): os links do GitHub e o Ctrl+clique dos terminais.
 #[tauri::command(async)]
 fn open_url(url: String) -> Result<(), String> {
-    if !url.starts_with("https://github.com/") {
-        return Err("Só é permitido abrir links do GitHub.".into());
+    if !url_aberta(&url) {
+        return Err("Só é permitido abrir links http(s).".into());
     }
     platform::open_url(&url).map_err(|e| e.to_string())
 }
@@ -727,6 +748,7 @@ pub fn run(context: tauri::Context, initial_paths: Vec<std::path::PathBuf>) {
             reveal_file,
             reveal_dir,
             open_url,
+            path_kinds,
             create_file,
             create_dir,
             clipboard_snapshot,

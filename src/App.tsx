@@ -18,6 +18,7 @@ import { SearchScreen } from './search/search';
 import { SHELL_HEIGHT, SHELL_MIN, ShellPanel } from './terminal/shell-panel';
 import { type ExecutorTab, FINISHED, PANEL_MIN, PANEL_WIDTH, TerminalsScreen } from './terminal/terminal-screen';
 import type { TermView } from './terminal/term';
+import { setLinkTarget } from './terminal/term-links';
 import { terminals } from './terminal/terminals';
 import { folderName, TitleBar, type ProjectTab, type TitleBarMenu } from './window/titlebar';
 import { SECONDARY } from './shared/text-style';
@@ -562,6 +563,13 @@ function ProjectApp({ initialProject, active = true, projects, onSelect, onClose
     editor.current?.openFile(relative ?? absolute, { permanent: true });
     setRoute('arquivos');
   }
+
+  // Ctrl+clique nos terminais deste projeto: arquivo abre no editor (na linha), pasta é revelada na árvore.
+  useEffect(() => setLinkTarget(state.projectId, {
+    root: state.project || null,
+    openFile: (path, line, col) => editor.current?.openFile(path, { permanent: true, line, col }),
+    revealDir: (path) => { setTreeReveal({ path }); setRoute('arquivos'); },
+  }), [state.projectId, state.project]);
 
   useEffect(() => {
     if (initialProject) {

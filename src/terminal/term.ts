@@ -8,6 +8,7 @@ import { backend, message } from '../backend/backend';
 import { decodeTermFrame } from '../backend/term-frame';
 import { mirror } from './mirror';
 import { termKey } from './term-key';
+import { attachTermLinks } from './term-links';
 import { clipboardFiles, clipboardPaste, type Cli, type Paste } from './paste';
 
 const theme = {
@@ -57,6 +58,7 @@ const MIRROR_SCROLLBACK = 2000;
 export class TermView {
   readonly term: Terminal;
   private fitAddon = new FitAddon();
+  private links: { dispose(): void };
   private observer: ResizeObserver;
   private frame = 0;
   /** O React diz se o terminal aparece (`setShown`): aba ativa, painel aberto e projeto ativo. */
@@ -102,6 +104,7 @@ export class TermView {
     if (!shown) this.sync = 'stale';
     this.term.open(host);
     deferSelectionRedraw(this.term);
+    this.links = attachTermLinks(this.term, host, project);
     // Gancho de medição (scripts/medir-desempenho.mjs): só existe se o script o definir na página; sem ele, nada acontece.
     (globalThis as { __orqMedir?: (id: string, term: Terminal) => void }).__orqMedir?.(id, this.term);
     // Ctrl+C com texto selecionado copia; Ctrl+V cola pelo evento nativo (que o xterm trata).
@@ -280,6 +283,7 @@ export class TermView {
     mirror.close(this.key);
     this.release();
     this.observer.disconnect();
+    this.links.dispose();
     this.term.element?.removeEventListener('paste', this.onPaste, true);
     this.term.dispose();
   }

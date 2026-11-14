@@ -1119,7 +1119,7 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
   },
   reveal_file: ({ path }: { path: string }) => void requireFile(path),
   open_url: ({ url }: { url: string }) => {
-    if (!url.startsWith('https://github.com/')) throw 'Só é permitido abrir links do GitHub.';
+    if (!/^https?:\/\//i.test(url)) throw 'Só é permitido abrir links http(s).';
     return null;
   },
   // Área vazia da raiz: cria de verdade na árvore (e a lista relê). Pasta que não existe é recusada antes.
@@ -1192,6 +1192,17 @@ const commands: { [K in CommandName]: (args: Commands[K]['args']) => Commands[K]
     if (path === 'dados/exportacao.json') return { binary: false, tooLarge: true, readOnly: false, bom: false, text: '' };
     return { binary: false, tooLarge: false, readOnly: false, bom: false, text: TEXTS[path] ?? '' };
   },
+  // Caminhos do projeto simulado (`C:\projetos\exemplo\...`, com `\` ou `/`) pela árvore; fora dele, só os arquivos soltos.
+  path_kinds: ({ paths }: { paths: string[] }) => paths.map((path) => {
+    const key = absoluteKey(path), root = absoluteKey(MOCK_ROOT);
+    if (absoluteFiles.has(key)) return 'file';
+    if (key === root) return 'dir';
+    if (!key.startsWith(`${root}/`)) return null;
+    const rel = path.replace(/\\/g, '/').slice(root.length + 1);
+    const { dir, name } = splitPath(rel);
+    const entry = folderAt(dir)?.children[name];
+    return entry ? (entry.dir ? 'dir' : 'file') : null;
+  }),
   read_file_at: ({ path }: { path: string }) => {
     const text = absoluteFiles.get(absoluteKey(path));
     if (text === undefined) throw `Não foi possível ler o arquivo: ${path}`;

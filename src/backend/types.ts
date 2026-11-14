@@ -163,6 +163,7 @@ export type Commands = {
   list_dirs: { args: ProjectArgs<{ paths: string[] }>; result: DirListing[] };
   read_file: { args: ProjectArgs<{ path: string }>; result: FileContent };
   read_file_at: { args: { path: string }; result: FileContent };
+  path_kinds: { args: { paths: string[] }; result: ('file' | 'dir' | null)[] };
   read_media: { args: ProjectArgs<{ path: string }>; result: ArrayBuffer };
   read_media_at: { args: { path: string }; result: ArrayBuffer };
   formatter_info: { args: { path: string }; result: FormatterInfo };
