@@ -1,7 +1,7 @@
 // O caminho do arquivo embaixo das abas, como os breadcrumbs do Antigravity/VS Code: 22 px, as pastas e o arquivo separados por `›`.
 // Clicar num item abre o seletor com o conteúdo da pasta em que ele está (o item marcado). Pasta no seletor desce um nível; arquivo
 // abre como prévia. Sem os símbolos do arquivo: o último item é o próprio arquivo.
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Popover, ScrollArea } from '@lobehub/ui/base-ui';
 import { message } from '../backend/backend';
@@ -11,7 +11,7 @@ import { join, splitPath } from '../shared/paths';
 import type { DirEntry } from '../backend/types';
 
 export function Breadcrumbs({
-  path, onOpen }: { path: string; onOpen: (path: string) => void }) {
+  path, onOpen, extra }: { path: string; onOpen: (path: string) => void; extra?: ReactNode }) {
   const backend = useBackend();
   const parts = path.split('/').filter(Boolean);
   // Item com o seletor aberto (índice em `parts`) e a pasta que o seletor mostra agora.
@@ -99,6 +99,7 @@ export function Breadcrumbs({
           </span>
         );
       })}
+      {extra && <div className="ml-auto flex h-full shrink-0 items-center pr-2 pl-2">{extra}</div>}
     </nav>
   );
 }
