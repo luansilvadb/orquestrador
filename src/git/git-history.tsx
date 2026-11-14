@@ -252,7 +252,7 @@ export function CommitFileList({
               onDoubleClick={() => onOpenTarget({ kind: 'commit', hash, path: f.path }, { permanent: true })}
               aria-current={isOpen ? 'true' : undefined}
               title={`${full}: ${word}. Ver a alteração neste commit (duplo clique abre de vez)`}
-              className={`flex h-[22px] min-w-0 flex-1 items-center gap-1.5 pl-5 pr-3 text-left text-[13px] outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset${isOpen ? ' bg-muted shadow-[inset_2px_0_0_var(--ant-color-primary)]' : ''}`}
+              className={`flex h-[22px] min-w-0 flex-1 items-center gap-1.5 pl-5 pr-3 text-left text-[13px] outline-none hover:bg-muted${isOpen ? ' bg-muted shadow-[inset_2px_0_0_var(--ant-color-primary)]' : ''}`}
             >
               {/* Como no painel do Antigravity: nome e letra na cor do tipo de alteração (gitDecoration), a pasta em tamanho menor. */}
               <FileIcon path={f.path} className="size-4" />
@@ -341,7 +341,7 @@ export function HistoryPanel({
                 type="button"
                 onMouseDown={(e) => { if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) prefetchCommit(c.hash); }}
                 onClick={() => toggleCommit(c.hash)} title={`${c.short} · ${c.subject}`}
-                className="@container flex w-full min-w-0 flex-col gap-0.5 px-3 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
+                className="@container flex w-full min-w-0 flex-col gap-0.5 px-3 py-1.5 text-left outline-none hover:bg-muted"
               >
                 <span className="flex w-full min-w-0 items-center gap-1">
                   <Text as="span" ellipsis fontSize={13} className="min-w-[6rem] flex-1">{c.subject || '(sem mensagem)'}</Text>

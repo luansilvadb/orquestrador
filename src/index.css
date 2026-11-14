@@ -31,9 +31,15 @@
     --animate-spin: spin 1.5s steps(30) infinite;
 }
 
+/* Sem contorno de foco no app (mouse e teclado), inclusive o do antd, do Lobe UI e do navegador. */
+:focus,
+:focus-visible {
+  outline: none !important;
+}
+
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
     }
   html {
     @apply font-sans;
@@ -180,10 +186,6 @@ body {
 .compare-toolbar {
   overflow: hidden;
 }
-.compare-toolbar button:focus-visible {
-  outline: 1px solid #007fd4;
-  outline-offset: -1px;
-}
 .compare-view {
   position: relative;
 }
@@ -193,9 +195,6 @@ body {
   overflow: auto;
   background: #1f1f1f;
   outline: none;
-}
-.compare-body:focus-visible {
-  box-shadow: inset 0 0 0 1px #007fd4;
 }
 /* Ao menos a altura visível: o divisor pega do topo ao fim da área, mesmo com o arquivo mais curto que ela. */
 .compare-stage {
@@ -232,7 +231,7 @@ body {
 /* Divisor do lado a lado: um pipe único no vão de 40 px entre as colunas; a proporção das colunas de texto usa trilhas `fr`.
    Arrastar só atualiza essas variáveis, sem refazer o diff.
    A área de pegar tem 8 px e ocupa o palco todo, então pega em qualquer ponto da rolagem. O hover põe a linha azul de 4 px depois de 300 ms;
-   arrastar e o foco, na hora. */
+   arrastar, na hora. */
 .compare-sash {
   position: absolute;
   top: 0;
@@ -260,8 +259,7 @@ body {
   background: #007fd4;
   transition-delay: 0.3s;
 }
-.compare-sash[data-dragging]::after,
-.compare-sash:focus-visible::after {
+.compare-sash[data-dragging]::after {
   width: 4px;
   background: #007fd4;
 }
@@ -300,9 +298,6 @@ body {
 }
 .compare-mark[data-current] {
   box-shadow: 0 0 0 1px #ffffff;
-}
-.compare-mark:focus-visible {
-  outline: 1px solid #007fd4;
 }
 
 /* Avisos no estilo do `message` do antd, sobre o Toast do Lobe UI: pílula do tamanho do texto, centrada, sem fechar, e sempre em

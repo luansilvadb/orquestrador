@@ -1492,7 +1492,7 @@ export const EditorWorkspace = forwardRef<EditorWorkspaceHandle, EditorWorkspace
                   <button
                     type="button" role="tab" aria-selected={active} tabIndex={active ? 0 : -1} title={labelOf(tab.target)}
                     onClick={() => activateTab(tab.id)} onKeyDown={onTabKey}
-                    className={`flex h-full min-w-0 items-center gap-1.5 pr-7 pl-2.5 text-left text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset ${tab.preview ? 'italic' : ''} ${active ? 'text-[var(--ant-color-text)]' : 'text-[var(--ant-color-text-secondary)]'}`}
+                    className={`flex h-full min-w-0 items-center gap-1.5 pr-7 pl-2.5 text-left text-[13px] outline-none ${tab.preview ? 'italic' : ''} ${active ? 'text-[var(--ant-color-text)]' : 'text-[var(--ant-color-text-secondary)]'}`}
                   >
                     {tab.pinned
                       ? <Pin className="size-4 shrink-0 text-[var(--ant-color-text-secondary)]" aria-hidden />

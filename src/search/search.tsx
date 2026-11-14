@@ -50,7 +50,6 @@ const INPUT_TOGGLE = { size: 16, blockSize: 20, borderRadius: 3 } as const;
 const INPUT_STYLE = { height: 26 };
 const INDENT = 8;
 const ROW_HEIGHT = 22;
-const FOCUS = 'focus-visible:ring-2 focus-visible:ring-ring/50';
 
 /** Tudo o que a busca e a substituição usam, do jeito que está nos campos. */
 type Form = {
@@ -719,7 +718,7 @@ export function SearchScreen({
                 rowActions.current.mark(h);
                 rowActions.current.onOpen(h.path, h.line, h.col, { permanent: true });
               }}
-              className={`flex h-full min-w-0 flex-1 items-center pl-[30px] pr-2 text-left text-[13px] leading-[22px] outline-none ${FOCUS}`}
+              className={`flex h-full min-w-0 flex-1 items-center pl-[30px] pr-2 text-left text-[13px] leading-[22px] outline-none`}
             >
               <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre">
                 {before}
@@ -733,7 +732,7 @@ export function SearchScreen({
             <span className="hidden h-full shrink-0 items-center pr-2 group-hover/row:flex group-focus-within/row:flex">
               <ActionIcon
                 size="small" variant="borderless" icon={X} aria-label="Dispensar" title="Ignorar (Delete)"
-                onClick={() => rowActions.current.dismissHit(h, index)} className={FOCUS}
+                onClick={() => rowActions.current.dismissHit(h, index)}
               />
             </span>
           </div>
@@ -753,7 +752,7 @@ export function SearchScreen({
         <div key={row.key} className="group/file relative flex h-[22px] items-center hover:bg-[var(--ant-color-fill-tertiary)]" style={indent}>
           <button
             type="button" data-result data-key={row.key} aria-expanded={open} title={row.path} onClick={() => rowActions.current.toggleRow(row.key)}
-            className={`flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none ${FOCUS}`}
+            className={`flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none`}
           >
             {twistie}
             <FileIcon path={row.path} dir className="ml-1.5 size-4" />
@@ -772,7 +771,7 @@ export function SearchScreen({
           <button
             type="button" data-result data-key={row.key} aria-expanded={open} title={row.path} onClick={() => rowActions.current.toggleRow(row.key)}
             aria-label={`${plural(row.hits.length, 'resultado', 'resultados')} em ${row.path}`}
-            className={`flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none ${FOCUS}`}
+            className={`flex h-full min-w-0 flex-1 items-center pl-2 text-left text-[13px] outline-none`}
             onKeyDown={(e) => {
               if (e.key !== 'Delete') return;
               e.preventDefault();
@@ -792,12 +791,12 @@ export function SearchScreen({
             {showReplace && (
               <ActionIcon
                 size="small" variant="borderless" icon={ReplaceAll} aria-label={`Substituir tudo em ${row.path}`} title="Substituir Tudo"
-                disabled={applying} onClick={() => void rowActions.current.replaceIn([row.path])} className={FOCUS}
+                disabled={applying} onClick={() => void rowActions.current.replaceIn([row.path])}
               />
             )}
             <ActionIcon
               size="small" variant="borderless" icon={X} aria-label="Dispensar" title="Ignorar (Delete)"
-              onClick={() => rowActions.current.dismissFile(row.path, index)} className={FOCUS}
+              onClick={() => rowActions.current.dismissFile(row.path, index)}
             />
           </span>
         </div>
@@ -839,7 +838,7 @@ export function SearchScreen({
           <button
             type="button" aria-label="Ativar/Desativar Substituição" aria-expanded={replaceOpen} title="Ativar/Desativar Substituição"
             onClick={() => { setReplaceOpen((v) => !v); setReport(null); }}
-            className={`absolute top-0 left-0 flex h-full w-4 items-center justify-center rounded-sm text-[var(--ant-color-text-secondary)] outline-none hover:bg-[var(--ant-color-fill-tertiary)] ${FOCUS}`}
+            className={`absolute top-0 left-0 flex h-full w-4 items-center justify-center rounded-sm text-[var(--ant-color-text-secondary)] outline-none hover:bg-[var(--ant-color-fill-tertiary)]`}
           >
             <ChevronRight className={`size-4 transition-transform${replaceOpen ? ' rotate-90' : ''}`} aria-hidden />
           </button>
@@ -867,7 +866,7 @@ export function SearchScreen({
                 {TOGGLES.map(({ key, icon, label }) => (
                   <ActionIcon
                     key={key} icon={icon} size={INPUT_TOGGLE} variant="borderless" active={form.options[key]}
-                    aria-pressed={form.options[key]} aria-label={label} title={label} onClick={() => toggle(key)} className={FOCUS}
+                    aria-pressed={form.options[key]} aria-label={label} title={label} onClick={() => toggle(key)}
                   />
                 ))}
               </Flexbox>
@@ -888,14 +887,14 @@ export function SearchScreen({
                   <ActionIcon
                     icon={CaseUpper} size={INPUT_TOGGLE} variant="borderless" active={form.preserveCase}
                     aria-pressed={form.preserveCase} aria-label="Preservar maiúsculas" title="Preservar Maiúsculas e Minúsculas"
-                    onClick={() => change({ preserveCase: !form.preserveCase }, 'none')} className={FOCUS}
+                    onClick={() => change({ preserveCase: !form.preserveCase }, 'none')}
                   />
                 )}
               />
               <ActionIcon
                 size="small" variant="borderless" icon={ReplaceAll} aria-label="Substituir Tudo" title="Substituir Tudo (Ctrl+Alt+Enter)"
                 disabled={!form.query || !files.length || applying} onClick={() => void replaceIn(null)}
-                className={FOCUS} aria-busy={applying || undefined}
+                aria-busy={applying || undefined}
               />
             </div>
           )}
@@ -905,7 +904,7 @@ export function SearchScreen({
           <button
             type="button" aria-label="Ativar/Desativar os Detalhes da Pesquisa" aria-expanded={detailsOpen} title="Ativar/Desativar os Detalhes da Pesquisa"
             onClick={() => setDetailsOpen((v) => !v)}
-            className={`absolute -right-0.5 top-0 z-10 flex h-4 w-[25px] items-center justify-center rounded-sm text-[var(--ant-color-text-secondary)] outline-none hover:bg-[var(--ant-color-fill-tertiary)] ${FOCUS}`}
+            className={`absolute -right-0.5 top-0 z-10 flex h-4 w-[25px] items-center justify-center rounded-sm text-[var(--ant-color-text-secondary)] outline-none hover:bg-[var(--ant-color-fill-tertiary)]`}
           >
             <Ellipsis className="size-4" aria-hidden />
           </button>
@@ -920,7 +919,7 @@ export function SearchScreen({
                   <ActionIcon
                     icon={BookOpen} size={INPUT_TOGGLE} variant="borderless" active={form.onlyOpen}
                     aria-pressed={form.onlyOpen} aria-label="Pesquisar só nos editores abertos" title="Fazer a pesquisa somente nos Editores Abertos"
-                    onClick={() => change({ onlyOpen: !form.onlyOpen }, 'now')} className={FOCUS}
+                    onClick={() => change({ onlyOpen: !form.onlyOpen }, 'now')}
                   />
                 )}
               />
@@ -1025,7 +1024,7 @@ function HeaderAction({ icon, label, onClick, disabled, spin }: { icon: LucideIc
   return (
     <ActionIcon
       icon={icon} size="small" variant="borderless" aria-label={label} title={label} disabled={disabled} spin={spin}
-      onClick={onClick} className={FOCUS}
+      onClick={onClick}
     />
   );
 }

@@ -357,7 +357,7 @@ export function GraphSection({
     <Flexbox horizontal align="center" gap={2} height={22} className="shrink-0 pr-2">
       <button
         type="button" onClick={onToggle} aria-expanded={open}
-        className="flex h-full min-w-0 flex-1 items-center text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
+        className="flex h-full min-w-0 flex-1 items-center text-left outline-none"
       >
         <ChevronRight className={`mx-0.5 size-4 shrink-0 transition-transform${open ? ' rotate-90' : ''}`} aria-hidden />
         <span className="min-w-0 shrink truncate text-[12px] font-medium">Grafo</span>
@@ -398,7 +398,7 @@ export function GraphSection({
                       onMouseDown={(e) => { if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) prefetchCommit(c.hash); }}
                       onClick={() => toggleCommit(c.hash)} aria-expanded={isOpen}
                       aria-label={`${c.short}: ${c.subject || '(sem mensagem)'}`}
-                      className={`@container flex h-[22px] w-full min-w-0 items-center gap-1 pr-3 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset${isOpen ? ' bg-muted' : ''}`}
+                      className={`@container flex h-[22px] w-full min-w-0 items-center gap-1 pr-3 text-left outline-none hover:bg-muted${isOpen ? ' bg-muted' : ''}`}
                     >
                       <CommitLanes row={row} head={isHead} />
                       {/* O assunto tem prioridade: base zero (só cresce) e piso de 6rem. Etiquetas e autor encolhem antes dele. */}

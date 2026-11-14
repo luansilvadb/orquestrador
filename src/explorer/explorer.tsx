@@ -107,7 +107,7 @@ const LIST_MAX = 10;
 
 // Botões do diálogo, nas medidas do Antigravity: 28 px, raio de 2 px, 10 px de respiro e 13 px de texto; o principal na cor primária do
 // tema (texto escuro do fundo), o secundário no preenchimento.
-const DIALOG_BUTTON = 'flex h-7 min-w-[64px] items-center justify-center gap-1.5 rounded-[2px] border border-[var(--ant-color-fill-tertiary)] px-2.5 text-[13px] outline-none focus:ring-1 focus:ring-[var(--ant-color-primary)] focus:ring-offset-2 focus:ring-offset-[var(--ant-color-bg-elevated)] disabled:cursor-default disabled:opacity-40';
+const DIALOG_BUTTON = 'flex h-7 min-w-[64px] items-center justify-center gap-1.5 rounded-[2px] border border-[var(--ant-color-fill-tertiary)] px-2.5 text-[13px] outline-none disabled:cursor-default disabled:opacity-40';
 
 /**
  * Diálogo de Excluir, no formato do diálogo do Antigravity/VS Code (Renomear e Criar são inline): caixa de 522 px com raio de 3 px e
@@ -167,7 +167,7 @@ function FormDialog({ open, title, detail, busy, onClose, onConfirm, children }:
       <Flexbox horizontal justify="flex-end" className="h-[26px] pb-1">
         <button
           type="button" aria-label="Fechar" title="Fechar" disabled={busy} onClick={close}
-          className="flex size-[22px] items-center justify-center rounded-[5px] outline-none hover:bg-[var(--ant-color-fill)] focus-visible:ring-2 focus-visible:ring-[var(--ant-color-primary)]"
+          className="flex size-[22px] items-center justify-center rounded-[5px] outline-none hover:bg-[var(--ant-color-fill)]"
         >
           <X className="size-4" aria-hidden />
         </button>
@@ -872,7 +872,7 @@ export function FilesScreen({
       {/* Seção do projeto, como a da pasta no VS Code: recolhe a árvore inteira. */}
       <button
         type="button" aria-expanded={!collapsed} onClick={() => setCollapsed((v) => !v)}
-        className="mt-1 flex h-[22px] flex-none cursor-pointer items-center gap-1 px-2 text-left text-[13px] font-medium text-foreground outline-none hover:bg-[var(--ant-color-fill-tertiary)] focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="mt-1 flex h-[22px] flex-none cursor-pointer items-center gap-1 px-2 text-left text-[13px] font-medium text-foreground outline-none hover:bg-[var(--ant-color-fill-tertiary)]"
       >
         <ChevronRight aria-hidden="true" className={`size-4 shrink-0 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
         <span className="truncate leading-[22px]" title={project}>{project}</span>

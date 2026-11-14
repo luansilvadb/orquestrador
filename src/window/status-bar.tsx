@@ -3,7 +3,7 @@ import { RefreshCw, SquareTerminal } from 'lucide-react';
 import { Flexbox } from '@lobehub/ui';
 
 // Item da barra de status, nas medidas do Antigravity: 22 px de altura, 5 px de respiro dos lados e 12 px de texto da interface.
-const STATUS_ITEM = 'flex h-full shrink-0 items-center gap-1 px-[5px] text-[12px] outline-none hover:bg-[var(--ant-color-fill)] focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:cursor-default disabled:hover:bg-transparent';
+const STATUS_ITEM = 'flex h-full shrink-0 items-center gap-1 px-[5px] text-[12px] outline-none hover:bg-[var(--ant-color-fill)] disabled:cursor-default disabled:hover:bg-transparent';
 
 /**
  * Barra de status embaixo da tela principal, como a do Antigravity: à esquerda, a branch atual (abre o painel Git) e

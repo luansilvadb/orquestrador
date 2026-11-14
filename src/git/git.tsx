@@ -370,7 +370,7 @@ function ChangesPanel({
         >
           <button
             type="button" disabled={!canCommit || busy === 'commit'} title={hint || MODE_LABEL[mode]} onClick={() => void commit(mode)}
-            className="flex min-w-0 flex-1 items-center justify-center gap-1 px-1 text-[13px] outline-none hover:bg-[var(--hover)] focus-visible:ring-2 focus-visible:ring-current focus-visible:ring-inset disabled:cursor-default disabled:hover:bg-transparent"
+            className="flex min-w-0 flex-1 items-center justify-center gap-1 px-1 text-[13px] outline-none hover:bg-[var(--hover)] disabled:cursor-default disabled:hover:bg-transparent"
           >
             {busy === 'commit' ? <LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden /> : <Check className="size-4 shrink-0" aria-hidden />}
             <span className="truncate">{MODE_LABEL[mode]}</span>
@@ -379,7 +379,7 @@ function ChangesPanel({
           <DropdownMenu items={modeMenu} placement="bottomRight">
             <button
               type="button" aria-label={`Escolher a ação do commit (atual: ${MODE_LABEL[mode]})`} title="Escolher a ação do commit"
-              className="flex w-[26px] shrink-0 items-center justify-center outline-none hover:bg-[var(--hover)] focus-visible:ring-2 focus-visible:ring-current focus-visible:ring-inset"
+              className="flex w-[26px] shrink-0 items-center justify-center outline-none hover:bg-[var(--hover)]"
             >
               <ChevronDown className="size-4" aria-hidden />
             </button>
@@ -581,7 +581,7 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
       <Flexbox horizontal align="center" gap={2} height={22} className="pr-2">
         <button
           type="button" onClick={onToggle} aria-expanded={!collapsed}
-          className="flex h-full min-w-0 flex-1 items-center text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
+          className="flex h-full min-w-0 flex-1 items-center text-left outline-none"
         >
           <ChevronRight className={`mx-0.5 size-4 shrink-0 transition-transform${collapsed ? '' : ' rotate-90'}`} aria-hidden />
           <span className="min-w-0 shrink truncate text-[12px] font-medium">{title}</span>
@@ -625,7 +625,7 @@ function FileSection({ title, side, files, collapsed, onToggle, busy, marked, op
                       onDoubleClick={() => actions.review(f, side)}
                       aria-current={isOpen ? 'true' : undefined}
                       title={`${full}: ${word}. Ver alterações (duplo clique abre de vez; Ctrl+clique marca)`}
-                      className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-5 pr-1 text-left text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
+                      className="flex h-full min-w-0 flex-1 items-center gap-1.5 pl-5 pr-1 text-left text-[13px] outline-none"
                     >
                       {/* Nome e letra na cor do tipo de alteração (gitDecoration), como no Antigravity; a pasta em tamanho menor. */}
                       <FileIcon path={f.path} className="size-4" />

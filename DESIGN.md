@@ -136,7 +136,7 @@ Uma paleta de neutros quase sem matiz, onde o branco faz o papel de cor primári
 
 ### Sinal
 - **Erro** (signal-error), **sucesso** (signal-success), **alerta** (signal-warning) e **informação** (signal-info), do tema; estados de executor usam as cores predefinidas do Lobe UI no `Tag`.
-- **Azul de Foco** (focus-blue): foco e unidade atual no comparador, como no VS Code.
+- **Azul de Foco** (focus-blue): unidade atual, hover e arraste do divisor no comparador, como no VS Code.
 - **Vermelho de Fechar** (close-red, a 90%): hover do botão Fechar da janela, como no Windows.
 
 ### Named Rules
@@ -191,7 +191,7 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 - **Fill:** branco de tinta com texto preto, para a ação principal (Salvar, Commit, Escolher pasta).
 - **Default:** preenchimento neutro, para Cancelar e ações secundárias.
 - **Danger:** só na ação destrutiva, que também diz o que faz no texto ("Descartar e encerrar todos").
-- **ActionIcon:** ações pequenas de ícone (24–36 px); foco por teclado com `focus-visible:ring-2`.
+- **ActionIcon:** ações pequenas de ícone (24–36 px); sem contorno de foco.
 
 ### Cards / Containers
 - **Corner Style:** 8px.
@@ -201,7 +201,7 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 
 ### Inputs / Fields
 - **Style:** `Input` e `TextArea` do Lobe UI, 32 px na pesquisa; opções em `ActionIcon` no `suffix` com `aria-pressed`.
-- **Focus:** padrão do Lobe UI.
+- **Focus:** sem contorno de foco (regra global em `src/index.css`).
 
 ### Navigation
 - **Rail:** 44 px, `bg-card`, quatro `ActionIcon` de 36 px com ícone de 20 px. O ativo tem o fundo ativo do Lobe UI e um filete de 2 px na cor primária à esquerda. Contador do Git em `Badge` pequeno no canto do botão.

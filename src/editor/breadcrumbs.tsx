@@ -42,7 +42,7 @@ export function Breadcrumbs({
         <div className="flex h-[22px] items-center gap-1 border-b px-1.5 text-[12px] text-[var(--ant-color-text-secondary)]">
           <button
             type="button" aria-label="Pasta de cima" title="Pasta de cima" onClick={() => load(splitPath(dir).dir)}
-            className="flex size-4 items-center justify-center rounded-sm outline-none hover:bg-[var(--ant-color-fill-tertiary)] focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="flex size-4 items-center justify-center rounded-sm outline-none hover:bg-[var(--ant-color-fill-tertiary)]"
           >
             <ChevronLeft className="size-3.5" aria-hidden />
           </button>
@@ -89,7 +89,7 @@ export function Breadcrumbs({
             >
               <button
                 type="button" title={full} aria-haspopup="listbox" aria-expanded={open === i}
-                className="flex h-full min-w-0 items-center gap-1.5 rounded-sm px-1 outline-none hover:text-[var(--ant-color-text)] focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="flex h-full min-w-0 items-center gap-1.5 rounded-sm px-1 outline-none hover:text-[var(--ant-color-text)]"
               >
                 {last && <FileIcon path={full} className="size-4" />}
                 <span className="truncate">{name}</span>

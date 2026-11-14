@@ -19,7 +19,7 @@ function WindowButton({ label, icon: Icon, danger, disabled, onClick }: {
     <Tooltip title={label} placement="bottomRight">
       <button
         type="button" aria-label={label} disabled={disabled} onClick={onClick}
-        className={`flex h-full w-[46px] shrink-0 items-center justify-center text-[#cccccc] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:opacity-40 ${danger ? 'hover:bg-[#e81123e6] hover:text-white' : 'hover:bg-[#ffffff1a]'}`}
+        className={`flex h-full w-[46px] shrink-0 items-center justify-center text-[#cccccc] outline-none disabled:opacity-40 ${danger ? 'hover:bg-[#e81123e6] hover:text-white' : 'hover:bg-[#ffffff1a]'}`}
       >
         <Icon className="size-4" />
       </button>
@@ -110,7 +110,7 @@ export function TitleBar({ connected, project, children, menu, projectTabs, titl
       <AppMark className="pointer-events-none mx-2.5 size-4 shrink-0" />
       {menu && (
         <DropdownMenu items={menuItems} placement="bottomLeft">
-          <button type="button" className="mr-1 h-[22px] shrink-0 rounded px-2 text-[13px] text-[#cccccc] outline-none hover:bg-[#ffffff1a] focus-visible:ring-2 focus-visible:ring-ring/50">Arquivo</button>
+          <button type="button" className="mr-1 h-[22px] shrink-0 rounded px-2 text-[13px] text-[#cccccc] outline-none hover:bg-[#ffffff1a]">Arquivo</button>
         </DropdownMenu>
       )}
       {projectTabs && <ProjectTabs {...projectTabs} />}
@@ -173,14 +173,14 @@ function ProjectTabs({ projects, active, onSelect, onClose, onMove, onAdd }: Pro
             {!!item.busy && <span className="size-1.5 shrink-0 rounded-full bg-[var(--ant-color-warning)]" aria-label={`${item.busy} executores ativos`} title={`${item.busy} executores ativos`} />}
             <button
               type="button" aria-label={`Fechar ${folderName(item.path)}`} title="Fechar pasta" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClose(item.id); }}
-              className={`flex size-[18px] shrink-0 items-center justify-center rounded text-[#cccccc] outline-none hover:bg-[#ffffff1a] focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 ${selected ? '' : 'opacity-0 group-hover:opacity-100'}`}
+              className={`flex size-[18px] shrink-0 items-center justify-center rounded text-[#cccccc] outline-none hover:bg-[#ffffff1a] focus-visible:opacity-100 ${selected ? '' : 'opacity-0 group-hover:opacity-100'}`}
             >
               <X className="size-3" aria-hidden />
             </button>
           </div>
         );
       })}
-      <button type="button" aria-label="Abrir pasta" title="Abrir pasta" onClick={onAdd} className="flex size-[26px] shrink-0 items-center justify-center rounded-md text-[#cccccc] outline-none hover:bg-[#ffffff1a] focus-visible:ring-2 focus-visible:ring-ring/50">
+      <button type="button" aria-label="Abrir pasta" title="Abrir pasta" onClick={onAdd} className="flex size-[26px] shrink-0 items-center justify-center rounded-md text-[#cccccc] outline-none hover:bg-[#ffffff1a]">
         <Plus className="size-4" aria-hidden />
       </button>
     </div>
