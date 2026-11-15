@@ -3,7 +3,6 @@
 // A saída dos macros do GPUI aponta para `gpui::`; o alias resolve tudo pelo Kit.
 extern crate gpui_kit as gpui;
 
-pub mod colagem;
 pub mod comparar;
 pub mod comparador;
 pub mod comum;
@@ -12,7 +11,6 @@ pub mod fonte;
 pub mod grafo;
 pub mod guarda;
 pub mod pre_leitura;
-pub mod quebra;
 pub use orquestrador_hunks as preparo;
 pub mod realce;
 pub mod simulado;

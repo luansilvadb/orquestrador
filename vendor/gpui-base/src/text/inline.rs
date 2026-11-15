@@ -101,6 +101,11 @@ impl InlineHighlight {
                     *inset += border.to_pixels(rem_size).max(Pixels::ZERO);
                 }
             }
+            // Orquestrador: a margem horizontal (o `margin-inline` do CSS) também afasta o texto vizinho; o fundo
+            // desconta-a em `code_background`.
+            let (left, right) = code_margins(style, font_size, rem_size);
+            insets.left += left;
+            insets.right += right;
         }
         insets
     }
@@ -305,6 +310,15 @@ pub(super) fn text_runs(
         runs.push(default_style.to_run(text_len - ix));
     }
     runs
+}
+
+// Orquestrador: margens horizontais do estilo do código inline, em pixels.
+pub(super) fn code_margins(style: &gpui::StyleRefinement, font_size: Pixels, rem_size: Pixels) -> (Pixels, Pixels) {
+    let px_of = |m: Option<gpui::Length>| match m {
+        Some(gpui::Length::Definite(d)) => d.to_pixels(font_size.into(), rem_size).max(Pixels::ZERO),
+        _ => Pixels::ZERO,
+    };
+    (px_of(style.margin.left), px_of(style.margin.right))
 }
 
 pub(super) fn code_insets(

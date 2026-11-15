@@ -1329,10 +1329,12 @@ fn code_background(
                 .map(|width| width.to_pixels(window.rem_size()))
                 .unwrap_or_default()
     };
+    // Orquestrador: o fundo fica dentro da margem horizontal.
+    let (margin_left, margin_right) = super::inline::code_margins(&style, font_size, window.rem_size());
     Some(CodeBox {
         bounds: Bounds::new(
-            point(Pixels::ZERO, baseline - cap_height - top),
-            size(fragment_size.width, cap_height + top + bottom),
+            point(margin_left, baseline - cap_height - top),
+            size(fragment_size.width - margin_left - margin_right, cap_height + top + bottom),
         ),
         style: Arc::new(style),
     })

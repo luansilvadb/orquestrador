@@ -16,3 +16,5 @@ Cada tela (editor, árvore, mídia, pesquisa, Git) é um crate próprio que:
 - usa os menus do Kit (`PopupMenu`, com `widgets::item_menu` para rótulo e atalho), já nas medidas do React;
 - usa `TooltipTexto::tooltip_texto` para dicas e `widgets::mascara` sob os modais; menu ou camada própria que deve
   esconder a dica visível chama `widgets::marcar_sobreposicao()` ao desenhar.
+- ordena como o `localeCompare` do React com `colagem::comparar` e quebra texto corrido com `quebra::linhas` (o
+  `text-wrap: pretty` do Lobe) ou com `widgets::texto_pretty`.

@@ -1,7 +1,10 @@
 //! Widgets genéricos no estilo do app: ícone, botões do Lobe UI, ícone de estado, botões da janela, dicas, item de menu e alça de divisor.
 use crate::tema::{self, cor};
 use gpui_kit::component::tooltip::{registrar_clique, Tooltip};
-use gpui_kit::{div, prelude::*, px, svg, AnyElement, App, Div, Hsla, SharedString, Stateful, Svg, Window, WindowControlArea};
+use gpui_kit::{
+    canvas, div, prelude::*, px, svg, AnyElement, App, Div, ElementId, FontWeight, Hsla, Pixels, SharedString, Stateful, Svg, Window,
+    WindowControlArea,
+};
 
 pub fn icone(caminho: &'static str, tamanho: f32, cor: Hsla) -> Svg {
     svg().path(caminho).size(px(tamanho)).flex_none().text_color(cor)
@@ -156,6 +159,45 @@ impl<E: StatefulInteractiveElement> TooltipTexto for E {
         self.capture_any_mouse_down(|ev, _, _| registrar_clique(ev.position))
             .tooltip(move |window, cx| Tooltip::new(texto.clone()).build(window, cx))
     }
+}
+
+/// `texto` quebrado com o `text-wrap: pretty` do Lobe na largura `largura`, medido na fonte do app: as linhas vão
+/// separadas por `\n` (os `\n` do texto ficam como parágrafos).
+pub fn linhas_pretty(texto: &str, largura: f32, tamanho: Pixels, peso: FontWeight, window: &Window) -> String {
+    let sistema = window.text_system().clone();
+    let fonte = gpui_kit::Font { weight: peso, ..gpui_kit::font(tema::FONTE) };
+    let medir = |t: &str| {
+        let run = gpui_kit::TextRun { len: t.len(), font: fonte.clone(), color: Default::default(), background_color: None, underline: None, strikethrough: None };
+        f32::from(sistema.shape_line(t.to_string().into(), tamanho, &[run], None).width)
+    };
+    texto.split('\n').map(|p| crate::quebra::linhas(p, largura, &medir).join("\n")).collect::<Vec<_>>().join("\n")
+}
+
+/// Bloco de texto corrido com o `text-wrap: pretty` do Lobe, na largura do próprio bloco (a do pai, medida no quadro
+/// anterior). `tamanho` e `peso` são os do texto desenhado; o resto do estilo vem do pai ou de quem chama.
+pub fn texto_pretty(
+    id: impl Into<ElementId>, texto: impl Into<SharedString>, tamanho: Pixels, peso: FontWeight, window: &mut Window, cx: &mut App,
+) -> Div {
+    let texto: SharedString = texto.into();
+    let largura = window.use_keyed_state(id, cx, |_, _| 0f32);
+    let l = *largura.read(cx);
+    let quebrado: SharedString = if l > 0. { linhas_pretty(&texto, l, tamanho, peso, window).into() } else { texto };
+    let medidor = canvas(
+        move |b, window, cx| {
+            let n = f32::from(b.size.width);
+            if *largura.read(cx) != n {
+                // Notificar no meio do desenho se perde: a largura nova vale no quadro seguinte.
+                window.on_next_frame(move |_, cx| largura.update(cx, |v, cx| {
+                    *v = n;
+                    cx.notify();
+                }));
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_full();
+    div().relative().w_full().min_w_0().text_size(tamanho).font_weight(peso).child(quebrado).child(medidor)
 }
 
 /// Borda do painel onde fica a alça de redimensionar.

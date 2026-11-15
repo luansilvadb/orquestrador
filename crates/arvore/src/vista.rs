@@ -2039,7 +2039,8 @@ impl Explorador {
                                 .text_size(tema::TEXTO_LABEL)
                                 .line_height(px(17.))
                                 .text_color(cor::text_primary())
-                                .child(erro),
+                                // Largura do campo menos o recuo e a borda.
+                                .child(widgets::linhas_pretty(&erro, f32::from(self.largura_campo) - 14., tema::TEXTO_LABEL, FontWeight::NORMAL, window)),
                         ),
                     )
                     .with_priority(1),
@@ -2117,7 +2118,7 @@ impl Explorador {
         )
     }
 
-    fn dialogo_el(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn dialogo_el(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let e = self.excluindo.as_ref()?;
         let tem_pasta = e.caminhos.iter().any(|p| !self.arvore.eh_arquivo(p));
         let (pergunta, detalhe) = modelo::textos_excluir(&e.caminhos, tem_pasta);
@@ -2146,7 +2147,7 @@ impl Explorador {
                 .when(ocupado, |d| d.opacity(0.4))
                 .test_support()
         };
-        let alerta = |texto: String, tom: Hsla, caminho: &'static str| {
+        let alerta = |id: &'static str, texto: String, tom: Hsla, caminho: &'static str, window: &mut Window, cx: &mut App| {
             div()
                 .flex()
                 .items_start()
@@ -2158,7 +2159,7 @@ impl Explorador {
                 .border_color(tom.opacity(0.35))
                 .bg(tom.opacity(0.1))
                 .child(div().mt(px(3.)).child(icone(caminho, 14., tom)))
-                .child(div().flex_1().min_w_0().child(texto))
+                .child(div().flex_1().min_w_0().child(widgets::texto_pretty(id, texto, tema::TEXTO_MENU, FontWeight::NORMAL, window, cx)))
         };
         let mut corpo = div().flex().flex_col().flex_1().min_w_0().pl(px(24.)).child(
             div()
@@ -2168,9 +2169,9 @@ impl Explorador {
                 .mb(px(8.))
                 .text_size(px(18.))
                 .line_height(px(22.))
-                .child(div().flex_1().min_w_0().child(pergunta)),
+                .child(div().flex_1().min_w_0().child(widgets::texto_pretty("arvore-excluir-pergunta", pergunta, px(18.), FontWeight::NORMAL, window, cx))),
         );
-        corpo = corpo.child(div().child(detalhe));
+        corpo = corpo.child(widgets::texto_pretty("arvore-excluir-detalhe", detalhe, tema::TEXTO_MENU, FontWeight::NORMAL, window, cx));
         let mut extras = div().flex().flex_col().gap(px(8.)).mt(px(8.));
         let mut tem_extra = false;
         if e.caminhos.len() > 1 {
@@ -2186,11 +2187,11 @@ impl Explorador {
         }
         if let Some(a) = modelo::aviso_rascunhos(&sujos) {
             tem_extra = true;
-            extras = extras.child(alerta(a, cor::signal_warning(), "icons/triangle-alert.svg"));
+            extras = extras.child(alerta("arvore-excluir-rascunhos", a, cor::signal_warning(), "icons/triangle-alert.svg", window, cx));
         }
         if !e.erro.is_empty() {
             tem_extra = true;
-            extras = extras.child(alerta(e.erro.clone(), cor::signal_error(), "icons/circle-x.svg"));
+            extras = extras.child(alerta("arvore-excluir-erro", e.erro.clone(), cor::signal_error(), "icons/circle-x.svg", window, cx));
         }
         if tem_extra {
             corpo = corpo.child(extras);

@@ -1,8 +1,6 @@
 //! Faixa de abas com rolagem horizontal (porte de `src/shared/tab-strip.ts`), comum às abas de projeto, de shell, de
 //! executores e do editor. Quem chama desenha cada aba; a faixa cuida do arrasto (começa depois de 4 px, as vizinhas abrem
 //! espaço, rola sozinha na borda, Esc ou a janela perdendo o foco cancelam), da roda do mouse e de revelar a aba ativa.
-use crate::tema::{self, cor};
-use crate::widgets::TooltipTexto;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::{
     canvas, deferred, div, point, prelude::*, px, AnyElement, App, Context, Div, DispatchPhase, ElementId, EntityId,
@@ -452,60 +450,6 @@ impl RenderOnce for FaixaAbas {
             .size_0(),
         )
     }
-}
-
-/// O fechar das abas do editor (como no VS Code): X de 20 px, visível na ativa e com o ponteiro sobre a aba (`grupo`);
-/// com alteração não salva, o ● fica no lugar dele até o ponteiro chegar. Posicionado à direita, centrado na vertical.
-pub fn fechar_ou_modificado(
-    id: impl Into<ElementId>, grupo: impl Into<SharedString>, ativa: bool, modificado: bool,
-    ao_fechar: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let grupo: SharedString = grupo.into();
-    div()
-        .absolute()
-        .right(px(4.))
-        .top_0()
-        .bottom_0()
-        .flex()
-        .items_center()
-        .child(
-            div()
-                .relative()
-                .size(px(20.))
-                .when(modificado, |d| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(tema::TEXTO_MENU)
-                            .group_hover(grupo.clone(), |s| s.opacity(0.))
-                            .child("●"),
-                    )
-                })
-                .child(
-                    div()
-                        .id(id)
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(tema::RAIO_MENU)
-                        .hover(|s| s.bg(cor::fill_hover()))
-                        .when(!(ativa && !modificado), |d| d.opacity(0.))
-                        .group_hover(grupo, |s| s.opacity(1.))
-                        .tooltip_texto("Fechar (Ctrl+F4)")
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(move |e, w, cx| {
-                            cx.stop_propagation();
-                            ao_fechar(e, w, cx);
-                        })
-                        .child(crate::widgets::icone(crate::recursos::icone::FECHAR, 16., cor::text_secondary())),
-                ),
-        )
 }
 
 #[cfg(test)]

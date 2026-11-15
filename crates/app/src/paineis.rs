@@ -1,13 +1,13 @@
 //! Navegação (nav.tsx), faixa lateral, coluna central, painéis Terminal e Orquestrador e barra de status (status-bar.tsx).
 use crate::bancada::{Bancada, Divisor, Rota};
 use crate::moldura::icone;
-use orquestrador_ui::widgets::Borda;
+use orquestrador_ui::widgets::{Borda, TooltipTexto as _};
 use crate::recursos::icone as ic;
 use crate::tema::{self, cor};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::Sizable;
 use gpui_kit::TestSupportExt;
-use gpui_kit::{div, prelude::*, px, Context, FontWeight, MouseButton};
+use gpui_kit::{div, prelude::*, px, Context, FontWeight, MouseButton, Window};
 
 /// Título de seção da faixa lateral: 36 px, 12 px a 500 em texto secundário (explorer.tsx).
 fn cabecalho(titulo: &'static str) -> impl IntoElement {
@@ -242,14 +242,14 @@ impl Bancada {
         el
     }
 
-    fn conteudo_orquestrador(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    fn conteudo_orquestrador(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let (ativa, raiz) = (self.ativa.clone(), self.aba_ativa().map(|a| a.caminho.clone()));
-        let el = self.terminais.update(cx, |t, cx| t.painel_orquestrador(ativa, raiz, cx));
+        let el = self.terminais.update(cx, |t, cx| t.painel_orquestrador(ativa, raiz, window, cx));
         self.ajustar_terminais(cx);
         el
     }
 
-    pub(crate) fn painel_orquestrador(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn painel_orquestrador(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("painel-orquestrador")
             .relative()
@@ -261,7 +261,7 @@ impl Bancada {
             .bg(cor::painel_arrastavel())
             .border_l_1()
             .border_color(cor::hairline_soft())
-            .child(self.conteudo_orquestrador(cx))
+            .child(self.conteudo_orquestrador(window, cx))
             .child(alca("alca-painel", Divisor::Painel, cx))
             .test_support()
     }
@@ -290,10 +290,7 @@ impl Bancada {
                         .flex_shrink(1.)
                         .min_w_0()
                         .on_click(cx.listener(|this, _, _, cx| this.ir(Rota::Git, cx)))
-                        .tooltip({
-                            let dica: gpui_kit::SharedString = format!("{}, branch atual", git.branch).into();
-                            move |window, cx| gpui_kit::component::tooltip::Tooltip::new(dica.clone()).build(window, cx)
-                        })
+                        .tooltip_texto(format!("{}, branch atual", git.branch))
                         .child(div().truncate().child(git.branch.clone())),
                 )
                 .child({
@@ -307,7 +304,7 @@ impl Bancada {
                     };
                     item_status("status-sync")
                         .when(sincronizando, |d| d.hover(|s| s.bg(gpui_kit::transparent_black())))
-                        .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(dica.clone()).build(window, cx))
+                        .tooltip_texto(dica)
                         .when(!sincronizando, |d| d.on_click(cx.listener(|this, _, window, cx| this.sincronizar(window, cx))))
                         .child(icone(ic::SINCRONIZAR, 14., cor::text_primary()))
                         .when_some(contagem, |d, c| d.child(c))
@@ -319,7 +316,7 @@ impl Bancada {
                     .ml_auto()
                     .when(self.terminal_aberto, |d| d.bg(cor::fill_hover()))
                     .on_click(cx.listener(|this, _, _, cx| this.alternar_terminal(cx)))
-                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("Painel Terminal (Ctrl+`)").build(window, cx))
+                    .tooltip_texto("Painel Terminal (Ctrl+`)")
                     .child(icone(ic::TERMINAL, 14., cor::text_primary()))
                     .child("Terminal")
                     .test_support(),

@@ -277,7 +277,7 @@ impl Bancada {
     }
 
     /// O diálogo, por cima de tudo, com a máscara escura (clique nela cancela).
-    pub(crate) fn dialogo_fechamento(&self, window: &Window, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
+    pub(crate) fn dialogo_fechamento(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
         let f = self.fechamento.as_ref()?;
         let n = f.arquivos.len();
         let titulo = if n > 0 {
@@ -287,8 +287,12 @@ impl Bancada {
         } else {
             "Fechar o Orquestrador?"
         };
-        let paragrafo = |t: String| {
-            div().text_size(tema::TEXTO_BODY).line_height(px(22.4)).text_color(cor::text_secondary()).child(t)
+        let mut n_par = 0usize;
+        let mut paragrafo = |t: String| {
+            n_par += 1;
+            orquestrador_ui::widgets::texto_pretty(("fechar-paragrafo", n_par), t, tema::TEXTO_BODY, gpui_kit::FontWeight::NORMAL, window, cx)
+                .line_height(px(22.4))
+                .text_color(cor::text_secondary())
         };
         let mut corpo = div().flex().flex_col().gap(px(8.)).pt(px(6.));
         if n > 0 {

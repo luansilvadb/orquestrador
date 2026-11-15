@@ -25,7 +25,7 @@ use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMen
 use orquestrador_core::ide::files;
 use orquestrador_ui::avisos::{self, Aviso};
 use orquestrador_ui::tema::{self, cor};
-use orquestrador_ui::widgets::{icone, item_menu, TooltipTexto};
+use orquestrador_ui::widgets::{self, icone, item_menu, TooltipTexto};
 use orquestrador_ui::{icone_arquivo, Aba, EstadoFaixa, EstadoLista, FaixaAbas, ItemLista, ListaAbas, MoverAba};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -2179,21 +2179,21 @@ impl AreaEditor {
             return div().flex().flex_col().flex_1().min_h_0().child(v.clone()).into_any_element();
         }
         let Some(doc_id) = aba.alvo.doc_id().map(str::to_string) else {
-            return nota("Sem visualização para esta aba.", false).into_any_element();
+            return nota("Sem visualização para esta aba.", false, window, cx).into_any_element();
         };
         let s = self.situacao.get(&doc_id).cloned().unwrap_or_default();
         if s.binario {
-            return nota("Arquivo binário: não há texto para mostrar aqui.", false).into_any_element();
+            return nota("Arquivo binário: não há texto para mostrar aqui.", false, window, cx).into_any_element();
         }
         if s.grande {
-            return nota("Arquivo grande demais para mostrar aqui.", false).into_any_element();
+            return nota("Arquivo grande demais para mostrar aqui.", false, window, cx).into_any_element();
         }
         let Some(d) = self.docs.get(&doc_id) else {
             return match s.erro {
                 Some(e) => {
                     let ent = ent.clone();
                     let id = doc_id.clone();
-                    nota(&e, true)
+                    nota(&e, true, window, cx)
                         .child(
                             orquestrador_ui::widgets::botao_pequeno("tentar-de-novo").child("Tentar de novo").on_click(move |_, window, cx| {
                                 let _ = ent.update(cx, |a, cx| {
@@ -2204,7 +2204,7 @@ impl AreaEditor {
                         )
                         .into_any_element()
                 }
-                None => nota("Lendo o arquivo…", false).into_any_element(),
+                None => nota("Lendo o arquivo…", false, window, cx).into_any_element(),
             };
         };
         let markdown = matches!(&aba.alvo, Alvo::File { path, .. } if eh_markdown(path));
@@ -2511,7 +2511,7 @@ linha nova", window, cx);
         self.migalha.as_mut()
     }
 
-    fn modal_pergunta(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn modal_pergunta(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = self.pergunta.as_ref()?;
         let mut rodape = div().flex().flex_wrap().justify_end().gap(px(8.)).child(
             orquestrador_ui::widgets::botao("pergunta-cancelar", "Cancelar", orquestrador_ui::widgets::Variante::Padrao, false)
@@ -2531,13 +2531,17 @@ linha nova", window, cx);
             "pergunta",
             480.,
             p.titulo.clone(),
-            div().text_size(tema::TEXTO_BODY).line_height(px(22.4)).text_color(cor::text_secondary()).child(p.corpo.clone()).into_any_element(),
+            widgets::texto_pretty("pergunta-corpo", p.corpo.clone(), tema::TEXTO_BODY, gpui::FontWeight::NORMAL, window, cx)
+                .line_height(px(22.4))
+                .text_color(cor::text_secondary())
+                .into_any_element(),
             rodape.into_any_element(),
+            window,
             cx.listener(|a, _: &MouseDownEvent, w, cx| a.responder(None, w, cx)),
         ))
     }
 
-    fn modal_comparacao(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn modal_comparacao(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let c = self.comparacao.as_ref()?;
         let usar = c.modo == ModoComparacao::Usar;
         let titulo_m = if usar { "Usar a versão do disco?" } else { "Salvar sua edição sobre o disco?" };
@@ -2560,7 +2564,7 @@ linha nova", window, cx);
                 .when(usar, |b| b.text_color(cor::signal_error()).border_color(cor::signal_error()))
                 .on_click(cx.listener(|a, _, w, cx| a.confirmar_comparacao(w, cx))),
             );
-        Some(modal("comparacao", 960., titulo_m.into(), corpo, rodape.into_any_element(), cx.listener(|a, _: &MouseDownEvent, _, cx| {
+        Some(modal("comparacao", 960., titulo_m.into(), corpo, rodape.into_any_element(), window, cx.listener(|a, _: &MouseDownEvent, _, cx| {
             a.comparacao = None;
             cx.notify();
         })))
@@ -2603,7 +2607,7 @@ fn marca_dagua() -> impl IntoElement {
 }
 
 /// Nota no lugar do editor (`Note` de media-view.tsx): texto cinza a 16 px da borda.
-fn nota(texto: &str, perigo: bool) -> gpui::Div {
+fn nota(texto: &str, perigo: bool, window: &mut Window, cx: &mut App) -> gpui::Div {
     div()
         .flex()
         .flex_col()
@@ -2614,26 +2618,21 @@ fn nota(texto: &str, perigo: bool) -> gpui::Div {
         .text_size(tema::TEXTO_BODY)
         .line_height(px(22.))
         .text_color(if perigo { cor::signal_error() } else { cor::text_tertiary() })
-        .child(texto.to_string())
+        .child(widgets::texto_pretty("nota", texto.to_string(), tema::TEXTO_BODY, gpui::FontWeight::NORMAL, window, cx))
 }
 
-/// Modal do Lobe UI: fundo escurecido, cartão `raised_black` com borda e raio de 8 px.
+/// Modal do Lobe UI: a máscara comum, cartão `raised_black` com borda e raio de 8 px.
 fn modal(
-    id: &'static str, largura: f32, titulo: SharedString, corpo: AnyElement, rodape: AnyElement,
+    id: &'static str, largura: f32, titulo: SharedString, corpo: AnyElement, rodape: AnyElement, window: &Window,
     fora: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     deferred(
         anchored().position(gpui::point(px(0.), px(0.))).child(
-            div()
-                .id(id)
-                .occlude()
-                .size_full()
-                .w(gpui::relative(1.))
+            widgets::mascara(id, window)
                 .flex()
                 .items_start()
                 .justify_center()
                 .pt(px(100.))
-                .bg(gpui::rgba(0x00000080))
                 .child(
                     div()
                         .id("modal-cartao")
@@ -2764,8 +2763,8 @@ impl Render for AreaEditor {
                     cx.notify();
                 }))))
         });
-        let pergunta = self.modal_pergunta(cx);
-        let comparacao = self.modal_comparacao(cx);
+        let pergunta = self.modal_pergunta(window, cx);
+        let comparacao = self.modal_comparacao(window, cx);
         let ir_para = self.painel_ir_para(cx);
         let migalha = self.migalha.as_ref().map(|s| migalhas::seletor(s, cx.entity().downgrade()));
         for alvo in crate::markdown::pedidos() {

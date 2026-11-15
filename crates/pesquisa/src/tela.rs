@@ -1191,8 +1191,12 @@ impl TelaPesquisa {
             )
     }
 
-    fn render_mensagens(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = |t: String, c: Hsla| div().text_color(c).child(t);
+    fn render_mensagens(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut n = 0usize;
+        let mut p = |t: String, c: Hsla| {
+            n += 1;
+            widgets::texto_pretty(("mensagem", n), t, tema::TEXTO_MENU, FontWeight::NORMAL, window, cx).text_color(c)
+        };
         let status = self.status();
         let mut el = div()
             .flex_none()
@@ -1590,7 +1594,12 @@ impl TelaPesquisa {
                     .pb(px(16.))
                     // Os espaços do DirectWrite saem um pouco mais largos que os do Chromium: a folga de 4 px sobre o recuo
                     // mantém as quebras de linha do React.
-                    .child(div().mr(px(-4.)).text_size(tema::TEXTO_BODY).line_height(px(22.)).child(corpo))
+                    .child(
+                        div()
+                            .mr(px(-4.))
+                            .line_height(px(22.))
+                            .child(widgets::texto_pretty("confirmar-corpo", corpo, tema::TEXTO_BODY, FontWeight::NORMAL, window, cx)),
+                    )
                     .child(lista),
             )
             .child(
@@ -1758,7 +1767,7 @@ impl Render for TelaPesquisa {
                 .track_scroll(&self.rolagem),
             );
         let campos = self.render_campos(cx);
-        let mensagens = self.render_mensagens(cx);
+        let mensagens = self.render_mensagens(window, cx);
         div()
             .id("pesquisa")
             .track_focus(&self.foco)

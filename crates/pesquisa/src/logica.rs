@@ -340,8 +340,7 @@ pub fn linhas_da_tela(arquivos: &[ArquivoVisivel], visao: Visao, recolhidos: &Ha
         let mut no = &mut raiz;
         for parte in dividir(&f.caminho).0.split('/').filter(|p| !p.is_empty()) {
             let caminho = if no.caminho.is_empty() { parte.to_string() } else { format!("{}/{parte}", no.caminho) };
-            // A ordem é a do `localeCompare`, que ignora a caixa; a chave guarda o nome em minúsculas na frente.
-            no = no.pastas.entry(format!("{}\u{0}{parte}", parte.to_lowercase())).or_insert_with(|| Pasta {
+            no = no.pastas.entry(parte.to_string()).or_insert_with(|| Pasta {
                 nome: parte.into(),
                 caminho,
                 ..Pasta::default()
@@ -361,7 +360,10 @@ pub fn linhas_da_tela(arquivos: &[ArquivoVisivel], visao: Visao, recolhidos: &Ha
         out: &mut Vec<Linha>,
         empurrar: &Empurrar<'_>,
     ) {
-        for filho in p.pastas.values() {
+        // `localeCompare` sem localidade: a do navegador, pt-BR no WebView2.
+        let mut filhos: Vec<&Pasta> = p.pastas.values().collect();
+        filhos.sort_by(|a, b| orquestrador_ui::colagem::comparar(&a.nome, &b.nome));
+        for filho in filhos {
             let mut no = filho;
             let mut rotulo = filho.nome.clone();
             while no.arquivos.is_empty() && no.pastas.len() == 1 {
@@ -508,6 +510,21 @@ mod testes {
             .map(|i| Ocorrencia { caminho: c.clone(), linha: i as u32 + 1, col: 1, texto: "x".into(), trecho: None })
             .collect();
         ArquivoVisivel { caminho: c, ocorrencias }
+    }
+
+    #[test]
+    fn pastas_na_ordem_do_locale_compare() {
+        let fs: Vec<_> = ["b/x", "Á/x", "a10/x", "a2/x", "a/x", "_/x"].iter().map(|c| arq(c, 1)).collect();
+        let ls = linhas_da_tela(&fs, Visao::Arvore, &HashSet::new());
+        let pastas: Vec<_> = ls
+            .iter()
+            .filter_map(|l| match l {
+                Linha::Pasta { rotulo, .. } => Some(rotulo.as_str()),
+                _ => None,
+            })
+            .collect();
+        // `[...].sort((a, b) => a.localeCompare(b))` no Chromium pt-BR.
+        assert_eq!(pastas, ["_", "a", "Á", "a10", "a2", "b"]);
     }
 
     #[test]

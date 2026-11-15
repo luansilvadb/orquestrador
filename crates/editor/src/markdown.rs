@@ -167,7 +167,9 @@ fn estilo(cx: &App) -> TextViewStyle {
                 .border_color(lobe::fill_quaternario())
                 .rounded(px(blocos::FONTE * 0.875 * 0.25))
                 .px(px(blocos::FONTE * 0.875 * 0.4))
-                .py(px(blocos::FONTE * 0.875 * 0.1)),
+                .py(px(blocos::FONTE * 0.875 * 0.1))
+                // `margin-inline: 0,25em` do Lobe.
+                .mx(px(blocos::FONTE * 0.875 * 0.25)),
         )
         .with_blockquote_style(
             gpui::StyleRefinement::default().border_l(px(4.)).border_color(lobe::borda()).pl(px(blocos::FONTE)).text_color(lobe::texto_secundario()),

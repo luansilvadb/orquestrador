@@ -17,7 +17,7 @@ use gpui_kit::{
     Window,
 };
 use orquestrador_ui::tema::{self, cor};
-use orquestrador_ui::widgets::{icone, TooltipTexto as _};
+use orquestrador_ui::widgets::{self, icone, TooltipTexto as _};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -185,8 +185,6 @@ pub struct TelaGit {
     erro_branch: String,
     nome_branch: Entity<InputState>,
     iniciando: bool,
-    /// Largura do texto do estado vazio, medida no último quadro, para a quebra `pretty`.
-    largura_vazio: Rc<Cell<f32>>,
     // Grafo.
     pub(crate) grafo: Paginada,
     pub(crate) grafo_linhas: Vec<LinhaGrafo>,
@@ -278,7 +276,6 @@ impl TelaGit {
             erro_branch: String::new(),
             nome_branch,
             iniciando: false,
-            largura_vazio: Rc::default(),
             grafo: Paginada::default(),
             grafo_linhas: Vec::new(),
             grafo_carimbo: None,
@@ -423,7 +420,7 @@ impl TelaGit {
             Ok(mut e) => {
                 // O React recebe a lista ordenada por `localeCompare` pt-BR; o core ordena por bytes.
                 if let Estado::Repo { status } = &mut e {
-                    status.files.sort_by(|a, b| crate::colagem::comparar(&a.path, &b.path));
+                    status.files.sort_by(|a, b| orquestrador_ui::colagem::comparar(&a.path, &b.path));
                 }
                 let mudou = self.estado.as_ref() != Some(&e);
                 let tinha_erro = !self.erro.is_empty();
@@ -782,40 +779,13 @@ impl TelaGit {
             Estado::RepoAbove { root } => format!("Esta pasta está dentro do repositório {root}, que não é a raiz do projeto. O painel Git só funciona com a raiz do repositório aberta como projeto."),
             Estado::Repo { .. } => String::new(),
         };
-        let largura = self.largura_vazio.get();
-        let texto = if largura > 0. {
-            let sistema = window.text_system().clone();
-            let fonte = gpui_kit::font(tema::FONTE);
-            let medir = |t: &str| {
-                let run = gpui_kit::TextRun { len: t.len(), font: fonte.clone(), color: Default::default(), background_color: None, underline: None, strikethrough: None };
-                f32::from(sistema.shape_line(t.to_string().into(), tema::TEXTO_LABEL, &[run], None).width)
-            };
-            crate::quebra::linhas(&texto, largura, medir).join("
-")
-        } else {
-            texto
-        };
-        let (celula, entidade) = (self.largura_vazio.clone(), cx.entity_id());
-        let medidor = canvas(
-            move |b, window, _| {
-                let l = f32::from(b.size.width);
-                if celula.get() != l {
-                    celula.set(l);
-                    // Notificar no meio do desenho se perde: o novo quadro vem depois deste.
-                    window.on_next_frame(move |_, cx| cx.notify(entidade));
-                }
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full();
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .px(px(12.))
             .py(px(8.))
-            .child(div().relative().text_size(tema::TEXTO_LABEL).line_height(px(19.)).text_color(descricao()).child(texto).child(medidor))
+            .child(widgets::texto_pretty("git-vazio", texto, tema::TEXTO_LABEL, gpui_kit::FontWeight::NORMAL, window, cx).line_height(px(19.)).text_color(descricao()))
             .when(matches!(estado, Estado::NoRepo), |d| {
                 d.child(
                     div()

@@ -22,6 +22,10 @@ Alterações:
   conta para testes.
 - `RangeDecorationStyle::Lines`: fundo na largura toda das linhas que o trecho toca (o fundo das linhas novas do bloco
   aberto).
+- Cor do texto selecionado nos campos: `InputEditorStyle::selection_foreground` (`None` mantém a cor); o `TextElement`
+  parte os runs nos limites da seleção (`recolor_selected_runs`) com o campo focado e a janela ativa.
+- Código inline do texto (`text/inline.rs`, `text/inline_flow.rs`): a margem horizontal do estilo (`margin-inline`) soma
+  aos recuos do trecho e o fundo a desconta (`code_margins`).
 
 Os testes do próprio crate não fazem parte do workspace; os do editor (`crates/editor/tests/git_gutter.rs`) cobrem as
 alterações.
@@ -38,6 +42,8 @@ Alterações:
   espaço entre itens; menu com 4 px de folga, borda de 1 px, anel claro por fora, raio de 5 px e 220 px de largura
   mínima; separador de 1 px com 5 px de margem; ícone absoluto a 6 px da borda; submenu sem seta, encostado no menu e
   4 px acima; desabilitado em branco a 25% com opacidade de 50%; dropdown 6 px abaixo do gatilho.
+- Tema (`theme/mod.rs`, `input/input.rs`): `Theme::selection_foreground`, a cor do texto selecionado repassada ao
+  `InputEditorStyle` do `gpui-base`.
 - Dica (`tooltip.rs`): some quando o mouse aperta e quando um menu ou modal desenha no mesmo quadro
   (`marcar_sobreposicao`, chamado pelo `PopupMenu` e pela máscara de `orquestrador-ui`); a dica pendente do dono clicado
   nasce escondida (`registrar_clique`). Escondida, só volta num novo hover.

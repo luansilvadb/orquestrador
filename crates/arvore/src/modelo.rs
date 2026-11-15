@@ -111,7 +111,8 @@ impl Arvore {
     }
 
     /// Põe a lista da pasta e a abre (a raiz não entra em `abertas`).
-    pub fn abrir_com(&mut self, caminho: &str, lista: Vec<Entry>) {
+    pub fn abrir_com(&mut self, caminho: &str, mut lista: Vec<Entry>) {
+        ordenar(&mut lista);
         self.filhos.insert(caminho.to_string(), lista);
         if !caminho.is_empty() && !self.aberta(caminho) {
             self.abertas.push(caminho.to_string());
@@ -124,6 +125,10 @@ impl Arvore {
         let abertas_antes = self.abertas.clone();
         let mut mudou = false;
         for (caminho, r) in caminhos.iter().zip(resultados) {
+            let r = &r.clone().map(|mut l| {
+                ordenar(&mut l);
+                l
+            });
             if caminho.is_empty() {
                 if let Ok(lista) = r {
                     if self.filhos.get("") != Some(lista) {
@@ -148,6 +153,11 @@ impl Arvore {
         }
         mudou
     }
+}
+
+/// A ordem do React: pastas antes, depois `a.name.localeCompare(b.name, 'pt-BR')`.
+pub fn ordenar(lista: &mut [Entry]) {
+    lista.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| orquestrador_ui::colagem::comparar(&a.name, &b.name)));
 }
 
 /// Linhas à vista, na ordem da tela. `criando` põe a linha do nome novo na pasta dela (já lida): pasta nova no topo,
@@ -594,6 +604,18 @@ mod testes {
 
     fn e(nome: &str, dir: bool) -> Entry {
         Entry { name: nome.into(), dir, ignored: false }
+    }
+
+    #[test]
+    fn pastas_antes_e_nomes_como_o_locale_compare() {
+        let mut v = vec![e("b.ts", false), e("Zeta", true), e("_x", false), e("á.ts", false), e("A.ts", false), e("alfa", true), e("a10", false), e("a2", false)];
+        ordenar(&mut v);
+        let nomes: Vec<_> = v.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(nomes, ["alfa", "Zeta", "_x", "A.ts", "á.ts", "a10", "a2", "b.ts"]);
+        // A lista da consulta também sai ordenada.
+        let mut a = Arvore::default();
+        assert!(a.aplicar(&["".into()], &[Ok(vec![e("b", false), e("a", true)])]));
+        assert_eq!(a.filhos[""].iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["a", "b"]);
     }
 
     fn exemplo() -> Arvore {

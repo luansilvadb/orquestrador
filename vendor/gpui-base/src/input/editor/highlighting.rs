@@ -113,6 +113,8 @@ pub struct InputEditorStyle {
     pub background: Hsla,
     pub border: Hsla,
     pub selection: Hsla,
+    // Orquestrador: cor do texto dentro da seleção; `None` mantém a do realce.
+    pub selection_foreground: Option<Hsla>,
     pub caret: Hsla,
     pub diagnostics: DiagnosticColors,
     pub highlight_styles: SharedHighlightStyleResolver,
@@ -168,6 +170,7 @@ impl Default for InputEditorStyle {
             background: Hsla::default(),
             border: Hsla::default(),
             selection: Hsla::default(),
+            selection_foreground: None,
             caret: Hsla::default(),
             diagnostics: DiagnosticColors::default(),
             highlight_styles: Arc::new(NoHighlightStyles),

@@ -351,9 +351,10 @@ impl Render for FormEscolha {
                     .flex()
                     .flex_col()
                     .gap(px(20.))
-                    .child(div().flex().flex_col().gap(px(8.)).children(
-                        self.dicas.iter().map(|d| div().text_size(tema::TEXTO_BODY).text_color(cor::text_secondary()).child(d.clone())),
-                    ))
+                    .child(div().flex().flex_col().gap(px(8.)).children(self.dicas.iter().enumerate().map(|(i, d)| {
+                        orquestrador_ui::widgets::texto_pretty(("escolha-dica", i), d.clone(), tema::TEXTO_BODY, gpui_kit::FontWeight::NORMAL, window, cx)
+                            .text_color(cor::text_secondary())
+                    })))
                     .child(div().flex().flex_col().gap(px(8.)).child(Self::rotulo("Ferramenta")).child(self.segmentado(cx)))
                     .child(div().flex().flex_col().gap(px(8.)).child(Self::rotulo("Modelo")).child(self.select(Campo::Modelo, cx)))
                     .child(div().flex().flex_col().gap(px(8.)).child(Self::rotulo("Esforço")).child(self.select(Campo::Esforco, cx)))

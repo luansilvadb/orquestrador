@@ -82,12 +82,14 @@ fn icone_e_cor(tipo: TipoAviso) -> (&'static str, Hsla) {
 }
 
 /// A camada dos avisos: posição absoluta sobre a janela inteira, sem pegar o ponteiro fora dos avisos.
-pub fn camada(_window: &mut Window, cx: &mut App) -> AnyElement {
+pub fn camada(window: &mut Window, cx: &mut App) -> AnyElement {
     let itens = visiveis(cx);
     if itens.is_empty() {
         return div().into_any_element();
     }
     let mut coluna = div().flex().flex_col().items_center().gap(px(8.)).w_full().max_w(px(560.));
+    // A largura que sobra ao título: a coluna menos o respiro, a borda e o ícone com o vão.
+    let largura = (560f32).min(f32::from(window.viewport_size().width) - 32.) - 24. - 2. - 16. - 8.;
     for aviso in itens {
         let (caminho, tom) = icone_e_cor(aviso.tipo);
         coluna = coluna.child(
@@ -106,7 +108,12 @@ pub fn camada(_window: &mut Window, cx: &mut App) -> AnyElement {
                 .line_height(px(20.))
                 .text_color(cor::text_primary())
                 .child(icone(caminho, 16., tom))
-                .child(div().min_w_0().font_weight(FontWeight::MEDIUM).child(aviso.titulo)),
+                .child({
+                    let linhas = crate::widgets::linhas_pretty(&aviso.titulo, largura, tema::TEXTO_MENU, FontWeight::MEDIUM, window);
+                    // Quebrado, o aviso ocupa a largura toda, como o `fit-content` do navegador.
+                    let quebrou = linhas.contains('\n');
+                    div().min_w_0().when(quebrou, |d| d.w(px(largura))).font_weight(FontWeight::MEDIUM).child(linhas)
+                }),
         );
     }
     div()

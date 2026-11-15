@@ -3381,6 +3381,25 @@ impl<M: InputModeKind> Element for TextElement<M> {
             state.masked,
         );
 
+        // Orquestrador: trechos selecionados (na coordenada do texto exibido) para trocar a cor do texto.
+        let selected_ranges: Vec<Range<usize>> = match state.editor_style.selection_foreground {
+            Some(_) if !is_empty && window.is_window_active() && state.has_selection_focus(window, cx) => state
+                .selections
+                .iter()
+                .map(|s| {
+                    let (a, b) = (s.start.min(s.end), s.start.max(s.end));
+                    if state.masked {
+                        masked_display_offset(&text, a)..masked_display_offset(&text, b)
+                    } else {
+                        a..b
+                    }
+                })
+                .filter(|r| !r.is_empty())
+                .collect(),
+            _ => Vec::new(),
+        };
+        let selection_foreground = state.editor_style.selection_foreground.unwrap_or_default();
+
         let runs = if let (false, Some(highlight_styles)) = (is_empty, highlight_styles) {
             let mut runs = Vec::with_capacity(highlight_styles.len() + 2);
 
@@ -3390,22 +3409,31 @@ impl<M: InputModeKind> Element for TextElement<M> {
                     run.color = run.color.opacity(0.5);
                 }
 
-                runs.extend(split_run_for_ime_underline(
-                    run,
-                    range.clone(),
-                    ime_marked_range.clone(),
-                    marked_run.underline,
+                runs.extend(recolor_selected_runs(
+                    split_run_for_ime_underline(
+                        run,
+                        range.clone(),
+                        ime_marked_range.clone(),
+                        marked_run.underline,
+                    ),
+                    range.start,
+                    &selected_ranges,
+                    selection_foreground,
                 ));
             }
             runs
         } else {
-            split_run_for_ime_underline(
-                run,
-                0..display_text.len(),
-                ime_marked_range,
-                marked_run.underline,
+            recolor_selected_runs(
+                split_run_for_ime_underline(
+                    run,
+                    0..display_text.len(),
+                    ime_marked_range,
+                    marked_run.underline,
+                ),
+                0,
+                &selected_ranges,
+                selection_foreground,
             )
-            .into_vec()
         };
 
         let document_colors = state
@@ -4377,6 +4405,38 @@ fn split_run_for_ime_underline(
     .into_iter()
     .filter(|run| run.len > 0)
     .collect()
+}
+
+// Orquestrador: parte os runs contíguos a partir de `start` nos limites de `selected` e pinta o texto
+// selecionado com `color`.
+fn recolor_selected_runs(
+    runs: impl IntoIterator<Item = TextRun>,
+    start: usize,
+    selected: &[Range<usize>],
+    color: Hsla,
+) -> Vec<TextRun> {
+    let mut out = Vec::new();
+    let mut pos = start;
+    for run in runs {
+        let end = pos + run.len;
+        let mut cut = pos;
+        for sel in selected {
+            let (a, b) = (sel.start.max(pos), sel.end.min(end));
+            if a >= b || a < cut {
+                continue;
+            }
+            if a > cut {
+                out.push(TextRun { len: a - cut, ..run.clone() });
+            }
+            out.push(TextRun { len: b - a, color, ..run.clone() });
+            cut = b;
+        }
+        if end > cut {
+            out.push(TextRun { len: end - cut, ..run });
+        }
+        pos = end;
+    }
+    out
 }
 
 /// Whether any of these runs paints a glyph background, used to skip the background

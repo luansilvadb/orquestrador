@@ -566,6 +566,8 @@ impl RenderOnce for Input {
                 background: cx.theme().editor_background(),
                 border: cx.theme().border,
                 selection: cx.theme().selection,
+                // Orquestrador: cor do texto selecionado.
+                selection_foreground: cx.theme().selection_foreground,
                 caret: cx.theme().caret,
                 diagnostics: gpui_base::input::DiagnosticColors {
                     error: cx.theme().highlight_theme.style.status.error(cx),

@@ -560,7 +560,9 @@ impl Comparador {
     }
 
     /// Calha de uma coluna: `padding-left: 2ch`, número com no mínimo os dígitos do total de linhas, o sinal −/+ com 4 px de margem nas linhas
-    /// mudadas, `padding-right` (4 px no lado a lado, 1ch no unificado) e a borda de 2 px.
+    /// mudadas, `padding-right` (4 px no lado a lado, 1ch no unificado) e a borda de 2 px. No lado a lado, a do lado novo
+    /// tem 1 px a mais: medido na referência, os números do lado novo ficam ~0,5 px à direita e as quebras do lado novo
+    /// só batem com a coluna de texto 1 px mais estreita.
     fn largura_calha(&self, m: Medidas, b: bool) -> f32 {
         let fileiras = self.modelo.fileiras(self.lado);
         let pad_d = if self.lado { 4. } else { m.ch };
@@ -580,7 +582,7 @@ impl Comparador {
             };
             maior = maior.max(w);
         }
-        maior + 2.
+        maior + 2. + if self.lado && b { 1. } else { 0. }
     }
 
     fn geometria(&mut self, window: &mut Window) -> Rc<Geometria> {
@@ -1242,13 +1244,13 @@ mod testes {
     fn geometria_do_lado_a_lado() {
         let mut c = comparador(LONGO, None);
         let g = medir(&mut c, 500., 300.);
-        // Calha: 2ch + 1ch (6 linhas no total: um dígito) + 4 + sinal + 4 + borda 2 = 42; o resto dividido 50/50
-        // depois do vão de 40.
+        // Calha: 2ch + 1ch (6 linhas no total: um dígito) + 4 + sinal + 4 + borda 2 = 42 (43 no lado novo); o resto
+        // dividido 50/50 depois do vão de 40.
         assert_eq!(g.colunas.num_a, (0., 42.));
-        assert_eq!(g.colunas.txt_a, (42., 42. + 188.));
-        assert_eq!(g.colunas.num_b, (270., 312.));
-        assert_eq!(g.colunas.centro, 250.);
-        // Margem de 8 px; a linha de 50 caracteres quebra em 188 - 16 - 1 = 171 px úteis (21 caracteres): 3 linhas.
+        assert_eq!(g.colunas.txt_a, (42., 42. + 187.5));
+        assert_eq!(g.colunas.num_b, (269.5, 312.5));
+        assert_eq!(g.colunas.centro, 249.5);
+        // Margem de 8 px; a linha de 50 caracteres quebra em 187,5 - 16 - 1 = 170,5 px úteis (21 caracteres): 3 linhas.
         assert_eq!(g.topos[0], 8.);
         assert_eq!(g.topos[1], 27.);
         assert_eq!(g.topos[2] - g.topos[1], 3. * LINHA, "a fileira tem a altura do lado mais alto");
@@ -1256,7 +1258,7 @@ mod testes {
         // Divisor a 30%: o original encolhe e o vão acompanha.
         c.pct = 30.;
         let g = medir(&mut c, 500., 300.);
-        assert!((g.colunas.txt_a.1 - (42. + 376. * 0.3)).abs() < 0.01);
+        assert!((g.colunas.txt_a.1 - (42. + 375. * 0.3)).abs() < 0.01);
         assert!((g.colunas.centro - (g.colunas.txt_a.1 + 20.)).abs() < 0.01);
     }
 

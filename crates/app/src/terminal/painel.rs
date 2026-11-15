@@ -793,7 +793,9 @@ impl Terminais {
     }
 
     /// O painel do Orquestrador (sem o contêiner nem a alça, que ficam em paineis.rs).
-    pub fn painel_orquestrador(&mut self, projeto: Option<String>, raiz: Option<String>, cx: &mut Context<Self>) -> AnyElement {
+    pub fn painel_orquestrador(
+        &mut self, projeto: Option<String>, raiz: Option<String>, window: &mut Window, cx: &mut Context<Self>,
+    ) -> AnyElement {
         self.projeto(&projeto);
         let p = &self.projetos[&projeto];
         let ativa = p.aba_ativa();
@@ -973,7 +975,12 @@ impl Terminais {
                         .justify_center()
                         .p(px(16.))
                         .bg(gpui_kit::rgba(0x000000f2))
-                        .child(div().max_w(px(300.)).text_center().text_size(tema::TEXTO_BODY).text_color(cor::text_secondary()).child(texto)),
+                        .child(div().max_w(px(300.)).text_center().text_size(tema::TEXTO_BODY).text_color(cor::text_secondary()).child({
+                            let linhas = orquestrador_ui::widgets::linhas_pretty(&texto, 300., tema::TEXTO_BODY, gpui_kit::FontWeight::NORMAL, window);
+                            // Quebrada, a capa ocupa os 300 px, como o `fit-content` do navegador.
+                            let quebrou = linhas.contains('\n');
+                            div().when(quebrou, |d| d.w(px(300.))).child(linhas)
+                        })),
                 );
             }
         } else {
@@ -999,8 +1006,7 @@ impl Terminais {
                                     .border_1()
                                     .border_color(cor::hairline())
                                     .bg(cor::panel_black())
-                                    .text_size(tema::TEXTO_BODY)
-                                    .child(aviso.clone()),
+                                    .child(orquestrador_ui::widgets::texto_pretty("aviso-orquestrador-texto", aviso.clone(), tema::TEXTO_BODY, gpui_kit::FontWeight::NORMAL, window, cx)),
                             )
                         })
                         .child(
@@ -1009,11 +1015,16 @@ impl Terminais {
                                 .test_support(),
                         )
                         .child(
-                            div()
-                                .text_size(tema::TEXTO_LABEL)
-                                .text_color(cor::text_secondary())
-                                .text_center()
-                                .child("Abre o orquestrador, com quem você conversa. Os executores aparecem em abas quando ele delega."),
+                            orquestrador_ui::widgets::texto_pretty(
+                                "orquestrador-dica",
+                                "Abre o orquestrador, com quem você conversa. Os executores aparecem em abas quando ele delega.",
+                                tema::TEXTO_LABEL,
+                                gpui_kit::FontWeight::NORMAL,
+                                window,
+                                cx,
+                            )
+                            .text_color(cor::text_secondary())
+                            .text_center(),
                         ),
                 ),
             );

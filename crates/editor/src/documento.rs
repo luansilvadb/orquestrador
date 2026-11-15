@@ -604,6 +604,8 @@ impl gpui::Element for ComTemaDoEditor {
             t.foreground = cor::texto();
             t.muted_foreground = cor::numero();
             t.selection = cor::selecao();
+            // O CodeMirror pinta a seleção por baixo e mantém a cor do texto.
+            t.selection_foreground = None;
             t.caret = cor::cursor();
             let mut h = (*t.highlight_theme).clone();
             h.style.editor_background = Some(cor::fundo());

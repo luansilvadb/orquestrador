@@ -125,6 +125,8 @@ pub fn aplicar(cx: &mut App) {
     t.popover = cor::raised_black();
     t.popover_foreground = cor::text_primary();
     t.selection = cor::selecao();
+    // `::selection` do Lobe: texto preto sobre o amarelo.
+    t.selection_foreground = Some(rgb(0x000000).into());
     t.primary = cor::ink_white();
     t.primary_hover = cor::ink_white_hover();
     t.primary_active = cor::ink_white_active();

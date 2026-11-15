@@ -29,6 +29,22 @@ struct Achado {
     total: usize,
 }
 
+/// A ordem do React (`quickOpen` do mock): nome com todos os termos antes, depois o caminho mais curto (em UTF-16) e
+/// `localeCompare` sem localidade (pt-BR no WebView2).
+pub fn ordenar(termo: &str, caminhos: &mut [String]) {
+    let termos: Vec<String> = termo.to_lowercase().split_whitespace().map(str::to_string).collect();
+    let fora_do_nome = |p: &str| {
+        let nome = p.rsplit('/').next().unwrap_or(p).to_lowercase();
+        !termos.iter().all(|t| nome.contains(t.as_str()))
+    };
+    caminhos.sort_by(|a, b| {
+        fora_do_nome(a)
+            .cmp(&fora_do_nome(b))
+            .then_with(|| a.encode_utf16().count().cmp(&b.encode_utf16().count()))
+            .then_with(|| orquestrador_ui::colagem::comparar(a, b))
+    });
+}
+
 pub struct AbrirRapido {
     raiz: PathBuf,
     campo: gpui::Entity<InputState>,
@@ -93,7 +109,8 @@ impl AbrirRapido {
                     return;
                 }
                 match r {
-                    Ok(q) => {
+                    Ok(mut q) => {
+                        ordenar(&texto, &mut q.paths);
                         a.achado = Some(Achado { consulta: texto, caminhos: q.paths, total: q.total });
                         a.indice = 0;
                     }
@@ -244,5 +261,18 @@ impl Render for AbrirRapido {
                         .child(lista),
                 ),
         )
+    }
+}
+
+#[cfg(test)]
+mod testes_ordem {
+    use super::ordenar;
+
+    #[test]
+    fn como_o_quick_open_do_react() {
+        let mut v: Vec<String> = ["src/b/Ab.ts", "src/a/ab.ts", "ab/x.ts", "src/á/ab.ts", "src/A/ab.ts"].map(String::from).into();
+        ordenar("ab", &mut v);
+        // Nome primeiro; empate de tamanho pela colagem pt-BR (a, A, á), não pelos bytes (A antes de a).
+        assert_eq!(v, ["src/a/ab.ts", "src/A/ab.ts", "src/á/ab.ts", "src/b/Ab.ts", "ab/x.ts"]);
     }
 }

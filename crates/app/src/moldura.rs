@@ -20,7 +20,7 @@ use gpui_kit::{
 actions!(orquestrador, [NovoArquivo, AbrirArquivo, Salvar, SalvarComo]);
 
 pub use orquestrador_ui::widgets::icone;
-use orquestrador_ui::widgets::item_menu;
+use orquestrador_ui::widgets::{item_menu, TooltipTexto as _};
 use orquestrador_ui::{Aba, FaixaAbas, MoverAba};
 
 fn menu_arquivo(
@@ -110,7 +110,7 @@ impl Render for Bancada {
                     .child(self.nav(cx))
                     .when(self.lateral_visivel(), |d| d.child(self.lateral(cx)))
                     .child(self.centro(cx))
-                    .when(self.ativa.is_some(), |d| d.child(self.painel_orquestrador(cx))),
+                    .when(self.ativa.is_some(), |d| d.child(self.painel_orquestrador(window, cx))),
             )
             .child(self.status_bar(cx))
             .children(dialogo)
@@ -331,7 +331,7 @@ impl Bancada {
                 })
                 .occlude()
                 .on_scroll(move |e, window, cx| rolar_faixa(&rolagem, e, window, cx))
-                .tooltip(move |window, cx| Tooltip::new(caminho.clone()).build(window, cx))
+                .tooltip_texto(caminho)
                 .on_click(cx.listener(move |this, _, _, cx| this.selecionar(&id_sel, cx)))
                 .child(div().flex_none().opacity(0.7).child(icone(icone::PASTA, 14., texto)))
                 .child(div().flex_1().min_w_0().truncate().child(nome.clone()))
@@ -344,7 +344,7 @@ impl Bancada {
                             .size(px(6.))
                             .rounded_full()
                             .bg(cor::signal_warning())
-                            .tooltip(move |window, cx| Tooltip::new(dica.clone()).build(window, cx))
+                            .tooltip_texto(dica)
                             .test_support(),
                     )
                 })
@@ -358,7 +358,7 @@ impl Bancada {
                         .size(px(18.))
                         .rounded(tema::RAIO_XS)
                         .hover(|s| s.bg(cor::fill_hover()))
-                        .tooltip(|window, cx| Tooltip::new("Fechar pasta").build(window, cx))
+                        .tooltip_texto("Fechar pasta")
                         .when(!selecionada, |d| d.opacity(0.).group_hover(grupo.clone(), |s| s.opacity(1.)))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -395,7 +395,7 @@ impl Bancada {
                     .size(px(26.))
                     .rounded(tema::RAIO_SM)
                     .hover(|s| s.bg(cor::fill_hover()))
-                    .tooltip(|window, cx| Tooltip::new("Abrir pasta").build(window, cx))
+                    .tooltip_texto("Abrir pasta")
                     .on_click(cx.listener(|this, _, _, cx| this.escolher_pasta(cx)))
                     .child(icone(icone::MAIS, 16., cor::titlebar_text()))
                     .test_support(),
