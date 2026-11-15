@@ -323,3 +323,112 @@ fn atalhos_do_controle(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("k");
     assert!(!v.read_with(cx, |v, _| v.tocando()));
 }
+
+/// Põe o ponteiro na janela (os controles da PiP só aparecem assim) e devolve o centro do botão.
+fn pairar(pcx: &mut VisualTestContext, botao: &'static str) -> gpui_kit::Point<gpui_kit::Pixels> {
+    let centro = pcx.debug_bounds("pip").expect("janela da PiP").center();
+    pcx.simulate_mouse_move(centro, None, Default::default());
+    pcx.run_until_parked();
+    let b = pcx.debug_bounds(botao).map(|b| b.center());
+    b.unwrap_or_else(|| panic!("sem {botao}"))
+}
+
+#[gpui_kit::test]
+fn picture_in_picture_abre_pausa_volta_e_fecha_com_a_aba(cx: &mut TestAppContext) {
+    let _s = comum::serial();
+    let tmp = Tmp::new("pip");
+    let c = copiar(&tmp, "clipe.webm", "clipe.webm");
+    let antes = player::decodificadores_ativos();
+    let janelas = cx.update(|cx| cx.windows().len());
+    let (v, cx) = abrir(cx, c);
+    esperar(cx, &v, |v| v.tamanho().is_some());
+    let eventos = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let e = eventos.clone();
+    let _assinatura = cx.update(|_, cx| cx.subscribe(&v, move |_, ev: &orquestrador_midia::EventoMidia, _| e.borrow_mut().push(ev.clone())));
+
+    // Abrir: a segunda janela desenha o mesmo player, sem outro decodificador, e a aba mostra o aviso.
+    v.update(cx, |v, cx| v.abrir_pip(cx));
+    cx.run_until_parked();
+    let pip = v.read_with(cx, |v, _| v.janela_pip()).expect("janela de picture-in-picture");
+    assert_eq!(cx.cx.update(|cx| cx.windows().len()), janelas + 2);
+    assert_eq!(player::decodificadores_ativos(), antes + 1, "decodificou duas vezes");
+    assert!(cx.debug_bounds("midia-pip-aviso").is_some(), "a aba não mostra o aviso");
+    let mut pcx = VisualTestContext::from_window(pip.into(), &cx.cx);
+    let inicio = Instant::now();
+    while pcx.debug_bounds("pip-video").is_none() {
+        assert!(inicio.elapsed() < Duration::from_secs(5), "PiP sem quadro");
+        pcx.executor().advance_clock(Duration::from_millis(10));
+        pcx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Tocar e pausar pelos controles da janela (aparecem com o ponteiro em cima).
+    let centro = pcx.debug_bounds("pip").unwrap().center();
+    pcx.simulate_mouse_move(centro, None, Default::default());
+    pcx.run_until_parked();
+    let tocar = pairar(&mut pcx, "pip-tocar");
+    pcx.simulate_click(tocar, Default::default());
+    esperar(cx, &v, |v| v.tocando());
+    // Fora da vista e com a PiP aberta, continua tocando.
+    v.update(cx, |v, cx| v.definir_visivel(false, cx));
+    assert!(v.read_with(cx, |v, _| v.tocando()), "PiP pausou ao trocar de aba");
+    let tocar = pairar(&mut pcx, "pip-tocar");
+    pcx.simulate_click(tocar, Default::default());
+    esperar(cx, &v, |v| !v.tocando());
+
+    // Voltar para a guia: fecha a janela, não pausa e avisa a bancada.
+    v.update(cx, |v, cx| v.definir_visivel(true, cx));
+    v.update(cx, |v, cx| v.tocar(cx));
+    esperar(cx, &v, |v| v.tocando());
+    let voltar = pairar(&mut pcx, "pip-voltar");
+    pcx.simulate_click(voltar, Default::default());
+    cx.run_until_parked();
+    assert!(!v.read_with(cx, |v, _| v.pip_aberta()));
+    assert_eq!(cx.cx.update(|cx| cx.windows().len()), janelas + 1, "janela da PiP sobrou");
+    assert!(v.read_with(cx, |v, _| v.tocando()), "voltar para a guia pausou");
+    assert!(eventos.borrow().contains(&orquestrador_midia::EventoMidia::VoltarParaAba));
+    assert!(cx.debug_bounds("midia-pip-aviso").is_none());
+
+    // Fechar pelo "×" pausa.
+    v.update(cx, |v, cx| v.abrir_pip(cx));
+    cx.run_until_parked();
+    let pip = v.read_with(cx, |v, _| v.janela_pip()).unwrap();
+    let mut pcx = VisualTestContext::from_window(pip.into(), &cx.cx);
+    let centro = pcx.debug_bounds("pip").unwrap().center();
+    pcx.simulate_mouse_move(centro, None, Default::default());
+    pcx.run_until_parked();
+    let fechar = pairar(&mut pcx, "pip-fechar");
+    pcx.simulate_click(fechar, Default::default());
+    cx.run_until_parked();
+    assert!(!v.read_with(cx, |v, _| v.pip_aberta() || v.tocando()), "fechar a PiP não pausou");
+    assert_eq!(cx.cx.update(|cx| cx.windows().len()), janelas + 1);
+
+    // Fechar pelo sistema (a janela some por fora) também pausa.
+    v.update(cx, |v, cx| v.tocar(cx));
+    v.update(cx, |v, cx| v.abrir_pip(cx));
+    cx.run_until_parked();
+    let pip = v.read_with(cx, |v, _| v.janela_pip()).unwrap();
+    pip.update(&mut cx.cx, |_, window, _| window.remove_window()).unwrap();
+    cx.run_until_parked();
+    assert!(!v.read_with(cx, |v, _| v.pip_aberta() || v.tocando()));
+
+    // Fechar a aba com a PiP aberta fecha a janela e solta o decodificador.
+    v.update(cx, |v, cx| v.abrir_pip(cx));
+    cx.run_until_parked();
+    assert_eq!(cx.cx.update(|cx| cx.windows().len()), janelas + 2);
+    let fraca = v.downgrade();
+    cx.update(|window, _| window.remove_window());
+    drop(v);
+    drop(_assinatura);
+    cx.run_until_parked();
+    cx.cx.update(|_| {});
+    cx.cx.run_until_parked();
+    assert!(fraca.upgrade().is_none(), "a entidade sobreviveu");
+    assert_eq!(cx.cx.update(|cx| cx.windows().len()), janelas, "a PiP ficou aberta depois de fechar a aba");
+    let inicio = Instant::now();
+    while player::decodificadores_ativos() != antes {
+        assert!(inicio.elapsed() < Duration::from_secs(5), "decodificador continuou vivo");
+        cx.cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

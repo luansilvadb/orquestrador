@@ -1,6 +1,6 @@
 //! Linguagem de um arquivo pelo nome, igual ao `shikiLanguage` de `src/editor/shiki-colors.ts`: metadados do Linguist
 //! ligados às gramáticas do Shiki, `.env` como dotenv e, no fim, as descrições do `@codemirror/language-data`. A tabela
-//! vem de `assets/linguagens.json`, gerada por `gerar-dados.mjs` a partir dos mesmos pacotes.
+//! vem de `assets/linguagens.json`, gerada uma vez dos mesmos pacotes (ver o README).
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;

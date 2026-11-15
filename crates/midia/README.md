@@ -13,8 +13,12 @@ Aba de mídia do editor central (porte de `src/editor/media-view.tsx`): imagem, 
 - Consultas: `tipo`, `caminho`, `tocando`, `estado_reproducao`, `tamanho`, `status`, `aviso`, `tamanho_real`, `tela_cheia`, `foco`.
 - Ações: `alternar_tamanho`, `tocar`, `pausar`, `alternar_reproducao`, `buscar`, `definir_volume`, `alternar_mudo`,
   `definir_velocidade` (`VELOCIDADES`), `alternar_tela_cheia`, `baixar`.
+- Picture-in-picture (item do menu ⋮ do vídeo): `abrir_pip`, `alternar_pip`, `voltar_da_pip` ("voltar para a guia": fecha
+  sem pausar, ativa a janela e emite `VoltarParaAba`), `fechar_pip` (o "×": fecha e pausa), `pip_aberta`, `janela_pip`. A
+  janela (`pip::JanelaPip`) é pequena, sem moldura, sempre no topo, redimensionável e arrastável, e desenha o quadro do
+  mesmo player. Com ela aberta, `definir_visivel(false)` e minimizar não pausam; fechar a aba fecha a janela.
 - `registrar_atalhos(cx)`: uma vez no início do app; contexto `VisaoMidia` (espaço/K, ←/→ ±5 s, ↑/↓ volume, M, F, Esc).
-- Eventos (`EventEmitter<EventoMidia>`): `Falhou(String)` e `Reproducao { tocando }`.
+- Eventos (`EventEmitter<EventoMidia>`): `Falhou(String)`, `Reproducao { tocando }` e `VoltarParaAba` (a bancada ativa a aba).
 - `player::Player` e `imagem::decodificar` ficam públicos para testes e reuso.
 
 Imagens leem por `files::read_media_at` e áudio/vídeo passam por `files::stream_path_at` (as regras do Tauri); o arquivo é lido
@@ -43,5 +47,5 @@ sistema que o Media Foundation e o DXVA do FFmpeg pedem (`mfuuid`, `strmiids`, `
 
 ```powershell
 cargo test -p orquestrador-midia
-cargo run -p orquestrador-midia --example vitrine -- imagem|audio|video|erro
+cargo run -p orquestrador-midia --example vitrine-midia -- imagem|audio|video|tocar|pip|erro [arquivo]
 ```

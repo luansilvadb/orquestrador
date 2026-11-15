@@ -2,6 +2,8 @@
 //! navegação de 44, lateral de 280 e o editor no meio. Uma cena por referência de `docs/referencia-visual/`:
 //! `cargo run -p orquestrador-git --example vitrine -- <cena>`, com cena = alteracoes | historico | commit-diff |
 //! lado-a-lado | unificado | sem-repositorio | ausente | conflito.
+// O `orquestrador-editor` traz o Oniguruma, que exporta símbolos: o link.exe avisa que criou a .lib do executável.
+#![allow(linker_messages)]
 use gpui_kit::{div, prelude::*, px, size, AnyView, App, Bounds, Context, Entity, Window, WindowBounds, WindowOptions};
 use orquestrador_git::simulado::{ModoSimulado, Simulado};
 use orquestrador_git::{Alvo, Fonte, GuardaGit, Lado, TelaGit, VisaoConflito, VisaoDiff};

@@ -297,3 +297,41 @@ fn texto_selecionado_e_caminhos(cx: &mut TestAppContext) {
     com(cx, j, &a, |a, _, cx| a.remover(&["lib".to_string()], cx));
     assert!(cx.read(|cx| a.read(cx).caminhos_abertos()).is_empty());
 }
+
+#[gpui_kit::test]
+fn esc_no_arrasto_entre_grupos_nao_move(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton};
+    let tmp = Tmp::new("arrasto-esc");
+    let (j, a) = montar(cx, &tmp.raiz(), Rc::default());
+    com(cx, j, &a, |a, w, cx| a.abrir_arquivo("src/a.ts", Abertura { permanente: true, ..Default::default() }, w, cx));
+    com(cx, j, &a, |a, w, cx| a.abrir_ao_lado("src/b.ts", Abertura { permanente: true, ..Default::default() }, w, cx));
+    let id = cx.read(|cx| a.read(cx).workspace().grupo(Grupo::A).unwrap().tabs[0].id.clone());
+    let mut vcx = VisualTestContext::from_window(j.into(), cx);
+    // A faixa cancela o arrasto com a janela inativa.
+    vcx.update(|w, _| w.activate_window());
+    vcx.run_until_parked();
+    let arrastar = |vcx: &mut VisualTestContext, esc: bool| {
+        let aba = vcx.debug_bounds(Box::leak(format!("aba-{id}").into_boxed_str())).expect("aba").center();
+        let faixa = vcx.debug_bounds("faixa-vazia-B").expect("faixa B");
+        let alvo = gpui_kit::point(faixa.right() - px(20.), faixa.center().y);
+        vcx.simulate_mouse_down(aba, MouseButton::Left, Modifiers::none());
+        vcx.update(|w, _| w.refresh());
+        vcx.run_until_parked();
+        for p in [aba + gpui_kit::point(px(10.), px(0.)), alvo - gpui_kit::point(px(5.), px(0.)), alvo] {
+            vcx.simulate_mouse_move(p, Some(MouseButton::Left), Modifiers::none());
+            vcx.run_until_parked();
+        }
+        if esc {
+            vcx.simulate_keystrokes("escape");
+            vcx.run_until_parked();
+            vcx.simulate_mouse_move(alvo + gpui_kit::point(px(2.), px(0.)), Some(MouseButton::Left), Modifiers::none());
+            vcx.run_until_parked();
+        }
+        vcx.simulate_mouse_up(alvo, MouseButton::Left, Modifiers::none());
+        vcx.run_until_parked();
+    };
+    arrastar(&mut vcx, true);
+    assert_eq!(nomes(&mut vcx, &a, Grupo::A), [("src/a.ts".into(), false)], "Esc cancela o arrasto");
+    arrastar(&mut vcx, false);
+    assert!(nomes(&mut vcx, &a, Grupo::A).is_empty(), "sem Esc, a aba vai para o outro grupo");
+}

@@ -3,6 +3,7 @@
 extern crate gpui_kit as gpui;
 
 pub mod imagem;
+pub mod pip;
 pub mod player;
 pub mod tipos;
 mod visao;

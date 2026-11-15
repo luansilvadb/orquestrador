@@ -10,6 +10,13 @@ name = "orquestrador_arvore"
 orquestrador-core = { path = "../core" }
 orquestrador-ui = { path = "../ui" }
 gpui-kit = "=0.9.1"
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_DataExchange", "Win32_System_Memory"] }

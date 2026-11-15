@@ -17,8 +17,9 @@ use gpui_kit::{
     anchored, deferred, div, img, point, prelude::*, px, rgb, rgba, uniform_list, AnyElement, App, ClickEvent,
     ClipboardItem, Context, DragMoveEvent, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla,
     KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Point, ScrollStrategy, SharedString, Subscription,
-    UniformListScrollHandle, WeakEntity, Window,
+    UniformListScrollHandle, WeakEntity, Window, actions, Bounds, KeyBinding,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -29,6 +30,23 @@ pub const ALTURA_LINHA: f32 = 22.;
 const RECUO: f32 = 8.;
 const POLL: Duration = Duration::from_millis(1500);
 const POLL_SEM_FOCO: Duration = Duration::from_secs(10);
+actions!(arvore, [FocarProximo, FocarAnterior]);
+
+/// Tab e Shift+Tab percorrem o foco como no navegador; o painel da árvore é uma parada. Uma vez no início do app.
+pub fn registrar_atalhos(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new("tab", FocarProximo, None), KeyBinding::new("shift-tab", FocarAnterior, None)]);
+    cx.on_action(|_: &FocarProximo, cx| percorrer_foco(true, cx));
+    cx.on_action(|_: &FocarAnterior, cx| percorrer_foco(false, cx));
+}
+
+fn percorrer_foco(adiante: bool, cx: &mut App) {
+    let Some(janela) = cx.active_window().or_else(|| cx.windows().first().copied()) else { return };
+    // Adiado: a janela está emprestada durante o despacho da ação.
+    cx.defer(move |cx| {
+        let _ = janela.update(cx, |_, window, cx| if adiante { window.focus_next(cx) } else { window.focus_prev(cx) });
+    });
+}
+
 /// Quantos itens o diálogo de excluir lista antes de resumir.
 const LISTA_MAX: usize = 10;
 
@@ -83,23 +101,92 @@ pub struct Arrasto {
     caminhos: Vec<String>,
 }
 
-struct VistaArrasto {
-    rotulo: SharedString,
+/// A imagem do arraste: a cópia da linha agarrada, translúcida e na mesma posição sob o ponteiro, como o Chromium
+/// desenha um elemento `draggable` (com o fundo de hover ou de seleção do momento).
+#[derive(Clone)]
+struct CopiaLinha {
+    largura: Pixels,
+    nivel: usize,
+    expansivel: bool,
+    aberta: bool,
+    icone: SharedString,
+    nome: SharedString,
+    cor_nome: Option<Hsla>,
+    letra: SharedString,
+    selecionada: bool,
 }
+
+struct VistaArrasto {
+    copia: CopiaLinha,
+    /// O GPUI prende a imagem no ponto em que o arraste começou (depois do limiar); o Chromium, no ponto do clique.
+    ajuste: Point<Pixels>,
+}
+
+/// Opacidade da imagem de arraste do Chromium (`kDragImageAlpha`).
+const OPACIDADE_ARRASTO: f32 = 0.75;
 
 impl Render for VistaArrasto {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let c = &self.copia;
+        let mut guias = div().absolute().top_0().bottom_0().left(px(16.));
+        for n in 0..c.nivel {
+            guias = guias.child(div().absolute().top_0().bottom_0().left(px(RECUO * n as f32)).w(px(1.)).bg(cor_guia()));
+        }
+        let seta = icone("icons/chevron-right.svg", 14., cor::text_secondary());
+        let seta = if c.aberta { seta.with_transformation(gpui_kit::Transformation::rotate(gpui_kit::percentage(0.25))) } else { seta };
         div()
-            .px(px(8.))
-            .h(px(ALTURA_LINHA))
+            .debug_selector(|| "arvore-arrasto".into())
+            .relative()
+            .left(self.ajuste.x)
+            .top(self.ajuste.y)
             .flex()
             .items_center()
-            .rounded(tema::RAIO_XS)
-            .bg(cor::raised_black())
-            .opacity(0.85)
-            .text_size(tema::TEXTO_MENU)
+            .w(c.largura)
+            .h(px(ALTURA_LINHA))
+            .pl(px(RECUO * c.nivel as f32))
+            .pr(px(8.))
+            .opacity(OPACIDADE_ARRASTO)
+            .font_family(tema::FONTE)
+            .text_size(tema::TEXTO_BODY)
             .text_color(cor::text_primary())
-            .child(self.rotulo.clone())
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(4.))
+                    .right(px(4.))
+                    .rounded(tema::RAIO_XS)
+                    .bg(if c.selecionada { fundo_selecionado() } else { fundo_hover() }),
+            )
+            .child(guias)
+            .child(
+                div()
+                    .ml(px(8.))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .w(px(16.))
+                    .h(px(ALTURA_LINHA))
+                    .when(c.expansivel, |d| d.child(seta)),
+            )
+            .child(img(c.icone.clone()).size(px(16.)).flex_none().mr(px(6.)))
+            .child(
+                div().flex().flex_1().min_w_0().items_center().pt(px(1.)).pb(px(3.)).gap(px(8.)).child(
+                    div().flex_1().min_w_0().truncate().when_some(c.cor_nome, |d, cor| d.text_color(cor)).child(c.nome.clone()),
+                )
+                .when(!c.letra.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .text_size(tema::TEXTO_LABEL)
+                            .font_weight(FontWeight::MEDIUM)
+                            .when_some(c.cor_nome, |d, cor| d.text_color(cor))
+                            .child(c.letra.clone()),
+                    )
+                }),
+            )
     }
 }
 
@@ -180,6 +267,12 @@ pub struct Explorador {
     /// Devolve o foco ao painel no próximo desenho (fim de um pedido assíncrono).
     focar_painel: bool,
     origem_lista: Point<Pixels>,
+    /// Limites de cada linha desenhada no último quadro (menu pelo teclado e largura da cópia no arraste).
+    limites_linhas: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
+    /// Janela minimizada: a atualização periódica para, como o `usePolling` com a página oculta.
+    minimizada: bool,
+    /// Onde o botão desceu na última linha clicada (o ponto em que a cópia do arraste fica presa).
+    agarrado: Rc<std::cell::Cell<Point<Pixels>>>,
     largura_campo: Pixels,
     tamanho_janela: gpui_kit::Size<Pixels>,
     _subs: Vec<Subscription>,
@@ -197,7 +290,8 @@ impl Explorador {
     /// `raiz` é a pasta do projeto; `projeto`, o nome mostrado na seção. A primeira leitura sai na hora.
     pub fn new(raiz: PathBuf, projeto: impl Into<SharedString>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let campo = cx.new(|cx| InputState::new(window, cx));
-        let foco = cx.focus_handle();
+        // Parada de Tab, como o `tabIndex` itinerante da árvore no React.
+        let foco = cx.focus_handle().tab_stop(true);
         let subs = vec![
             cx.subscribe_in(&campo, window, Self::no_campo),
             // O acorde Ctrl+K cancela quando o foco sai da árvore.
@@ -243,6 +337,9 @@ impl Explorador {
             rolar_para: None,
             focar_painel: false,
             origem_lista: Point::default(),
+            limites_linhas: Rc::default(),
+            minimizada: false,
+            agarrado: Rc::default(),
             largura_campo: px(200.),
             tamanho_janela: window.viewport_size(),
             _subs: subs,
@@ -432,7 +529,18 @@ impl Explorador {
     fn iniciar_relogio(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| loop {
             cx.background_executor().timer(Duration::from_millis(100)).await;
-            let vivo = this.update(cx, |this, cx| {
+            let vivo = this.update_in(cx, |this, window, cx| {
+                let minimizada = janela_minimizada(window);
+                if this.minimizada != minimizada {
+                    this.minimizada = minimizada;
+                    // Ao restaurar, a rodada sai na hora (o `visibilitychange` do React).
+                    if !minimizada {
+                        this.proxima_rodada = cx.background_executor().now();
+                    }
+                }
+                if this.minimizada {
+                    return;
+                }
                 if this.ativa && !this.recolhida && !this.consultando && cx.background_executor().now() >= this.proxima_rodada {
                     this.rodada(cx);
                 }
@@ -1422,8 +1530,16 @@ impl Explorador {
         // Sem ponteiro: abre na linha (24 px da borda, no meio dela) ou no canto do painel.
         let base = self.origem_lista;
         let topo = self.rolagem.0.borrow().base_handle.offset().y;
+        let desenhada = indice
+            .and_then(|i| self.linhas.get(i))
+            .and_then(|l| self.limites_linhas.borrow().get(&l.chave).copied());
+        if let Some(b) = desenhada {
+            // A conta do React: `rect.left + 24`, `rect.top + rect.height / 2` da linha.
+            return point(b.origin.x + px(24.), b.origin.y + b.size.height / 2.);
+        }
         match indice {
-            Some(i) => point(base.x + px(24.), base.y + topo + px(ALTURA_LINHA * i as f32 + ALTURA_LINHA / 2.)),
+            // Fora da vista: a mesma conta pela posição virtual (a lista tem 2 px de respiro em cima).
+            Some(i) => point(base.x + px(24.), base.y + topo + px(2. + ALTURA_LINHA * i as f32 + ALTURA_LINHA / 2.)),
             None => {
                 let _ = window;
                 point(base.x + px(24.), base.y + px(ALTURA_LINHA / 2.))
@@ -1784,6 +1900,7 @@ impl Explorador {
         if !editando {
             el = el
                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    this.agarrado.set(ev.position);
                     cx.stop_propagation();
                     let m = ev.modifiers;
                     if l1.tipo == TipoLinha::Arquivo && !m.control && !m.shift && !m.platform {
@@ -1809,16 +1926,43 @@ impl Explorador {
         } else {
             el = el.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         }
+        {
+            let limites = self.limites_linhas.clone();
+            let k = linha.chave.clone();
+            el = el.child(
+                gpui_kit::canvas(move |b, _, _| {
+                    limites.borrow_mut().insert(k.clone(), b);
+                }, |_, _, _, _| {})
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
+        }
         if linha.real() && !renomeando {
             let caminhos = if self.selecao.contains(&linha.chave) { self.selecao.clone() } else { vec![linha.chave.clone()] };
-            let rotulo: SharedString = if caminhos.len() == 1 {
-                modelo::nome_de(&caminhos[0]).to_string().into()
-            } else {
-                format!("{} itens", caminhos.len()).into()
+            let e = linha.entrada.as_ref().unwrap();
+            let deco = self.decoracoes.get(&linha.chave);
+            let copia = CopiaLinha {
+                largura: px(0.),
+                nivel: linha.nivel,
+                expansivel: linha.expansivel,
+                aberta,
+                icone: icone_arquivo(&e.name, e.dir, aberta),
+                nome: e.name.clone().into(),
+                cor_nome: match (deco, e.ignored) {
+                    (Some(d), _) => Some(hsla(d.cor)),
+                    (None, true) => Some(hsla(modelo::IGNORADO)),
+                    (None, false) => None,
+                },
+                letra: deco.map(|d| d.letra.clone()).unwrap_or_default().into(),
+                selecionada,
             };
+            let limites = self.limites_linhas.clone();
             let fraco = cx.weak_entity();
             let chave_arrasto = linha.chave.clone();
-            el = el.on_drag(Arrasto { caminhos }, move |_, _, _, cx| {
+            let agarrado = self.agarrado.clone();
+            el = el.on_drag(Arrasto { caminhos }, move |_, deslocamento, _, cx| {
                 let k = chave_arrasto.clone();
                 let _ = fraco.update(cx, |this, cx| {
                     if !this.selecao.contains(&k) {
@@ -1826,8 +1970,11 @@ impl Explorador {
                         cx.notify();
                     }
                 });
-                let rotulo = rotulo.clone();
-                cx.new(|_| VistaArrasto { rotulo })
+                let mut copia = copia.clone();
+                let b = limites.borrow().get(&chave_arrasto).copied().unwrap_or_default();
+                copia.largura = if b.size.width > px(0.) { b.size.width } else { px(200.) };
+                let ajuste = b.origin + deslocamento - agarrado.get();
+                cx.new(|_| VistaArrasto { copia, ajuste })
             });
         }
         el = el.on_drag_move::<Arrasto>(cx.listener(move |this, ev: &DragMoveEvent<Arrasto>, _, cx| {
@@ -2130,6 +2277,7 @@ impl Explorador {
 impl Render for Explorador {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.garantir_linhas();
+        self.limites_linhas.borrow_mut().clear();
         self.tamanho_janela = window.viewport_size();
         if self.focar_painel {
             self.focar_painel = false;
@@ -2241,6 +2389,34 @@ impl Render for Explorador {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A janela de teste não é Win32: os testes dizem se ela está minimizada.
+    pub(crate) static MINIMIZADA_NO_TESTE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn janela_minimizada(_: &Window) -> bool {
+    MINIMIZADA_NO_TESTE.with(|m| m.get())
+}
+
+#[cfg(all(windows, not(test)))]
+fn janela_minimizada(window: &Window) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
+        // SAFETY: o HWND é da janela viva que o GPUI acabou de entregar.
+        Ok(RawWindowHandle::Win32(h)) => unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::IsIconic(h.hwnd.get() as _) != 0
+        },
+        _ => false,
+    }
+}
+
+#[cfg(all(not(windows), not(test)))]
+fn janela_minimizada(_: &Window) -> bool {
+    false
+}
+
 /// Mede a origem e a largura da lista (para o menu aberto pelo teclado e a largura do motivo embaixo do campo).
 fn canvas_origem(vista: WeakEntity<Explorador>) -> impl IntoElement {
     gpui_kit::canvas(
@@ -2294,6 +2470,18 @@ impl Explorador {
 
     pub(crate) fn erro(&self) -> &str {
         &self.erro
+    }
+
+    pub(crate) fn posicao_menu(&self) -> Option<Point<Pixels>> {
+        self.menu.as_ref().map(|m| m.posicao)
+    }
+
+    pub(crate) fn limites_linha(&self, chave: &str) -> Option<Bounds<Pixels>> {
+        self.limites_linhas.borrow().get(chave).copied()
+    }
+
+    pub(crate) fn rodadas_paradas(&self) -> bool {
+        self.minimizada
     }
 
     pub(crate) fn rotulos_menu(&self) -> Vec<String> {

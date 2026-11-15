@@ -1,0 +1,20 @@
+/* Estilos base */
+@import url("tema.css");
+:root {
+  --cor-fundo: #1f1f1f;
+  --espaco: 8px;
+}
+body, html {
+  margin: 0;
+  font-family: Consolas, 'Courier New', monospace;
+  background-color: var(--cor-fundo);
+}
+.painel > .titulo:hover::after {
+  content: "->";
+  color: rgba(255, 0, 0, 0.5);
+  transition: opacity 0.2s ease-in-out !important;
+}
+#principal[data-ativo="sim"] { width: calc(100% - 2 * var(--espaco)); }
+@media (max-width: 600px) {
+  .painel { display: none; }
+}

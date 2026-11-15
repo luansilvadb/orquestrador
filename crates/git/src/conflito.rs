@@ -8,6 +8,9 @@ use crate::guarda::GuardaGit;
 use gpui_kit::component::button::ButtonVariant;
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
 use gpui_kit::component::{Sizable as _, WindowExt as _};
+use orquestrador_editor::armazem::Buffer;
+use orquestrador_editor::documento::{self, ComTemaDoEditor, Documento};
+use orquestrador_editor::minimapa::Minimapa;
 use gpui_kit::{
     actions, div, prelude::*, px, App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, Subscription,
     Task, Window,
@@ -59,6 +62,7 @@ pub struct VisaoConflito {
     travado: bool,
     arquivo_sujo: bool,
     editor: Entity<EditorState>,
+    _documento: Documento,
     foco: FocusHandle,
     _editor: Subscription,
     _tarefas: Vec<Task<()>>,
@@ -82,12 +86,10 @@ impl VisaoConflito {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let caminho2 = caminho.clone();
-        let editor = cx.new(|cx| {
-            let mut e = EditorState::new(window, cx).language(caminho2).line_number(true);
-            e.set_highlighter_factory(crate::realce::fabrica_editor(), cx);
-            e
-        });
+        // O texto final no editor do app, com a mesma configuração do de arquivo (realce, calha, quebra, guias), como o
+        // `CodeEditor` que o React usa aqui.
+        let doc = Documento::novo(Buffer::do_disco(&format!("conflito:{caminho}"), &caminho, String::new(), false, false), window, cx);
+        let editor = doc.editor.clone();
         let sub = cx.subscribe(&editor, |this: &mut Self, editor, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
                 let texto = editor.read(cx).value().to_string();
@@ -113,6 +115,7 @@ impl VisaoConflito {
             travado: false,
             arquivo_sujo: false,
             editor,
+            _documento: doc,
             foco: cx.focus_handle(),
             _editor: sub,
             _tarefas: Vec::new(),
@@ -569,17 +572,22 @@ impl Render for VisaoConflito {
                 .flex_1()
                 .min_h_0()
                 .overflow_hidden()
-                .bg(gpui_kit::rgb(0x1f1f1f))
-                // O texto final com a fonte e o fundo do editor (Consolas 14 px sobre #1F1F1F), como o CodeMirror do React.
-                .child(crate::tema_local::tema_local(
-                    div().size_full().child(Editor::new(&self.editor).bordered(false).small().line_height(px(19.)).h_full()),
-                    |t| {
-                        t.background = gpui_kit::rgb(0x1f1f1f).into();
-                        t.foreground = crate::realce::cor_texto();
-                        t.mono_font_family = "Consolas".into();
-                        t.mono_font_size = px(14.);
-                    },
-                )),
+                .bg(documento::cor::fundo())
+                .child(
+                    div().flex_1().min_w_0().h_full().child(ComTemaDoEditor(Some(
+                        // Sem o recuo vertical do Kit: a primeira linha encosta no topo, como o CodeMirror do React.
+                        Editor::new(&self.editor)
+                            .appearance(false)
+                            .bordered(false)
+                            .xsmall()
+                            .h_full()
+                            .font_family(documento::FONTE_EDITOR)
+                            .text_size(documento::TAMANHO_EDITOR)
+                            .line_height(documento::LINHA_EDITOR)
+                            .into_any_element(),
+                    ))),
+                )
+                .child(Minimapa::new(self.editor.clone())),
         )
     }
 }

@@ -3,6 +3,7 @@
 //! tempo, barra, volume e mudo, tela cheia no vídeo, menu com download e velocidade). Não toca sozinho e pausa ao sair da
 //! vista (`definir_visivel(false)`, janela minimizada) e ao fechar (soltar a entidade para o decodificador e o áudio).
 use crate::imagem::{self, FalhaImagem};
+use crate::pip::{self, AreaPip, JanelaPip};
 use crate::player::{Estado, Player};
 use crate::tipos::{self, formatar_tempo, TipoMidia};
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -11,7 +12,7 @@ use gpui_kit::component::Sizable;
 use gpui_kit::{
     actions, anchored, canvas, deferred, div, img, point, prelude::*, px, rgb, rgba, Anchor, App, Bounds, Context,
     EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit,
-    Pixels, RenderImage, SharedString, Task, Window,
+    Pixels, RenderImage, SharedString, Task, Window, WindowHandle, AnyWindowHandle,
 };
 use orquestrador_ui::tema::{self, cor};
 use orquestrador_ui::widgets::icone;
@@ -37,6 +38,8 @@ pub enum EventoMidia {
     Falhou(String),
     /// Começou ou parou de tocar.
     Reproducao { tocando: bool },
+    /// "Voltar para a guia" na janela de picture-in-picture: a bancada ativa esta aba.
+    VoltarParaAba,
 }
 
 enum Corpo {
@@ -75,6 +78,8 @@ struct Reproducao {
     volume_aberto: bool,
     ultimo_movimento: Instant,
     tela_cheia: bool,
+    pip: Option<WindowHandle<JanelaPip>>,
+    area_pip: AreaPip,
     _relogio: Task<()>,
 }
 
@@ -91,6 +96,7 @@ pub struct VisaoMidia {
     corpo: Corpo,
     foco: FocusHandle,
     visivel: bool,
+    janela: AnyWindowHandle,
     _assinaturas: Vec<gpui_kit::Subscription>,
 }
 
@@ -127,11 +133,14 @@ impl VisaoMidia {
             corpo: Corpo::NaoMidia,
             foco: cx.focus_handle(),
             visivel: true,
+            janela: window.window_handle(),
             _assinaturas: Vec::new(),
         };
         // Minimizar a janela pausa, como o `visibilitychange` do WebView2.
         v._assinaturas.push(cx.observe_window_bounds(window, |v, window, cx| v.conferir_janela(window, cx)));
         v._assinaturas.push(cx.observe_window_activation(window, |v, window, cx| v.conferir_janela(window, cx)));
+        // Fechar a aba fecha a janela de picture-in-picture.
+        v._assinaturas.push(cx.on_release(|v, cx| v.fechar_janela_pip(cx)));
         v.carregar(caminho.into(), cx);
         v
     }
@@ -156,7 +165,8 @@ impl VisaoMidia {
     /// A bancada avisa quando a aba sai ou volta à vista (troca de aba, grupo oculto). Sair pausa; voltar não retoma.
     pub fn definir_visivel(&mut self, visivel: bool, cx: &mut Context<Self>) {
         self.visivel = visivel;
-        if !visivel {
+        // Em picture-in-picture o vídeo continua tocando fora da aba, como no Chromium.
+        if !visivel && !self.pip_aberta() {
             self.pausar(cx);
         }
     }
@@ -217,7 +227,111 @@ impl VisaoMidia {
         matches!(&self.corpo, Corpo::Player(r) if r.tela_cheia)
     }
 
+    pub fn pip_aberta(&self) -> bool {
+        matches!(&self.corpo, Corpo::Player(r) if r.pip.is_some())
+    }
+
+    /// A janela de picture-in-picture, se aberta.
+    pub fn janela_pip(&self) -> Option<WindowHandle<JanelaPip>> {
+        match &self.corpo {
+            Corpo::Player(r) => r.pip,
+            _ => None,
+        }
+    }
+
+    pub(crate) fn quadro_atual(&self) -> Option<Arc<RenderImage>> {
+        match &self.corpo {
+            Corpo::Player(r) => r.quadro.clone(),
+            _ => None,
+        }
+    }
+
     // Ações.
+
+    /// "Picture-in-picture" do menu: abre a janela flutuante com o mesmo player; com ela aberta, volta para a aba.
+    pub fn alternar_pip(&mut self, cx: &mut Context<Self>) {
+        if self.pip_aberta() {
+            self.voltar_da_pip(cx);
+        } else {
+            self.abrir_pip(cx);
+        }
+    }
+
+    pub fn abrir_pip(&mut self, cx: &mut Context<Self>) {
+        let Corpo::Player(r) = &mut self.corpo else { return };
+        if !r.video || r.pip.is_some() || r.estado.info.erro.is_some() || !r.estado.info.pronto {
+            return;
+        }
+        if r.tela_cheia {
+            r.tela_cheia = false;
+            let _ = self.janela.update(cx, |_, window, _| {
+                if window.is_fullscreen() {
+                    window.toggle_fullscreen();
+                }
+            });
+        }
+        let Corpo::Player(r) = &mut self.corpo else { return };
+        let opcoes = pip::opcoes(r.estado.info.video.unwrap_or((16, 9)), cx);
+        let area = r.area_pip.clone();
+        let visao = cx.entity().downgrade();
+        // Adiado: a janela nova desenha na hora e lê esta View, que está emprestada agora.
+        cx.defer(move |cx| {
+            let v = visao.clone();
+            let aberta = cx.open_window(opcoes, move |window, cx| cx.new(|cx| JanelaPip::new(v, area, window, cx)));
+            let _ = visao.update(cx, |v, cx| match aberta {
+                Ok(h) => match &mut v.corpo {
+                    Corpo::Player(r) if r.pip.is_none() => {
+                        r.pip = Some(h);
+                        r.refazer_quadro = true;
+                        cx.notify();
+                    }
+                    _ => {
+                        let _ = h.update(cx, |_, window, _| window.remove_window());
+                    }
+                },
+                Err(e) => cx.emit(EventoMidia::Falhou(format!("Não foi possível abrir o picture-in-picture: {e}"))),
+            });
+        });
+    }
+
+    /// "Voltar para a guia": fecha a janela sem pausar e devolve o vídeo e o foco à aba.
+    pub fn voltar_da_pip(&mut self, cx: &mut Context<Self>) {
+        if !self.pip_aberta() {
+            return;
+        }
+        self.fechar_janela_pip(cx);
+        let _ = self.janela.update(cx, |_, window, _| window.activate_window());
+        cx.emit(EventoMidia::VoltarParaAba);
+        cx.notify();
+    }
+
+    /// O "×" da janela: fecha e pausa, como o Chromium.
+    pub fn fechar_pip(&mut self, cx: &mut Context<Self>) {
+        if self.pip_aberta() {
+            self.fechar_janela_pip(cx);
+            self.pausar(cx);
+        }
+    }
+
+    /// A janela sumiu por fora (Alt+F4 ou o sistema): o mesmo que o "×".
+    pub(crate) fn pip_fechada(&mut self, cx: &mut Context<Self>) {
+        if let Corpo::Player(r) = &mut self.corpo {
+            if r.pip.take().is_some() {
+                r.refazer_quadro = true;
+                self.pausar(cx);
+            }
+        }
+    }
+
+    fn fechar_janela_pip(&mut self, cx: &mut App) {
+        let Corpo::Player(r) = &mut self.corpo else { return };
+        let Some(h) = r.pip.take() else { return };
+        r.refazer_quadro = true;
+        // Adiado: o clique pode ter vindo da própria janela, que está emprestada durante o evento.
+        cx.defer(move |cx| {
+            let _ = h.update(cx, |_, window, _| window.remove_window());
+        });
+    }
 
     pub fn alternar_tamanho(&mut self, cx: &mut Context<Self>) {
         if let Corpo::Imagem(i) = &mut self.corpo {
@@ -313,6 +427,7 @@ impl VisaoMidia {
     }
 
     fn carregar(&mut self, caminho: PathBuf, cx: &mut Context<Self>) {
+        self.fechar_janela_pip(cx);
         self.nome = tipos::nome_de(&caminho).into();
         self.tipo = tipos::midia_de(&caminho).map(|m| m.0);
         self.caminho = caminho.clone();
@@ -369,6 +484,8 @@ impl VisaoMidia {
                     volume_aberto: false,
                     ultimo_movimento: Instant::now(),
                     tela_cheia: false,
+                    pip: None,
+                    area_pip: Rc::new(Cell::new((Bounds::default(), 1.))),
                     _relogio: relogio,
                 }))
             }
@@ -383,7 +500,7 @@ impl VisaoMidia {
             cx.drop_image(velho, None);
         }
         let mut mudou = false;
-        let (area, escala) = r.area.get();
+        let (area, escala) = if r.pip.is_some() { r.area_pip.get() } else { r.area.get() };
         let alvo = (f32::from(area.size.width) * escala, f32::from(area.size.height) * escala);
         if r.video && r.player.definir_alvo(alvo.0 as u32, alvo.1 as u32) {
             r.refazer_quadro = true;
@@ -436,7 +553,7 @@ impl VisaoMidia {
     }
 
     fn conferir_janela(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if janela_minimizada(window) {
+        if janela_minimizada(window) && !self.pip_aberta() {
             self.pausar(cx);
         }
     }
@@ -722,7 +839,21 @@ impl VisaoMidia {
                 let area = r.area.clone();
                 canvas(move |b, window, _| area.set((b, window.scale_factor())), |_, _, _, _| {}).absolute().size_full()
             })
-            .when_some(r.quadro.clone(), |d, q| d.child(img(q).size_full().object_fit(ObjectFit::Contain).debug_selector(|| "midia-video".into())))
+            .when(r.pip.is_some(), |d| {
+                d.child(
+                    div()
+                        .absolute().top_0().left_0()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(tema::TEXTO_BODY)
+                        .text_color(cor::text_secondary())
+                        .debug_selector(|| "midia-pip-aviso".into())
+                        .child("Reproduzindo em picture-in-picture"),
+                )
+            })
+            .when_some(r.quadro.clone().filter(|_| r.pip.is_none()), |d, q| d.child(img(q).size_full().object_fit(ObjectFit::Contain).debug_selector(|| "midia-video".into())))
             .on_click(cx.listener(|v, e: &gpui_kit::ClickEvent, window, cx| {
                 window.focus(&v.foco.clone(), cx);
                 if e.click_count() >= 2 {
@@ -793,6 +924,7 @@ impl VisaoMidia {
             );
         let entidade = cx.entity().downgrade();
         let velocidade = e.velocidade;
+        let pode_pip = video && habilitado;
         let mais = Button::new("mais")
             .ghost()
             .xsmall()
@@ -802,10 +934,16 @@ impl VisaoMidia {
             .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, window, cx| {
                 let e1 = entidade.clone();
                 let e2 = entidade.clone();
+                let e3 = entidade.clone();
                 menu.min_w(px(200.))
                     .item(PopupMenuItem::new("Fazer download").on_click(move |_, _, cx| {
                         let _ = e1.update(cx, |v, cx| v.baixar(cx));
                     }))
+                    .when(pode_pip, |m| {
+                        m.item(PopupMenuItem::new("Picture-in-picture").on_click(move |_, _, cx| {
+                            let _ = e3.update(cx, |v, cx| v.alternar_pip(cx));
+                        }))
+                    })
                     .submenu("Velocidade de reprodução", window, cx, move |sub, _, _| {
                         VELOCIDADES.iter().fold(sub, |sub, &vel| {
                             let e = e2.clone();

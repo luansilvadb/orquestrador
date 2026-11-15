@@ -8,7 +8,7 @@ use crate::fonte::{Estado, Fonte, FonteGit, Kind};
 use crate::guarda::GuardaGit;
 use crate::simulado::{ModoSimulado, Simulado};
 use crate::tela::{EventoGit, ModoCommit, Remoto, TelaGit, Vista};
-use gpui_kit::component::diff::DiffMode;
+use crate::diff::Modo;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{px, size, AnyWindowHandle, AppContext, Bounds, Entity, Point, TestAppContext, WindowBounds, WindowOptions};
 use std::cell::RefCell;
@@ -354,7 +354,7 @@ fn diff_prepara_bloco_com_a_revisao_vista(cx: &mut TestAppContext) {
     let ev = eventos.clone();
     cx.update(|cx| cx.subscribe(&v, move |_, e: &EventoDiff, _| ev.borrow_mut().push(e.clone())).detach());
     assert_eq!(cx.read(|cx| v.read(cx).total_unidades()), 2);
-    assert_eq!(cx.read(|cx| v.read(cx).modo()), DiffMode::Split, "lado a lado por padrão");
+    assert_eq!(cx.read(|cx| v.read(cx).modo()), Modo::LadoALado, "lado a lado por padrão");
     let r = cx.read(|cx| v.read(cx).bloco(0)).unwrap();
     na_janela(cx, j, |w, cx| v.update(cx, |v, cx| v.preparar_bloco(0, w, cx)));
     cx.run_until_parked();
@@ -393,13 +393,70 @@ fn diff_navega_e_troca_o_modo(cx: &mut TestAppContext) {
     v.update(cx, |v, cx| v.passo(-5, cx));
     assert_eq!(cx.read(|cx| v.read(cx).atual()), Some(0));
     v.update(cx, |v, cx| v.alternar_modo(cx));
-    assert_eq!(cx.read(|cx| v.read(cx).modo()), DiffMode::Unified);
+    assert_eq!(cx.read(|cx| v.read(cx).modo()), Modo::Unificado);
     // Poll com a resposta igual não refaz o comparador.
     let lidas = s.contar("git_review_diff");
     cx.executor().advance_clock(Duration::from_secs(12));
     cx.run_until_parked();
     assert!(s.contar("git_review_diff") > lidas);
     assert_eq!(cx.read(|cx| v.read(cx).atual()), Some(0));
+}
+
+#[gpui_kit::test]
+fn diff_f8_rola_a_unidade_ao_terco(cx: &mut TestAppContext) {
+    let s = Arc::new(Simulado::default());
+    let fonte: Fonte = s.clone();
+    let alvo = Alvo::Diff { lado: Lado::Alteracoes, caminho: "src/sem-quebra.ts".into() };
+    let (j, v) = montar_vista(cx, move |w, cx| VisaoDiff::new(fonte, GuardaGit::new(), alvo, w, cx));
+    let desenhar = |cx: &mut TestAppContext| {
+        na_janela(cx, j, |w, _| w.refresh());
+        cx.run_until_parked();
+    };
+    desenhar(cx);
+    assert!(cx.read(|cx| v.read(cx).faixa_atual()).is_some(), "a geometria sai do primeiro desenho");
+    for passo in [1, 1, -1] {
+        v.update(cx, |v, cx| v.passo(passo, cx));
+        desenhar(cx);
+        let (topo, _) = cx.read(|cx| v.read(cx).faixa_atual()).unwrap();
+        let rolagem = cx.read(|cx| v.read(cx).rolagem());
+        // 900 de janela; o corpo é a janela menos a barra de 28 px.
+        let alvo = (topo - (900. - 28.) / 3.).max(0.);
+        assert!((rolagem - alvo).abs() < 1. || rolagem < alvo, "rolagem {rolagem}, alvo {alvo}");
+    }
+    // O divisor fica entre 15% e 85% e sobrevive à troca de modo.
+    v.update(cx, |v, cx| v.definir_proporcao(95., cx));
+    assert_eq!(cx.read(|cx| v.read(cx).proporcao()), 85.);
+    v.update(cx, |v, cx| v.alternar_modo(cx));
+    desenhar(cx);
+    v.update(cx, |v, cx| v.alternar_modo(cx));
+    desenhar(cx);
+    assert_eq!(cx.read(|cx| v.read(cx).proporcao()), 85.);
+}
+
+#[test]
+fn comparador_aguenta_milhares_de_linhas() {
+    use crate::comparador::Comparador;
+    let mut p = String::from("--- a/x.ts
++++ b/x.ts
+@@ -1,20000 +1,20000 @@
+");
+    for i in 0..20_000 {
+        if i % 50 == 0 {
+            p.push_str(&format!("-const v{i} = antigo({i});
++const v{i} = novo({i}, extra);
+"));
+        } else {
+            p.push_str(&format!(" const v{i} = igual({i});
+"));
+        }
+    }
+    let inicio = std::time::Instant::now();
+    let c = crate::comparar::comparar(&p, None);
+    let u: Vec<_> = c.unificado.iter().map(|l| l.unidade).collect();
+    let cmp = Comparador::new(&p, "x.ts", &u, c.unidades.len());
+    assert_eq!(cmp.unidades.len(), 400);
+    assert_eq!(cmp.modelo.lado.len(), 20_000);
+    assert!(inicio.elapsed() < Duration::from_secs(5), "modelo em {:?}", inicio.elapsed());
 }
 
 #[gpui_kit::test]

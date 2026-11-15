@@ -28,14 +28,23 @@ let tela = cx.new(|cx| TelaGit::new(fonte.clone(), guarda.clone(), window, cx));
 
 `VisaoDiff::new(fonte, guarda, alvo, window, cx)` com `Alvo::Diff { lado, caminho }` (relido a cada 2,5 s enquanto ativa)
 ou `Alvo::Commit { hash, caminho }` (lido uma vez). Métodos: `definir_ativa`, `definir_travado`, `definir_rascunho`
-(rascunho aberto do arquivo bloqueia descartar), `alternar_modo`, `passo`. Eventos `EventoDiff`: `AtualizarGit`,
+(rascunho aberto do arquivo bloqueia descartar), `alternar_modo`, `modo() -> diff::Modo` (`LadoALado`/`Unificado`; antes `DiffMode` do Kit),
+`passo`, `escolher`, `proporcao`/`definir_proporcao` (divisor, 15 a 85), `rolagem`, `faixa_atual`, `selecao`. Eventos `EventoDiff`: `AtualizarGit`,
 `AbrirLinha { caminho, linha }`.
+
+O corpo é o comparador próprio (`comparador::{Comparador, Corpo}`), porte do `FileDiff` do `@pierre/diffs` 1.2.12 como o
+React o configura: Consolas 14/19 px, calha com número e −/+, vão de 40 px com divisor arrastável e ações do bloco,
+células vazias hachuradas, `word-alt` (`comparador::palavras`), régua e F8/Shift+F8 pela geometria calculada.
+Ctrl+C copia a seleção; setas, PageUp/PageDown, Home/End rolam.
 
 ## `VisaoConflito` (aba do editor)
 
 `VisaoConflito::new(fonte, guarda, caminho, rascunho, window, cx)`; `rascunho` vem da recuperação. Métodos: `mostrar`
 (a aba voltou a ser a atual), `definir_travado`, `definir_arquivo_sujo`, `rascunho()`. Eventos `EventoConflito`:
-`Rascunho(RascunhoConflito)` (sujo e recuperação), `AtualizarGit`, `Fechar` (resolvido ou removido).
+`Rascunho(RascunhoConflito)` (sujo e recuperação), `AtualizarGit`, `Fechar` (resolvido ou removido). O texto final usa o
+`Documento` e o `Minimapa` do `orquestrador-editor`.
+
+Na tela Git, Shift+F10 e a tecla de menu abrem o menu de contexto da linha focada.
 
 ## Puro, para o git gutter
 

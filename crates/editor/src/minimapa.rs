@@ -99,12 +99,9 @@ fn pintar(editor: &Entity<EditorState>, b: Bounds<Pixels>, sobre: bool, window: 
     let desl = deslocamento(linhas, alt, fracao);
     let primeira = (desl / LINHA).floor() as usize;
     let ultima = (((desl + alt) / LINHA).ceil() as usize).min(linhas);
-    let trechos = realce::trechos_de(&s.language_name());
-    let trechos = trechos.as_ref().map(|t| t.borrow());
     let padrao: Hsla = gpui::rgb(0xcccccc).into();
     let maximo = (f32::from(b.size.width) / CARACTERE) as usize;
     for l in primeira..ultima {
-        let ini = texto.line_start_offset(l);
         let linha = texto.slice_line(l).to_string();
         let y = f32::from(b.origin.y) + l as f32 * LINHA - desl;
         let mut col = 0usize;
@@ -115,7 +112,7 @@ fn pintar(editor: &Entity<EditorState>, b: Bounds<Pixels>, sobre: bool, window: 
                 window.paint_quad(fill(r, cor.opacity(0.6)));
             }
         };
-        for (i, ch) in linha.char_indices() {
+        for ch in linha.chars() {
             if col >= maximo || ch == '\n' || ch == '\r' {
                 break;
             }
@@ -126,7 +123,6 @@ fn pintar(editor: &Entity<EditorState>, b: Bounds<Pixels>, sobre: bool, window: 
                 continue;
             }
             // O minimapa do React lê só a árvore do CodeMirror, sem as cores do Shiki: desenha tudo na cor do texto.
-            let _ = (&trechos, ini, i);
             let cor = padrao;
             match &mut corrida {
                 Some((_, n, c)) if *c == cor => *n += 1,

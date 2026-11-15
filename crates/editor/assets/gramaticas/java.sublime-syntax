@@ -1,0 +1,1746 @@
+%YAML 1.2
+---
+{
+ "name": "shiki-java",
+ "scope": "source.java",
+ "file_extensions": [],
+ "hidden": true,
+ "contexts": {
+  "main": [
+   {
+    "match": "\\b(package)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.package.java"
+     },
+     {
+      "meta_content_scope": "storage.modifier.package.java"
+     },
+     {
+      "match": "\\s*(;)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.terminator.java"
+      }
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "match": "(?<=\\.)\\s*\\.|\\.(?=\\s*;)",
+      "scope": "invalid.illegal.character_not_allowed_here.java"
+     },
+     {
+      "match": "(?<!_)_(?=\\s*([.;]))|\\b\\d+|-+",
+      "scope": "invalid.illegal.character_not_allowed_here.java"
+     },
+     {
+      "match": "[A-Z]+",
+      "scope": "invalid.deprecated.package_name_not_lowercase.java"
+     },
+     {
+      "match": "\\b(?<!\\$)(abstract|assert|boolean|break|byte|case|catch|char|class|const|continue|default|do|double|else|enum|extends|final|finally|float|for|goto|if|implements|import|instanceof|int|interface|long|native|new|non-sealed|package|permits|private|protected|public|return|sealed|short|static|strictfp|super|switch|syncronized|this|throws??|transient|try|void|volatile|while|yield|true|false|null)\\b",
+      "scope": "invalid.illegal.character_not_allowed_here.java"
+     },
+     {
+      "match": "\\.",
+      "scope": "punctuation.separator.java"
+     }
+    ],
+    "captures": {
+     1: "keyword.other.package.java"
+    }
+   },
+   {
+    "match": "\\b(import)\\b\\s*\\b(static)?\\b\\s",
+    "push": [
+     {
+      "meta_scope": "meta.import.java"
+     },
+     {
+      "meta_content_scope": "storage.modifier.import.java"
+     },
+     {
+      "match": "\\s*(;)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.terminator.java"
+      }
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "match": "(?<=\\.)\\s*\\.|\\.(?=\\s*;)",
+      "scope": "invalid.illegal.character_not_allowed_here.java"
+     },
+     {
+      "match": "(?<!\\.)\\s*\\*",
+      "scope": "invalid.illegal.character_not_allowed_here.java"
+     },
+     {
+      "match": "(?<!_)_(?=\\s*([.;]))|\\b\\d+|-+",
+      "scope": "invalid.illegal.character_not_allowed_here.java"
+     },
+     {
+      "match": "\\b(?<!\\$)(abstract|assert|boolean|break|byte|case|catch|char|class|const|continue|default|do|double|else|enum|extends|final|finally|float|for|goto|if|implements|import|instanceof|int|interface|long|native|new|non-sealed|package|permits|private|protected|public|return|sealed|short|static|strictfp|super|switch|syncronized|this|throws??|transient|try|void|volatile|while|yield|true|false|null)\\b",
+      "scope": "invalid.illegal.character_not_allowed_here.java"
+     },
+     {
+      "match": "\\.",
+      "scope": "punctuation.separator.java"
+     },
+     {
+      "match": "\\*",
+      "scope": "variable.language.wildcard.java"
+     }
+    ],
+    "captures": {
+     1: "keyword.other.import.java",
+     2: "storage.modifier.java"
+    }
+   },
+   {
+    "include": "r_comments_javadoc"
+   },
+   {
+    "include": "r_code"
+   },
+   {
+    "include": "r_module"
+   }
+  ],
+  "r_all_types": [
+   {
+    "include": "r_primitive_arrays"
+   },
+   {
+    "include": "r_primitive_types"
+   },
+   {
+    "include": "r_object_types"
+   }
+  ],
+  "r_annotations": [
+   {
+    "match": "((@)\\s*([^(\\s]+))(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.declaration.annotation.java"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.annotation-arguments.end.bracket.round.java"
+     },
+     {
+      "match": "(\\w*)\\s*(=)",
+      "captures": {
+       1: "constant.other.key.java",
+       2: "keyword.operator.assignment.java"
+      }
+     },
+     {
+      "include": "r_code"
+     }
+    ],
+    "captures": {
+     2: "punctuation.definition.annotation.java",
+     3: "storage.type.annotation.java",
+     4: "punctuation.definition.annotation-arguments.begin.bracket.round.java"
+    }
+   },
+   {
+    "match": "(@)(interface)\\s+(\\w*)|((@)\\s*(\\w+))",
+    "scope": "meta.declaration.annotation.java",
+    "captures": {
+     1: "punctuation.definition.annotation.java",
+     2: "storage.modifier.java",
+     3: "storage.type.annotation.java",
+     5: "punctuation.definition.annotation.java",
+     6: "storage.type.annotation.java"
+    }
+   }
+  ],
+  "r_anonymous_block_and_instance_initializer": [
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.block.end.bracket.curly.java"
+     },
+     {
+      "include": "r_code"
+     }
+    ],
+    "scope": "punctuation.section.block.begin.bracket.curly.java"
+   }
+  ],
+  "r_anonymous_classes_and_new": [
+   {
+    "match": "\\bnew\\b",
+    "push": [
+     {
+      "match": "(?=[])-.:;?}]|/(?![*/])|[!%\\&=^|])",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_function_call"
+     },
+     {
+      "include": "r_all_types"
+     },
+     {
+      "match": "(?<=\\))",
+      "push": [
+       {
+        "match": "(?=[])-.:;?}]|/(?![*/])|[!%\\&=^|])",
+        "pop": true
+       },
+       {
+        "include": "r_comments"
+       },
+       {
+        "match": "\\{",
+        "push": [
+         {
+          "meta_scope": "meta.inner-class.java"
+         },
+         {
+          "match": "}",
+          "pop": true,
+          "scope": "punctuation.section.inner-class.end.bracket.curly.java"
+         },
+         {
+          "include": "r_class_body"
+         }
+        ],
+        "scope": "punctuation.section.inner-class.begin.bracket.curly.java"
+       }
+      ]
+     },
+     {
+      "match": "(?<=])",
+      "push": [
+       {
+        "match": "(?=[])-.:;?}]|/(?![*/])|[!%\\&=^|])",
+        "pop": true
+       },
+       {
+        "include": "r_comments"
+       },
+       {
+        "match": "\\{",
+        "push": [
+         {
+          "meta_scope": "meta.array-initializer.java"
+         },
+         {
+          "match": "}",
+          "pop": true,
+          "scope": "punctuation.section.array-initializer.end.bracket.curly.java"
+         },
+         {
+          "include": "r_code"
+         }
+        ],
+        "scope": "punctuation.section.array-initializer.begin.bracket.curly.java"
+       }
+      ]
+     },
+     {
+      "include": "r_parens"
+     }
+    ],
+    "scope": "keyword.control.new.java"
+   }
+  ],
+  "r_assertions": [
+   {
+    "match": "\\b(assert)\\s",
+    "push": [
+     {
+      "meta_scope": "meta.declaration.assertion.java"
+     },
+     {
+      "match": "$",
+      "pop": true
+     },
+     {
+      "match": ":",
+      "scope": "keyword.operator.assert.expression-separator.java"
+     },
+     {
+      "include": "r_code"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.assert.java"
+    }
+   }
+  ],
+  "r_class": [
+   {
+    "match": "(?=\\w?[-\\w\\s]*\\b(?:class|(?<!@)interface|enum)\\s+[$\\w]+)",
+    "push": [
+     {
+      "meta_scope": "meta.class.java"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.class.end.bracket.curly.java"
+     },
+     {
+      "include": "r_storage_modifiers"
+     },
+     {
+      "include": "r_generics"
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "match": "(class|(?<!@)interface|enum)\\s+([$\\w]+)",
+      "scope": "meta.class.identifier.java",
+      "captures": {
+       1: "storage.modifier.java",
+       2: "entity.name.type.class.java"
+      }
+     },
+     {
+      "match": "extends",
+      "push": [
+       {
+        "meta_scope": "meta.definition.class.inherited.classes.java"
+       },
+       {
+        "match": "(?=\\{|implements|permits)",
+        "pop": true
+       },
+       {
+        "include": "r_object_types_inherited"
+       },
+       {
+        "include": "r_comments"
+       }
+      ],
+      "scope": "storage.modifier.extends.java"
+     },
+     {
+      "match": "(implements)\\s",
+      "push": [
+       {
+        "meta_scope": "meta.definition.class.implemented.interfaces.java"
+       },
+       {
+        "match": "(?=\\s*extends|permits|\\{)",
+        "pop": true
+       },
+       {
+        "include": "r_object_types_inherited"
+       },
+       {
+        "include": "r_comments"
+       }
+      ],
+      "captures": {
+       1: "storage.modifier.implements.java"
+      }
+     },
+     {
+      "match": "(permits)\\s",
+      "push": [
+       {
+        "meta_scope": "meta.definition.class.permits.classes.java"
+       },
+       {
+        "match": "(?=\\s*extends|implements|\\{)",
+        "pop": true
+       },
+       {
+        "include": "r_object_types_inherited"
+       },
+       {
+        "include": "r_comments"
+       }
+      ],
+      "captures": {
+       1: "storage.modifier.permits.java"
+      }
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_content_scope": "meta.class.body.java"
+       },
+       {
+        "match": "(?=})",
+        "pop": true
+       },
+       {
+        "include": "r_class_body"
+       }
+      ],
+      "scope": "punctuation.section.class.begin.bracket.curly.java"
+     }
+    ]
+   }
+  ],
+  "r_class_body": [
+   {
+    "include": "r_comments_javadoc"
+   },
+   {
+    "include": "r_comments"
+   },
+   {
+    "include": "r_enums"
+   },
+   {
+    "include": "r_class"
+   },
+   {
+    "include": "r_generics"
+   },
+   {
+    "include": "r_static_initializer"
+   },
+   {
+    "include": "r_class_fields_and_methods"
+   },
+   {
+    "include": "r_annotations"
+   },
+   {
+    "include": "r_storage_modifiers"
+   },
+   {
+    "include": "r_member_variables"
+   },
+   {
+    "include": "r_code"
+   }
+  ],
+  "r_class_fields_and_methods": [
+   {
+    "match": "(?==)",
+    "push": [
+     {
+      "match": "(?=;)",
+      "pop": true
+     },
+     {
+      "include": "r_code"
+     }
+    ]
+   },
+   {
+    "include": "r_methods"
+   }
+  ],
+  "r_code": [
+   {
+    "include": "r_annotations"
+   },
+   {
+    "include": "r_comments"
+   },
+   {
+    "include": "r_enums"
+   },
+   {
+    "include": "r_class"
+   },
+   {
+    "include": "r_record"
+   },
+   {
+    "include": "r_anonymous_block_and_instance_initializer"
+   },
+   {
+    "include": "r_try_catch_finally"
+   },
+   {
+    "include": "r_assertions"
+   },
+   {
+    "include": "r_parens"
+   },
+   {
+    "include": "r_constants_and_special_vars"
+   },
+   {
+    "include": "r_numbers"
+   },
+   {
+    "include": "r_anonymous_classes_and_new"
+   },
+   {
+    "include": "r_lambda_expression"
+   },
+   {
+    "include": "r_keywords"
+   },
+   {
+    "include": "r_storage_modifiers"
+   },
+   {
+    "include": "r_method_call"
+   },
+   {
+    "include": "r_function_call"
+   },
+   {
+    "include": "r_variables"
+   },
+   {
+    "include": "r_variables_local"
+   },
+   {
+    "include": "r_objects"
+   },
+   {
+    "include": "r_properties"
+   },
+   {
+    "include": "r_strings"
+   },
+   {
+    "include": "r_all_types"
+   },
+   {
+    "match": ",",
+    "scope": "punctuation.separator.delimiter.java"
+   },
+   {
+    "match": "\\.",
+    "scope": "punctuation.separator.period.java"
+   },
+   {
+    "match": ";",
+    "scope": "punctuation.terminator.java"
+   }
+  ],
+  "r_comments": [
+   {
+    "match": "/\\*\\*/",
+    "scope": "comment.block.empty.java punctuation.definition.comment.java"
+   },
+   {
+    "include": "r_comments_inline"
+   }
+  ],
+  "r_comments_inline": [
+   {
+    "match": "/\\*",
+    "push": [
+     {
+      "meta_scope": "comment.block.java"
+     },
+     {
+      "match": "\\*/",
+      "pop": true,
+      "scope": "punctuation.definition.comment.java"
+     }
+    ],
+    "scope": "punctuation.definition.comment.java"
+   },
+   {
+    "match": "(^[\\t ]+)?(?=//)",
+    "push": [
+     {
+      "match": "(?!\\G)",
+      "pop": true
+     },
+     {
+      "match": "//",
+      "push": [
+       {
+        "meta_scope": "comment.line.double-slash.java"
+       },
+       {
+        "match": "\\n",
+        "pop": true
+       }
+      ],
+      "scope": "punctuation.definition.comment.java"
+     }
+    ],
+    "captures": {
+     1: "punctuation.whitespace.comment.leading.java"
+    }
+   }
+  ],
+  "r_comments_javadoc": [
+   {
+    "match": "^\\s*(/\\*\\*)(?!/)",
+    "push": [
+     {
+      "meta_scope": "comment.block.javadoc.java"
+     },
+     {
+      "match": "\\*/",
+      "pop": true,
+      "scope": "punctuation.definition.comment.java"
+     },
+     {
+      "match": "@(author|deprecated|return|see|serial|since|version)\\b",
+      "scope": "keyword.other.documentation.javadoc.java"
+     },
+     {
+      "match": "(@param)\\s+(\\S+)",
+      "captures": {
+       1: "keyword.other.documentation.javadoc.java",
+       2: "variable.parameter.java"
+      }
+     },
+     {
+      "match": "(@(?:exception|throws))\\s+(\\S+)",
+      "captures": {
+       1: "keyword.other.documentation.javadoc.java",
+       2: "entity.name.type.class.java"
+      }
+     },
+     {
+      "match": "\\{(@link)\\s+(\\S+)?#([$\\w]+\\s*\\([^()]*\\)).*?}",
+      "captures": {
+       1: "keyword.other.documentation.javadoc.java",
+       2: "entity.name.type.class.java",
+       3: "variable.parameter.java"
+      }
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.comment.java"
+    }
+   }
+  ],
+  "r_constants_and_special_vars": [
+   {
+    "match": "\\b(true|false|null)\\b",
+    "scope": "constant.language.java"
+   },
+   {
+    "match": "\\bthis\\b",
+    "scope": "variable.language.this.java"
+   },
+   {
+    "match": "\\bsuper\\b",
+    "scope": "variable.language.java"
+   }
+  ],
+  "r_enums": [
+   {
+    "match": "^\\s*([\\w\\s]*)(enum)\\s+(\\w+)",
+    "push": [
+     {
+      "meta_scope": "meta.enum.java"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.enum.end.bracket.curly.java"
+     },
+     {
+      "match": "\\b(extends)\\b",
+      "push": [
+       {
+        "meta_scope": "meta.definition.class.inherited.classes.java"
+       },
+       {
+        "match": "(?=\\{|\\bimplements\\b)",
+        "pop": true
+       },
+       {
+        "include": "r_object_types_inherited"
+       },
+       {
+        "include": "r_comments"
+       }
+      ],
+      "captures": {
+       1: "storage.modifier.extends.java"
+      }
+     },
+     {
+      "match": "\\b(implements)\\b",
+      "push": [
+       {
+        "meta_scope": "meta.definition.class.implemented.interfaces.java"
+       },
+       {
+        "match": "(?=\\{|\\bextends\\b)",
+        "pop": true
+       },
+       {
+        "include": "r_object_types_inherited"
+       },
+       {
+        "include": "r_comments"
+       }
+      ],
+      "captures": {
+       1: "storage.modifier.implements.java"
+      }
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "match": "(?=})",
+        "pop": true
+       },
+       {
+        "match": "(?<=\\{)",
+        "push": [
+         {
+          "match": "(?=[;}])",
+          "pop": true
+         },
+         {
+          "include": "r_comments_javadoc"
+         },
+         {
+          "include": "r_comments"
+         },
+         {
+          "match": "\\b(\\w+)\\b",
+          "push": [
+           {
+            "match": "(,)|(?=[;}])",
+            "pop": true,
+            "captures": {
+             1: "punctuation.separator.delimiter.java"
+            }
+           },
+           {
+            "include": "r_comments_javadoc"
+           },
+           {
+            "include": "r_comments"
+           },
+           {
+            "match": "\\(",
+            "push": [
+             {
+              "match": "\\)",
+              "pop": true,
+              "scope": "punctuation.bracket.round.java"
+             },
+             {
+              "include": "r_code"
+             }
+            ],
+            "scope": "punctuation.bracket.round.java"
+           },
+           {
+            "match": "\\{",
+            "push": [
+             {
+              "match": "}",
+              "pop": true,
+              "scope": "punctuation.bracket.curly.java"
+             },
+             {
+              "include": "r_class_body"
+             }
+            ],
+            "scope": "punctuation.bracket.curly.java"
+           }
+          ],
+          "captures": {
+           1: "constant.other.enum.java"
+          }
+         }
+        ]
+       },
+       {
+        "include": "r_class_body"
+       }
+      ],
+      "scope": "punctuation.section.enum.begin.bracket.curly.java"
+     }
+    ],
+    "captures": {
+     2: "storage.modifier.java",
+     3: "entity.name.type.enum.java"
+    }
+   }
+  ],
+  "r_function_call": [
+   {
+    "match": "([$A-Z_a-z][$\\w]*)\\s*(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.function-call.java"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.parameters.end.bracket.round.java"
+     },
+     {
+      "include": "r_code"
+     }
+    ],
+    "captures": {
+     1: "entity.name.function.java",
+     2: "punctuation.definition.parameters.begin.bracket.round.java"
+    }
+   }
+  ],
+  "r_generics": [
+   {
+    "match": "<",
+    "push": [
+     {
+      "match": ">",
+      "pop": true,
+      "scope": "punctuation.bracket.angle.java"
+     },
+     {
+      "match": "\\b(extends|super)\\b"
+     },
+     {
+      "match": "(?<!\\.)([$A-Z_a-z][$0-9A-Z_a-z]*)(?=\\s*<)",
+      "captures": {
+       1: "storage.type.java"
+      }
+     },
+     {
+      "include": "r_primitive_arrays"
+     },
+     {
+      "match": "[$A-Z_a-z][$0-9A-Z_a-z]*",
+      "scope": "storage.type.generic.java"
+     },
+     {
+      "match": "\\?",
+      "scope": "storage.type.generic.wildcard.java"
+     },
+     {
+      "match": "&",
+      "scope": "punctuation.separator.types.java"
+     },
+     {
+      "match": ",",
+      "scope": "punctuation.separator.delimiter.java"
+     },
+     {
+      "match": "\\.",
+      "scope": "punctuation.separator.period.java"
+     },
+     {
+      "include": "r_parens"
+     },
+     {
+      "include": "r_generics"
+     },
+     {
+      "include": "r_comments"
+     }
+    ],
+    "scope": "punctuation.bracket.angle.java"
+   }
+  ],
+  "r_keywords": [
+   {
+    "match": "\\bthrow\\b",
+    "scope": "keyword.control.throw.java"
+   },
+   {
+    "match": "[:?]",
+    "scope": "keyword.control.ternary.java"
+   },
+   {
+    "match": "\\b(return|yield|break|case|continue|default|do|while|for|switch|if|else)\\b",
+    "scope": "keyword.control.java"
+   },
+   {
+    "match": "\\b(instanceof)\\b",
+    "scope": "keyword.operator.instanceof.java"
+   },
+   {
+    "match": "(<<|>>>?|[\\^~])",
+    "scope": "keyword.operator.bitwise.java"
+   },
+   {
+    "match": "(([\\&^|]|<<|>>>?)=)",
+    "scope": "keyword.operator.assignment.bitwise.java"
+   },
+   {
+    "match": "(===?|!=|<=|>=|<>|[<>])",
+    "scope": "keyword.operator.comparison.java"
+   },
+   {
+    "match": "([-%*+/]=)",
+    "scope": "keyword.operator.assignment.arithmetic.java"
+   },
+   {
+    "match": "(=)",
+    "scope": "keyword.operator.assignment.java"
+   },
+   {
+    "match": "(--|\\+\\+)",
+    "scope": "keyword.operator.increment-decrement.java"
+   },
+   {
+    "match": "([-%*+/])",
+    "scope": "keyword.operator.arithmetic.java"
+   },
+   {
+    "match": "(!|&&|\\|\\|)",
+    "scope": "keyword.operator.logical.java"
+   },
+   {
+    "match": "([\\&|])",
+    "scope": "keyword.operator.bitwise.java"
+   },
+   {
+    "match": "\\b(const|goto)\\b",
+    "scope": "keyword.reserved.java"
+   }
+  ],
+  "r_lambda_expression": [
+   {
+    "match": "->",
+    "scope": "storage.type.function.arrow.java"
+   }
+  ],
+  "r_member_variables": [
+   {
+    "match": "(?=private|protected|public|native|synchronized|abstract|threadsafe|transient|static|final)",
+    "push": [
+     {
+      "match": "(?=[;=])",
+      "pop": true
+     },
+     {
+      "include": "r_storage_modifiers"
+     },
+     {
+      "include": "r_variables"
+     },
+     {
+      "include": "r_primitive_arrays"
+     },
+     {
+      "include": "r_object_types"
+     }
+    ]
+   }
+  ],
+  "r_method_call": [
+   {
+    "match": "(\\.)\\s*([$A-Z_a-z][$\\w]*)\\s*(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.method-call.java"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.parameters.end.bracket.round.java"
+     },
+     {
+      "include": "r_code"
+     }
+    ],
+    "captures": {
+     1: "punctuation.separator.period.java",
+     2: "entity.name.function.java",
+     3: "punctuation.definition.parameters.begin.bracket.round.java"
+    }
+   }
+  ],
+  "r_methods": [
+   {
+    "match": "(?!new)(?=[<\\w].*\\s+)(?=([^/=]|/(?!/))+\\()",
+    "push": [
+     {
+      "meta_scope": "meta.method.java"
+     },
+     {
+      "match": "(})|(?=;)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.section.method.end.bracket.curly.java"
+      }
+     },
+     {
+      "include": "r_storage_modifiers"
+     },
+     {
+      "match": "(\\w+)\\s*(\\()",
+      "push": [
+       {
+        "meta_scope": "meta.method.identifier.java"
+       },
+       {
+        "match": "\\)",
+        "pop": true,
+        "scope": "punctuation.definition.parameters.end.bracket.round.java"
+       },
+       {
+        "include": "r_parameters"
+       },
+       {
+        "include": "r_parens"
+       },
+       {
+        "include": "r_comments"
+       }
+      ],
+      "captures": {
+       1: "entity.name.function.java",
+       2: "punctuation.definition.parameters.begin.bracket.round.java"
+      }
+     },
+     {
+      "include": "r_generics"
+     },
+     {
+      "match": "(?=\\w.*\\s+\\w+\\s*\\()",
+      "push": [
+       {
+        "meta_scope": "meta.method.return-type.java"
+       },
+       {
+        "match": "(?=\\s+\\w+\\s*\\()",
+        "pop": true
+       },
+       {
+        "include": "r_all_types"
+       },
+       {
+        "include": "r_parens"
+       },
+       {
+        "include": "r_comments"
+       }
+      ]
+     },
+     {
+      "include": "r_throws"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_content_scope": "meta.method.body.java"
+       },
+       {
+        "match": "(?=})",
+        "pop": true
+       },
+       {
+        "include": "r_code"
+       }
+      ],
+      "scope": "punctuation.section.method.begin.bracket.curly.java"
+     },
+     {
+      "include": "r_comments"
+     }
+    ]
+   }
+  ],
+  "r_module": [
+   {
+    "match": "((open)\\s)?(module)\\s+(\\w+)",
+    "push": [
+     {
+      "meta_scope": "meta.module.java"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.module.end.bracket.curly.java"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_content_scope": "meta.module.body.java"
+       },
+       {
+        "match": "(?=})",
+        "pop": true
+       },
+       {
+        "include": "r_comments"
+       },
+       {
+        "include": "r_comments_javadoc"
+       },
+       {
+        "match": "\\b(requires|transitive|exports|opens|to|uses|provides|with)\\b",
+        "scope": "keyword.module.java"
+       }
+      ],
+      "scope": "punctuation.section.module.begin.bracket.curly.java"
+     }
+    ],
+    "captures": {
+     1: "storage.modifier.java",
+     3: "storage.modifier.java",
+     4: "entity.name.type.module.java"
+    }
+   }
+  ],
+  "r_numbers": [
+   {
+    "match": "\\b(?<!\\$)0([Xx])((?<!\\.)\\h([_\\h]*\\h)?[Ll]?(?!\\.)|(\\h([_\\h]*\\h)?\\.?|(\\h([_\\h]*\\h)?)?\\.\\h([_\\h]*\\h)?)[Pp][-+]?[0-9]([0-9_]*[0-9])?[DFdf]?)\\b(?!\\$)",
+    "scope": "constant.numeric.hex.java"
+   },
+   {
+    "match": "\\b(?<!\\$)0([Bb])[01]([01_]*[01])?[Ll]?\\b(?!\\$)",
+    "scope": "constant.numeric.binary.java"
+   },
+   {
+    "match": "\\b(?<!\\$)0[0-7]([0-7_]*[0-7])?[Ll]?\\b(?!\\$)",
+    "scope": "constant.numeric.octal.java"
+   },
+   {
+    "match": "(?<!\\$)(\\b[0-9]([0-9_]*[0-9])?\\.\\B(?!\\.)|\\b[0-9]([0-9_]*[0-9])?\\.([Ee][-+]?[0-9]([0-9_]*[0-9])?)[DFdf]?\\b|\\b[0-9]([0-9_]*[0-9])?\\.([Ee][-+]?[0-9]([0-9_]*[0-9])?)?[DFdf]\\b|\\b[0-9]([0-9_]*[0-9])?\\.([0-9]([0-9_]*[0-9])?)([Ee][-+]?[0-9]([0-9_]*[0-9])?)?[DFdf]?\\b|(?<!\\.)\\B\\.[0-9]([0-9_]*[0-9])?([Ee][-+]?[0-9]([0-9_]*[0-9])?)?[DFdf]?\\b|\\b[0-9]([0-9_]*[0-9])?([Ee][-+]?[0-9]([0-9_]*[0-9])?)[DFdf]?\\b|\\b[0-9]([0-9_]*[0-9])?([Ee][-+]?[0-9]([0-9_]*[0-9])?)?[DFdf]\\b|\\b(0|[1-9]([0-9_]*[0-9])?)(?!\\.)[Ll]?\\b)(?!\\$)",
+    "scope": "constant.numeric.decimal.java"
+   }
+  ],
+  "r_object_types": [
+   {
+    "include": "r_generics"
+   },
+   {
+    "match": "\\b((?:[A-Z_a-z]\\w*\\s*\\.\\s*)*)([A-Z_]\\w*)\\s*(?=\\[)",
+    "push": [
+     {
+      "match": "(?!\\s*\\[)",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_parens"
+     }
+    ],
+    "captures": {
+     2: "storage.type.object.array.java"
+    }
+   },
+   {
+    "match": "\\b((?:[A-Z_a-z]\\w*\\s*\\.\\s*)*[A-Z_]\\w*)\\s*(?=<)"
+   },
+   {
+    "match": "\\b((?:[A-Z_a-z]\\w*\\s*\\.\\s*)*[A-Z_]\\w*)\\b((?=\\s*[\\n$A-Z_a-z])|(?=\\s*\\.\\.\\.))"
+   }
+  ],
+  "r_object_types_inherited": [
+   {
+    "include": "r_generics"
+   },
+   {
+    "match": "\\b(?:[A-Z]\\w*\\s*(\\.)\\s*)*[A-Z]\\w*\\b",
+    "scope": "entity.other.inherited-class.java",
+    "captures": {
+     1: "punctuation.separator.period.java"
+    }
+   },
+   {
+    "match": ",",
+    "scope": "punctuation.separator.delimiter.java"
+   }
+  ],
+  "r_objects": [
+   {
+    "match": "(?<![$\\w])[$A-Z_a-z][$\\w]*(?=\\s*\\.\\s*[$\\w]+)",
+    "scope": "variable.other.object.java"
+   }
+  ],
+  "r_parameters": [
+   {
+    "match": "\\bfinal\\b",
+    "scope": "storage.modifier.java"
+   },
+   {
+    "include": "r_annotations"
+   },
+   {
+    "include": "r_all_types"
+   },
+   {
+    "include": "r_strings"
+   },
+   {
+    "match": "\\w+",
+    "scope": "variable.parameter.java"
+   },
+   {
+    "match": ",",
+    "scope": "punctuation.separator.delimiter.java"
+   },
+   {
+    "match": "\\.\\.\\.",
+    "scope": "punctuation.definition.parameters.varargs.java"
+   }
+  ],
+  "r_parens": [
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.bracket.round.java"
+     },
+     {
+      "include": "r_code"
+     }
+    ],
+    "scope": "punctuation.bracket.round.java"
+   },
+   {
+    "match": "\\[",
+    "push": [
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.bracket.square.java"
+     },
+     {
+      "include": "r_code"
+     }
+    ],
+    "scope": "punctuation.bracket.square.java"
+   },
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.bracket.curly.java"
+     },
+     {
+      "include": "r_code"
+     }
+    ],
+    "scope": "punctuation.bracket.curly.java"
+   }
+  ],
+  "r_primitive_arrays": [
+   {
+    "match": "\\b(void|boolean|byte|char|short|int|float|long|double)\\b\\s*(?=\\[)",
+    "push": [
+     {
+      "match": "(?!\\s*\\[)",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_parens"
+     }
+    ],
+    "captures": {
+     1: "storage.type.primitive.array.java"
+    }
+   }
+  ],
+  "r_primitive_types": [
+   {
+    "match": "\\b(void|boolean|byte|char|short|int|float|long|double)\\b",
+    "scope": "storage.type.primitive.java"
+   }
+  ],
+  "r_properties": [
+   {
+    "match": "(\\.)\\s*(new)",
+    "captures": {
+     1: "punctuation.separator.period.java",
+     2: "keyword.control.new.java"
+    }
+   },
+   {
+    "match": "(\\.)\\s*([$A-Z_a-z][$\\w]*)(?=\\s*\\.\\s*[$A-Z_a-z][$\\w]*)",
+    "captures": {
+     1: "punctuation.separator.period.java",
+     2: "variable.other.object.property.java"
+    }
+   },
+   {
+    "match": "(\\.)\\s*([$A-Z_a-z][$\\w]*)",
+    "captures": {
+     1: "punctuation.separator.period.java",
+     2: "variable.other.object.property.java"
+    }
+   },
+   {
+    "match": "(\\.)\\s*([0-9][$\\w]*)",
+    "captures": {
+     1: "punctuation.separator.period.java",
+     2: "invalid.illegal.identifier.java"
+    }
+   }
+  ],
+  "r_record": [
+   {
+    "match": "(?=\\w?[\\w\\s]*\\brecord\\s+[$\\w]+)",
+    "push": [
+     {
+      "meta_scope": "meta.record.java"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.class.end.bracket.curly.java"
+     },
+     {
+      "include": "r_storage_modifiers"
+     },
+     {
+      "include": "r_generics"
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "match": "(record)\\s+([$\\w]+)(<[$\\w]+>)?(\\()",
+      "push": [
+       {
+        "meta_scope": "meta.record.identifier.java"
+       },
+       {
+        "match": "\\)",
+        "pop": true,
+        "scope": "punctuation.definition.parameters.end.bracket.round.java"
+       },
+       {
+        "include": "r_code"
+       }
+      ],
+      "captures": {
+       1: "storage.modifier.java",
+       2: "entity.name.type.record.java",
+       4: "punctuation.definition.parameters.begin.bracket.round.java"
+      }
+     },
+     {
+      "match": "(implements)\\s",
+      "push": [
+       {
+        "meta_scope": "meta.definition.class.implemented.interfaces.java"
+       },
+       {
+        "match": "(?=\\s*\\{)",
+        "pop": true
+       },
+       {
+        "include": "r_object_types_inherited"
+       },
+       {
+        "include": "r_comments"
+       }
+      ],
+      "captures": {
+       1: "storage.modifier.implements.java"
+      }
+     },
+     {
+      "include": "r_record_body"
+     }
+    ]
+   }
+  ],
+  "r_record_body": [
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "meta_scope": "meta.record.body.java"
+     },
+     {
+      "match": "(?=})",
+      "pop": true
+     },
+     {
+      "include": "r_record_constructor"
+     },
+     {
+      "include": "r_class_body"
+     }
+    ],
+    "scope": "punctuation.section.class.begin.bracket.curly.java"
+   }
+  ],
+  "r_record_constructor": [
+   {
+    "match": "(?!new)(?=[<\\w].*\\s+)(?=([^(/=]|/(?!/))+(?=\\{))",
+    "push": [
+     {
+      "meta_scope": "meta.method.java"
+     },
+     {
+      "match": "(})|(?=;)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.section.method.end.bracket.curly.java"
+      }
+     },
+     {
+      "include": "r_storage_modifiers"
+     },
+     {
+      "match": "(\\w+)",
+      "push": [
+       {
+        "meta_scope": "meta.method.identifier.java"
+       },
+       {
+        "match": "(?=\\s*\\{)",
+        "pop": true
+       },
+       {
+        "include": "r_comments"
+       }
+      ],
+      "captures": {
+       1: "entity.name.function.java"
+      }
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_content_scope": "meta.method.body.java"
+       },
+       {
+        "match": "(?=})",
+        "pop": true
+       },
+       {
+        "include": "r_code"
+       }
+      ],
+      "scope": "punctuation.section.method.begin.bracket.curly.java"
+     }
+    ]
+   }
+  ],
+  "r_static_initializer": [
+   {
+    "include": "r_anonymous_block_and_instance_initializer"
+   },
+   {
+    "match": "static",
+    "scope": "storage.modifier.java"
+   }
+  ],
+  "r_storage_modifiers": [
+   {
+    "match": "\\b(public|private|protected|static|final|native|synchronized|abstract|threadsafe|transient|volatile|default|strictfp|sealed|non-sealed)\\b",
+    "scope": "storage.modifier.java"
+   }
+  ],
+  "r_strings": [
+   {
+    "match": "\"\"\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.triple.java"
+     },
+     {
+      "match": "\"\"\"",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.java"
+     },
+     {
+      "match": "(\\\\\"\"\")(?!\")|(\\\\.)",
+      "scope": "constant.character.escape.java"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.java"
+   },
+   {
+    "match": "\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.java"
+     },
+     {
+      "match": "\"",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.java"
+     },
+     {
+      "match": "\\\\.",
+      "scope": "constant.character.escape.java"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.java"
+   },
+   {
+    "match": "'",
+    "push": [
+     {
+      "meta_scope": "string.quoted.single.java"
+     },
+     {
+      "match": "'",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.java"
+     },
+     {
+      "match": "\\\\.",
+      "scope": "constant.character.escape.java"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.java"
+   }
+  ],
+  "r_throws": [
+   {
+    "match": "throws",
+    "push": [
+     {
+      "meta_scope": "meta.throwables.java"
+     },
+     {
+      "match": "(?=[;{])",
+      "pop": true
+     },
+     {
+      "match": ",",
+      "scope": "punctuation.separator.delimiter.java"
+     },
+     {
+      "match": "[$A-Z_a-z][$.0-9A-Z_a-z]*",
+      "scope": "storage.type.java"
+     },
+     {
+      "include": "r_comments"
+     }
+    ],
+    "scope": "storage.modifier.java"
+   }
+  ],
+  "r_try_catch_finally": [
+   {
+    "match": "\\btry\\b",
+    "push": [
+     {
+      "meta_scope": "meta.try.java"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.try.end.bracket.curly.java"
+     },
+     {
+      "match": "\\(",
+      "push": [
+       {
+        "meta_scope": "meta.try.resources.java"
+       },
+       {
+        "match": "\\)",
+        "pop": true,
+        "scope": "punctuation.section.try.resources.end.bracket.round.java"
+       },
+       {
+        "include": "r_code"
+       }
+      ],
+      "scope": "punctuation.section.try.resources.begin.bracket.round.java"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_content_scope": "meta.try.body.java"
+       },
+       {
+        "match": "(?=})",
+        "pop": true
+       },
+       {
+        "include": "r_code"
+       }
+      ],
+      "scope": "punctuation.section.try.begin.bracket.curly.java"
+     }
+    ],
+    "scope": "keyword.control.try.java"
+   },
+   {
+    "match": "\\b(catch)\\b",
+    "push": [
+     {
+      "meta_scope": "meta.catch.java"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.catch.end.bracket.curly.java"
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "match": "\\(",
+      "push": [
+       {
+        "meta_content_scope": "meta.catch.parameters.java"
+       },
+       {
+        "match": "\\)",
+        "pop": true,
+        "scope": "punctuation.definition.parameters.end.bracket.round.java"
+       },
+       {
+        "include": "r_comments"
+       },
+       {
+        "include": "r_storage_modifiers"
+       },
+       {
+        "match": "[$A-Z_a-z][$.0-9A-Z_a-z]*",
+        "push": [
+         {
+          "match": "(\\|)|(?=\\))",
+          "pop": true,
+          "captures": {
+           1: "punctuation.catch.separator.java"
+          }
+         },
+         {
+          "include": "r_comments"
+         },
+         {
+          "match": "\\w+",
+          "scope": "variable.parameter.java"
+         }
+        ],
+        "scope": "storage.type.java"
+       }
+      ],
+      "scope": "punctuation.definition.parameters.begin.bracket.round.java"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_content_scope": "meta.catch.body.java"
+       },
+       {
+        "match": "(?=})",
+        "pop": true
+       },
+       {
+        "include": "r_code"
+       }
+      ],
+      "scope": "punctuation.section.catch.begin.bracket.curly.java"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.catch.java"
+    }
+   },
+   {
+    "match": "\\bfinally\\b",
+    "push": [
+     {
+      "meta_scope": "meta.finally.java"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.finally.end.bracket.curly.java"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_content_scope": "meta.finally.body.java"
+       },
+       {
+        "match": "(?=})",
+        "pop": true
+       },
+       {
+        "include": "r_code"
+       }
+      ],
+      "scope": "punctuation.section.finally.begin.bracket.curly.java"
+     }
+    ],
+    "scope": "keyword.control.finally.java"
+   }
+  ],
+  "r_variables": [
+   {
+    "match": "(?=\\b((void|boolean|byte|char|short|int|float|long|double)|(?>(\\w+\\.)*[A-Z_]+\\w*))\\b\\s*(<[],.<>?\\[\\w\\s]*>)?\\s*((\\[])*)?\\s+[$A-Z_a-z][$\\w]*([]$,\\[\\w][],\\[\\w\\s]*)?\\s*([:;=]))",
+    "push": [
+     {
+      "meta_scope": "meta.definition.variable.java"
+     },
+     {
+      "match": "(?=[:;=])",
+      "pop": true
+     },
+     {
+      "match": "([$A-Z_a-z][$\\w]*)(?=\\s*(\\[])*\\s*([,:;=]))",
+      "captures": {
+       1: "variable.other.definition.java"
+      }
+     },
+     {
+      "include": "r_all_types"
+     },
+     {
+      "include": "r_code"
+     }
+    ]
+   }
+  ],
+  "r_variables_local": [
+   {
+    "match": "(?=\\b(var)\\b\\s+[$A-Z_a-z][$\\w]*\\s*([:;=]))",
+    "push": [
+     {
+      "meta_scope": "meta.definition.variable.local.java"
+     },
+     {
+      "match": "(?=[:;=])",
+      "pop": true
+     },
+     {
+      "match": "\\bvar\\b",
+      "scope": "storage.type.local.java"
+     },
+     {
+      "match": "([$A-Z_a-z][$\\w]*)(?=\\s*(\\[])*\\s*([:;=]))",
+      "captures": {
+       1: "variable.other.definition.java"
+      }
+     },
+     {
+      "include": "r_code"
+     }
+    ]
+   }
+  ]
+ }
+}

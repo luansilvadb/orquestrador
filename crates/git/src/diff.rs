@@ -1,65 +1,56 @@
-//! Comparador do editor central (porte de `DiffTab` e `CommitTab` de `src/editor/diff-view.tsx`): o arquivo inteiro num
-//! `Diff` do GPUI Kit, lado a lado por padrão ou unificado, com realce `syntect`/Dark+ e diferença por palavra. No diff
-//! do índice, as ações por bloco (preparar, tirar do preparo, descartar) e descartar o arquivo; no commit, só leitura.
-use crate::comparar::{self, BlocoPatch, Comparacao, Intervalo, Tipo, TipoUnidade};
+//! Comparador do editor central (porte de `DiffTab` e `CommitTab` de `src/editor/diff-view.tsx`): o arquivo inteiro no
+//! comparador próprio (`crate::comparador`), lado a lado por padrão ou unificado, com realce `syntect`/Dark+ e diferença
+//! por palavra. No diff do índice, as ações por bloco (preparar, tirar do preparo, descartar) e descartar o arquivo; no
+//! commit, só leitura.
+use crate::comparador::{limitar_pct, Comparador, Corpo};
+use crate::comparar::{self, BlocoPatch, Comparacao, Intervalo, TipoUnidade};
 use crate::comum::{self, acao, botao, Alvo};
 use crate::fonte::{Diff as DiffGit, Fonte, HunkRef, ReviewDiff};
 use crate::guarda::GuardaGit;
 use crate::sondagem::Sondagem;
-use crate::tema_local::tema_local;
 use gpui_kit::component::button::ButtonVariant;
-use gpui_kit::component::diff::{
-    Diff, DiffChangeIndicator, DiffDecoration, DiffFile, DiffHunkSeparator, DiffInlineUnit, DiffLinePosition,
-    DiffLineRange, DiffMode, DiffSide, DiffState,
-};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{
-    actions, div, prelude::*, px, rgb, rgba, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, KeyBinding,
-    SharedString, Task, Window,
+    actions, div, prelude::*, px, rgb, App, Context, CursorStyle, EventEmitter, FocusHandle, Focusable, KeyBinding, KeyDownEvent,
+    MouseButton, MouseDownEvent, Task, Window,
 };
 use orquestrador_ui::tema::{self, cor};
 use orquestrador_ui::widgets::TooltipTexto as _;
-use gpui_kit::component::diff::DiffGutterMarker;
-use gpui_kit::{canvas, Bounds, Pixels};
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-actions!(visao_diff, [ProximaMudanca, MudancaAnterior]);
+actions!(visao_diff, [ProximaMudanca, MudancaAnterior, Copiar, RolarAcima, RolarAbaixo, PaginaAcima, PaginaAbaixo, Inicio, Fim]);
 
-/// Atalhos F8 e Shift+F8 (vale em toda a aba).
+/// Atalhos F8 e Shift+F8 (vale em toda a aba), a cópia da seleção e a rolagem pelo teclado, como no corpo focado do React.
 pub fn init(cx: &mut App) {
+    let c = Some("VisaoDiff");
     cx.bind_keys([
-        KeyBinding::new("f8", ProximaMudanca, Some("VisaoDiff")),
-        KeyBinding::new("shift-f8", MudancaAnterior, Some("VisaoDiff")),
+        KeyBinding::new("f8", ProximaMudanca, c),
+        KeyBinding::new("shift-f8", MudancaAnterior, c),
+        KeyBinding::new("ctrl-c", Copiar, c),
+        KeyBinding::new("ctrl-insert", Copiar, c),
+        KeyBinding::new("up", RolarAcima, c),
+        KeyBinding::new("down", RolarAbaixo, c),
+        KeyBinding::new("pageup", PaginaAcima, c),
+        KeyBinding::new("pagedown", PaginaAbaixo, c),
+        KeyBinding::new("home", Inicio, c),
+        KeyBinding::new("end", Fim, c),
+        KeyBinding::new("ctrl-home", Inicio, c),
+        KeyBinding::new("ctrl-end", Fim, c),
     ]);
 }
-
-/// Altura de uma linha do Kit: Consolas 14 px × 1,6.
-const ALTURA_LINHA: f32 = 22.4;
 
 /// Intervalo da releitura do diff do índice (`POLL_MS`).
 pub const RELEITURA: Duration = Duration::from_millis(2500);
 
-/// Cores do comparador (as do `unsafeCSS` do React, tiradas do VS Code).
-pub mod cores {
-    use super::*;
-    pub fn fundo() -> Hsla {
-        rgb(0x1f1f1f).into()
-    }
-    pub fn removida() -> Hsla {
-        rgba(0xff000033).into()
-    }
-    pub fn incluida() -> Hsla {
-        rgba(0x9bb95533).into()
-    }
-    pub fn numero() -> Hsla {
-        rgb(0x6e7681).into()
-    }
-    pub fn atual() -> Hsla {
-        rgb(0x007fd4).into()
-    }
+pub use crate::comparador::cores;
+
+/// Lado a lado ou unificado.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Modo {
+    LadoALado,
+    Unificado,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -70,34 +61,17 @@ pub enum EventoDiff {
     AbrirLinha { caminho: String, linha: usize },
 }
 
-#[derive(Clone, Copy)]
-struct Rolagem {
-    acima: usize,
-    passos: u8,
-}
-
 enum Leitura {
     Indice(ReviewDiff),
     Commit(DiffGit),
 }
 
-/// A comparação desenhada: o estado do Kit e o modelo das unidades.
+/// A comparação desenhada: o modelo das unidades e o estado do comparador.
 struct Mostrado {
     patch: String,
-    estado: Entity<DiffState>,
-    caminho: SharedString,
     comparacao: Comparacao,
-    unidade_de: HashMap<String, usize>,
-    geometria: Rc<Geometria>,
-}
-
-/// Onde cada linha de mudança visível foi desenhada no último quadro (medido pela marca da calha de cada uma) e a caixa
-/// do corpo: o Kit não expõe a geometria das linhas, e a barra da unidade atual, as ações no vão e a régua dependem dela.
-#[derive(Default)]
-struct Geometria {
-    quadro: RefCell<HashMap<String, Bounds<Pixels>>>,
-    ultimo: RefCell<HashMap<String, Bounds<Pixels>>>,
-    corpo: Cell<Bounds<Pixels>>,
+    estado: Rc<RefCell<Comparador>>,
+    _realce: Task<()>,
 }
 
 pub struct VisaoDiff {
@@ -106,17 +80,20 @@ pub struct VisaoDiff {
     alvo: Alvo,
     leitura: Option<Leitura>,
     erro: String,
-    modo: DiffMode,
+    lado: bool,
     atual: usize,
     ocupado: bool,
     travado: bool,
     rascunho: bool,
     ativa: bool,
     tarde: bool,
-    rolar: Option<Rolagem>,
     mostrado: Option<Mostrado>,
     sondagem: Option<Sondagem>,
     foco: FocusHandle,
+    foco_divisor: FocusHandle,
+    /// Ponteiro parado sobre o divisor há 300 ms: a linha fica azul e larga.
+    divisor_realce: bool,
+    divisor_sobre: bool,
     _tarefas: Vec<Task<()>>,
 }
 
@@ -137,17 +114,19 @@ impl VisaoDiff {
             alvo,
             leitura: None,
             erro: String::new(),
-            modo: DiffMode::Split,
+            lado: true,
             atual: 0,
             ocupado: false,
             travado: false,
             rascunho: false,
             ativa: false,
             tarde: false,
-            rolar: None,
             mostrado: None,
             sondagem: None,
             foco: cx.focus_handle(),
+            foco_divisor: cx.focus_handle(),
+            divisor_realce: false,
+            divisor_sobre: false,
             _tarefas: Vec::new(),
         };
         // "Lendo…" só aparece depois de 200 ms, para a leitura rápida não piscar.
@@ -194,18 +173,43 @@ impl VisaoDiff {
         cx.notify();
     }
 
-    pub fn modo(&self) -> DiffMode {
-        self.modo
+    /// O modo pedido (arquivo novo é sempre desenhado unificado).
+    pub fn modo(&self) -> Modo {
+        if self.lado { Modo::LadoALado } else { Modo::Unificado }
     }
 
     pub fn alternar_modo(&mut self, cx: &mut Context<Self>) {
-        self.modo = if self.modo == DiffMode::Split { DiffMode::Unified } else { DiffMode::Split };
-        if let Some(m) = &self.mostrado {
-            let modo = self.modo;
-            m.estado.update(cx, |s, cx| s.set_mode(modo, cx));
-        }
-        self.rolar_para_atual(cx);
+        self.lado = !self.lado;
         cx.notify();
+    }
+
+    /// Proporção do original no lado a lado (15 a 85); vale para a aba e sobrevive à troca de modo.
+    pub fn proporcao(&self) -> f32 {
+        self.mostrado.as_ref().map_or(50., |m| m.estado.borrow().pct)
+    }
+
+    pub fn definir_proporcao(&mut self, pct: f32, cx: &mut Context<Self>) {
+        if let Some(m) = &self.mostrado {
+            m.estado.borrow_mut().pct = limitar_pct(pct);
+            cx.notify();
+        }
+    }
+
+    /// Rolagem do corpo (o `scrollTop`).
+    pub fn rolagem(&self) -> f32 {
+        self.mostrado.as_ref().map_or(0., |m| m.estado.borrow().rolagem)
+    }
+
+    /// Faixa (topo, base) da unidade atual no palco, depois do primeiro desenho.
+    pub fn faixa_atual(&self) -> Option<(f32, f32)> {
+        let m = self.mostrado.as_ref()?;
+        let e = m.estado.borrow();
+        e.faixa(e.atual?)
+    }
+
+    /// Texto selecionado no comparador.
+    pub fn selecao(&self) -> Option<String> {
+        self.mostrado.as_ref().and_then(|m| m.estado.borrow().texto_selecionado())
     }
 
     /// Unidade atual (bloco no índice, trecho no commit), limitada à última.
@@ -232,68 +236,19 @@ impl VisaoDiff {
         self.escolher((cur + por).clamp(0, n as i32 - 1) as usize, cx);
     }
 
+    /// Escolhe a unidade; a rolagem vai a ela quando a unidade muda (o `jump` do React).
     pub fn escolher(&mut self, unidade: usize, cx: &mut Context<Self>) {
         self.atual = unidade;
-        self.rolar_para_atual(cx);
         cx.notify();
     }
 
-    /// Pede a rolagem até a unidade atual; ela sai nos próximos desenhos, com a altura do corpo já medida.
-    fn rolar_para_atual(&mut self, cx: &mut Context<Self>) {
-        self.rolar = Some(Rolagem { acima: 0, passos: 0 });
-        cx.notify();
-    }
-
-    /// Como o React, a primeira linha da unidade fica a um terço da altura. O Kit só rola uma linha até o topo e as linhas
-    /// quebram, então a linha do topo é ajustada uma de cada vez, medindo onde a unidade caiu, até chegar ao terço.
-    fn passo_rolagem(&mut self, cx: &mut Context<Self>) {
-        let Some(mut r) = self.rolar.take() else { return };
-        let Some(m) = &self.mostrado else { return };
-        let altura = f32::from(m.geometria.corpo.get().size.height);
-        if altura <= 0. {
-            self.rolar = Some(r);
-            return;
-        }
-        let Some(u) = self.atual() else { return };
-        let Some(un) = m.comparacao.unidades.get(u).copied() else { return };
-        let alvo = altura / 3.;
-        if r.passos > 0 {
-            let Some((topo, _)) = self.faixa_atual() else { return };
-            if topo + ALTURA_LINHA / 2. < alvo && r.passos < 40 {
-                r.acima += 1;
-            } else {
-                if topo > alvo + ALTURA_LINHA && r.acima > 0 {
-                    r.acima -= 1;
-                    self.rolar_linha(un, r.acima, cx);
-                }
-                return;
-            }
-        }
-        r.passos += 1;
-        self.rolar_linha(un, r.acima, cx);
-        self.rolar = Some(r);
-    }
-
-    /// Rola até a linha `acima` linhas antes da primeira da unidade.
-    fn rolar_linha(&self, un: crate::comparar::Unidade, acima: usize, cx: &mut Context<Self>) {
-        let Some(m) = &self.mostrado else { return };
-        let primeira = match self.modo {
-            DiffMode::Split => un.lado.map(|(a, _)| {
-                let l = m.comparacao.lado[a.saturating_sub(acima)];
-                l.direita.map(|n| (DiffSide::Modified, n)).or(l.esquerda.map(|n| (DiffSide::Original, n)))
-            }),
-            _ => un.unificado.map(|(a, _)| {
-                let l = m.comparacao.unificado[a.saturating_sub(acima)];
-                match l.tipo {
-                    Tipo::Removida => l.antiga.map(|n| (DiffSide::Original, n)),
-                    _ => l.nova.map(|n| (DiffSide::Modified, n)),
-                }
-            }),
-        }
-        .flatten();
-        if let Some((lado, linha)) = primeira {
-            let pos = DiffLinePosition::new(m.caminho.clone(), lado, linha);
-            m.estado.update(cx, |s, cx| s.scroll_to_line(pos, cx));
+    fn rolar(&mut self, por: impl FnOnce(f32, f32) -> f32, cx: &mut Context<Self>) {
+        if let Some(m) = &self.mostrado {
+            let mut e = m.estado.borrow_mut();
+            let alto = f32::from(e.caixa.size.height);
+            let y = por(e.rolagem, alto);
+            e.rolar_para(y);
+            cx.notify();
         }
     }
 
@@ -332,7 +287,8 @@ impl VisaoDiff {
         }));
     }
 
-    /// Resposta nova: só refaz o comparador quando o patch mostrado mudou (o poll igual não rola nem pisca).
+    /// Resposta nova: só refaz o comparador quando o patch mostrado mudou (o poll igual não rola nem pisca). Refeito, o
+    /// comparador mantém a rolagem e a proporção, e só rola se a unidade atual mudar.
     fn receber(&mut self, leitura: Leitura, cx: &mut Context<Self>) {
         let (mostrar, blocos) = match &leitura {
             Leitura::Indice(r) => {
@@ -350,10 +306,8 @@ impl VisaoDiff {
         if self.mostrado.as_ref().is_some_and(|m| m.patch == patch) {
             return;
         }
-        self.mostrado = montar(&patch, blocos.as_deref(), self.modo, cx);
-        if self.mostrado.is_some() {
-            self.rolar_para_atual(cx);
-        }
+        let anterior = self.mostrado.take();
+        self.mostrado = montar(&patch, blocos.as_deref(), self.alvo.caminho(), anterior.as_ref(), cx);
     }
 
     fn bloco_ref(&self, i: usize) -> Option<(HunkRef, BlocoPatch, String)> {
@@ -578,7 +532,7 @@ impl VisaoDiff {
                 d.child(botao("preparar-arquivo", "Preparar arquivo", !bloqueado).on_click(cx.listener(|this, _, w, cx| this.preparar_arquivo(w, cx))))
             })
             .when(!novo && self.mostrado.is_some(), |d| {
-                let split = self.modo == DiffMode::Split;
+                let split = self.lado;
                 d.child(
                     acao("modo", if split { "icons/rows-2.svg" } else { "icons/columns-2.svg" }, true)
                         .tooltip_texto(if split { "Unificado" } else { "Lado a lado" })
@@ -602,61 +556,98 @@ impl VisaoDiff {
             })
     }
 
-    /// Faixa vertical (topo, base) da unidade atual no corpo, pelas linhas visíveis dela no último quadro.
-    fn faixa_atual(&self) -> Option<(f32, f32)> {
-        let m = self.mostrado.as_ref()?;
-        let u = self.atual()?;
-        let un = m.comparacao.unidades.get(u)?;
-        let topos = self.topos();
-        let (a, b) = if self.modo == DiffMode::Split { un.lado? } else { un.unificado? };
-        let visiveis: Vec<f32> = (a..=b).filter_map(|i| topos.get(i).copied().flatten()).collect();
-        let topo = *visiveis.first()?;
-        // A base é o topo da linha seguinte (a linha pode quebrar); sem ela, a última medida mais uma linha.
-        let base = topos.get(b + 1).copied().flatten().unwrap_or(visiveis.last().copied().unwrap_or(topo) + ALTURA_LINHA);
-        Some((topo, base))
+    /// Divisor do lado a lado: 8 px de pegada no vão, linha de 1 px; com o ponteiro parado 300 ms ou arrastando, 4 px azuis.
+    fn divisor(&self, centro: f32, arrastando: bool, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        let forte = arrastando || self.divisor_realce;
+        div()
+            .id("divisor")
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(centro - 4.))
+            .w(px(8.))
+            .cursor(CursorStyle::ResizeLeftRight)
+            .track_focus(&self.foco_divisor)
+            .block_mouse_except_scroll()
+            .on_hover(cx.listener(|this, sobre: &bool, _, cx| {
+                this.divisor_sobre = *sobre;
+                if !*sobre {
+                    this.divisor_realce = false;
+                    cx.notify();
+                    return;
+                }
+                this._tarefas.push(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(Duration::from_millis(300)).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.divisor_sobre {
+                            this.divisor_realce = true;
+                            cx.notify();
+                        }
+                    });
+                }));
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                    window.focus(&this.foco_divisor, cx);
+                    let Some(m) = &this.mostrado else { return };
+                    if ev.click_count >= 2 {
+                        m.estado.borrow_mut().pct = 50.;
+                    } else {
+                        m.estado.borrow_mut().iniciar_divisor(f32::from(ev.position.x));
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
+                let d = match ev.keystroke.key.as_str() {
+                    "left" => -2.,
+                    "right" => 2.,
+                    _ => return,
+                };
+                let p = this.proporcao();
+                this.definir_proporcao(p + d, cx);
+                cx.stop_propagation();
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(if forte { 2. } else { 3.5 }))
+                    .w(px(if forte { 4. } else { 1. }))
+                    .bg(if forte { comparador_cor_atual() } else { rgb(0x6e6e6e).into() }),
+            )
+            .into_any_element()
     }
 
-    /// Topo de cada linha do modo atual no corpo, onde foi medida no último quadro.
-    fn topos(&self) -> Vec<Option<f32>> {
-        let Some(m) = &self.mostrado else { return Vec::new() };
-        let corpo = m.geometria.corpo.get();
-        let ultimo = m.geometria.ultimo.borrow();
-        let topo = |k: &String| ultimo.get(k).map(|b| f32::from(b.top() - corpo.top()));
-        if self.modo == DiffMode::Split {
-            m.comparacao.lado.iter().map(|l| chaves_lado(l).iter().filter_map(topo).reduce(f32::min)).collect()
-        } else {
-            m.comparacao.unificado.iter().map(|l| chave_unif(l).as_ref().and_then(topo)).collect()
-        }
-    }
-
-    /// A barra azul da unidade atual e, no lado a lado, as ações do bloco no meio, na altura dela.
-    fn sobreposicao(&self, cx: &mut Context<Self>) -> Vec<gpui_kit::AnyElement> {
-        let Some((topo, base)) = self.faixa_atual() else { return Vec::new() };
-        let mut v = vec![div().absolute().left_0().top(px(topo)).h(px(base - topo)).w(px(3.)).bg(cores::atual()).into_any_element()];
+    /// As ações do bloco atual no vão, centradas na altura dele (rolam com o conteúdo).
+    fn acoes_vao(&self, centro: f32, meio: f32, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
         let staged = matches!(self.alvo, Alvo::Diff { lado: crate::Lado::Preparadas, .. });
         let nao_rastreado = matches!(&self.leitura, Some(Leitura::Indice(r)) if r.untracked);
-        let (Some(c), Alvo::Diff { .. }) = (self.atual(), &self.alvo) else { return v };
-        if self.modo != DiffMode::Split || nao_rastreado {
-            return v;
+        let (Some(c), Alvo::Diff { .. }) = (self.atual(), &self.alvo) else { return None };
+        if nao_rastreado {
+            return None;
         }
         let n = self.total();
         let bloqueado = self.travado || self.ocupado;
-        let corpo = self.mostrado.as_ref().map(|m| m.geometria.corpo.get()).unwrap_or_default();
-        let meio_x = f32::from(corpo.size.width) / 2. - 5.;
-        let meio_y = ((topo + base) / 2.).clamp(0., f32::from(corpo.size.height));
+        // Ícone de 24 px, `padding` 2 e borda 1: 30 px de largura, e a altura de um ou dois ícones com 2 px entre eles.
         let alto = if staged { 30. } else { 56. };
         let mut caixa = div()
+            .id("acoes-vao")
             .absolute()
-            .left(px(meio_x - 15.))
-            .top(px(meio_y - alto / 2.))
+            .left(px(centro - 15.))
+            .top(px(meio - alto / 2.))
             .flex()
             .flex_col()
             .gap(px(2.))
             .p(px(2.))
-            .rounded(tema::RAIO_XS)
+            .rounded(px(4.))
             .border_1()
             .border_color(rgb(0x454545))
-            .bg(rgb(0x292929));
+            .bg(rgb(0x292929))
+            .block_mouse_except_scroll();
         if !staged {
             caixa = caixa.child(
                 acao("vao-descartar", "icons/arrow-right.svg", !bloqueado && !self.rascunho)
@@ -681,45 +672,34 @@ impl VisaoDiff {
                     .on_click(cx.listener(move |this, _, w, cx| this.preparar_bloco(c, w, cx))),
             )
         };
-        v.push(caixa.into_any_element());
-        v
+        Some(caixa.into_any_element())
     }
 
-    /// Faixa de visão geral à direita: uma marca por unidade, na proporção das linhas do modo atual.
+    /// Faixa de visão geral à direita: uma marca por unidade, na posição dela no palco.
     fn regua(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut regua = div().absolute().top_0().right_0().bottom_0().w(px(10.));
         let Some(m) = &self.mostrado else { return regua };
-        let linhas = match self.modo {
-            DiffMode::Split => m.comparacao.lado.len(),
-            _ => m.comparacao.unificado.len(),
+        let e = m.estado.borrow();
+        if e.geo.as_ref().is_none_or(|g| g.lado != e.lado) {
+            return regua;
         }
-        .max(1) as f32;
-        // O arquivo inteiro cabe na altura; curto, ocupa só a parte de cima, como o palco de altura mínima do React.
-        let visivel = f32::from(m.geometria.corpo.get().size.height).max(1.);
-        // Altura média das linhas medidas (as quebras contam) estima a altura do arquivo inteiro.
-        let medidas: Vec<(usize, f32)> = self.topos().into_iter().enumerate().filter_map(|(i, t)| t.map(|t| (i, t))).collect();
-        let media = match (medidas.first(), medidas.last()) {
-            (Some(&(i, a)), Some(&(j, b))) if j > i => (b - a) / (j - i) as f32,
-            _ => ALTURA_LINHA,
-        };
-        let total = linhas.max(visivel / media);
+        let altura = e.altura_palco().max(1.);
         let cur = self.atual();
         let unidade = if matches!(self.alvo, Alvo::Commit { .. }) { "Mudança" } else { "Bloco" };
+        let alto_regua = f32::from(e.caixa.size.height);
         for (i, u) in m.comparacao.unidades.iter().enumerate() {
-            let faixa = if self.modo == DiffMode::Split { u.lado } else { u.unificado };
-            let Some((a, b)) = faixa else { continue };
-            let topo = a as f32 / total;
-            let alto = (b + 1 - a) as f32 / total;
+            let Some((topo, base)) = e.faixa(i) else { continue };
+            let y = topo / altura * alto_regua;
+            let h = ((base - topo) / altura * alto_regua).max(3.);
             let marca = div()
                 .id(("marca", i))
                 .absolute()
                 .right_0()
                 .w_full()
-                .top(gpui_kit::relative(topo))
-                .h(gpui_kit::relative(alto))
-                .min_h(px(3.))
+                .top(px(y))
+                .h(px(h))
                 .cursor_pointer()
-                .when(cur == Some(i), |d| d.border_1().border_color(rgb(0xffffff)))
+                .block_mouse_except_scroll()
                 .tooltip_texto(format!("{unidade} {}, linha {}", i + 1, u.linha))
                 .on_click(cx.listener(move |this, _, _, cx| this.escolher(i, cx)));
             let marca = match u.tipo {
@@ -727,99 +707,51 @@ impl VisaoDiff {
                 TipoUnidade::Remocao => marca.bg(rgb(0xff4d4d)),
                 TipoUnidade::Troca => marca.flex().flex_col().child(div().flex_1().bg(rgb(0xff4d4d))).child(div().flex_1().bg(rgb(0x9ccc2c))),
             };
+            // A atual mantém a cor e ganha um contorno claro de 1 px por fora (`box-shadow: 0 0 0 1px #fff`).
+            if cur == Some(i) {
+                regua = regua.child(div().absolute().right(px(-1.)).w(px(12.)).top(px(y - 1.)).h(px(h + 2.)).bg(rgb(0xffffff)));
+            }
             regua = regua.child(marca);
         }
         regua
     }
 }
 
-/// O `DiffState` e o modelo das unidades para um patch. `None` se o Kit não interpreta o patch.
-fn montar(patch: &str, blocos: Option<&[Intervalo]>, modo: DiffMode, cx: &mut Context<VisaoDiff>) -> Option<Mostrado> {
-    let arquivo = DiffFile::parse(patch).ok()?.into_iter().next()?;
-    let caminho = arquivo.path().clone();
-    let arquivo = arquivo.with_language(caminho.clone());
+fn comparador_cor_atual() -> gpui_kit::Hsla {
+    cores::atual()
+}
+
+/// O comparador para um patch. `None` se o patch não tem blocos. `anterior` é o da mesma aba antes da releitura: a
+/// rolagem, a proporção e a unidade passam para o novo, e a rolagem só muda se a unidade mudar.
+fn montar(patch: &str, blocos: Option<&[Intervalo]>, caminho: &str, anterior: Option<&Mostrado>, cx: &mut Context<VisaoDiff>) -> Option<Mostrado> {
+    if comparar::intervalos(patch).is_empty() {
+        return None;
+    }
     let comparacao = comparar::comparar(patch, blocos);
-    let mut unidade_de = HashMap::new();
-    for l in &comparacao.unificado {
-        if let (Some(u), Some(k)) = (l.unidade, comparar::chave_unificada(l)) {
-            unidade_de.insert(k, u);
-        }
+    let unidades: Vec<_> = comparacao.unificado.iter().map(|l| l.unidade).collect();
+    let mut c = Comparador::new(patch, caminho, &unidades, comparacao.unidades.len());
+    if let Some(a) = anterior {
+        let a = a.estado.borrow();
+        c.pct = a.pct;
+        c.rolagem = a.rolagem;
+        c.atual = a.atual;
+        c.caixa = a.caixa;
+        c.lado = a.lado && !c.modelo.arquivo_novo;
+        c.pular = false;
     }
-    let estado = cx.new(|cx| {
-        DiffState::new([arquivo], cx)
-            .with_mode(modo)
-            .with_context_lines(None)
-            .with_inline_unit(Some(DiffInlineUnit::Word))
-            .with_syntax_highlighter(crate::realce::realcar)
+    let (antigo, novo) = c.textos();
+    let modelo = (*c.modelo).clone();
+    let estado = Rc::new(RefCell::new(c));
+    let cam = caminho.to_string();
+    // O realce chega depois, como o do worker do React: o diff aparece sem cores e ganha as cores em seguida.
+    let tarefa = cx.background_spawn(async move { Comparador::realcar(&cam, &modelo, &antigo, &novo) });
+    let e2 = estado.clone();
+    let realce = cx.spawn(async move |this, cx| {
+        let (a, n) = tarefa.await;
+        e2.borrow_mut().definir_realce(a, n);
+        let _ = this.update(cx, |_, cx| cx.notify());
     });
-    Some(Mostrado { patch: patch.to_string(), estado, caminho, comparacao, unidade_de, geometria: Rc::default() })
-}
-
-/// Fundo das linhas mudadas, nas cores do VS Code (o Kit pinta com as cores do tema).
-fn decoracoes(m: &Mostrado) -> Vec<DiffDecoration> {
-    let mut v = Vec::new();
-    let mut corrida: Option<(DiffSide, usize, usize)> = None;
-    let fechar = |c: Option<(DiffSide, usize, usize)>, v: &mut Vec<DiffDecoration>| {
-        if let Some((lado, a, b)) = c {
-            let fundo = if lado == DiffSide::Original { cores::removida() } else { cores::incluida() };
-            v.push(DiffDecoration::new(DiffLineRange::new(m.caminho.clone(), lado, a, b)).with_background(fundo));
-        }
-    };
-    for l in &m.comparacao.unificado {
-        let atual = match l.tipo {
-            Tipo::Removida => l.antiga.map(|n| (DiffSide::Original, n)),
-            Tipo::Incluida => l.nova.map(|n| (DiffSide::Modified, n)),
-            Tipo::Contexto => None,
-        };
-        match (atual, corrida) {
-            (Some((lado, n)), Some((l2, a, b))) if lado == l2 && n == b + 1 => corrida = Some((lado, a, n)),
-            (Some((lado, n)), c) => {
-                fechar(c, &mut v);
-                corrida = Some((lado, n, n));
-            }
-            (None, c) => {
-                fechar(c, &mut v);
-                corrida = None;
-            }
-        }
-    }
-    fechar(corrida, &mut v);
-    v
-}
-
-/// Uma marca por linha de mudança: o sinal (− ou +) depois do número, como no React, e a medida da linha.
-fn marcas(m: &Mostrado) -> Vec<DiffGutterMarker> {
-    // Todas as linhas dos dois lados ganham marca (vazia no contexto): a medida da linha seguinte dá a base de uma linha
-    // quebrada, e a régua usa a altura média medida.
-    let mut v = Vec::new();
-    for l in &m.comparacao.unificado {
-        let (d, a) = match l.tipo {
-            Tipo::Removida => (Some("−"), None),
-            Tipo::Incluida => (None, Some("+")),
-            Tipo::Contexto => (Some(""), Some("")),
-        };
-        if let (Some(sinal), Some(n)) = (d, l.antiga) {
-            v.push(DiffGutterMarker::new(SharedString::from(format!("d{n}")), DiffLinePosition::new(m.caminho.clone(), DiffSide::Original, n)).with_label(sinal));
-        }
-        if let (Some(sinal), Some(n)) = (a, l.nova) {
-            v.push(DiffGutterMarker::new(SharedString::from(format!("a{n}")), DiffLinePosition::new(m.caminho.clone(), DiffSide::Modified, n)).with_label(sinal));
-        }
-    }
-    v
-}
-
-/// Chaves com que uma linha de cada modo é medida.
-fn chaves_lado(l: &crate::comparar::LinhaLado) -> Vec<String> {
-    l.esquerda.map(|n| format!("d{n}")).into_iter().chain(l.direita.map(|n| format!("a{n}"))).collect()
-}
-
-fn chave_unif(l: &crate::comparar::LinhaUnificada) -> Option<String> {
-    match (l.tipo, l.antiga, l.nova) {
-        (Tipo::Incluida, _, Some(n)) => Some(format!("a{n}")),
-        (_, Some(n), _) => Some(format!("d{n}")),
-        (_, None, Some(n)) => Some(format!("a{n}")),
-        _ => None,
-    }
+    Some(Mostrado { patch: patch.to_string(), comparacao, estado, _realce: realce })
 }
 
 /// Diálogo de confirmação com o texto em monoespaçado (o `ask` do workspace do React).
@@ -864,6 +796,18 @@ impl Render for VisaoDiff {
             .track_focus(&self.foco)
             .on_action(cx.listener(|this, _: &ProximaMudanca, _, cx| this.passo(1, cx)))
             .on_action(cx.listener(|this, _: &MudancaAnterior, _, cx| this.passo(-1, cx)))
+            .on_action(cx.listener(|this, _: &Copiar, _, cx| {
+                if let Some(m) = &this.mostrado {
+                    m.estado.borrow().copiar(cx);
+                }
+            }))
+            // Setas rolam 40 px e as páginas a altura menos uma faixa, como a rolagem do Chromium num elemento focado.
+            .on_action(cx.listener(|this, _: &RolarAcima, _, cx| this.rolar(|y, _| y - 40., cx)))
+            .on_action(cx.listener(|this, _: &RolarAbaixo, _, cx| this.rolar(|y, _| y + 40., cx)))
+            .on_action(cx.listener(|this, _: &PaginaAcima, _, cx| this.rolar(|y, h| y - (h * 0.875).max(40.), cx)))
+            .on_action(cx.listener(|this, _: &PaginaAbaixo, _, cx| this.rolar(|y, h| y + (h * 0.875).max(40.), cx)))
+            .on_action(cx.listener(|this, _: &Inicio, _, cx| this.rolar(|_, _| 0., cx)))
+            .on_action(cx.listener(|this, _: &Fim, _, cx| this.rolar(|_, _| f32::MAX, cx)))
             .flex()
             .flex_col()
             .size_full()
@@ -903,86 +847,50 @@ impl Render for VisaoDiff {
         let Some(m) = &self.mostrado else {
             return raiz.child(aviso("Não foi possível interpretar o diff.", true));
         };
-        let _ = m;
-        self.passo_rolagem(cx);
-        let Some(m) = &self.mostrado else { return raiz };
-        let unidade_de = m.unidade_de.clone();
+        let estado = m.estado.clone();
+        // O estado do comparador segue a vista: unidade atual e modo.
+        {
+            let mut e = estado.borrow_mut();
+            let a = self.atual();
+            if e.atual != a {
+                e.escolher(a);
+            }
+            e.definir_lado(self.lado);
+        }
         let this = cx.entity().downgrade();
-        let corpo = Diff::new(&m.estado)
-            .header_visible(false)
-            .hunk_separator(DiffHunkSeparator::LineInfo)
-            .change_indicator(DiffChangeIndicator::None)
-            .change_background(false)
-            .soft_wrap(true)
-            .decorations(decoracoes(m))
-            .gutter_markers(marcas(m))
-            .render_gutter_marker({
-                let g = m.geometria.clone();
-                move |marca, _, _| {
-                    let g = g.clone();
-                    let pos = marca.position();
-                    let chave = format!("{}{}", if pos.side() == DiffSide::Original { "d" } else { "a" }, pos.line());
-                    div()
-                        .relative()
-                        .size_full()
-                        .flex()
-                        .items_center()
-                        .text_color(cores::numero())
-                        .child(marca.label().clone())
-                        .child(canvas(move |b, _, _| {
-                            g.quadro.borrow_mut().insert(chave.clone(), b);
-                        }, |_, _, _, _| {}).absolute().size_full())
+        let this2 = this.clone();
+        let corpo = Corpo::new(
+            estado.clone(),
+            cx.entity_id(),
+            move |u, _, cx| {
+                let _ = this.update(cx, |this, cx| this.escolher(u, cx));
+            },
+            move |window, cx| {
+                let _ = this2.update(cx, |this, cx| window.focus(&this.foco, cx));
+            },
+        );
+        let (sobre, lado) = {
+            let e = estado.borrow();
+            let mut v = Vec::new();
+            if let Some(g) = e.geo.clone().filter(|g| g.lado == e.lado && e.lado) {
+                let centro = g.colunas.centro;
+                v.push(self.divisor(centro, e.arrastando_divisor(), cx));
+                if let Some((topo, base)) = e.atual.and_then(|u| e.faixa(u)) {
+                    let meio = (topo + base) / 2. - e.rolagem;
+                    v.extend(self.acoes_vao(centro, meio, cx));
                 }
-            })
-            .on_line_click(move |pos, _, _, cx| {
-                let k = format!("{}{}", if pos.side() == DiffSide::Original { "d" } else { "a" }, pos.line());
-                if let Some(&u) = unidade_de.get(&k) {
-                    let _ = this.update(cx, |this, cx| this.escolher(u, cx));
-                }
-            })
-            .size_full();
-        let corpo = tema_local(corpo, |t| {
-            t.background = cores::fundo();
-            t.foreground = crate::realce::cor_texto();
-            t.border = rgb(0x3c3c3c).into();
-            t.muted = rgba(0xcccccc40).into();
-            t.muted_foreground = cores::numero();
-            // O Kit pinta a diferença por palavra com 30% destas: dá o #ff000033 e o #9ccc2c33 do React.
-            t.danger = rgba(0xff0000aa).into();
-            t.success = rgba(0x9ccc2caa).into();
-            t.mono_font_family = "Consolas".into();
-            // O Kit usa rem × tamanho mono / 16, e o rem do app é 14: 16 dá a Consolas de 14 px do React.
-            t.mono_font_size = px(16.);
-        });
-        let (g1, g2) = (m.geometria.clone(), m.geometria.clone());
-        // Antes das linhas: limpa o quadro. Depois: se a geometria mudou, desenha de novo com a barra no lugar.
-        let antes = canvas(move |b, window, _| {
-            g1.quadro.borrow_mut().clear();
-            if g1.corpo.replace(b) != b {
-                window.refresh();
             }
-        }, |_, _, _, _| {})
-        .absolute()
-        .size_full();
-        let depois = canvas(move |_, window, _| {
-            let novo = g2.quadro.borrow().clone();
-            if *g2.ultimo.borrow() != novo {
-                *g2.ultimo.borrow_mut() = novo;
-                window.refresh();
-            }
-        }, |_, _, _, _| {})
-        .absolute()
-        .size_0();
-        let sobre = self.sobreposicao(cx);
+            (v, e.lado)
+        };
+        let _ = lado;
         raiz.child(self.barra(cx)).child(
             div()
                 .relative()
                 .flex()
                 .flex_1()
                 .min_h_0()
-                .child(antes)
-                .child(div().flex_1().min_w_0().child(corpo))
-                .child(depois)
+                .overflow_hidden()
+                .child(corpo)
                 .children(sobre)
                 .child(self.regua(cx)),
         )

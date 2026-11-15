@@ -1,0 +1,19 @@
+# Configuracao
+nome: orquestrador
+versao: 1.2
+ativo: true
+nada: null
+lista:
+  - um
+  - "dois"
+  - 'tres'
+mapa:
+  chave: valor
+  numero: 42
+  bloco: |
+    texto
+    em bloco
+ancora: &base
+  a: 1
+uso:
+  <<: *base

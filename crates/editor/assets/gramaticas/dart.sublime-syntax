@@ -1,0 +1,627 @@
+%YAML 1.2
+---
+{
+ "name": "shiki-dart",
+ "scope": "source.dart",
+ "file_extensions": [],
+ "hidden": true,
+ "contexts": {
+  "main": [
+   {
+    "match": "^(#!.*)$",
+    "scope": "meta.preprocessor.script.dart"
+   },
+   {
+    "match": "^\\w*\\b(augment\\s+library|library|import\\s+augment|import|part\\s+of|part|export)\\b",
+    "push": [
+     {
+      "meta_scope": "meta.declaration.dart"
+     },
+     {
+      "match": ";",
+      "pop": true,
+      "scope": "punctuation.terminator.dart"
+     },
+     {
+      "include": "r_strings"
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "match": "\\b(as|show|hide)\\b",
+      "scope": "keyword.other.import.dart"
+     },
+     {
+      "match": "\\b(if)\\b",
+      "scope": "keyword.control.dart"
+     }
+    ],
+    "scope": "keyword.other.import.dart"
+   },
+   {
+    "include": "r_comments"
+   },
+   {
+    "include": "r_punctuation"
+   },
+   {
+    "include": "r_annotations"
+   },
+   {
+    "include": "r_keywords"
+   },
+   {
+    "include": "r_constants_and_special_vars"
+   },
+   {
+    "include": "r_class_identifier_with_optional_factory_method"
+   },
+   {
+    "include": "r_function_identifier"
+   },
+   {
+    "include": "r_operators"
+   },
+   {
+    "include": "r_strings"
+   }
+  ],
+  "r_annotations": [
+   {
+    "match": "@[A-Za-z]+",
+    "scope": "storage.type.annotation.dart"
+   }
+  ],
+  "r_class_identifier": [
+   {
+    "match": "(?<!\\$)\\b(bool|num|int|double|dynamic)\\b(?!\\$)",
+    "scope": "support.class.dart"
+   },
+   {
+    "match": "(?<!\\$)\\bvoid\\b(?!\\$)",
+    "scope": "storage.type.primitive.dart"
+   },
+   {
+    "match": "(?<![$0-9A-Z_a-z])([$_]*[A-Z][$0-9A-Z_a-z]*)\\b",
+    "push": [
+     {
+      "match": "(?!<)",
+      "pop": true
+     },
+     {
+      "include": "r_type_args"
+     }
+    ],
+    "captures": {
+     1: "support.class.dart"
+    }
+   }
+  ],
+  "r_class_identifier_with_optional_factory_method": [
+   {
+    "match": "(?<!\\$)\\b(bool|num|int|double|dynamic)\\b(?!\\$)\\s*(factory\\b)?",
+    "captures": {
+     1: "support.class.dart",
+     2: "entity.name.function.dart"
+    }
+   },
+   {
+    "match": "(?<!\\$)\\b(void)\\b(?!\\$)\\s*(factory\\b)?",
+    "captures": {
+     1: "storage.type.primitive.dart",
+     2: "entity.name.function.dart"
+    }
+   },
+   {
+    "match": "(?<![$0-9A-Z_a-z])([$_]*[A-Z][$0-9A-Z_a-z]*)\\b\\s*(factory\\b)?",
+    "push": [
+     {
+      "match": "(?!<)",
+      "pop": true
+     },
+     {
+      "include": "r_type_args"
+     }
+    ],
+    "captures": {
+     1: "support.class.dart",
+     2: "entity.name.function.dart"
+    }
+   }
+  ],
+  "r_comments": [
+   {
+    "match": "/\\*\\*/",
+    "scope": "comment.block.empty.dart punctuation.definition.comment.dart"
+   },
+   {
+    "include": "r_comments_doc_oldschool"
+   },
+   {
+    "include": "r_comments_doc"
+   },
+   {
+    "include": "r_comments_inline"
+   }
+  ],
+  "r_comments_block": [
+   {
+    "match": "/\\*",
+    "push": [
+     {
+      "meta_scope": "comment.block.dart"
+     },
+     {
+      "match": "\\*/",
+      "pop": true
+     },
+     {
+      "include": "r_comments_block"
+     }
+    ]
+   }
+  ],
+  "r_comments_doc": [
+   {
+    "match": "///",
+    "push": [
+     {
+      "meta_scope": "comment.block.documentation.dart"
+     },
+     {
+      "match": "^(?!\\s*///)",
+      "pop": true
+     },
+     {
+      "include": "r_dartdoc"
+     }
+    ]
+   }
+  ],
+  "r_comments_doc_oldschool": [
+   {
+    "match": "/\\*\\*",
+    "push": [
+     {
+      "meta_scope": "comment.block.documentation.dart"
+     },
+     {
+      "match": "\\*/",
+      "pop": true
+     },
+     {
+      "include": "r_comments_doc_oldschool"
+     },
+     {
+      "include": "r_comments_block"
+     },
+     {
+      "include": "r_dartdoc"
+     }
+    ]
+   }
+  ],
+  "r_comments_inline": [
+   {
+    "include": "r_comments_block"
+   },
+   {
+    "match": "((//).*)$",
+    "captures": {
+     1: "comment.line.double-slash.dart"
+    }
+   }
+  ],
+  "r_constants_and_special_vars": [
+   {
+    "match": "(?<!\\$)\\b(true|false|null)\\b(?!\\$)",
+    "scope": "constant.language.dart"
+   },
+   {
+    "match": "(?<!\\$)\\b(this|super|augmented)\\b(?!\\$)",
+    "scope": "variable.language.dart"
+   },
+   {
+    "match": "(?<!\\$)\\b((0([Xx])\\h[_\\h]*)|(([0-9][0-9_]*\\.?[0-9_]*)|(\\.[0-9][0-9_]*))(([Ee])([-+])?[0-9][0-9_]*)?)\\b(?!\\$)",
+    "scope": "constant.numeric.dart"
+   }
+  ],
+  "r_dartdoc": [
+   {
+    "match": "(\\[.*?])",
+    "scope": "variable.name.source.dart"
+   },
+   {
+    "match": "^\\s*///\\s*(```)",
+    "push": [
+     {
+      "match": "^(?:\\s*///\\s*(```)|(?!\\s*///))",
+      "pop": true
+     },
+     {
+      "include": "r_dartdoc_codeblock_triple"
+     }
+    ]
+   },
+   {
+    "match": "^\\s*\\*\\s*(```)",
+    "push": [
+     {
+      "match": "^(?:\\s*\\*\\s*(```)|(?=\\s*\\*/))",
+      "pop": true
+     },
+     {
+      "include": "r_dartdoc_codeblock_block"
+     }
+    ]
+   },
+   {
+    "match": "`[^\\n`]+`",
+    "scope": "variable.other.source.dart"
+   },
+   {
+    "match": "(?:\\*|//)\\s{4,}(.*?)(?=($|\\*/))",
+    "captures": {
+     1: "variable.other.source.dart"
+    }
+   }
+  ],
+  "r_dartdoc_codeblock_block": [
+   {
+    "match": "^\\s*\\*\\s*(?!(\\s*```|/))",
+    "push": [
+     {
+      "meta_content_scope": "variable.other.source.dart"
+     },
+     {
+      "match": "$",
+      "pop": true
+     }
+    ]
+   }
+  ],
+  "r_dartdoc_codeblock_triple": [
+   {
+    "match": "^\\s*///\\s*(?!\\s*```)",
+    "push": [
+     {
+      "meta_content_scope": "variable.other.source.dart"
+     },
+     {
+      "match": "$",
+      "pop": true
+     }
+    ]
+   }
+  ],
+  "r_expression": [
+   {
+    "include": "r_constants_and_special_vars"
+   },
+   {
+    "include": "r_class_identifier_with_optional_factory_method"
+   },
+   {
+    "include": "r_function_identifier"
+   },
+   {
+    "include": "r_strings"
+   },
+   {
+    "match": "[0-9A-Z_a-z]+",
+    "scope": "variable.parameter.dart"
+   },
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "match": "}",
+      "pop": true
+     },
+     {
+      "include": "r_expression"
+     }
+    ]
+   }
+  ],
+  "r_function_identifier": [
+   {
+    "match": "([$_]*[a-z][$0-9A-Z_a-z]*)(<(?:[$0-9<>?A-Z_a-z]|,\\s*|\\s+extends\\s+)+>)?[!?]?\\(",
+    "captures": {
+     1: "entity.name.function.dart"
+    }
+   },
+   {
+    "match": "(?<=\\.)new\\b",
+    "scope": "entity.name.function.dart"
+   }
+  ],
+  "r_keywords": [
+   {
+    "match": "(?<!\\$)\\bas\\b(?!\\$)",
+    "scope": "keyword.cast.dart"
+   },
+   {
+    "match": "(?<!\\$)\\b(try|on|catch|finally|throw|rethrow)\\b(?!\\$)",
+    "scope": "keyword.control.catch-exception.dart"
+   },
+   {
+    "match": "(?<!\\$)\\b(break|case|continue|default|do|else|for|if|in|switch|while|when)\\b(?!\\$)",
+    "scope": "keyword.control.dart"
+   },
+   {
+    "match": "(?<!\\$)\\b(sync(\\*)?|async(\\*)?|await|yield(\\*)?)\\b(?!\\$)",
+    "scope": "keyword.control.dart"
+   },
+   {
+    "match": "(?<!\\$)\\bassert\\b(?!\\$)",
+    "scope": "keyword.control.dart"
+   },
+   {
+    "match": "(?<![$.])\\b(new)\\b(?!\\$)",
+    "scope": "keyword.new.dart"
+   },
+   {
+    "match": "(?<!\\$)\\b(return)\\b(?!\\$)",
+    "scope": "keyword.control.return.dart"
+   },
+   {
+    "match": "(?<!\\$)\\b(abstract|sealed|base|interface|class|enum|extends|extension\\s+type|extension|external|factory|implements|get(?![(<])|mixin|native|operator|set(?![(<])|typedef|with|covariant)\\b(?!\\$)",
+    "scope": "keyword.declaration.dart"
+   },
+   {
+    "match": "(?<!\\$)\\b(macro|augment|static|final|const|required|late)\\b(?!\\$)",
+    "scope": "storage.modifier.dart"
+   },
+   {
+    "match": "(?<!\\$)\\bvar\\b(?!\\$)",
+    "scope": "storage.type.primitive.dart"
+   }
+  ],
+  "r_operators": [
+   {
+    "match": "(?<!\\$)\\b(is!?)\\b(?!\\$)",
+    "scope": "keyword.operator.dart"
+   },
+   {
+    "match": "[:?]",
+    "scope": "keyword.operator.ternary.dart"
+   },
+   {
+    "match": "(<<|>>>?|[\\&^|~])",
+    "scope": "keyword.operator.bitwise.dart"
+   },
+   {
+    "match": "(([\\&^|]|<<|>>>?)=)",
+    "scope": "keyword.operator.assignment.bitwise.dart"
+   },
+   {
+    "match": "(=>)",
+    "scope": "keyword.operator.closure.dart"
+   },
+   {
+    "match": "(==|!=|<=?|>=?)",
+    "scope": "keyword.operator.comparison.dart"
+   },
+   {
+    "match": "(([-%*+/~])=)",
+    "scope": "keyword.operator.assignment.arithmetic.dart"
+   },
+   {
+    "match": "(=)",
+    "scope": "keyword.operator.assignment.dart"
+   },
+   {
+    "match": "(--|\\+\\+)",
+    "scope": "keyword.operator.increment-decrement.dart"
+   },
+   {
+    "match": "([-*+/]|~/|%)",
+    "scope": "keyword.operator.arithmetic.dart"
+   },
+   {
+    "match": "(!|&&|\\|\\|)",
+    "scope": "keyword.operator.logical.dart"
+   }
+  ],
+  "r_punctuation": [
+   {
+    "match": ",",
+    "scope": "punctuation.comma.dart"
+   },
+   {
+    "match": ";",
+    "scope": "punctuation.terminator.dart"
+   },
+   {
+    "match": "\\.",
+    "scope": "punctuation.dot.dart"
+   }
+  ],
+  "r_string_interp": [
+   {
+    "match": "\\$([0-9A-Z_a-z]+)",
+    "scope": "meta.embedded.expression.dart",
+    "captures": {
+     1: "variable.parameter.dart"
+    }
+   },
+   {
+    "match": "\\$\\{",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.expression.dart"
+     },
+     {
+      "match": "}",
+      "pop": true
+     },
+     {
+      "include": "r_expression"
+     }
+    ]
+   },
+   {
+    "match": "\\\\.",
+    "scope": "constant.character.escape.dart"
+   }
+  ],
+  "r_strings": [
+   {
+    "match": "(?<!r)\"\"\"",
+    "push": [
+     {
+      "meta_scope": "string.interpolated.triple.double.dart"
+     },
+     {
+      "match": "\"\"\"(?!\")",
+      "pop": true
+     },
+     {
+      "include": "r_string_interp"
+     }
+    ]
+   },
+   {
+    "match": "(?<!r)'''",
+    "push": [
+     {
+      "meta_scope": "string.interpolated.triple.single.dart"
+     },
+     {
+      "match": "'''(?!')",
+      "pop": true
+     },
+     {
+      "include": "r_string_interp"
+     }
+    ]
+   },
+   {
+    "match": "r\"\"\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.triple.double.dart"
+     },
+     {
+      "match": "\"\"\"(?!\")",
+      "pop": true
+     }
+    ]
+   },
+   {
+    "match": "r'''",
+    "push": [
+     {
+      "meta_scope": "string.quoted.triple.single.dart"
+     },
+     {
+      "match": "'''(?!')",
+      "pop": true
+     }
+    ]
+   },
+   {
+    "match": "(?<!\\|r)\"",
+    "push": [
+     {
+      "meta_scope": "string.interpolated.double.dart"
+     },
+     {
+      "match": "\"",
+      "pop": true
+     },
+     {
+      "match": "\\n",
+      "scope": "invalid.string.newline"
+     },
+     {
+      "include": "r_string_interp"
+     }
+    ]
+   },
+   {
+    "match": "r\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.dart"
+     },
+     {
+      "match": "\"",
+      "pop": true
+     },
+     {
+      "match": "\\n",
+      "scope": "invalid.string.newline"
+     }
+    ]
+   },
+   {
+    "match": "(?<!\\|r)'",
+    "push": [
+     {
+      "meta_scope": "string.interpolated.single.dart"
+     },
+     {
+      "match": "'",
+      "pop": true
+     },
+     {
+      "match": "\\n",
+      "scope": "invalid.string.newline"
+     },
+     {
+      "include": "r_string_interp"
+     }
+    ]
+   },
+   {
+    "match": "r'",
+    "push": [
+     {
+      "meta_scope": "string.quoted.single.dart"
+     },
+     {
+      "match": "'",
+      "pop": true
+     },
+     {
+      "match": "\\n",
+      "scope": "invalid.string.newline"
+     }
+    ]
+   }
+  ],
+  "r_type_args": [
+   {
+    "match": "(<)",
+    "push": [
+     {
+      "match": "(>)",
+      "pop": true,
+      "captures": {
+       1: "other.source.dart"
+      }
+     },
+     {
+      "include": "r_class_identifier"
+     },
+     {
+      "match": ","
+     },
+     {
+      "match": "extends",
+      "scope": "keyword.declaration.dart"
+     },
+     {
+      "include": "r_comments"
+     }
+    ],
+    "captures": {
+     1: "other.source.dart"
+    }
+   }
+  ]
+ }
+}

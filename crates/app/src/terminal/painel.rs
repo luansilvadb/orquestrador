@@ -99,6 +99,8 @@ pub struct Shell {
     pub n: usize,
     /// '' até o shell responder; nasce com o último programa aberto.
     pub programa: String,
+    /// Pasta relativa ao projeto em que o shell abre ("Abrir no Terminal" da árvore); `None` é a raiz.
+    pub cwd: Option<String>,
 }
 
 #[derive(Default)]
@@ -208,9 +210,8 @@ impl Terminais {
 
     /// Erros dos terminais viram o aviso de erro do Kit (o toast do React).
     fn com_avisos(self, cx: &mut Context<Self>) -> Self {
-        use gpui_kit::component::WindowExt;
-        cx.set_global(super::vista::AvisarErro(Some(Rc::new(|msg, window, cx| {
-            window.push_notification(gpui_kit::component::notification::Notification::error(msg), cx)
+        cx.set_global(super::vista::AvisarErro(Some(Rc::new(|msg, _window, cx| {
+            orquestrador_ui::avisos::mostrar(orquestrador_ui::avisos::Aviso::erro(msg, 7000), cx)
         }))));
         self
     }
@@ -541,14 +542,23 @@ impl Terminais {
         }
     }
 
-    /// Cola o caminho absoluto no rascunho do orquestrador, sem Enter (o "copiar caminho para o orquestrador"). Ponto de
-    /// extensão da fase de Arquivos.
-    #[allow(dead_code)]
-    pub fn colar_no_orquestrador(&mut self, projeto: Option<String>, caminho: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// O foco está num terminal (os atalhos de projeto deixam a tecla seguir para ele, como o `.xterm` do React).
+    pub fn foco_em_terminal(&self, window: &Window, cx: &App) -> bool {
+        self.vistas.values().any(|v| v.read(cx).foco.is_focused(window))
+    }
+
+    /// Cola o caminho absoluto no rascunho do orquestrador, sem Enter ("Adicionar ao Chat" da árvore). `false` sem
+    /// orquestrador aberto.
+    pub fn colar_no_orquestrador(&mut self, projeto: Option<String>, caminho: String, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let k = chave(projeto.as_deref(), ORCHESTRATOR);
-        if let Some(v) = self.vistas.get(&k).cloned() {
-            v.update(cx, |v, cx| v.colar_caminhos(vec![caminho], window, cx));
-            self.focar(&k, window, cx);
+        let aberto = self.projeto(&projeto).orquestrador.as_ref().is_some_and(|o| o.escolha.is_some());
+        match self.vistas.get(&k).cloned() {
+            Some(v) if aberto => {
+                v.update(cx, |v, cx| v.colar_caminhos(vec![caminho], window, cx));
+                self.focar(&k, window, cx);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -556,6 +566,11 @@ impl Terminais {
 
     /// Nova aba de shell: id novo e ativa. O shell abre quando o terminal é medido (`medido`).
     pub fn adicionar_shell(&mut self, projeto: Option<String>, raiz: Option<String>, cx: &mut Context<Self>) {
+        self.adicionar_shell_em(projeto, raiz, None, cx);
+    }
+
+    /// Nova aba de shell na pasta `cwd` (relativa ao projeto).
+    pub fn adicionar_shell_em(&mut self, projeto: Option<String>, raiz: Option<String>, cwd: Option<String>, cx: &mut Context<Self>) {
         if !self.pronto(cx) {
             return;
         }
@@ -567,7 +582,7 @@ impl Terminais {
         while p.shells.iter().any(|s| s.n == n) {
             n += 1;
         }
-        p.shells.push(Shell { id: id.clone(), n, programa });
+        p.shells.push(Shell { id: id.clone(), n, programa, cwd: cwd.filter(|c| !c.is_empty()) });
         p.shell_ativa = id.clone();
         // A aba nova entra na área visível da faixa.
         let ultima = p.shells.len() - 1;
@@ -598,9 +613,11 @@ impl Terminais {
             return;
         }
         let (c, l) = v.read(cx).tamanho();
+        let cwd = self.projeto(&projeto).shells.iter().find(|s| s.id == id).and_then(|s| s.cwd.clone());
         let projetos = self.backend.projetos.clone();
         let (p2, id2) = (projeto.clone(), id.clone());
-        let tarefa = cx.background_spawn(async move { projetos.shell_core(p2.as_deref())?.start_shell_in(&id2, c, l, None) });
+        let tarefa =
+            cx.background_spawn(async move { projetos.shell_core(p2.as_deref())?.start_shell_in(&id2, c, l, cwd.as_deref()) });
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
             let r = tarefa.await;
             let _ = this.update(cx, |this, cx| {

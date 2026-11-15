@@ -1,0 +1,16 @@
+# Manifesto
+[package]
+name = "orquestrador"
+version = "0.1.0"
+edition = "2021"
+ativo = true
+peso = 1.5
+data = 1979-05-27T07:32:00Z
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+regex = "1"
+
+[[bin]]
+name = 'app'
+path = "src/main.rs"

@@ -1,0 +1,208 @@
+%YAML 1.2
+---
+{
+ "name": "shiki-json",
+ "scope": "source.json",
+ "file_extensions": [],
+ "hidden": true,
+ "contexts": {
+  "main": [
+   {
+    "include": "r_value"
+   }
+  ],
+  "r_array": [
+   {
+    "match": "\\[",
+    "push": [
+     {
+      "meta_scope": "meta.structure.array.json"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.definition.array.end.json"
+     },
+     {
+      "include": "r_value"
+     },
+     {
+      "match": ",",
+      "scope": "punctuation.separator.array.json"
+     },
+     {
+      "match": "[^]\\s]",
+      "scope": "invalid.illegal.expected-array-separator.json"
+     }
+    ],
+    "scope": "punctuation.definition.array.begin.json"
+   }
+  ],
+  "r_comments": [
+   {
+    "match": "/\\*\\*(?!/)",
+    "push": [
+     {
+      "meta_scope": "comment.block.documentation.json"
+     },
+     {
+      "match": "\\*/",
+      "pop": true,
+      "scope": "punctuation.definition.comment.json"
+     }
+    ],
+    "scope": "punctuation.definition.comment.json"
+   },
+   {
+    "match": "/\\*",
+    "push": [
+     {
+      "meta_scope": "comment.block.json"
+     },
+     {
+      "match": "\\*/",
+      "pop": true,
+      "scope": "punctuation.definition.comment.json"
+     }
+    ],
+    "scope": "punctuation.definition.comment.json"
+   },
+   {
+    "match": "(//).*$\\n?",
+    "scope": "comment.line.double-slash.js",
+    "captures": {
+     1: "punctuation.definition.comment.json"
+    }
+   }
+  ],
+  "r_constant": [
+   {
+    "match": "\\b(?:true|false|null)\\b",
+    "scope": "constant.language.json"
+   }
+  ],
+  "r_number": [
+   {
+    "match": "-?(?:0|[1-9]\\d*)(?:(?:\\.\\d+)?(?:[Ee][-+]?\\d+)?)?",
+    "scope": "constant.numeric.json"
+   }
+  ],
+  "r_object": [
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "meta_scope": "meta.structure.dictionary.json"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.definition.dictionary.end.json"
+     },
+     {
+      "include": "r_objectkey"
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "match": ":",
+      "push": [
+       {
+        "meta_scope": "meta.structure.dictionary.value.json"
+       },
+       {
+        "match": "(,)|(?=})",
+        "pop": true,
+        "captures": {
+         1: "punctuation.separator.dictionary.pair.json"
+        }
+       },
+       {
+        "include": "r_value"
+       },
+       {
+        "match": "[^,\\s]",
+        "scope": "invalid.illegal.expected-dictionary-separator.json"
+       }
+      ],
+      "scope": "punctuation.separator.dictionary.key-value.json"
+     },
+     {
+      "match": "[^}\\s]",
+      "scope": "invalid.illegal.expected-dictionary-separator.json"
+     }
+    ],
+    "scope": "punctuation.definition.dictionary.begin.json"
+   }
+  ],
+  "r_objectkey": [
+   {
+    "match": "\"",
+    "push": [
+     {
+      "meta_scope": "string.json support.type.property-name.json"
+     },
+     {
+      "match": "\"",
+      "pop": true,
+      "scope": "punctuation.support.type.property-name.end.json"
+     },
+     {
+      "include": "r_stringcontent"
+     }
+    ],
+    "scope": "punctuation.support.type.property-name.begin.json"
+   }
+  ],
+  "r_string": [
+   {
+    "match": "\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.json"
+     },
+     {
+      "match": "\"",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.json"
+     },
+     {
+      "include": "r_stringcontent"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.json"
+   }
+  ],
+  "r_stringcontent": [
+   {
+    "match": "\\\\(?:[\"/\\\\bfnrt]|u\\h{4})",
+    "scope": "constant.character.escape.json"
+   },
+   {
+    "match": "\\\\.",
+    "scope": "invalid.illegal.unrecognized-string-escape.json"
+   }
+  ],
+  "r_value": [
+   {
+    "include": "r_constant"
+   },
+   {
+    "include": "r_number"
+   },
+   {
+    "include": "r_string"
+   },
+   {
+    "include": "r_array"
+   },
+   {
+    "include": "r_object"
+   },
+   {
+    "include": "r_comments"
+   }
+  ]
+ }
+}

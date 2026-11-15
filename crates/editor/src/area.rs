@@ -1793,8 +1793,10 @@ impl AreaEditor {
             let detalhe = t.alvo.caminho().and_then(|p| det.get(p)).cloned().unwrap_or_default();
             let gid = SharedString::from(format!("aba-{}", t.id));
             let (id1, id2, ent1, ent2) = (t.id.clone(), t.id.clone(), ent.clone(), ent.clone());
+            let seletor = gid.to_string();
             let el = div()
                 .id(gid.clone())
+                .debug_selector(move || seletor.clone())
                 .group(gid.clone())
                 .relative()
                 .flex()
@@ -1872,6 +1874,7 @@ impl AreaEditor {
         let ent_dbl = ent.clone();
         let faixa = div()
             .id(SharedString::from(format!("faixa-vazia-{g:?}")))
+            .debug_selector(move || format!("faixa-vazia-{g:?}"))
             .flex()
             .flex_1()
             .min_w_0()
@@ -2222,11 +2225,17 @@ impl AreaEditor {
             .min_w_0()
             .bg(documento::cor::fundo())
             .child(
-                div().flex_1().min_w_0().h_full().child(ComTemaDoEditor(Some(
+                // Medido nas capturas do React: a quebra do CodeMirror cabe 8 px a mais que a do Kit (que reserva 10 px à
+                // direita); o editor passa por baixo da borda do minimapa, desenhado por cima.
+                div().flex_1().min_w_0().h_full().mr(px(-8.)).child(ComTemaDoEditor(Some(
                     Editor::new(&editor)
                         .appearance(false)
                         .bordered(false)
                         .h_full()
+                        // O `.cm-content` não tem padding: o tamanho XSmall tira os 8 px de cima e deixa 4 px nas laterais;
+                        // mais 2 px à esquerda põem o texto onde o CodeMirror põe, e a quebra fica na mesma coluna.
+                        .with_size(gpui_kit::component::Size::XSmall)
+                        .pl(px(2.))
                         .font_family(documento::FONTE_EDITOR)
                         .text_size(documento::TAMANHO_EDITOR)
                         .line_height(documento::LINHA_EDITOR)
@@ -2283,6 +2292,15 @@ impl AreaEditor {
             .children(migalha)
             .child(div().relative().flex().flex_col().flex_1().min_h_0().child(corpo))
             .into_any_element()
+    }
+
+    /// Esc (ou a janela sem foco) cancela o arrasto na faixa de origem; sem isto, soltar sobre a outra faixa ainda moveria a aba.
+    fn conferir_arrasto_cancelado(&mut self) {
+        if let Some((origem, _)) = &self.arrasto_aba {
+            if self.faixas[idx(*origem)].arrasto().is_none() {
+                self.arrasto_aba = None;
+            }
+        }
     }
 
     /// Grupo de destino quando a aba arrastada está sobre a faixa do outro grupo.
@@ -2565,6 +2583,7 @@ fn modal(
 impl Render for AreaEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.avisar_mudancas(cx);
+        self.conferir_arrasto_cancelado();
         let dois = self.ws.groups.len() == 2;
         let mostrar_inicio = self.projeto.is_empty() && self.ws.groups.iter().all(|g| g.tabs.is_empty());
         let grupos: Vec<Grupo> = self.ws.groups.iter().map(|g| g.id).collect();
@@ -2611,6 +2630,7 @@ impl Render for AreaEditor {
             linha = linha
                 .on_mouse_move(cx.listener(|a, ev: &MouseMoveEvent, _, cx| {
                     let antes = a.destino_arrasto();
+                    a.conferir_arrasto_cancelado();
                     a.ponteiro = ev.position;
                     if a.destino_arrasto() != antes {
                         cx.notify();

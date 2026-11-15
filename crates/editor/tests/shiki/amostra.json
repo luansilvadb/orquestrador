@@ -1,0 +1,13 @@
+{
+  "name": "orquestrador",
+  "version": "1.2.3",
+  "private": true,
+  "count": 42,
+  "ratio": -1.5e3,
+  "nothing": null,
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build"
+  },
+  "list": [1, "dois", false, { "a": [] }]
+}

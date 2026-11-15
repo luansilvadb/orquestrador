@@ -55,7 +55,7 @@ fn montar(cx: &mut TestAppContext, tmp: &Tmp, exes: cli::Exes) -> (WindowHandle<
         std::fs::create_dir_all(p).expect("pasta da sessão");
     }
     let (backend, _tx, eventos) =
-        Backend::com(exes, places, tmp.0.join("config.json"), Some(tmp.0.join("interface.json")), false);
+        Backend::com(exes, places, tmp.0.join("config.json"), Some(tmp.0.join("interface.json")));
     let backend = Rc::new(backend);
     // As threads do PTY e do core acordam tarefas da janela, como no app.
     cx.executor().allow_parking();

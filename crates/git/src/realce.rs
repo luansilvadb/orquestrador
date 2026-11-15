@@ -79,68 +79,6 @@ pub fn realcar(caminho: &str, texto: &str) -> Vec<(Range<usize>, HighlightStyle)
 }
 
 
-/// Realce do texto do conflito no editor do Kit: o mesmo `syntect`, refeito a cada edição (o arquivo em conflito é
-/// pequeno). A "linguagem" do editor é o caminho do arquivo.
-pub struct RealceEditor {
-    caminho: gpui_kit::SharedString,
-    faixas: Vec<(Range<usize>, HighlightStyle)>,
-}
-
-impl gpui_kit::component::input::InputHighlighter for RealceEditor {
-    fn language(&self) -> gpui_kit::SharedString {
-        self.caminho.clone()
-    }
-
-    fn update(
-        &mut self,
-        _: Option<gpui_kit::component::input::InputEdit>,
-        texto: &gpui_kit::component::input::Rope,
-        _: bool,
-        _: &mut gpui_kit::Window,
-        _: &mut gpui_kit::Context<gpui_kit::component::input::EditorState>,
-    ) {
-        self.faixas = realcar(&self.caminho, &texto.to_string());
-    }
-
-    fn styles(
-        &self,
-        faixa: &Range<usize>,
-        _: &dyn gpui_kit::component::input::HighlightStyleResolver,
-    ) -> Vec<(Range<usize>, HighlightStyle)> {
-        // Corridas ordenadas e sem sobreposição cobrindo a faixa inteira; o que não tem cor vai com o estilo padrão.
-        let mut saida = Vec::new();
-        let mut pos = faixa.start;
-        for (r, estilo) in &self.faixas {
-            if r.end <= pos {
-                continue;
-            }
-            if r.start >= faixa.end {
-                break;
-            }
-            let (a, b) = (r.start.max(pos), r.end.min(faixa.end));
-            if a > pos {
-                saida.push((pos..a, HighlightStyle::default()));
-            }
-            saida.push((a..b, *estilo));
-            pos = b;
-        }
-        if pos < faixa.end {
-            saida.push((pos..faixa.end, HighlightStyle::default()));
-        }
-        saida
-    }
-
-    fn fold_ranges(&self, _: &gpui_kit::component::input::Rope) -> Vec<gpui_kit::component::input::FoldRange> {
-        Vec::new()
-    }
-}
-
-pub fn fabrica_editor() -> gpui_kit::component::input::InputHighlighterFactory {
-    std::rc::Rc::new(|caminho: &str| {
-        Some(Box::new(RealceEditor { caminho: caminho.to_string().into(), faixas: Vec::new() })
-            as Box<dyn gpui_kit::component::input::InputHighlighter>)
-    })
-}
 
 #[cfg(test)]
 mod testes {

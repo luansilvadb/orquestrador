@@ -1,0 +1,368 @@
+%YAML 1.2
+---
+{
+ "name": "shiki-xml",
+ "scope": "text.xml",
+ "file_extensions": [],
+ "hidden": true,
+ "contexts": {
+  "main": [
+   {
+    "match": "(<\\?)\\s*([-0-9A-Z_a-z]+)",
+    "push": [
+     {
+      "meta_scope": "meta.tag.preprocessor.xml"
+     },
+     {
+      "match": "(\\?>)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.tag.xml",
+       2: "entity.name.tag.xml"
+      }
+     },
+     {
+      "match": " ([-A-Za-z]+)",
+      "scope": "entity.other.attribute-name.xml"
+     },
+     {
+      "include": "r_doublequotedString"
+     },
+     {
+      "include": "r_singlequotedString"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.tag.xml",
+     2: "entity.name.tag.xml"
+    }
+   },
+   {
+    "match": "(<!)(DOCTYPE)\\s+([:A-Z_a-z][-.0-:A-Z_a-z]*)",
+    "push": [
+     {
+      "meta_scope": "meta.tag.sgml.doctype.xml"
+     },
+     {
+      "match": "\\s*(>)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.tag.xml",
+       2: "keyword.other.doctype.xml",
+       3: "variable.language.documentroot.xml"
+      }
+     },
+     {
+      "include": "r_internalSubset"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.tag.xml",
+     2: "keyword.other.doctype.xml",
+     3: "variable.language.documentroot.xml"
+    }
+   },
+   {
+    "include": "r_comments"
+   },
+   {
+    "match": "(<)((?:([-0-9A-Z_a-z]+)(:))?([-0-:A-Z_a-z]+))(?=(\\s[^>]*)?></\\2>)",
+    "push": [
+     {
+      "meta_scope": "meta.tag.no-content.xml"
+     },
+     {
+      "match": "(>)(</)((?:([-0-9A-Z_a-z]+)(:))?([-0-:A-Z_a-z]+))(>)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.tag.xml",
+       2: "punctuation.definition.tag.xml",
+       3: "entity.name.tag.xml",
+       4: "entity.name.tag.namespace.xml",
+       5: "punctuation.separator.namespace.xml",
+       6: "entity.name.tag.localname.xml",
+       7: "punctuation.definition.tag.xml"
+      }
+     },
+     {
+      "include": "r_tagStuff"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.tag.xml",
+     2: "entity.name.tag.xml",
+     3: "entity.name.tag.namespace.xml",
+     4: "punctuation.separator.namespace.xml",
+     5: "entity.name.tag.localname.xml"
+    }
+   },
+   {
+    "match": "(</?)(?:([-.\\w]+)((:)))?([-.:\\w]+)",
+    "push": [
+     {
+      "meta_scope": "meta.tag.xml"
+     },
+     {
+      "match": "(/?>)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.tag.xml",
+       2: "entity.name.tag.namespace.xml",
+       3: "entity.name.tag.xml",
+       4: "punctuation.separator.namespace.xml",
+       5: "entity.name.tag.localname.xml"
+      }
+     },
+     {
+      "include": "r_tagStuff"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.tag.xml",
+     2: "entity.name.tag.namespace.xml",
+     3: "entity.name.tag.xml",
+     4: "punctuation.separator.namespace.xml",
+     5: "entity.name.tag.localname.xml"
+    }
+   },
+   {
+    "include": "r_entity"
+   },
+   {
+    "include": "r_bare_ampersand"
+   },
+   {
+    "match": "<%@",
+    "push": [
+     {
+      "meta_scope": "source.java-props.embedded.xml"
+     },
+     {
+      "match": "%>",
+      "pop": true,
+      "scope": "punctuation.section.embedded.end.xml"
+     },
+     {
+      "match": "page|include|taglib",
+      "scope": "keyword.other.page-props.xml"
+     }
+    ],
+    "scope": "punctuation.section.embedded.begin.xml"
+   },
+   {
+    "match": "<%[!=]?(?!--)",
+    "push": [
+     {
+      "meta_scope": "source.java.embedded.xml"
+     },
+     {
+      "match": "(?!--)%>",
+      "pop": true,
+      "scope": "punctuation.section.embedded.end.xml"
+     },
+     {
+      "include": "scope:source.java"
+     }
+    ],
+    "scope": "punctuation.section.embedded.begin.xml"
+   },
+   {
+    "match": "<!\\[CDATA\\[",
+    "push": [
+     {
+      "meta_scope": "string.unquoted.cdata.xml"
+     },
+     {
+      "match": "]]>",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.xml"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.xml"
+   }
+  ],
+  "r_EntityDecl": [
+   {
+    "match": "(<!)(ENTITY)\\s+(%\\s+)?([:A-Z_a-z][-.0-:A-Z_a-z]*)(\\s+(?:SYSTEM|PUBLIC)\\s+)?",
+    "push": [
+     {
+      "match": "(>)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.tag.xml",
+       2: "keyword.other.entity.xml",
+       3: "punctuation.definition.entity.xml",
+       4: "variable.language.entity.xml",
+       5: "keyword.other.entitytype.xml"
+      }
+     },
+     {
+      "include": "r_doublequotedString"
+     },
+     {
+      "include": "r_singlequotedString"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.tag.xml",
+     2: "keyword.other.entity.xml",
+     3: "punctuation.definition.entity.xml",
+     4: "variable.language.entity.xml",
+     5: "keyword.other.entitytype.xml"
+    }
+   }
+  ],
+  "r_bare_ampersand": [
+   {
+    "match": "&",
+    "scope": "invalid.illegal.bad-ampersand.xml"
+   }
+  ],
+  "r_comments": [
+   {
+    "match": "<%--",
+    "push": [
+     {
+      "match": "(?!x)x",
+      "pop": true
+     }
+    ],
+    "scope": "punctuation.definition.comment.xml"
+   },
+   {
+    "match": "<!--",
+    "push": [
+     {
+      "meta_scope": "comment.block.xml"
+     },
+     {
+      "match": "-->",
+      "pop": true,
+      "scope": "punctuation.definition.comment.xml"
+     },
+     {
+      "match": "--(?!>)",
+      "push": [
+       {
+        "match": "(?!x)x",
+        "pop": true
+       }
+      ],
+      "scope": "invalid.illegal.bad-comments-or-CDATA.xml"
+     }
+    ],
+    "scope": "punctuation.definition.comment.xml"
+   }
+  ],
+  "r_doublequotedString": [
+   {
+    "match": "\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.xml"
+     },
+     {
+      "match": "\"",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.xml"
+     },
+     {
+      "include": "r_entity"
+     },
+     {
+      "include": "r_bare_ampersand"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.xml"
+   }
+  ],
+  "r_entity": [
+   {
+    "match": "(&)([:A-Z_a-z][-.0-:A-Z_a-z]*|#[0-9]+|#x\\h+)(;)",
+    "scope": "constant.character.entity.xml",
+    "captures": {
+     1: "punctuation.definition.constant.xml",
+     3: "punctuation.definition.constant.xml"
+    }
+   }
+  ],
+  "r_internalSubset": [
+   {
+    "match": "(\\[)",
+    "push": [
+     {
+      "meta_scope": "meta.internalsubset.xml"
+     },
+     {
+      "match": "(])",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.constant.xml"
+      }
+     },
+     {
+      "include": "r_EntityDecl"
+     },
+     {
+      "include": "r_parameterEntity"
+     },
+     {
+      "include": "r_comments"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.constant.xml"
+    }
+   }
+  ],
+  "r_parameterEntity": [
+   {
+    "match": "(%)([:A-Z_a-z][-.0-:A-Z_a-z]*)(;)",
+    "scope": "constant.character.parameter-entity.xml",
+    "captures": {
+     1: "punctuation.definition.constant.xml",
+     3: "punctuation.definition.constant.xml"
+    }
+   }
+  ],
+  "r_singlequotedString": [
+   {
+    "match": "'",
+    "push": [
+     {
+      "meta_scope": "string.quoted.single.xml"
+     },
+     {
+      "match": "'",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.xml"
+     },
+     {
+      "include": "r_entity"
+     },
+     {
+      "include": "r_bare_ampersand"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.xml"
+   }
+  ],
+  "r_tagStuff": [
+   {
+    "match": "(?:^|\\s+)(?:([-.\\w]+)((:)))?([-.:\\w]+)\\s*=",
+    "captures": {
+     1: "entity.other.attribute-name.namespace.xml",
+     2: "entity.other.attribute-name.xml",
+     3: "punctuation.separator.namespace.xml",
+     4: "entity.other.attribute-name.localname.xml"
+    }
+   },
+   {
+    "include": "r_doublequotedString"
+   },
+   {
+    "include": "r_singlequotedString"
+   }
+  ]
+ }
+}

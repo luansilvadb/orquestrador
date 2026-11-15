@@ -12,9 +12,9 @@ use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::{
-    anchored, canvas, deferred, div, prelude::*, px, uniform_list, App, Bounds, ClickEvent, Context, Entity,
+    anchored, canvas, deferred, div, prelude::*, px, list, ListAlignment, ListState, App, Bounds, ClickEvent, Context, Entity,
     EventEmitter, FocusHandle, Focusable, Hsla, MouseButton, Pixels, ScrollHandle, SharedString, Subscription, Task,
-    UniformListScrollHandle, Window,
+    Window,
 };
 use orquestrador_ui::tema::{self, cor};
 use orquestrador_ui::widgets::{icone, TooltipTexto as _};
@@ -129,6 +129,8 @@ pub(crate) struct Hover {
     pub abrir: Option<Task<()>>,
     pub fechar: Option<Task<()>>,
     pub vizinhas: Option<Task<()>>,
+    /// Altura do cartão no último desenho: o posicionador centra o cartão na linha (`placement="right"`).
+    pub altura: Rc<Cell<f32>>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -138,8 +140,18 @@ struct Recolhido {
     grafo: bool,
 }
 
+gpui_kit::actions!(tela_git, [MenuContexto]);
+
+/// Shift+F10 e a tecla de menu abrem o menu de contexto da linha focada.
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        gpui_kit::KeyBinding::new("shift-f10", MenuContexto, Some("TelaGit")),
+        gpui_kit::KeyBinding::new("menu", MenuContexto, Some("TelaGit")),
+    ]);
+}
+
 /// Uma linha da lista virtual de arquivos.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Item {
     Cabecalho(Lado),
     Arquivo(Lado, usize),
@@ -165,7 +177,9 @@ pub struct TelaGit {
     recolhido: Recolhido,
     pub(crate) altura_grafo: Option<f32>,
     marcados: HashSet<(Lado, String)>,
-    lista: UniformListScrollHandle,
+    lista: ListState,
+    /// Itens da última lista desenhada: mudando, as alturas são medidas de novo sem perder a rolagem.
+    itens_lista: RefCell<Vec<Item>>,
     branch_aberto: bool,
     branches: Option<Branches>,
     erro_branch: String,
@@ -181,6 +195,9 @@ pub struct TelaGit {
     pub(crate) hover: Hover,
     pub(crate) hovers: HashMap<String, EstadoHover>,
     pub(crate) linhas_grafo: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
+    /// Foco de cada linha com menu (o `button` do React) e onde ela foi desenhada, para o menu pelo teclado.
+    focos_linha: RefCell<HashMap<String, FocusHandle>>,
+    pub(crate) limites_linha: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
     pub(crate) arrasto: Option<(f32, f32, f32)>,
     pub(crate) medidas: Rc<Cell<(f32, f32, f32)>>,
     // Histórico.
@@ -252,7 +269,8 @@ impl TelaGit {
             recolhido: Recolhido::default(),
             altura_grafo: None,
             marcados: HashSet::new(),
-            lista: UniformListScrollHandle::new(),
+            lista: ListState::new(0, ListAlignment::Top, px(200.)),
+            itens_lista: RefCell::default(),
             branch_aberto: false,
             branches: None,
             erro_branch: String::new(),
@@ -267,6 +285,8 @@ impl TelaGit {
             hover: Hover::default(),
             hovers: HashMap::new(),
             linhas_grafo: Rc::default(),
+            focos_linha: RefCell::default(),
+            limites_linha: Rc::default(),
             arrasto: None,
             medidas: Rc::default(),
             historico: Paginada::default(),
@@ -1174,7 +1194,7 @@ impl TelaGit {
             .into_any_element()
     }
 
-    fn linha_arquivo(&self, f: &GitFile, lado: Lado, i: usize, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    fn linha_arquivo(&self, f: &GitFile, lado: Lado, i: usize, window: &Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let Some(k) = tipo(f, lado) else { return div().into_any_element() };
         let staged = lado.staged();
         let (nome, pasta) = dividir(&f.path);
@@ -1201,6 +1221,11 @@ impl TelaGit {
         let entidade = cx.entity();
         let menu_f = f.clone();
         let rotulo_menu = rotulo_stage.clone();
+        let chave_foco = format!("{}:{}", if staged { "p" } else { "a" }, f.path);
+        let foco_l = self.foco_linha(&chave_foco, cx);
+        let focado = foco_l.is_focused(window);
+        let (k1, k2, registro) = (chave_foco.clone(), chave_foco, self.limites_linha.clone());
+        let foco_clique = foco_l.clone();
         div()
             .id((if staged { "arquivo-p" } else { "arquivo-a" }, i))
             .group(grupo.clone())
@@ -1213,6 +1238,11 @@ impl TelaGit {
             .hover(|d| d.bg(cor::fill_muted()))
             .when(aberta, |d| d.bg(cor::fill_muted()).child(div().absolute().left_0().top_0().bottom_0().w(px(2.)).bg(cor::ink_white())))
             .when(marcado, |d| d.border_1().border_color(gpui_kit::rgba(0x6f6f6f66)))
+            .track_focus(&foco_l)
+            .on_action(cx.listener(move |this, _: &MenuContexto, window, cx| this.menu_pelo_teclado(&k1, window, cx)))
+            .child(canvas(move |b, _, _| {
+                registro.borrow_mut().insert(k2.clone(), b);
+            }, |_, _, _, _| {}).absolute().size_full())
             .context_menu(move |menu, _, _| {
                 let (e1, e2, e3) = (entidade.clone(), entidade.clone(), entidade.clone());
                 let (fa, fb, fc) = (menu_f.clone(), menu_f.clone(), menu_f.clone());
@@ -1245,7 +1275,8 @@ impl TelaGit {
                     .pr(px(4.))
                     .text_size(px(13.))
                     .tooltip_texto(format!("{completo}: {}. Ver alterações (duplo clique abre de vez; Ctrl+clique marca)", palavra(k)))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |_, e: &gpui_kit::MouseDownEvent, _, cx| {
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |_, e: &gpui_kit::MouseDownEvent, window, cx| {
+                        window.focus(&foco_clique, cx);
                         if !e.modifiers.control && !e.modifiers.shift && !e.modifiers.platform && tipo(&f5, lado) != Some(Kind::Conflicted) {
                             cx.emit(EventoGit::PreCarregar { alvo: Alvo::Diff { lado, caminho: f5.path.clone() }, hover: false });
                         }
@@ -1272,6 +1303,8 @@ impl TelaGit {
                     .items_center()
                     .invisible()
                     .group_hover(grupo, |s| s.visible())
+                    // `group-focus-within`: com a linha focada, as ações aparecem como no hover.
+                    .when(focado, |d| d.visible())
                     .when(k != Kind::Deleted, |d| {
                         d.child(acao("abrir-editor", "icons/square-arrow-out-up-right.svg", true).tooltip_texto("Abrir no editor").on_click(
                             cx.listener(move |_, _, _, cx| cx.emit(EventoGit::AbrirArquivo { caminho: f3.path.clone(), permanente: true })),
@@ -1301,9 +1334,40 @@ impl TelaGit {
             .into_any_element()
     }
 
+    /// Foco da linha `chave` (entra na ordem do Tab, como o `button` da linha no React).
+    pub(crate) fn foco_linha(&self, chave: &str, cx: &mut App) -> FocusHandle {
+        self.focos_linha.borrow_mut().entry(chave.to_string()).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
+    }
+
+    /// O menu de contexto da linha focada pelo teclado: o Chromium abre o `contextmenu` no centro do elemento focado, e o
+    /// menu do Kit abre num clique direito, então o clique é simulado ali.
+    pub(crate) fn menu_pelo_teclado(&self, chave: &str, window: &mut Window, cx: &mut App) {
+        let Some(b) = self.limites_linha.borrow().get(chave).copied() else { return };
+        let centro = b.center();
+        window.defer(cx, move |window, cx| {
+            window.dispatch_event(
+                gpui_kit::PlatformInput::MouseDown(gpui_kit::MouseDownEvent {
+                    button: MouseButton::Right,
+                    position: centro,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+        });
+    }
+
     fn lista_arquivos(&self, s: &Status, cx: &mut Context<Self>) -> impl IntoElement {
         let itens = Rc::new(self.itens(s));
         let n = itens.len();
+        {
+            let mut antes = self.itens_lista.borrow_mut();
+            if *antes != *itens {
+                self.lista.splice(0..antes.len(), n);
+                *antes = (*itens).clone();
+            }
+        }
         let medidas = self.medidas.clone();
         div()
             .relative()
@@ -1313,33 +1377,30 @@ impl TelaGit {
             .flex_basis(px(0.))
             .min_h(px(0.))
             .child(
-                uniform_list(
-                    "arquivos",
-                    n,
-                    cx.processor(move |this, faixa: std::ops::Range<usize>, _window, cx| {
-                        let Some(s) = this.status().cloned() else { return Vec::new() };
+                // Lista virtual com alturas próprias: as linhas têm 22 px e o "Nenhuma alteração." a altura do parágrafo
+                // do React (12 px com `line-height` 1,5715 e 4 px em cima e embaixo).
+                list(
+                    self.lista.clone(),
+                    cx.processor(move |this, i: usize, window, cx| {
+                        let Some(s) = this.status().cloned() else { return div().into_any_element() };
                         let preparadas = s.files.iter().filter(|f| f.staged.is_some()).count();
                         let alteracoes = s.files.iter().filter(|f| f.unstaged.is_some()).count();
-                        faixa
-                            .filter_map(|i| itens.get(i).copied())
-                            .map(|item| match item {
-                                Item::Cabecalho(l) => this.cabecalho_secao(l, if l.staged() { preparadas } else { alteracoes }, cx),
-                                Item::Arquivo(l, i) => this.linha_arquivo(&s.files[i], l, i, cx),
-                                Item::Vazio => div()
-                                    .w_full()
-                                    .h(px(LINHA))
-                                    .px(px(20.))
-                                    .flex()
-                                    .items_center()
-                                    .text_size(tema::TEXTO_LABEL)
-                                    .text_color(descricao())
-                                    .child("Nenhuma alteração.")
-                                    .into_any_element(),
-                            })
-                            .collect()
+                        match itens.get(i).copied() {
+                            Some(Item::Cabecalho(l)) => this.cabecalho_secao(l, if l.staged() { preparadas } else { alteracoes }, cx),
+                            Some(Item::Arquivo(l, i)) => this.linha_arquivo(&s.files[i], l, i, window, cx),
+                            Some(Item::Vazio) => div()
+                                .w_full()
+                                .px(px(20.))
+                                .py(px(4.))
+                                .text_size(tema::TEXTO_LABEL)
+                                .line_height(px(12. * 1.5715))
+                                .text_color(descricao())
+                                .child("Nenhuma alteração.")
+                                .into_any_element(),
+                            None => div().into_any_element(),
+                        }
                     }),
                 )
-                .track_scroll(&self.lista)
                 .size_full(),
             )
             .child(

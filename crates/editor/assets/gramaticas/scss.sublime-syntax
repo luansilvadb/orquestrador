@@ -1,0 +1,1772 @@
+%YAML 1.2
+---
+{
+ "name": "shiki-scss",
+ "scope": "source.css.scss",
+ "file_extensions": [],
+ "hidden": true,
+ "contexts": {
+  "main": [
+   {
+    "include": "r_variable_setting"
+   },
+   {
+    "include": "r_at_rule_forward"
+   },
+   {
+    "include": "r_at_rule_use"
+   },
+   {
+    "include": "r_at_rule_include"
+   },
+   {
+    "include": "r_at_rule_import"
+   },
+   {
+    "include": "r_general"
+   },
+   {
+    "include": "r_flow_control"
+   },
+   {
+    "include": "r_rules"
+   },
+   {
+    "include": "r_property_list"
+   },
+   {
+    "include": "r_at_rule_mixin"
+   },
+   {
+    "include": "r_at_rule_media"
+   },
+   {
+    "include": "r_at_rule_function"
+   },
+   {
+    "include": "r_at_rule_charset"
+   },
+   {
+    "include": "r_at_rule_option"
+   },
+   {
+    "include": "r_at_rule_namespace"
+   },
+   {
+    "include": "r_at_rule_fontface"
+   },
+   {
+    "include": "r_at_rule_page"
+   },
+   {
+    "include": "r_at_rule_keyframes"
+   },
+   {
+    "include": "r_at_rule_at_root"
+   },
+   {
+    "include": "r_at_rule_supports"
+   },
+   {
+    "match": ";",
+    "scope": "punctuation.terminator.rule.css"
+   }
+  ],
+  "r_at_rule_at_root": [
+   {
+    "match": "\\s*((@)(at-root))(\\s+|$)",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.at-root.scss"
+     },
+     {
+      "match": "\\s*(?=\\{)",
+      "pop": true
+     },
+     {
+      "include": "r_function_attributes"
+     },
+     {
+      "include": "r_functions"
+     },
+     {
+      "include": "r_selectors"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.at-rule.at-root.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_charset": [
+   {
+    "match": "\\s*((@)charset)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.charset.scss"
+     },
+     {
+      "match": "\\s*((?=;|$))",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.at-rule.charset.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_string_single"
+     },
+     {
+      "include": "r_string_double"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.at-rule.charset.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_content": [
+   {
+    "match": "\\s*((@)content)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.content.scss"
+     },
+     {
+      "match": "\\s*((?=;))",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.content.scss"
+      }
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_selectors"
+     },
+     {
+      "include": "r_property_values"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.content.scss"
+    }
+   }
+  ],
+  "r_at_rule_each": [
+   {
+    "match": "\\s*((@)each)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.each.scss"
+     },
+     {
+      "match": "\\s*((?=}))",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.each.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "match": "\\b(in|,)\\b",
+      "scope": "keyword.control.operator"
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_property_values"
+     },
+     {
+      "include": "main"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.each.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_else": [
+   {
+    "match": "\\s*((@)else(\\s*(if)?))\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.else.scss"
+     },
+     {
+      "match": "\\s*(?=\\{)",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.else.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "include": "r_conditional_operators"
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_property_values"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.else.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_extend": [
+   {
+    "match": "\\s*((@)extend)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.extend.scss"
+     },
+     {
+      "match": "\\s*(?=;)",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.at-rule.extend.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_selectors"
+     },
+     {
+      "include": "r_property_values"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.at-rule.extend.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_fontface": [
+   {
+    "match": "^\\s*((@)font-face)\\b",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.fontface.scss"
+     },
+     {
+      "match": "\\s*(?=\\{)",
+      "pop": true
+     },
+     {
+      "include": "r_function_attributes"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.at-rule.fontface.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_for": [
+   {
+    "match": "\\s*((@)for)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.for.scss"
+     },
+     {
+      "match": "\\s*(?=\\{)",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.for.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "match": "(==|!=|<=|>=|[<>]|from|to|through)",
+      "scope": "keyword.control.operator"
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_property_values"
+     },
+     {
+      "include": "main"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.for.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_forward": [
+   {
+    "match": "\\s*((@)forward)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.forward.scss"
+     },
+     {
+      "match": "\\s*(?=;)",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.at-rule.forward.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "match": "\\b(as|hide|show)\\b",
+      "scope": "keyword.control.operator"
+     },
+     {
+      "match": "\\b([-\\w]+)(\\*)",
+      "captures": {
+       1: "entity.other.attribute-name.module.scss",
+       2: "punctuation.definition.wildcard.scss"
+      }
+     },
+     {
+      "match": "\\b[-\\w]+\\b",
+      "scope": "entity.name.function.scss"
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_string_single"
+     },
+     {
+      "include": "r_string_double"
+     },
+     {
+      "include": "r_comment_line"
+     },
+     {
+      "include": "r_comment_block"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.at-rule.forward.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_function": [
+   {
+    "match": "\\s*((@)function)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.function.scss"
+     },
+     {
+      "match": "\\s*(?=\\{)",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.at-rule.function.scss",
+       2: "punctuation.definition.keyword.scss",
+       3: "entity.name.function.scss"
+      }
+     },
+     {
+      "include": "r_function_attributes"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.at-rule.function.scss",
+     2: "punctuation.definition.keyword.scss",
+     3: "entity.name.function.scss"
+    }
+   },
+   {
+    "match": "\\s*((@)function)\\b\\s*",
+    "scope": "meta.at-rule.function.scss",
+    "captures": {
+     1: "keyword.control.at-rule.function.scss",
+     2: "punctuation.definition.keyword.scss",
+     3: "entity.name.function.scss"
+    }
+   }
+  ],
+  "r_at_rule_if": [
+   {
+    "match": "\\s*((@)if)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.if.scss"
+     },
+     {
+      "match": "\\s*(?=\\{)",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.if.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "include": "r_conditional_operators"
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_property_values"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.if.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_import": [
+   {
+    "match": "\\s*((@)import)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.import.scss"
+     },
+     {
+      "match": "\\s*((?=;)|(?=}))",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.at-rule.import.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_string_single"
+     },
+     {
+      "include": "r_string_double"
+     },
+     {
+      "include": "r_functions"
+     },
+     {
+      "include": "r_comment_line"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.at-rule.import.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_include": [
+   {
+    "match": "(?<=@include)\\s+(?:([-\\w]+)\\s*(\\.))?([-\\w]+)\\s*(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.include.scss"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.parameters.end.bracket.round.scss"
+     },
+     {
+      "include": "r_function_attributes"
+     }
+    ],
+    "captures": {
+     1: "variable.scss",
+     2: "punctuation.access.module.scss",
+     3: "entity.name.function.scss",
+     4: "punctuation.definition.parameters.begin.bracket.round.scss"
+    }
+   },
+   {
+    "match": "(?<=@include)\\s+(?:([-\\w]+)\\s*(\\.))?([-\\w]+)",
+    "scope": "meta.at-rule.include.scss",
+    "captures": {
+     1: "variable.scss",
+     2: "punctuation.access.module.scss",
+     3: "entity.name.function.scss"
+    }
+   },
+   {
+    "match": "((@)include)\\b",
+    "scope": "meta.at-rule.include.scss",
+    "captures": {
+     1: "keyword.control.at-rule.include.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_keyframes": [
+   {
+    "match": "(?<=^|\\s)(@)(?:-(?:webkit|moz)-)?keyframes\\b",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.keyframes.scss"
+     },
+     {
+      "match": "(?<=})",
+      "pop": true
+     },
+     {
+      "match": "(?<=@keyframes)\\s+((?:[A-Z_a-z][-\\w]|-[A-Z_a-z])[-\\w]*)",
+      "captures": {
+       1: "entity.name.function.scss"
+      }
+     },
+     {
+      "match": "(?<=@keyframes)\\s+(\")",
+      "push": [
+       {
+        "meta_scope": "string.quoted.double.scss"
+       },
+       {
+        "meta_content_scope": "entity.name.function.scss"
+       },
+       {
+        "match": "\"",
+        "pop": true,
+        "scope": "punctuation.definition.string.end.scss"
+       },
+       {
+        "match": "\\\\(\\h{1,6}|.)",
+        "scope": "constant.character.escape.scss"
+       },
+       {
+        "include": "r_interpolation"
+       }
+      ],
+      "captures": {
+       1: "punctuation.definition.string.begin.scss"
+      }
+     },
+     {
+      "match": "(?<=@keyframes)\\s+(')",
+      "push": [
+       {
+        "meta_scope": "string.quoted.single.scss"
+       },
+       {
+        "meta_content_scope": "entity.name.function.scss"
+       },
+       {
+        "match": "'",
+        "pop": true,
+        "scope": "punctuation.definition.string.end.scss"
+       },
+       {
+        "match": "\\\\(\\h{1,6}|.)",
+        "scope": "constant.character.escape.scss"
+       },
+       {
+        "include": "r_interpolation"
+       }
+      ],
+      "captures": {
+       1: "punctuation.definition.string.begin.scss"
+      }
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "match": "}",
+        "pop": true,
+        "scope": "punctuation.section.keyframes.end.scss"
+       },
+       {
+        "match": "\\b(?:(?:100|[1-9]\\d|\\d)%|from|to)(?=\\s*\\{)",
+        "scope": "entity.other.attribute-name.scss"
+       },
+       {
+        "include": "r_flow_control"
+       },
+       {
+        "include": "r_interpolation"
+       },
+       {
+        "include": "r_property_list"
+       },
+       {
+        "include": "r_rules"
+       }
+      ],
+      "scope": "punctuation.section.keyframes.begin.scss"
+     }
+    ],
+    "scope": "keyword.control.at-rule.keyframes.scss",
+    "captures": {
+     1: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_media": [
+   {
+    "match": "^\\s*((@)media)\\b",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.media.scss"
+     },
+     {
+      "match": "\\s*(?=\\{)",
+      "pop": true
+     },
+     {
+      "include": "r_comment_docblock"
+     },
+     {
+      "include": "r_comment_block"
+     },
+     {
+      "include": "r_comment_line"
+     },
+     {
+      "match": "\\b(only)\\b",
+      "scope": "keyword.control.operator.css.scss"
+     },
+     {
+      "match": "\\(",
+      "push": [
+       {
+        "meta_scope": "meta.property-list.media-query.scss"
+       },
+       {
+        "match": "\\)",
+        "pop": true,
+        "scope": "punctuation.definition.media-query.end.bracket.round.scss"
+       },
+       {
+        "match": "(?<![-a-z])(?=[-a-z])",
+        "push": [
+         {
+          "meta_scope": "meta.property-name.media-query.scss"
+         },
+         {
+          "match": "$|(?![-a-z])",
+          "pop": true
+         },
+         {
+          "include": "scope:source.css#r_media_features"
+         },
+         {
+          "include": "scope:source.css#r_property_names"
+         }
+        ]
+       },
+       {
+        "match": "(:)\\s*(?!(\\s*\\{))",
+        "push": [
+         {
+          "meta_content_scope": "meta.property-value.media-query.scss"
+         },
+         {
+          "match": "\\s*(;|(?=[)}]))",
+          "pop": true,
+          "captures": {
+           1: "punctuation.terminator.rule.scss"
+          }
+         },
+         {
+          "include": "r_general"
+         },
+         {
+          "include": "r_property_values"
+         }
+        ],
+        "captures": {
+         1: "punctuation.separator.key-value.scss"
+        }
+       }
+      ],
+      "scope": "punctuation.definition.media-query.begin.bracket.round.scss"
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_conditional_operators"
+     },
+     {
+      "include": "scope:source.css#r_media_types"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.at-rule.media.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_mixin": [
+   {
+    "match": "(?<=@mixin)\\s+([-\\w]+)\\s*(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.mixin.scss"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.parameters.end.bracket.round.scss"
+     },
+     {
+      "include": "r_function_attributes"
+     }
+    ],
+    "captures": {
+     1: "entity.name.function.scss",
+     2: "punctuation.definition.parameters.begin.bracket.round.scss"
+    }
+   },
+   {
+    "match": "(?<=@mixin)\\s+([-\\w]+)",
+    "scope": "meta.at-rule.mixin.scss",
+    "captures": {
+     1: "entity.name.function.scss"
+    }
+   },
+   {
+    "match": "((@)mixin)\\b",
+    "scope": "meta.at-rule.mixin.scss",
+    "captures": {
+     1: "keyword.control.at-rule.mixin.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_namespace": [
+   {
+    "match": "(?<=@namespace)\\s+(?=url)",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.namespace.scss"
+     },
+     {
+      "match": "(?=;|$)",
+      "pop": true
+     },
+     {
+      "include": "r_property_values"
+     },
+     {
+      "include": "r_string_single"
+     },
+     {
+      "include": "r_string_double"
+     }
+    ]
+   },
+   {
+    "match": "(?<=@namespace)\\s+([-\\w]*)",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.namespace.scss"
+     },
+     {
+      "match": "(?=;|$)",
+      "pop": true,
+      "captures": {
+       1: "entity.name.namespace-prefix.scss"
+      }
+     },
+     {
+      "include": "r_variables"
+     },
+     {
+      "include": "r_property_values"
+     },
+     {
+      "include": "r_string_single"
+     },
+     {
+      "include": "r_string_double"
+     }
+    ],
+    "captures": {
+     1: "entity.name.namespace-prefix.scss"
+    }
+   },
+   {
+    "match": "((@)namespace)\\b",
+    "scope": "meta.at-rule.namespace.scss",
+    "captures": {
+     1: "keyword.control.at-rule.namespace.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_option": [
+   {
+    "match": "^\\s*((@)option)\\b\\s*",
+    "scope": "meta.at-rule.option.scss",
+    "captures": {
+     1: "keyword.control.at-rule.charset.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_page": [
+   {
+    "match": "^\\s*((@)page)(?=[:\\s])\\s*([-:\\w]*)",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.page.scss"
+     },
+     {
+      "match": "\\s*(?=\\{)",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.at-rule.page.scss",
+       2: "punctuation.definition.keyword.scss",
+       3: "entity.name.function.scss"
+      }
+     }
+    ],
+    "captures": {
+     1: "keyword.control.at-rule.page.scss",
+     2: "punctuation.definition.keyword.scss",
+     3: "entity.name.function.scss"
+    }
+   }
+  ],
+  "r_at_rule_return": [
+   {
+    "match": "\\s*((@)(return))\\b",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.return.scss"
+     },
+     {
+      "match": "\\s*((?=;))",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.return.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_property_values"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.return.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_supports": [
+   {
+    "match": "(?<=^|\\s)(@)supports\\b",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.supports.scss"
+     },
+     {
+      "match": "(?=\\{)|$",
+      "pop": true,
+      "scope": "keyword.control.at-rule.supports.scss",
+      "captures": {
+       1: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "include": "r_logical_operators"
+     },
+     {
+      "include": "r_properties"
+     },
+     {
+      "match": "\\(",
+      "scope": "punctuation.definition.condition.begin.bracket.round.scss"
+     },
+     {
+      "match": "\\)",
+      "scope": "punctuation.definition.condition.end.bracket.round.scss"
+     }
+    ],
+    "scope": "keyword.control.at-rule.supports.scss",
+    "captures": {
+     1: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_use": [
+   {
+    "match": "\\s*((@)use)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.use.scss"
+     },
+     {
+      "match": "\\s*(?=;)",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.at-rule.use.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "match": "\\b(as|with)\\b",
+      "scope": "keyword.control.operator"
+     },
+     {
+      "match": "\\b[-\\w]+\\b",
+      "scope": "variable.scss"
+     },
+     {
+      "match": "\\*",
+      "scope": "variable.language.expanded-namespace.scss"
+     },
+     {
+      "include": "r_string_single"
+     },
+     {
+      "include": "r_string_double"
+     },
+     {
+      "include": "r_comment_line"
+     },
+     {
+      "include": "r_comment_block"
+     },
+     {
+      "match": "\\(",
+      "push": [
+       {
+        "match": "\\)",
+        "pop": true,
+        "scope": "punctuation.definition.parameters.end.bracket.round.scss"
+       },
+       {
+        "include": "r_function_attributes"
+       }
+      ],
+      "scope": "punctuation.definition.parameters.begin.bracket.round.scss"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.at-rule.use.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_warn": [
+   {
+    "match": "\\s*((@)(warn|debug|error))\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.warn.scss"
+     },
+     {
+      "match": "\\s*(?=;)",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.warn.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_string_double"
+     },
+     {
+      "include": "r_string_single"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.warn.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_at_rule_while": [
+   {
+    "match": "\\s*((@)while)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.at-rule.while.scss"
+     },
+     {
+      "match": "\\s*(?=})",
+      "pop": true,
+      "captures": {
+       1: "keyword.control.while.scss",
+       2: "punctuation.definition.keyword.scss"
+      }
+     },
+     {
+      "include": "r_conditional_operators"
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_property_values"
+     },
+     {
+      "include": "main"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.while.scss",
+     2: "punctuation.definition.keyword.scss"
+    }
+   }
+  ],
+  "r_comment_block": [
+   {
+    "match": "/\\*",
+    "push": [
+     {
+      "meta_scope": "comment.block.scss"
+     },
+     {
+      "match": "\\*/",
+      "pop": true,
+      "scope": "punctuation.definition.comment.scss"
+     }
+    ],
+    "scope": "punctuation.definition.comment.scss"
+   }
+  ],
+  "r_comment_docblock": [
+   {
+    "match": "///",
+    "push": [
+     {
+      "meta_scope": "comment.block.documentation.scss"
+     },
+     {
+      "match": "(?=$)",
+      "pop": true
+     },
+     {
+      "include": "scope:source.sassdoc"
+     }
+    ],
+    "scope": "punctuation.definition.comment.scss"
+   }
+  ],
+  "r_comment_line": [
+   {
+    "match": "//",
+    "push": [
+     {
+      "meta_scope": "comment.line.scss"
+     },
+     {
+      "match": "\\n",
+      "pop": true
+     }
+    ],
+    "scope": "punctuation.definition.comment.scss"
+   }
+  ],
+  "r_comparison_operators": [
+   {
+    "match": "==|!=|<=|>=|[<>]",
+    "scope": "keyword.operator.comparison.scss"
+   }
+  ],
+  "r_conditional_operators": [
+   {
+    "include": "r_comparison_operators"
+   },
+   {
+    "include": "r_logical_operators"
+   }
+  ],
+  "r_constant_default": [
+   {
+    "match": "!default",
+    "scope": "keyword.other.default.scss"
+   }
+  ],
+  "r_constant_functions": [
+   {
+    "match": "(?:([-\\w]+)(\\.))?([-\\w]+)(\\()",
+    "push": [
+     {
+      "match": "(\\))",
+      "pop": true,
+      "captures": {
+       1: "punctuation.section.function.scss"
+      }
+     },
+     {
+      "include": "r_parameters"
+     }
+    ],
+    "captures": {
+     1: "variable.scss",
+     2: "punctuation.access.module.scss",
+     3: "support.function.misc.scss",
+     4: "punctuation.section.function.scss"
+    }
+   }
+  ],
+  "r_constant_important": [
+   {
+    "match": "!important",
+    "scope": "keyword.other.important.scss"
+   }
+  ],
+  "r_constant_mathematical_symbols": [
+   {
+    "match": "\\b([-*+/])\\b",
+    "scope": "support.constant.mathematical-symbols.scss"
+   }
+  ],
+  "r_constant_optional": [
+   {
+    "match": "!optional",
+    "scope": "keyword.other.optional.scss"
+   }
+  ],
+  "r_constant_sass_functions": [
+   {
+    "match": "(headings|stylesheet-url|rgba?|hsla?|ie-hex-str|red|green|blue|alpha|opacity|hue|saturation|lightness|prefixed|prefix|-moz|-svg|-css2|-pie|-webkit|-ms|font-(?:files|url)|grid-image|image-(?:width|height|url|color)|sprites?|sprite-(?:map|map-name|file|url|position)|inline-(?:font-files|image)|opposite-position|grad-point|grad-end-position|color-stops|color-stops-in-percentages|grad-color-stops|(?:radial|linear)-(?:|svg-)gradient|opacify|fade-?in|transparentize|fade-?out|lighten|darken|saturate|desaturate|grayscale|adjust-(?:hue|lightness|saturation|color)|scale-(?:lightness|saturation|color)|change-color|spin|complement|invert|mix|-compass-(?:list|space-list|slice|nth|list-size)|blank|compact|nth|first-value-of|join|length|append|nest|append-selector|headers|enumerate|range|percentage|unitless|unit|if|type-of|comparable|elements-of-type|quote|unquote|escape|e|sin|cos|tan|abs|round|ceil|floor|pi|translate[XY])(\\()",
+    "push": [
+     {
+      "match": "(\\))",
+      "pop": true,
+      "captures": {
+       1: "punctuation.section.function.scss"
+      }
+     },
+     {
+      "include": "r_parameters"
+     }
+    ],
+    "captures": {
+     1: "support.function.misc.scss",
+     2: "punctuation.section.function.scss"
+    }
+   }
+  ],
+  "r_flow_control": [
+   {
+    "include": "r_at_rule_if"
+   },
+   {
+    "include": "r_at_rule_else"
+   },
+   {
+    "include": "r_at_rule_warn"
+   },
+   {
+    "include": "r_at_rule_for"
+   },
+   {
+    "include": "r_at_rule_while"
+   },
+   {
+    "include": "r_at_rule_each"
+   },
+   {
+    "include": "r_at_rule_return"
+   }
+  ],
+  "r_function_attributes": [
+   {
+    "match": ":",
+    "scope": "punctuation.separator.key-value.scss"
+   },
+   {
+    "include": "r_general"
+   },
+   {
+    "include": "r_property_values"
+   },
+   {
+    "match": "[;=?@{}]",
+    "scope": "invalid.illegal.scss"
+   }
+  ],
+  "r_functions": [
+   {
+    "match": "([-\\w]+)(\\()\\s*",
+    "push": [
+     {
+      "match": "(\\))",
+      "pop": true,
+      "captures": {
+       1: "punctuation.section.function.scss"
+      }
+     },
+     {
+      "include": "r_parameters"
+     }
+    ],
+    "captures": {
+     1: "support.function.misc.scss",
+     2: "punctuation.section.function.scss"
+    }
+   },
+   {
+    "match": "([-\\w]+)",
+    "scope": "support.function.misc.scss"
+   }
+  ],
+  "r_general": [
+   {
+    "include": "r_variable"
+   },
+   {
+    "include": "r_comment_docblock"
+   },
+   {
+    "include": "r_comment_block"
+   },
+   {
+    "include": "r_comment_line"
+   }
+  ],
+  "r_interpolation": [
+   {
+    "match": "#\\{",
+    "push": [
+     {
+      "meta_scope": "variable.interpolation.scss"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.definition.interpolation.end.bracket.curly.scss"
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_property_values"
+     }
+    ],
+    "scope": "punctuation.definition.interpolation.begin.bracket.curly.scss"
+   }
+  ],
+  "r_logical_operators": [
+   {
+    "match": "\\b(not|or|and)\\b",
+    "scope": "keyword.operator.logical.scss"
+   }
+  ],
+  "r_map": [
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "meta_scope": "meta.definition.variable.map.scss"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.map.end.bracket.round.scss"
+     },
+     {
+      "include": "r_comment_docblock"
+     },
+     {
+      "include": "r_comment_block"
+     },
+     {
+      "include": "r_comment_line"
+     },
+     {
+      "match": "\\b([-\\w]+)\\s*(:)",
+      "captures": {
+       1: "support.type.map.key.scss",
+       2: "punctuation.separator.key-value.scss"
+      }
+     },
+     {
+      "match": ",",
+      "scope": "punctuation.separator.delimiter.scss"
+     },
+     {
+      "include": "r_map"
+     },
+     {
+      "include": "r_variable"
+     },
+     {
+      "include": "r_property_values"
+     }
+    ],
+    "scope": "punctuation.definition.map.begin.bracket.round.scss"
+   }
+  ],
+  "r_operators": [
+   {
+    "match": "[-*+/](?!\\s*[-*+/])",
+    "scope": "keyword.operator.css"
+   }
+  ],
+  "r_parameters": [
+   {
+    "include": "r_variable"
+   },
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.end.bracket.round.scss"
+     },
+     {
+      "include": "r_function_attributes"
+     }
+    ],
+    "scope": "punctuation.definition.begin.bracket.round.scss"
+   },
+   {
+    "include": "r_property_values"
+   },
+   {
+    "include": "r_comment_block"
+   },
+   {
+    "match": "[^\\t \"'),]+",
+    "scope": "variable.parameter.url.scss"
+   },
+   {
+    "match": ",",
+    "scope": "punctuation.separator.delimiter.scss"
+   }
+  ],
+  "r_parent_selector_suffix": [
+   {
+    "match": "(?<=&)((?:[-0-9A-Z_a-z[^\\x00-\\x7F]]|\\\\(?:\\h{1,6}|.)|#\\{|[$}])+)(?=$|[#)+,.:>\\[{|~\\s]|/\\*)",
+    "scope": "entity.other.attribute-name.parent-selector-suffix.css",
+    "captures": {
+     1: "punctuation.definition.entity.css"
+    }
+   }
+  ],
+  "r_properties": [
+   {
+    "match": "(?<![-a-z])(?=[-a-z])",
+    "push": [
+     {
+      "meta_scope": "meta.property-name.scss"
+     },
+     {
+      "match": "$|(?![-a-z])",
+      "pop": true
+     },
+     {
+      "include": "scope:source.css#r_property_names"
+     },
+     {
+      "include": "r_at_rule_include"
+     }
+    ]
+   },
+   {
+    "match": "(:)\\s*(?!(\\s*\\{))",
+    "push": [
+     {
+      "meta_content_scope": "meta.property-value.scss"
+     },
+     {
+      "match": "\\s*(;|(?=[)}]))",
+      "pop": true,
+      "captures": {
+       1: "punctuation.terminator.rule.scss"
+      }
+     },
+     {
+      "include": "r_general"
+     },
+     {
+      "include": "r_property_values"
+     }
+    ],
+    "captures": {
+     1: "punctuation.separator.key-value.scss"
+    }
+   }
+  ],
+  "r_property_list": [
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "meta_scope": "meta.property-list.scss"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.property-list.end.bracket.curly.scss"
+     },
+     {
+      "include": "r_flow_control"
+     },
+     {
+      "include": "r_rules"
+     },
+     {
+      "include": "r_properties"
+     },
+     {
+      "include": "main"
+     }
+    ],
+    "scope": "punctuation.section.property-list.begin.bracket.curly.scss"
+   }
+  ],
+  "r_property_values": [
+   {
+    "include": "r_string_single"
+   },
+   {
+    "include": "r_string_double"
+   },
+   {
+    "include": "r_constant_functions"
+   },
+   {
+    "include": "r_constant_sass_functions"
+   },
+   {
+    "include": "r_constant_important"
+   },
+   {
+    "include": "r_constant_default"
+   },
+   {
+    "include": "r_constant_optional"
+   },
+   {
+    "include": "scope:source.css#r_numeric_values"
+   },
+   {
+    "include": "scope:source.css#r_property_keywords"
+   },
+   {
+    "include": "scope:source.css#r_color_keywords"
+   },
+   {
+    "include": "scope:source.css#r_property_names"
+   },
+   {
+    "include": "r_constant_mathematical_symbols"
+   },
+   {
+    "include": "r_operators"
+   },
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.end.bracket.round.scss"
+     },
+     {
+      "include": "r_general"
+     },
+     {
+      "include": "r_property_values"
+     }
+    ],
+    "scope": "punctuation.definition.begin.bracket.round.scss"
+   }
+  ],
+  "r_rules": [
+   {
+    "include": "r_general"
+   },
+   {
+    "include": "r_at_rule_extend"
+   },
+   {
+    "include": "r_at_rule_content"
+   },
+   {
+    "include": "r_at_rule_include"
+   },
+   {
+    "include": "r_at_rule_media"
+   },
+   {
+    "include": "r_selectors"
+   }
+  ],
+  "r_selector_attribute": [
+   {
+    "match": "(?i)(\\[)\\s*((?:[-0-9A-Z_a-z[^\\x00-\\x7F]]|\\\\(?:\\h{1,6}|.)|#\\{|\\.?\\$|})+?)(?:\\s*([$*^|~]?=)\\s*(?:((?:[-0-9A-Z_a-z[^\\x00-\\x7F]]|\\\\(?:\\h{1,6}|.)|#\\{|\\.?\\$|})+)|((\")(.*?)(\"))|((')(.*?)('))))?\\s*(])",
+    "scope": "meta.attribute-selector.scss",
+    "captures": {
+     1: "punctuation.definition.attribute-selector.begin.bracket.square.scss",
+     2: "entity.other.attribute-name.attribute.scss",
+     3: "keyword.operator.scss",
+     4: "string.unquoted.attribute-value.scss",
+     5: "string.quoted.double.attribute-value.scss",
+     6: "punctuation.definition.string.begin.scss",
+     8: "punctuation.definition.string.end.scss",
+     9: "string.quoted.single.attribute-value.scss",
+     10: "punctuation.definition.string.begin.scss",
+     12: "punctuation.definition.string.end.scss",
+     13: "punctuation.definition.attribute-selector.end.bracket.square.scss"
+    }
+   }
+  ],
+  "r_selector_class": [
+   {
+    "match": "(\\.)((?:[-0-9A-Z_a-z[^\\x00-\\x7F]]|\\\\(?:\\h{1,6}|.)|#\\{|\\.?\\$|})+)(?=$|[#)+,:>\\[{|~\\s]|\\.[^$]|/\\*|;)",
+    "scope": "entity.other.attribute-name.class.css",
+    "captures": {
+     1: "punctuation.definition.entity.css"
+    }
+   }
+  ],
+  "r_selector_custom": [
+   {
+    "match": "\\b([0-9A-Za-z]+(-[0-9A-Za-z]+)+)(?=\\.|\\s++[^:]|\\s*[,\\[{]|:(link|visited|hover|active|focus|target|lang|disabled|enabled|checked|indeterminate|root|nth-((?:|last-)(?:child|of-type))|first-child|last-child|first-of-type|last-of-type|only-child|only-of-type|empty|not|valid|invalid)(\\([0-9A-Za-z]*\\))?)",
+    "scope": "entity.name.tag.custom.scss"
+   }
+  ],
+  "r_selector_id": [
+   {
+    "match": "(#)((?:[-0-9A-Z_a-z[^\\x00-\\x7F]]|\\\\(?:\\h{1,6}|.)|#\\{|\\.?\\$|})+)(?=$|[#)+,:>\\[{|~\\s]|\\.[^$]|/\\*)",
+    "scope": "entity.other.attribute-name.id.css",
+    "captures": {
+     1: "punctuation.definition.entity.css"
+    }
+   }
+  ],
+  "r_selector_placeholder": [
+   {
+    "match": "(%)((?:[-0-9A-Z_a-z[^\\x00-\\x7F]]|\\\\(?:\\h{1,6}|.)|#\\{|\\.\\$|[$}])+)(?=;|$|[#)+,:>\\[{|~\\s]|\\.[^$]|/\\*)",
+    "scope": "entity.other.attribute-name.placeholder.css",
+    "captures": {
+     1: "punctuation.definition.entity.css"
+    }
+   }
+  ],
+  "r_selector_pseudo_class": [
+   {
+    "match": "((:)\\bnth-(?:|last-)(?:child|of-type))(\\()",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.pseudo-class.end.bracket.round.css"
+     },
+     {
+      "include": "r_interpolation"
+     },
+     {
+      "match": "\\d+",
+      "scope": "constant.numeric.css"
+     },
+     {
+      "match": "(?:(?<=\\d)n|\\b(n|even|odd))\\b",
+      "scope": "constant.other.scss"
+     },
+     {
+      "match": "\\w+",
+      "scope": "invalid.illegal.scss"
+     }
+    ],
+    "captures": {
+     1: "entity.other.attribute-name.pseudo-class.css",
+     2: "punctuation.definition.entity.css",
+     3: "punctuation.definition.pseudo-class.begin.bracket.round.css"
+    }
+   },
+   {
+    "include": "scope:source.css#r_pseudo_classes"
+   },
+   {
+    "include": "scope:source.css#r_pseudo_elements"
+   },
+   {
+    "include": "scope:source.css#r_functional_pseudo_classes"
+   }
+  ],
+  "r_selectors": [
+   {
+    "include": "scope:source.css#r_tag_names"
+   },
+   {
+    "include": "r_selector_custom"
+   },
+   {
+    "include": "r_selector_class"
+   },
+   {
+    "include": "r_selector_id"
+   },
+   {
+    "include": "r_selector_pseudo_class"
+   },
+   {
+    "include": "r_tag_wildcard"
+   },
+   {
+    "include": "r_tag_parent_reference"
+   },
+   {
+    "include": "scope:source.css#r_pseudo_elements"
+   },
+   {
+    "include": "r_selector_attribute"
+   },
+   {
+    "include": "r_selector_placeholder"
+   },
+   {
+    "include": "r_parent_selector_suffix"
+   }
+  ],
+  "r_string_double": [
+   {
+    "match": "\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.scss"
+     },
+     {
+      "match": "\"",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.scss"
+     },
+     {
+      "match": "\\\\(\\h{1,6}|.)",
+      "scope": "constant.character.escape.scss"
+     },
+     {
+      "include": "r_interpolation"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.scss"
+   }
+  ],
+  "r_string_single": [
+   {
+    "match": "'",
+    "push": [
+     {
+      "meta_scope": "string.quoted.single.scss"
+     },
+     {
+      "match": "'",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.scss"
+     },
+     {
+      "match": "\\\\(\\h{1,6}|.)",
+      "scope": "constant.character.escape.scss"
+     },
+     {
+      "include": "r_interpolation"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.scss"
+   }
+  ],
+  "r_tag_parent_reference": [
+   {
+    "match": "&",
+    "scope": "entity.name.tag.reference.scss"
+   }
+  ],
+  "r_tag_wildcard": [
+   {
+    "match": "\\*",
+    "scope": "entity.name.tag.wildcard.scss"
+   }
+  ],
+  "r_variable": [
+   {
+    "include": "r_variables"
+   },
+   {
+    "include": "r_interpolation"
+   }
+  ],
+  "r_variable_setting": [
+   {
+    "match": "(?=\\$[-\\w]+\\s*:)",
+    "push": [
+     {
+      "meta_content_scope": "meta.definition.variable.scss"
+     },
+     {
+      "match": ";",
+      "pop": true,
+      "scope": "punctuation.terminator.rule.scss"
+     },
+     {
+      "match": "\\$[-\\w]+(?=\\s*:)",
+      "scope": "variable.scss"
+     },
+     {
+      "match": ":",
+      "push": [
+       {
+        "match": "(?=;)",
+        "pop": true
+       },
+       {
+        "include": "r_comment_docblock"
+       },
+       {
+        "include": "r_comment_block"
+       },
+       {
+        "include": "r_comment_line"
+       },
+       {
+        "include": "r_map"
+       },
+       {
+        "include": "r_property_values"
+       },
+       {
+        "include": "r_variable"
+       },
+       {
+        "match": ",",
+        "scope": "punctuation.separator.delimiter.scss"
+       }
+      ],
+      "scope": "punctuation.separator.key-value.scss"
+     }
+    ]
+   }
+  ],
+  "r_variables": [
+   {
+    "match": "\\b([-\\w]+)(\\.)(\\$[-\\w]+)\\b",
+    "captures": {
+     1: "variable.scss",
+     2: "punctuation.access.module.scss",
+     3: "variable.scss"
+    }
+   },
+   {
+    "match": "(\\$|--)[-0-9A-Z_a-z]+\\b",
+    "scope": "variable.scss"
+   }
+  ]
+ }
+}

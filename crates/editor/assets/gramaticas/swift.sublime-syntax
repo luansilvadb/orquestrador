@@ -1,0 +1,3441 @@
+%YAML 1.2
+---
+{
+ "name": "shiki-swift",
+ "scope": "source.swift",
+ "file_extensions": [],
+ "hidden": true,
+ "contexts": {
+  "main": [
+   {
+    "include": "r_root"
+   }
+  ],
+  "r_async_throws": [
+   {
+    "match": "\\b(?:((?:throws\\s+|rethrows\\s+)async)|((?:|re)throws)|(async))\\b",
+    "captures": {
+     1: "invalid.illegal.await-must-precede-throws.swift",
+     2: "storage.modifier.exception.swift",
+     3: "storage.modifier.async.swift"
+    }
+   }
+  ],
+  "r_attributes": [
+   {
+    "match": "((@)available)(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.attribute.available.swift"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.arguments.end.swift"
+     },
+     {
+      "match": "\\b(swift|(?:iOS|macOS|OSX|watchOS|tvOS|visionOS|UIKitForMac)(?:ApplicationExtension)?)\\b(?:\\s+([0-9]+(?:\\.[0-9]+)*)\\b)?",
+      "captures": {
+       1: "keyword.other.platform.os.swift",
+       2: "constant.numeric.swift"
+      }
+     },
+     {
+      "match": "\\b((?:introduc|deprecat|obsolet)ed)\\s*(:)\\s*",
+      "push": [
+       {
+        "match": "(?!\\G)",
+        "pop": true
+       },
+       {
+        "match": "\\b[0-9]+(?:\\.[0-9]+)*\\b",
+        "scope": "constant.numeric.swift"
+       }
+      ],
+      "captures": {
+       1: "keyword.other.swift",
+       2: "punctuation.separator.key-value.swift"
+      }
+     },
+     {
+      "match": "\\b(message|renamed)\\s*(:)\\s*(?=\")",
+      "push": [
+       {
+        "match": "(?!\\G)",
+        "pop": true
+       },
+       {
+        "include": "r_literals"
+       }
+      ],
+      "captures": {
+       1: "keyword.other.swift",
+       2: "punctuation.separator.key-value.swift"
+      }
+     },
+     {
+      "match": "(?:(\\*)|\\b(deprecated|unavailable|noasync)\\b)\\s*(.*?)(?=[),])",
+      "captures": {
+       1: "keyword.other.platform.all.swift",
+       2: "keyword.other.swift",
+       3: "invalid.illegal.character-not-allowed-here.swift"
+      }
+     }
+    ],
+    "captures": {
+     1: "storage.modifier.attribute.swift",
+     2: "punctuation.definition.attribute.swift",
+     3: "punctuation.definition.arguments.begin.swift"
+    }
+   },
+   {
+    "match": "((@)objc)(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.attribute.objc.swift"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.arguments.end.swift"
+     },
+     {
+      "match": "\\w*(?::(?:\\w*:)*(\\w*))?",
+      "scope": "entity.name.function.swift",
+      "captures": {
+       1: "invalid.illegal.missing-colon-after-selector-piece.swift"
+      }
+     }
+    ],
+    "captures": {
+     1: "storage.modifier.attribute.swift",
+     2: "punctuation.definition.attribute.swift",
+     3: "punctuation.definition.arguments.begin.swift"
+    }
+   },
+   {
+    "match": "(@)(?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>)",
+    "push": [
+     {
+      "meta_scope": "meta.attribute.swift"
+     },
+     {
+      "match": "(?!\\G\\()",
+      "pop": true
+     },
+     {
+      "match": "\\(",
+      "push": [
+       {
+        "meta_scope": "meta.arguments.attribute.swift"
+       },
+       {
+        "match": "\\)",
+        "pop": true,
+        "scope": "punctuation.definition.arguments.end.swift"
+       },
+       {
+        "include": "r_expressions"
+       }
+      ],
+      "scope": "punctuation.definition.arguments.begin.swift"
+     }
+    ],
+    "scope": "storage.modifier.attribute.swift",
+    "captures": {
+     1: "punctuation.definition.attribute.swift",
+     2: "punctuation.definition.identifier.swift",
+     3: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_builtin_functions": [
+   {
+    "match": "(?<=\\.)(?:s(?:ort(?:ed)?|plit)|contains|index|partition|f(?:i(?:lter|rst)|orEach|latMap)|with(?:MutableCharacters|CString|U(?:nsafe(?:Mutable(?:BufferPointer|Pointer(?:s|To(?:Header|Elements)))|BufferPointer)|TF8Buffer))|m(?:in|a[px]))(?=\\s*[({])\\b",
+    "scope": "support.function.swift"
+   },
+   {
+    "match": "(?<=\\.)(?:s(?:ymmetricDifference|t(?:oreBytes|arts|ride)|ortInPlace|u(?:ccessor|ffix|btract(?:ing|InPlace|WithOverflow)?)|quareRoot|amePosition)|h(?:oldsUnique(?:|OrPinned)Reference|as(?:Suf|Pre)fix)|ne(?:gated?|xt)|c(?:o(?:untByEnumerating|py(?:Bytes)?)|lamp(?:ed)?|reate)|t(?:o(?:IntMax|Opaque|UIntMax)|ake(?:R|Unr)etainedValue|r(?:uncatingRemainder|a(?:nscodedLength|ilSurrogate)))|i(?:s(?:MutableAndUniquelyReferenced(?:OrPinned)?|S(?:trictSu(?:perset(?:Of)?|bset(?:Of)?)|u(?:perset(?:Of)?|bset(?:Of)?))|Continuation|T(?:otallyOrdered|railSurrogate)|Disjoint(?:With)?|Unique(?:Reference|lyReferenced(?:OrPinned)?)|Equal|Le(?:ss(?:ThanOrEqualTo)?|adSurrogate))|n(?:sert(?:ContentsOf)?|tersect(?:ion|InPlace)?|itialize(?:Memory|From)?|dex(?:Of|ForKey)))|o(?:verlaps|bjectAt)|d(?:i(?:stance(?:To)?|vide(?:d|WithOverflow)?)|e(?:s(?:cendant|troy)|code(?:CString)?|initialize|alloc(?:ate(?:Capacity)?)?)|rop(?:First|Last))|u(?:n(?:ion(?:InPlace)?|derestimateCount|wrappedOrError)|p(?:date(?:Value)?|percased))|join(?:ed|WithSeparator)|p(?:op(?:First|Last)|ass(?:R|Unr)etained|re(?:decessor|fix))|e(?:scaped?|n(?:code|umerated?)|lementsEqual|xclusiveOr(?:InPlace)?)|f(?:orm(?:Remainder|S(?:ymmetricDifference|quareRoot)|TruncatingRemainder|In(?:tersection|dex)|Union)|latten|rom(?:CString(?:RepairingIllFormedUTF8)?|Opaque))|w(?:i(?:thMemoryRebound|dth)|rite(?:To)?)|l(?:o(?:wercased|ad)|e(?:adSurrogate|xicographical(?:Compare|lyPrecedes)))|a(?:ss(?:ign(?:(?:Backward|)From)?|umingMemoryBound)|d(?:d(?:ing(?:Product)?|Product|WithOverflow)?|vanced(?:By)?)|utorelease|ppend(?:ContentsOf)?|lloc(?:ate)?|bs)|r(?:ound(?:ed)?|e(?:serveCapacity|tain|duce|place(?:(?:R|Subr)ange)?|versed?|quest(?:Native|UniqueMutableBacking)Buffer|lease|m(?:ove(?:Range|Subrange|Value(?:ForKey)?|First|Last|A(?:tIndex|ll))?|ainder(?:WithOverflow)?)))|ge(?:nerate|t(?:Objects|Element))|m(?:in(?:imum(?:Magnitude)?|Element)|ove(?:Initialize(?:Memory|BackwardFrom|From)?|Assign(?:From)?)?|ultipl(?:y(?:WithOverflow)?|ied)|easure|a(?:ke(?:Iterator|Description)|x(?:imum(?:Magnitude)?|Element)))|bindMemory)(?=\\s*\\()",
+    "scope": "support.function.swift"
+   },
+   {
+    "match": "(?<=\\.)(?:s(?:uperclassMirror|amePositionIn|tartsWith)|nextObject|c(?:haracterAtIndex|o(?:untByEnumeratingWithState|pyWithZone)|ustom(?:Mirror|PlaygroundQuickLook))|is(?:EmptyInput|ASCII)|object(?:Enumerator|ForKey|AtIndex)|join|put|keyEnumerator|withUnsafeMutablePointerToValue|length|getMirror|m(?:oveInitializeAssignFrom|ember))(?=\\s*\\()",
+    "scope": "support.function.swift"
+   }
+  ],
+  "r_builtin_global_functions": [
+   {
+    "match": "\\b(type)(\\()\\s*(of)(:)",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.arguments.end.swift"
+     },
+     {
+      "include": "r_expressions"
+     }
+    ],
+    "captures": {
+     1: "support.function.dynamic-type.swift",
+     2: "punctuation.definition.arguments.begin.swift",
+     3: "support.variable.parameter.swift",
+     4: "punctuation.separator.argument-label.begin.swift"
+    }
+   },
+   {
+    "match": "\\ba(?:nyGenerator|utoreleasepool)(?=\\s*[({])\\b",
+    "scope": "support.function.swift"
+   },
+   {
+    "match": "\\b(?:s(?:tride(?:of(?:Value)?)?|izeof(?:Value)?|equence|wap)|numericCast|transcode|is(?:UniquelyReferenced(?:NonObjC)?|KnownUniquelyReferenced)|zip|d(?:ump|ebugPrint)|unsafe(?:BitCast|Downcast|Unwrap|Address(?:Of)?)|pr(?:int|econdition(?:Failure)?)|fatalError|with(?:Unsafe(?:Mutable|)Pointer|ExtendedLifetime|VaList)|a(?:ssert(?:ionFailure)?|lignof(?:Value)?|bs)|re(?:peatElement|adLine)|getVaList|m(?:in|ax))(?=\\s*\\()",
+    "scope": "support.function.swift"
+   },
+   {
+    "match": "\\b(?:s(?:ort|uffix|pli(?:ce|t))|insert|overlaps|d(?:istance|rop(?:First|Last))|join|prefix|extend|withUnsafe(?:Mutable|)Pointers|lazy|advance|re(?:flect|move(?:Range|Last|A(?:tIndex|ll))))(?=\\s*\\()",
+    "scope": "support.function.swift"
+   }
+  ],
+  "r_builtin_properties": [
+   {
+    "match": "(?<=(?:^|\\W)(?:Process\\.|CommandLine\\.))(arguments|argc|unsafeArgv)",
+    "scope": "support.variable.swift"
+   },
+   {
+    "match": "(?<=\\.)(?:s(?:t(?:artIndex|ri(?:ngValue|de))|i(?:ze|gn(?:BitIndex|ificand(?:Bit(?:Count|Pattern)|Width)?|alingNaN)?)|u(?:perclassMirror|mmary|bscriptBaseAddress))|h(?:eader|as(?:hValue|PointerRepresentation))|n(?:ulTerminatedUTF8|ext(?:Down|Up)|a(?:n|tiveOwner))|c(?:haracters|ount(?:TrailingZeros)?|ustom(?:Mirror|PlaygroundQuickLook)|apacity)|i(?:s(?:S(?:ign(?:Minus|aling(?:NaN)?)|ubnormal)|N(?:ormal|aN)|Canonical|Infinite|Zero|Empty|Finite|ASCII)|n(?:dices|finity)|dentity)|owner|de(?:|bugDe)scription|u(?:n(?:safelyUnwrapped|icodeScalars?|derestimatedCount)|tf(?:16|8(?:Start|C(?:String|odeUnitCount))?)|intValue|ppercaseString|lp(?:OfOne)?)|p(?:i|ointee)|e(?:ndIndex|lements|xponent(?:Bit(?:Count|Pattern))?)|values?|keys|quietNaN|f(?:irst(?:ElementAddress(?:IfContiguous)?)?|loatingPointClass)|l(?:ittleEndian|owercaseString|eastNo(?:nzero|rmal)Magnitude|a(?:st|zy))|a(?:l(?:ignment|l(?:ocatedElementCount|Zeros))|rray(?:PropertyIsNativeTypeChecked)?)|ra(?:dix|wValue)|greatestFiniteMagnitude|m(?:in|emory|ax)|b(?:yteS(?:ize|wapped)|i(?:nade|tPattern|gEndian)|uffer|ase(?:Address)?))\\b",
+    "scope": "support.variable.swift"
+   },
+   {
+    "match": "(?<=\\.)(?:boolValue|disposition|end|objectIdentifier|quickLookObject|start|valueType)\\b",
+    "scope": "support.variable.swift"
+   },
+   {
+    "match": "(?<=\\.)(?:s(?:calarValue|i(?:ze|gnalingNaN)|o(?:und|me)|uppressed|prite|et)|n(?:one|egative(?:Subnormal|Normal|Infinity|Zero))|c(?:ol(?:or|lection)|ustomized)|t(?:o(?:NearestOr(?:Even|AwayFromZero)|wardZero)|uple|ext)|i(?:nt|mage)|optional|d(?:ictionary|o(?:uble|wn))|u(?:Int|p|rl)|p(?:o(?:sitive(?:Subnormal|Normal|Infinity|Zero)|int)|lus)|e(?:rror|mptyInput)|view|quietNaN|float|a(?:ttributedString|wayFromZero)|r(?:ectangle|ange)|generated|minus|b(?:ool|ezierPath))\\b",
+    "scope": "support.variable.swift"
+   }
+  ],
+  "r_builtin_types": [
+   {
+    "include": "r_builtin_types_builtin_class_type"
+   },
+   {
+    "include": "r_builtin_types_builtin_enum_type"
+   },
+   {
+    "include": "r_builtin_types_builtin_protocol_type"
+   },
+   {
+    "include": "r_builtin_types_builtin_struct_type"
+   },
+   {
+    "include": "r_builtin_types_builtin_typealias"
+   },
+   {
+    "match": "\\bAny\\b",
+    "scope": "support.type.any.swift"
+   }
+  ],
+  "r_builtin_types_builtin_class_type": [
+   {
+    "match": "\\b(Managed((?:|Proto)Buffer)|NonObjectiveCBase|AnyGenerator)\\b",
+    "scope": "support.class.swift"
+   }
+  ],
+  "r_builtin_types_builtin_enum_type": [
+   {
+    "match": "\\b(?:CommandLine|Process(?=\\.))\\b",
+    "scope": "support.constant.swift"
+   },
+   {
+    "match": "\\bNever\\b",
+    "scope": "support.constant.never.swift"
+   },
+   {
+    "match": "\\b(?:ImplicitlyUnwrappedOptional|Representation|MemoryLayout|FloatingPointClassification|SetIndexRepresentation|SetIteratorRepresentation|FloatingPointRoundingRule|UnicodeDecodingResult|Optional|DictionaryIndexRepresentation|AncestorRepresentation|DisplayStyle|PlaygroundQuickLook|Never|FloatingPointSign|Bit|DictionaryIteratorRepresentation)\\b",
+    "scope": "support.type.swift"
+   },
+   {
+    "match": "\\b(?:MirrorDisposition|QuickLookObject)\\b",
+    "scope": "support.type.swift"
+   }
+  ],
+  "r_builtin_types_builtin_protocol_type": [
+   {
+    "match": "\\bActor\\b",
+    "scope": "support.type.swift"
+   },
+   {
+    "match": "\\b(?:Ra(?:n(?:domAccess(?:Collection|Indexable)|geReplaceable(?:Collection|Indexable))|wRepresentable)|M(?:irrorPath|utable(?:Collection|Indexable))|Bi(?:naryFloatingPoint|twiseOperations|directional(?:Collection|Indexable))|S(?:tr(?:ide|eam)able|igned(?:Number|Integer)|e(?:tAlgebra|quence))|Hashable|C(?:o(?:llection|mparable)|ustom(?:Reflecta|StringConverti|DebugStringConverti|PlaygroundQuickLooka|LeafReflecta)ble|VarArg)|TextOutputStream|I(?:n(?:teger(?:Arithmetic)?|dexable(?:Base)?)|teratorProtocol)|OptionSet|Un(?:signedInteger|icodeCodec)|E(?:quatable|rror|xpressibleBy(?:BooleanLiteral|String(?:Interpolation|Literal)|NilLiteral|IntegerLiteral|DictionaryLiteral|UnicodeScalarLiteral|ExtendedGraphemeClusterLiteral|FloatLiteral|ArrayLiteral))|FloatingPoint|L(?:osslessStringConvertible|azy(?:Sequence|Collection)Protocol)|A(?:nyObject|bsoluteValuable))\\b",
+    "scope": "support.type.swift"
+   },
+   {
+    "match": "\\b(?:Ran(?:domAccessIndex|geReplaceableCollection)Type|GeneratorType|M(?:irror(?:|Path)Type|utable(?:Sliceable|CollectionType))|B(?:i(?:twiseOperations|directionalIndex)Type|oolean(?:Type|LiteralConvertible))|S(?:tring(?:Interpolation|Literal)Convertible|i(?:nk|gned(?:Numb|Integ)er)Type|e(?:tAlgebra|quence)Type|liceable)|NilLiteralConvertible|C(?:ollection|VarArg)Type|Inte(?:rvalType|ger(?:Type|LiteralConvertible|ArithmeticType))|O(?:utputStream|ptionSet)Type|DictionaryLiteralConvertible|Un(?:signedIntegerType|icode(?:ScalarLiteralConvertible|CodecType))|E(?:rrorType|xten(?:sibleCollectionType|dedGraphemeClusterLiteralConvertible))|F(?:orwardIndexType|loat(?:ingPointType|LiteralConvertible))|A(?:nyCollectionType|rrayLiteralConvertible))\\b",
+    "scope": "support.type.swift"
+   }
+  ],
+  "r_builtin_types_builtin_struct_type": [
+   {
+    "match": "\\b(?:R(?:e(?:peat(?:ed)?|versed(?:RandomAccess(?:Collection|Index)|Collection|Index))|an(?:domAccessSlice|ge(?:Replaceable(?:RandomAccess|Bidirectional|)Slice|Generator)?))|Generator(?:Sequence|OfOne)|M(?:irror|utable(?:Ran(?:domAccess|geReplaceable(?:RandomAccess|Bidirectional|))|Bidirectional|)Slice|anagedBufferPointer)|B(?:idirectionalSlice|ool)|S(?:t(?:aticString|ri(?:ng|deT(?:hrough(?:(?:Gen|It)erator)?|o(?:(?:Gen|It)erator)?)))|et(?:I(?:ndex|terator))?|lice)|HalfOpenInterval|C(?:haracter(?:View)?|o(?:ntiguousArray|untable(?:|Closed)Range|llectionOfOne)|OpaquePointer|losed(?:Range(?:I(?:ndex|terator))?|Interval)|VaListPointer)|I(?:n(?:t(?:16|8|32|64)?|d(?:ices|ex(?:ing(?:Gen|It)erator)?))|terator(?:Sequence|OverOne)?)|Zip2(?:Sequence|Iterator)|O(?:paquePointer|bjectIdentifier)|D(?:ictionary(?:I(?:ndex|terator)|Literal)?|ouble|efault(?:RandomAccess|Bidirectional|)Indices)|U(?:n(?:safe(?:RawPointer|Mutable(?:Raw|Buffer|)Pointer|BufferPointer(?:(?:Gen|It)erator)?|Pointer)|icodeScalar(?:View)?|foldSequence|managed)|TF(?:16(?:View)?|8(?:View)?|32)|Int(?:16|8|32|64)?)|Join(?:Generator|ed(?:Sequence|Iterator))|PermutationGenerator|E(?:numerate(?:Generator|Sequence|d(?:Sequence|Iterator))|mpty(?:Generator|Collection|Iterator))|Fl(?:oat(?:80)?|atten(?:Generator|BidirectionalCollection(?:Index)?|Sequence|Collection(?:Index)?|Iterator))|L(?:egacyChildren|azy(?:RandomAccessCollection|Map(?:RandomAccessCollection|Generator|BidirectionalCollection|Sequence|Collection|Iterator)|BidirectionalCollection|Sequence|Collection|Filter(?:Generator|BidirectionalCollection|Sequence|Collection|I(?:ndex|terator))))|A(?:ny(?:RandomAccessCollection|Generator|BidirectionalCollection|Sequence|Hashable|Collection|I(?:ndex|terator))|utoreleasingUnsafeMutablePointer|rray(?:Slice)?))\\b",
+    "scope": "support.type.swift"
+   },
+   {
+    "match": "\\b(?:R(?:everse(?:RandomAccess(?:Collection|Index)|Collection|Index)|awByte)|Map(?:Generator|Sequence|Collection)|S(?:inkOf|etGenerator)|Zip2Generator|DictionaryGenerator|Filter(?:Generator|Sequence|Collection(?:Index)?)|LazyForwardCollection|Any(?:RandomAccessIndex|BidirectionalIndex|Forward(?:Collection|Index)))\\b",
+    "scope": "support.type.swift"
+   }
+  ],
+  "r_builtin_types_builtin_typealias": [
+   {
+    "match": "\\b(?:Raw(?:Significand|Exponent|Value)|B(?:ooleanLiteralType|uffer|ase)|S(?:t(?:orage|r(?:i(?:ngLiteralType|de)|eam[12]))|ubSequence)|NativeBuffer|C(?:hild(?:ren)?|Bool|S(?:hort|ignedChar)|odeUnit|Char(?:16|32)?|Int|Double|Unsigned(?:Short|Char|Int|Long(?:Long)?)|Float|WideChar|Long(?:Long)?)|I(?:n(?:t(?:Max|egerLiteralType)|d(?:ices|ex(?:Distance)?))|terator)|Distance|U(?:n(?:icodeScalar(?:Type|Index|View|LiteralType)|foldFirstSequence)|TF(?:16(?:Index|View)|8Index)|IntMax)|E(?:lements?|x(?:tendedGraphemeCluster(?:|Literal)Type|ponent))|V(?:oid|alue)|Key|Float(?:32|LiteralType|64)|AnyClass)\\b",
+    "scope": "support.type.swift"
+   },
+   {
+    "match": "\\b(?:Generator|PlaygroundQuickLook|UWord|Word)\\b",
+    "scope": "support.type.swift"
+   }
+  ],
+  "r_code_block": [
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.scope.end.swift"
+     },
+     {
+      "include": "main"
+     }
+    ],
+    "scope": "punctuation.section.scope.begin.swift"
+   }
+  ],
+  "r_comments": [
+   {
+    "match": "\\A^(#!).*$\\n?",
+    "scope": "comment.line.number-sign.swift",
+    "captures": {
+     1: "punctuation.definition.comment.swift"
+    }
+   },
+   {
+    "match": "/\\*\\*(?!/)",
+    "push": [
+     {
+      "meta_scope": "comment.block.documentation.swift"
+     },
+     {
+      "match": "\\*/",
+      "pop": true,
+      "scope": "punctuation.definition.comment.end.swift"
+     },
+     {
+      "include": "r_comments_nested"
+     }
+    ],
+    "scope": "punctuation.definition.comment.begin.swift"
+   },
+   {
+    "match": "/\\*:",
+    "push": [
+     {
+      "meta_scope": "comment.block.documentation.playground.swift"
+     },
+     {
+      "match": "\\*/",
+      "pop": true,
+      "scope": "punctuation.definition.comment.end.swift"
+     },
+     {
+      "include": "r_comments_nested"
+     }
+    ],
+    "scope": "punctuation.definition.comment.begin.swift"
+   },
+   {
+    "match": "/\\*",
+    "push": [
+     {
+      "meta_scope": "comment.block.swift"
+     },
+     {
+      "match": "\\*/",
+      "pop": true,
+      "scope": "punctuation.definition.comment.end.swift"
+     },
+     {
+      "include": "r_comments_nested"
+     }
+    ],
+    "scope": "punctuation.definition.comment.begin.swift"
+   },
+   {
+    "match": "\\*/",
+    "scope": "invalid.illegal.unexpected-end-of-block-comment.swift"
+   },
+   {
+    "match": "(^[\\t ]+)?(?=//)",
+    "push": [
+     {
+      "match": "(?!\\G)",
+      "pop": true
+     },
+     {
+      "match": "///",
+      "push": [
+       {
+        "meta_scope": "comment.line.triple-slash.documentation.swift"
+       },
+       {
+        "match": "$",
+        "pop": true
+       }
+      ],
+      "scope": "punctuation.definition.comment.swift"
+     },
+     {
+      "match": "//:",
+      "push": [
+       {
+        "meta_scope": "comment.line.double-slash.documentation.swift"
+       },
+       {
+        "match": "$",
+        "pop": true
+       }
+      ],
+      "scope": "punctuation.definition.comment.swift"
+     },
+     {
+      "match": "//",
+      "push": [
+       {
+        "meta_scope": "comment.line.double-slash.swift"
+       },
+       {
+        "match": "$",
+        "pop": true
+       }
+      ],
+      "scope": "punctuation.definition.comment.swift"
+     }
+    ],
+    "captures": {
+     1: "punctuation.whitespace.comment.leading.swift"
+    }
+   }
+  ],
+  "r_comments_nested": [
+   {
+    "match": "/\\*",
+    "push": [
+     {
+      "match": "\\*/",
+      "pop": true
+     },
+     {
+      "include": "r_comments_nested"
+     }
+    ]
+   }
+  ],
+  "r_compiler_control": [
+   {
+    "match": "^\\s*(#)(if|elseif)\\s+(false)\\b.*?(?=$|//|/\\*)",
+    "push": [
+     {
+      "meta_content_scope": "comment.block.preprocessor.swift"
+     },
+     {
+      "match": "(?=^\\s*(#(e(?:lseif|lse|ndif)))\\b)",
+      "pop": true
+     }
+    ],
+    "scope": "meta.preprocessor.conditional.swift",
+    "captures": {
+     1: "punctuation.definition.preprocessor.swift",
+     2: "keyword.control.import.preprocessor.conditional.swift",
+     3: "constant.language.boolean.swift"
+    }
+   },
+   {
+    "match": "^\\s*(#)(if|elseif)\\s+",
+    "push": [
+     {
+      "meta_scope": "meta.preprocessor.conditional.swift"
+     },
+     {
+      "match": "(?=\\s*/[*/])|$",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.preprocessor.swift",
+       2: "keyword.control.import.preprocessor.conditional.swift"
+      }
+     },
+     {
+      "match": "(&&|\\|\\|)",
+      "scope": "keyword.operator.logical.swift"
+     },
+     {
+      "match": "\\b(true|false)\\b",
+      "scope": "constant.language.boolean.swift"
+     },
+     {
+      "match": "\\b(arch)\\s*(\\()\\s*(?:(arm|arm64|powerpc64|powerpc64le|i386|x86_64|s390x)|\\w+)\\s*(\\))",
+      "captures": {
+       1: "keyword.other.condition.swift",
+       2: "punctuation.definition.parameters.begin.swift",
+       3: "support.constant.platform.architecture.swift",
+       4: "punctuation.definition.parameters.end.swift"
+      }
+     },
+     {
+      "match": "\\b(os)\\s*(\\()\\s*(?:(macOS|OSX|iOS|tvOS|watchOS|visionOS|Android|Linux|FreeBSD|Windows|PS4)|\\w+)\\s*(\\))",
+      "captures": {
+       1: "keyword.other.condition.swift",
+       2: "punctuation.definition.parameters.begin.swift",
+       3: "support.constant.platform.os.swift",
+       4: "punctuation.definition.parameters.end.swift"
+      }
+     },
+     {
+      "match": "\\b(canImport)\\s*(\\()([_\\p{L}][_\\p{L}\\p{N}\\p{M}]*)(\\))",
+      "captures": {
+       1: "keyword.other.condition.swift",
+       2: "punctuation.definition.parameters.begin.swift",
+       3: "entity.name.type.module.swift",
+       4: "punctuation.definition.parameters.end.swift"
+      }
+     },
+     {
+      "match": "\\b(targetEnvironment)\\s*(\\()",
+      "push": [
+       {
+        "match": "(\\))|$",
+        "pop": true,
+        "captures": {
+         1: "punctuation.definition.parameters.end.swift"
+        }
+       },
+       {
+        "match": "\\b(simulator|UIKitForMac)\\b",
+        "scope": "support.constant.platform.environment.swift"
+       }
+      ],
+      "captures": {
+       1: "keyword.other.condition.swift",
+       2: "punctuation.definition.parameters.begin.swift"
+      }
+     },
+     {
+      "match": "\\b(swift|compiler)\\s*(\\()",
+      "push": [
+       {
+        "match": "(\\))|$",
+        "pop": true,
+        "captures": {
+         1: "punctuation.definition.parameters.end.swift"
+        }
+       },
+       {
+        "match": ">=|<",
+        "scope": "keyword.operator.comparison.swift"
+       },
+       {
+        "match": "\\b[0-9]+(?:\\.[0-9]+)*\\b",
+        "scope": "constant.numeric.swift"
+       }
+      ],
+      "captures": {
+       1: "keyword.other.condition.swift",
+       2: "punctuation.definition.parameters.begin.swift"
+      }
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.preprocessor.swift",
+     2: "keyword.control.import.preprocessor.conditional.swift"
+    }
+   },
+   {
+    "match": "^\\s*(#)(e(?:lse|ndif))(.*?)(?=$|//|/\\*)",
+    "scope": "meta.preprocessor.conditional.swift",
+    "captures": {
+     1: "punctuation.definition.preprocessor.swift",
+     2: "keyword.control.import.preprocessor.conditional.swift"
+    }
+   },
+   {
+    "match": "^\\s*(#)(sourceLocation)((\\()([^)]*)(\\)))(.*?)(?=$|//|/\\*)",
+    "scope": "meta.preprocessor.sourcelocation.swift",
+    "captures": {
+     1: "punctuation.definition.preprocessor.swift",
+     2: "keyword.control.import.preprocessor.sourcelocation.swift",
+     4: "punctuation.definition.parameters.begin.swift",
+     6: "punctuation.definition.parameters.begin.swift"
+    }
+   }
+  ],
+  "r_conditionals": [
+   {
+    "match": "(?<!\\.)\\b(if|guard|switch|for)\\b",
+    "push": [
+     {
+      "match": "(?=\\{)",
+      "pop": true
+     },
+     {
+      "include": "r_expressions_without_trailing_closures"
+     }
+    ]
+   },
+   {
+    "match": "(?<!\\.)\\b(while)\\b",
+    "push": [
+     {
+      "match": "(?=\\{)|$",
+      "pop": true
+     },
+     {
+      "include": "r_expressions_without_trailing_closures"
+     }
+    ]
+   }
+  ],
+  "r_declarations": [
+   {
+    "include": "r_declarations_function"
+   },
+   {
+    "include": "r_declarations_function_initializer"
+   },
+   {
+    "include": "r_declarations_function_subscript"
+   },
+   {
+    "include": "r_declarations_typed_variable_declaration"
+   },
+   {
+    "include": "r_declarations_import"
+   },
+   {
+    "include": "r_declarations_operator"
+   },
+   {
+    "include": "r_declarations_precedencegroup"
+   },
+   {
+    "include": "r_declarations_protocol"
+   },
+   {
+    "include": "r_declarations_type"
+   },
+   {
+    "include": "r_declarations_extension"
+   },
+   {
+    "include": "r_declarations_typealias"
+   },
+   {
+    "include": "r_declarations_macro"
+   }
+  ],
+  "r_declarations_available_types": [
+   {
+    "include": "r_comments"
+   },
+   {
+    "include": "r_builtin_types"
+   },
+   {
+    "include": "r_attributes"
+   },
+   {
+    "match": "\\basync\\b",
+    "scope": "storage.modifier.async.swift"
+   },
+   {
+    "match": "\\b(?:|re)throws\\b",
+    "scope": "storage.modifier.exception.swift"
+   },
+   {
+    "match": "\\bsome\\b",
+    "scope": "keyword.other.operator.type.opaque.swift"
+   },
+   {
+    "match": "\\bany\\b",
+    "scope": "keyword.other.operator.type.existential.swift"
+   },
+   {
+    "match": "\\b(?:repeat|each)\\b",
+    "scope": "keyword.control.loop.swift"
+   },
+   {
+    "match": "\\b(?:inout|isolated|borrowing|consuming)\\b",
+    "scope": "storage.modifier.swift"
+   },
+   {
+    "match": "\\bnonisolated(?:\\(nonsending\\)|\\b)",
+    "scope": "storage.modifier.swift"
+   },
+   {
+    "match": "\\bSelf\\b",
+    "scope": "variable.language.swift"
+   },
+   {
+    "match": "(?<![-!%\\&*+./<=>^|~])(->)(?![-!%\\&*+./<=>^|~])",
+    "captures": {
+     1: "keyword.operator.type.function.swift"
+    }
+   },
+   {
+    "match": "(?<![-!%\\&*+./<=>^|~])(&)(?![-!%\\&*+./<=>^|~])",
+    "captures": {
+     1: "keyword.operator.type.composition.swift"
+    }
+   },
+   {
+    "match": "[!?]",
+    "scope": "keyword.operator.type.optional.swift"
+   },
+   {
+    "match": "\\.\\.\\.",
+    "scope": "keyword.operator.function.variadic-parameter.swift"
+   },
+   {
+    "match": "\\bprotocol\\b",
+    "scope": "keyword.other.type.composition.swift"
+   },
+   {
+    "match": "(?<=\\.)(?:Protocol|Type)\\b",
+    "scope": "keyword.other.type.metatype.swift"
+   },
+   {
+    "include": "r_declarations_available_types_tuple_type"
+   },
+   {
+    "include": "r_declarations_available_types_collection_type"
+   },
+   {
+    "include": "r_declarations_generic_argument_clause"
+   }
+  ],
+  "r_declarations_available_types_collection_type": [
+   {
+    "match": "\\[",
+    "push": [
+     {
+      "match": "]|(?=[)>{}])",
+      "pop": true,
+      "scope": "punctuation.section.collection-type.end.swift"
+     },
+     {
+      "include": "r_declarations_available_types"
+     },
+     {
+      "include": "r_literals_numeric"
+     },
+     {
+      "match": "\\b_\\b",
+      "scope": "support.variable.inferred.swift"
+     },
+     {
+      "match": "(?<=\\s)\\bof\\b(?=\\s+[(\\[_\\p{L}\\d\\p{N}\\p{M}])",
+      "scope": "keyword.other.inline-array.swift"
+     },
+     {
+      "match": ":",
+      "push": [
+       {
+        "match": "(?=[])>{}])",
+        "pop": true
+       },
+       {
+        "match": ":",
+        "scope": "invalid.illegal.extra-colon-in-dictionary-type.swift"
+       },
+       {
+        "include": "r_declarations_available_types"
+       }
+      ],
+      "scope": "punctuation.separator.key-value.swift"
+     }
+    ],
+    "scope": "punctuation.section.collection-type.begin.swift"
+   }
+  ],
+  "r_declarations_available_types_tuple_type": [
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "match": "\\)|(?=[]>{}])",
+      "pop": true,
+      "scope": "punctuation.section.tuple-type.end.swift"
+     },
+     {
+      "include": "r_declarations_available_types"
+     }
+    ],
+    "scope": "punctuation.section.tuple-type.begin.swift"
+   }
+  ],
+  "r_declarations_extension": [
+   {
+    "match": "\\b(extension)\\s+",
+    "push": [
+     {
+      "match": "(?<=})",
+      "pop": true
+     },
+     {
+      "match": "\\G(?!\\s*[\\n:{])",
+      "push": [
+       {
+        "meta_scope": "entity.name.type.swift"
+       },
+       {
+        "match": "(?=\\s*[\\n:{])|(?!\\G)(?=\\s*where\\b)",
+        "pop": true
+       },
+       {
+        "include": "r_declarations_available_types"
+       }
+      ]
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     },
+     {
+      "include": "r_declarations_inheritance_clause"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_scope": "meta.definition.type.body.swift"
+       },
+       {
+        "match": "}",
+        "pop": true,
+        "scope": "punctuation.definition.type.end.swift"
+       },
+       {
+        "include": "main"
+       }
+      ],
+      "scope": "punctuation.definition.type.begin.swift"
+     }
+    ]
+   }
+  ],
+  "r_declarations_function": [
+   {
+    "match": "\\b(func)\\s+((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>)|(?:((?<oph>[-!%\\&*+/<-?^|~¡-§©«¬®°±¶»¿×÷‖‗†-‧‰-‾⁁-⁓⁕-⁞←-⏿─-❵➔-⯿⸀-⹿、。〃〈-〰])(\\g<oph>|(?<opc>[̀-ͯ᷀-᷿⃐-⃿︀-️︠-︯\\x{E0100}-\\x{E01EF}]))*)|(\\.(\\g<oph>|\\g<opc>|\\.)+)))\\s*(?=[(<])",
+    "push": [
+     {
+      "meta_scope": "meta.definition.function.swift"
+     },
+     {
+      "match": "(?<=})|$",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_generic_parameter_clause"
+     },
+     {
+      "include": "r_declarations_parameter_clause"
+     },
+     {
+      "include": "r_declarations_function_result"
+     },
+     {
+      "include": "r_async_throws"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     },
+     {
+      "match": "(\\{)",
+      "push": [
+       {
+        "meta_scope": "meta.definition.function.body.swift"
+       },
+       {
+        "match": "(})",
+        "pop": true,
+        "captures": {
+         1: "punctuation.section.function.end.swift"
+        }
+       },
+       {
+        "include": "main"
+       }
+      ],
+      "captures": {
+       1: "punctuation.section.function.begin.swift"
+      }
+     }
+    ],
+    "captures": {
+     1: "storage.type.function.swift",
+     2: "entity.name.function.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_declarations_function_initializer": [
+   {
+    "match": "(?<!\\.)\\b(init[!?]*)\\s*(?=[(<])",
+    "push": [
+     {
+      "meta_scope": "meta.definition.function.initializer.swift"
+     },
+     {
+      "match": "(?<=})|$",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_generic_parameter_clause"
+     },
+     {
+      "include": "r_declarations_parameter_clause"
+     },
+     {
+      "include": "r_async_throws"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     },
+     {
+      "match": "(\\{)",
+      "push": [
+       {
+        "meta_scope": "meta.definition.function.body.swift"
+       },
+       {
+        "match": "(})",
+        "pop": true,
+        "captures": {
+         1: "punctuation.section.function.end.swift"
+        }
+       },
+       {
+        "include": "main"
+       }
+      ],
+      "captures": {
+       1: "punctuation.section.function.begin.swift"
+      }
+     }
+    ],
+    "captures": {
+     1: "storage.type.function.swift"
+    }
+   }
+  ],
+  "r_declarations_function_result": [
+   {
+    "match": "(?<![-!%\\&*+./<=>^|~])(->)(?![-!%\\&*+./<=>^|~])\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.function-result.swift"
+     },
+     {
+      "match": "(?!\\G)(?=\\{|\\bwhere\\b|[;=])|$",
+      "pop": true
+     },
+     {
+      "match": "\\bsending\\b",
+      "scope": "storage.modifier.swift"
+     },
+     {
+      "include": "r_declarations_available_types"
+     }
+    ],
+    "captures": {
+     1: "keyword.operator.function-result.swift"
+    }
+   }
+  ],
+  "r_declarations_function_subscript": [
+   {
+    "match": "(?<!\\.)\\b(subscript)\\s*(?=[(<])",
+    "push": [
+     {
+      "meta_scope": "meta.definition.function.subscript.swift"
+     },
+     {
+      "match": "(?<=})|$",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_generic_parameter_clause"
+     },
+     {
+      "include": "r_declarations_parameter_clause"
+     },
+     {
+      "include": "r_declarations_function_result"
+     },
+     {
+      "include": "r_async_throws"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     },
+     {
+      "match": "(\\{)",
+      "push": [
+       {
+        "meta_scope": "meta.definition.function.body.swift"
+       },
+       {
+        "match": "(})",
+        "pop": true,
+        "captures": {
+         1: "punctuation.section.function.end.swift"
+        }
+       },
+       {
+        "include": "main"
+       }
+      ],
+      "captures": {
+       1: "punctuation.section.function.begin.swift"
+      }
+     }
+    ],
+    "captures": {
+     1: "storage.type.function.swift"
+    }
+   }
+  ],
+  "r_declarations_generic_argument_clause": [
+   {
+    "match": "<",
+    "push": [
+     {
+      "meta_scope": "meta.generic-argument-clause.swift"
+     },
+     {
+      "match": ">|(?=[]){}])",
+      "pop": true,
+      "scope": "punctuation.separator.generic-argument-clause.end.swift"
+     },
+     {
+      "include": "r_literals_numeric"
+     },
+     {
+      "include": "r_declarations_available_types"
+     }
+    ],
+    "scope": "punctuation.separator.generic-argument-clause.begin.swift"
+   }
+  ],
+  "r_declarations_generic_parameter_clause": [
+   {
+    "match": "<",
+    "push": [
+     {
+      "meta_scope": "meta.generic-parameter-clause.swift"
+     },
+     {
+      "match": ">|(?=[^\\&,:<=>`\\w\\d\\s])",
+      "pop": true,
+      "scope": "punctuation.separator.generic-parameter-clause.end.swift"
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     },
+     {
+      "match": "\\blet\\b",
+      "scope": "keyword.other.declaration-specifier.swift"
+     },
+     {
+      "match": "\\beach\\b",
+      "scope": "keyword.control.loop.swift"
+     },
+     {
+      "match": "\\b((?!\\d)\\w[\\w\\d]*)\\b",
+      "captures": {
+       1: "variable.language.generic-parameter.swift"
+      }
+     },
+     {
+      "match": ",",
+      "scope": "punctuation.separator.generic-parameters.swift"
+     },
+     {
+      "match": "(:)\\s*",
+      "push": [
+       {
+        "meta_scope": "meta.generic-parameter-constraint.swift"
+       },
+       {
+        "match": "(?=[,>]|(?!\\G)\\bwhere\\b)",
+        "pop": true
+       },
+       {
+        "match": "\\G",
+        "push": [
+         {
+          "meta_scope": "entity.other.inherited-class.swift"
+         },
+         {
+          "match": "(?=[,>]|(?!\\G)\\bwhere\\b)",
+          "pop": true
+         },
+         {
+          "include": "r_declarations_type_identifier"
+         },
+         {
+          "include": "r_declarations_type_operators"
+         }
+        ]
+       }
+      ],
+      "captures": {
+       1: "punctuation.separator.generic-parameter-constraint.swift"
+      }
+     }
+    ],
+    "scope": "punctuation.separator.generic-parameter-clause.begin.swift"
+   }
+  ],
+  "r_declarations_generic_where_clause": [
+   {
+    "match": "\\b(where)\\b\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.generic-where-clause.swift"
+     },
+     {
+      "match": "(?!\\G)$|(?=[\\n;>{}]|//|/\\*)",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_generic_where_clause_requirement_list"
+     }
+    ],
+    "captures": {
+     1: "keyword.other.generic-constraint-introducer.swift"
+    }
+   }
+  ],
+  "r_declarations_generic_where_clause_requirement_list": [
+   {
+    "match": "\\G|,\\s*",
+    "push": [
+     {
+      "match": "(?=[\\n,;>{}]|//|/\\*)",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_available_types"
+     },
+     {
+      "match": "(?<![-!%\\&*+./<=>^|~])(==)(?![-!%\\&*+./<=>^|~])",
+      "push": [
+       {
+        "meta_scope": "meta.generic-where-clause.same-type-requirement.swift"
+       },
+       {
+        "match": "(?=\\s*[\\n,;>{}]|//|/\\*)",
+        "pop": true
+       },
+       {
+        "include": "r_declarations_available_types"
+       }
+      ],
+      "captures": {
+       1: "keyword.operator.generic-constraint.same-type.swift"
+      }
+     },
+     {
+      "match": "(?<![-!%\\&*+./<=>^|~])(:)(?![-!%\\&*+./<=>^|~])",
+      "push": [
+       {
+        "meta_scope": "meta.generic-where-clause.conformance-requirement.swift"
+       },
+       {
+        "match": "(?=\\s*[\\n,;>{}]|//|/\\*)",
+        "pop": true
+       },
+       {
+        "match": "\\G\\s*",
+        "push": [
+         {
+          "meta_content_scope": "entity.other.inherited-class.swift"
+         },
+         {
+          "match": "(?=\\s*[\\n,;>{}]|//|/\\*)",
+          "pop": true
+         },
+         {
+          "include": "r_declarations_available_types"
+         }
+        ]
+       }
+      ],
+      "captures": {
+       1: "keyword.operator.generic-constraint.conforms-to.swift"
+      }
+     }
+    ]
+   }
+  ],
+  "r_declarations_import": [
+   {
+    "match": "(?<!\\.)\\b(import)\\s+",
+    "push": [
+     {
+      "meta_scope": "meta.import.swift"
+     },
+     {
+      "match": "(;)|$\\n?|(?=/[*/])",
+      "pop": true,
+      "captures": {
+       1: "punctuation.terminator.statement.swift"
+      }
+     },
+     {
+      "match": "\\G(?!;|$|//|/\\*)(?:(typealias|struct|class|actor|enum|protocol|var|func)\\s+)?",
+      "push": [
+       {
+        "match": "(?=;|$|//|/\\*)",
+        "pop": true
+       },
+       {
+        "match": "(?<=\\G|\\.)(?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>)",
+        "scope": "entity.name.type.swift",
+        "captures": {
+         1: "punctuation.definition.identifier.swift",
+         2: "punctuation.definition.identifier.swift"
+        }
+       },
+       {
+        "match": "(?<=\\G|\\.)\\$[0-9]+",
+        "scope": "entity.name.type.swift"
+       },
+       {
+        "match": "(?<=\\G|\\.)(?:((?<oph>[-!%\\&*+/<-?^|~¡-§©«¬®°±¶»¿×÷‖‗†-‧‰-‾⁁-⁓⁕-⁞←-⏿─-❵➔-⯿⸀-⹿、。〃〈-〰])(\\g<oph>|(?<opc>[̀-ͯ᷀-᷿⃐-⃿︀-️︠-︯\\x{E0100}-\\x{E01EF}]))*)|(\\.(\\g<oph>|\\g<opc>|\\.)+))(?=[.;]|$|//|/\\*|\\s)",
+        "scope": "entity.name.type.swift"
+       },
+       {
+        "match": "\\.",
+        "scope": "punctuation.separator.import.swift"
+       },
+       {
+        "match": "(?!\\s*(;|$|//|/\\*))",
+        "push": [
+         {
+          "meta_scope": "invalid.illegal.character-not-allowed-here.swift"
+         },
+         {
+          "match": "(?=\\s*(;|$|//|/\\*))",
+          "pop": true
+         }
+        ]
+       }
+      ],
+      "captures": {
+       1: "storage.modifier.swift"
+      }
+     }
+    ],
+    "captures": {
+     1: "keyword.control.import.swift"
+    }
+   }
+  ],
+  "r_declarations_inheritance_clause": [
+   {
+    "match": "(:)(?=\\s*\\{)|(:)\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.inheritance-clause.swift"
+     },
+     {
+      "match": "(?!\\G)$|(?=[={}]|(?!\\G)\\bwhere\\b)",
+      "pop": true
+     },
+     {
+      "match": "\\bclass\\b",
+      "push": [
+       {
+        "match": "(?=[={}]|(?!\\G)\\bwhere\\b)",
+        "pop": true
+       },
+       {
+        "include": "r_comments"
+       },
+       {
+        "include": "r_declarations_inheritance_clause_more_types"
+       }
+      ],
+      "scope": "storage.type.class.swift"
+     },
+     {
+      "match": "\\G",
+      "push": [
+       {
+        "match": "(?!\\G)$|(?=[={}]|(?!\\G)\\bwhere\\b)",
+        "pop": true
+       },
+       {
+        "include": "r_attributes"
+       },
+       {
+        "include": "r_comments"
+       },
+       {
+        "include": "r_declarations_inheritance_clause_inherited_type"
+       },
+       {
+        "include": "r_declarations_inheritance_clause_more_types"
+       },
+       {
+        "include": "r_declarations_type_operators"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     1: "invalid.illegal.empty-inheritance-clause.swift",
+     2: "punctuation.separator.inheritance-clause.swift"
+    }
+   }
+  ],
+  "r_declarations_inheritance_clause_inherited_type": [
+   {
+    "match": "(?=[_`\\p{L}])",
+    "push": [
+     {
+      "meta_scope": "entity.other.inherited-class.swift"
+     },
+     {
+      "match": "(?!\\G)",
+      "pop": true
+     },
+     {
+      "include": "r_declarations_type_identifier"
+     }
+    ]
+   }
+  ],
+  "r_declarations_inheritance_clause_more_types": [
+   {
+    "match": ",\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.inheritance-list.more-types"
+     },
+     {
+      "match": "(?!\\G)(?!/[*/])|(?=[,={}]|(?!\\G)\\bwhere\\b)",
+      "pop": true
+     },
+     {
+      "include": "r_attributes"
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_inheritance_clause_inherited_type"
+     },
+     {
+      "include": "r_declarations_inheritance_clause_more_types"
+     },
+     {
+      "include": "r_declarations_type_operators"
+     }
+    ]
+   }
+  ],
+  "r_declarations_macro": [
+   {
+    "match": "\\b(macro)\\s+((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))\\s*(?=[(<=])",
+    "push": [
+     {
+      "meta_scope": "meta.definition.macro.swift"
+     },
+     {
+      "match": "$|(?=;|//|/\\*|[=}])",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_generic_parameter_clause"
+     },
+     {
+      "include": "r_declarations_parameter_clause"
+     },
+     {
+      "include": "r_declarations_function_result"
+     },
+     {
+      "include": "r_async_throws"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     }
+    ],
+    "captures": {
+     1: "storage.type.function.swift",
+     2: "entity.name.function.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_declarations_operator": [
+   {
+    "match": "(?:\\b((?:pre|in|post)fix)\\s+)?\\b(operator)\\s+(((?<oph>[-!%\\&*+/<-?^|~¡-§©«¬®°±¶»¿×÷‖‗†-‧‰-‾⁁-⁓⁕-⁞←-⏿─-❵➔-⯿⸀-⹿、。〃〈-〰])(\\g<oph>|\\.|(?<opc>[̀-ͯ᷀-᷿⃐-⃿︀-️︠-︯\\x{E0100}-\\x{E01EF}]))*+)|(\\.(\\g<oph>|\\g<opc>|\\.)++))\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.definition.operator.swift"
+     },
+     {
+      "match": "(;)|$\\n?|(?=/[*/])",
+      "pop": true,
+      "captures": {
+       1: "punctuation.terminator.statement.swift"
+      }
+     },
+     {
+      "include": "r_declarations_operator_swift2"
+     },
+     {
+      "include": "r_declarations_operator_swift3"
+     },
+     {
+      "match": "((?!$|;|//|/\\*)\\S)+",
+      "scope": "invalid.illegal.character-not-allowed-here.swift"
+     }
+    ],
+    "captures": {
+     1: "storage.modifier.swift",
+     2: "storage.type.function.operator.swift",
+     3: "entity.name.function.operator.swift",
+     4: "entity.name.function.operator.swift"
+    }
+   }
+  ],
+  "r_declarations_operator_swift2": [
+   {
+    "match": "\\G(\\{)",
+    "push": [
+     {
+      "match": "(})",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.operator.end.swift"
+      }
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "match": "\\b(associativity)\\s+(left|right)\\b",
+      "captures": {
+       1: "storage.modifier.swift",
+       2: "keyword.other.operator.associativity.swift"
+      }
+     },
+     {
+      "match": "\\b(precedence)\\s+([0-9]+)\\b",
+      "captures": {
+       1: "storage.modifier.swift",
+       2: "constant.numeric.integer.swift"
+      }
+     },
+     {
+      "match": "\\b(assignment)\\b",
+      "captures": {
+       1: "storage.modifier.swift"
+      }
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.operator.begin.swift"
+    }
+   }
+  ],
+  "r_declarations_operator_swift3": [
+   {
+    "match": "\\G(:)\\s*((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))",
+    "captures": {
+     2: "entity.other.inherited-class.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_declarations_parameter_clause": [
+   {
+    "match": "(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.parameter-clause.swift"
+     },
+     {
+      "match": "(\\))(?:\\s*(async)\\b)?",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.parameters.end.swift",
+       2: "storage.modifier.async.swift"
+      }
+     },
+     {
+      "include": "r_declarations_parameter_list"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.parameters.begin.swift"
+    }
+   }
+  ],
+  "r_declarations_parameter_list": [
+   {
+    "match": "((?<q1>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q1>))\\s+((?<q2>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q2>))(?=\\s*:)",
+    "captures": {
+     1: "entity.name.function.swift",
+     2: "punctuation.definition.identifier.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "variable.parameter.function.swift",
+     5: "punctuation.definition.identifier.swift",
+     6: "punctuation.definition.identifier.swift"
+    }
+   },
+   {
+    "match": "(((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>)))(?=\\s*:)",
+    "captures": {
+     1: "variable.parameter.function.swift",
+     2: "entity.name.function.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.identifier.swift"
+    }
+   },
+   {
+    "match": ":\\s*(?!\\s)",
+    "push": [
+     {
+      "match": "(?=[),])",
+      "pop": true
+     },
+     {
+      "match": "\\bsending\\b",
+      "scope": "storage.modifier.swift"
+     },
+     {
+      "include": "r_declarations_available_types"
+     },
+     {
+      "match": ":",
+      "scope": "invalid.illegal.extra-colon-in-parameter-list.swift"
+     },
+     {
+      "match": "=",
+      "push": [
+       {
+        "match": "(?=[),])",
+        "pop": true
+       },
+       {
+        "include": "r_expressions"
+       }
+      ],
+      "scope": "keyword.operator.assignment.swift"
+     }
+    ]
+   }
+  ],
+  "r_declarations_precedencegroup": [
+   {
+    "match": "\\b(precedencegroup)\\s+((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))\\s*(?=\\{)",
+    "push": [
+     {
+      "meta_scope": "meta.definition.precedencegroup.swift"
+     },
+     {
+      "match": "(?!\\G)",
+      "pop": true
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "match": "}",
+        "pop": true,
+        "scope": "punctuation.definition.precedencegroup.end.swift"
+       },
+       {
+        "include": "r_comments"
+       },
+       {
+        "match": "\\b((?:high|low)erThan)\\s*:\\s*((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))",
+        "captures": {
+         1: "storage.modifier.swift",
+         2: "entity.other.inherited-class.swift",
+         3: "punctuation.definition.identifier.swift",
+         4: "punctuation.definition.identifier.swift"
+        }
+       },
+       {
+        "match": "\\b(associativity)\\b(?:\\s*:\\s*(right|left|none)\\b)?",
+        "captures": {
+         1: "storage.modifier.swift",
+         2: "keyword.other.operator.associativity.swift"
+        }
+       },
+       {
+        "match": "\\b(assignment)\\b(?:\\s*:\\s*(true|false)\\b)?",
+        "captures": {
+         1: "storage.modifier.swift",
+         2: "constant.language.boolean.swift"
+        }
+       }
+      ],
+      "scope": "punctuation.definition.precedencegroup.begin.swift"
+     }
+    ],
+    "captures": {
+     1: "storage.type.precedencegroup.swift",
+     2: "entity.name.type.precedencegroup.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_declarations_protocol": [
+   {
+    "match": "\\b(protocol)\\s+((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))",
+    "push": [
+     {
+      "meta_scope": "meta.definition.type.protocol.swift"
+     },
+     {
+      "match": "(?<=})",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_inheritance_clause"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_scope": "meta.definition.type.body.swift"
+       },
+       {
+        "match": "}",
+        "pop": true,
+        "scope": "punctuation.definition.type.end.swift"
+       },
+       {
+        "include": "r_declarations_protocol_protocol_method"
+       },
+       {
+        "include": "r_declarations_protocol_protocol_initializer"
+       },
+       {
+        "include": "r_declarations_protocol_associated_type"
+       },
+       {
+        "include": "main"
+       }
+      ],
+      "scope": "punctuation.definition.type.begin.swift"
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_declarations_protocol_associated_type": [
+   {
+    "match": "\\b(associatedtype)\\s+((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.definition.associatedtype.swift"
+     },
+     {
+      "match": "(?!\\G)$|(?=[;}]|$)",
+      "pop": true
+     },
+     {
+      "include": "r_declarations_inheritance_clause"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     },
+     {
+      "include": "r_declarations_typealias_assignment"
+     }
+    ],
+    "captures": {
+     1: "keyword.other.declaration-specifier.swift",
+     2: "variable.language.associatedtype.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_declarations_protocol_protocol_initializer": [
+   {
+    "match": "(?<!\\.)\\b(init[!?]*)\\s*(?=[(<])",
+    "push": [
+     {
+      "meta_scope": "meta.definition.function.initializer.swift"
+     },
+     {
+      "match": "$|(?=;|//|/\\*|})",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_generic_parameter_clause"
+     },
+     {
+      "include": "r_declarations_parameter_clause"
+     },
+     {
+      "include": "r_async_throws"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_scope": "invalid.illegal.function-body-not-allowed-in-protocol.swift"
+       },
+       {
+        "match": "}",
+        "pop": true,
+        "scope": "punctuation.section.function.end.swift"
+       },
+       {
+        "include": "main"
+       }
+      ],
+      "scope": "punctuation.section.function.begin.swift"
+     }
+    ],
+    "captures": {
+     1: "storage.type.function.swift"
+    }
+   }
+  ],
+  "r_declarations_protocol_protocol_method": [
+   {
+    "match": "\\b(func)\\s+((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>)|(?:((?<oph>[-!%\\&*+/<-?^|~¡-§©«¬®°±¶»¿×÷‖‗†-‧‰-‾⁁-⁓⁕-⁞←-⏿─-❵➔-⯿⸀-⹿、。〃〈-〰])(\\g<oph>|(?<opc>[̀-ͯ᷀-᷿⃐-⃿︀-️︠-︯\\x{E0100}-\\x{E01EF}]))*)|(\\.(\\g<oph>|\\g<opc>|\\.)+)))\\s*(?=[(<])",
+    "push": [
+     {
+      "meta_scope": "meta.definition.function.swift"
+     },
+     {
+      "match": "$|(?=;|//|/\\*|})",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_generic_parameter_clause"
+     },
+     {
+      "include": "r_declarations_parameter_clause"
+     },
+     {
+      "include": "r_declarations_function_result"
+     },
+     {
+      "include": "r_async_throws"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_scope": "invalid.illegal.function-body-not-allowed-in-protocol.swift"
+       },
+       {
+        "match": "}",
+        "pop": true,
+        "scope": "punctuation.section.function.end.swift"
+       },
+       {
+        "include": "main"
+       }
+      ],
+      "scope": "punctuation.section.function.begin.swift"
+     }
+    ],
+    "captures": {
+     1: "storage.type.function.swift",
+     2: "entity.name.function.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_declarations_type": [
+   {
+    "match": "\\b(class(?!\\s+(?:func|var|let)\\b)|struct|actor)\\b\\s*((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))",
+    "push": [
+     {
+      "match": "(?<=})",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_generic_parameter_clause"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     },
+     {
+      "include": "r_declarations_inheritance_clause"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_scope": "meta.definition.type.body.swift"
+       },
+       {
+        "match": "}",
+        "pop": true,
+        "scope": "punctuation.definition.type.end.swift"
+       },
+       {
+        "include": "main"
+       }
+      ],
+      "scope": "punctuation.definition.type.begin.swift"
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.identifier.swift"
+    }
+   },
+   {
+    "include": "r_declarations_type_enum"
+   }
+  ],
+  "r_declarations_type_enum": [
+   {
+    "match": "\\b(enum)\\s+((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))",
+    "push": [
+     {
+      "match": "(?<=})",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_generic_parameter_clause"
+     },
+     {
+      "include": "r_declarations_generic_where_clause"
+     },
+     {
+      "include": "r_declarations_inheritance_clause"
+     },
+     {
+      "match": "\\{",
+      "push": [
+       {
+        "meta_scope": "meta.definition.type.body.swift"
+       },
+       {
+        "match": "}",
+        "pop": true,
+        "scope": "punctuation.definition.type.end.swift"
+       },
+       {
+        "include": "r_declarations_type_enum_enum_case_clause"
+       },
+       {
+        "include": "main"
+       }
+      ],
+      "scope": "punctuation.definition.type.begin.swift"
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_declarations_type_enum_associated_values": [
+   {
+    "match": "\\G\\(",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.parameters.end.swift"
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "match": "(?:(_)|((?<q1>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*\\k<q1>))\\s+(((?<q2>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*\\k<q2>))\\s*(:)",
+      "push": [
+       {
+        "match": "(?=[]),])",
+        "pop": true
+       },
+       {
+        "include": "r_declarations_available_types"
+       }
+      ],
+      "captures": {
+       1: "entity.name.function.swift",
+       2: "invalid.illegal.distinct-labels-not-allowed.swift",
+       5: "variable.parameter.function.swift",
+       7: "punctuation.separator.argument-label.swift"
+      }
+     },
+     {
+      "match": "(((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*\\k<q>))\\s*(:)",
+      "push": [
+       {
+        "match": "(?=[]),])",
+        "pop": true
+       },
+       {
+        "include": "r_declarations_available_types"
+       }
+      ],
+      "captures": {
+       1: "entity.name.function.swift",
+       2: "variable.parameter.function.swift",
+       4: "punctuation.separator.argument-label.swift"
+      }
+     },
+     {
+      "match": "(?![]),])(?=\\S)",
+      "push": [
+       {
+        "match": "(?=[]),])",
+        "pop": true
+       },
+       {
+        "include": "r_declarations_available_types"
+       },
+       {
+        "match": ":",
+        "scope": "invalid.illegal.extra-colon-in-parameter-list.swift"
+       }
+      ]
+     }
+    ],
+    "scope": "punctuation.definition.parameters.begin.swift"
+   }
+  ],
+  "r_declarations_type_enum_enum_case": [
+   {
+    "match": "((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))\\s*",
+    "push": [
+     {
+      "match": "(?<=\\))|(?![(=])",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_type_enum_associated_values"
+     },
+     {
+      "include": "r_declarations_type_enum_raw_value_assignment"
+     }
+    ],
+    "captures": {
+     1: "variable.other.enummember.swift"
+    }
+   }
+  ],
+  "r_declarations_type_enum_enum_case_clause": [
+   {
+    "match": "\\b(case)\\b\\s*",
+    "push": [
+     {
+      "match": "(?=[;}])|(?!\\G)(?!/[*/])(?=[^,\\s])",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_type_enum_enum_case"
+     },
+     {
+      "include": "r_declarations_type_enum_more_cases"
+     }
+    ],
+    "captures": {
+     1: "storage.type.enum.case.swift"
+    }
+   }
+  ],
+  "r_declarations_type_enum_more_cases": [
+   {
+    "match": ",\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.enum-case.more-cases"
+     },
+     {
+      "match": "(?!\\G)(?!/[*/])(?=[;}[^,\\s]])",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_declarations_type_enum_enum_case"
+     },
+     {
+      "include": "r_declarations_type_enum_more_cases"
+     }
+    ]
+   }
+  ],
+  "r_declarations_type_enum_raw_value_assignment": [
+   {
+    "match": "(=)\\s*",
+    "push": [
+     {
+      "match": "(?!\\G)",
+      "pop": true
+     },
+     {
+      "include": "r_comments"
+     },
+     {
+      "include": "r_literals"
+     }
+    ],
+    "captures": {
+     1: "keyword.operator.assignment.swift"
+    }
+   }
+  ],
+  "r_declarations_type_identifier": [
+   {
+    "match": "((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))\\s*",
+    "push": [
+     {
+      "match": "(?!<)",
+      "pop": true
+     },
+     {
+      "match": "(?=<)",
+      "push": [
+       {
+        "match": "(?!\\G)",
+        "pop": true
+       },
+       {
+        "include": "r_declarations_generic_argument_clause"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     1: "meta.type-name.swift",
+     2: "punctuation.definition.identifier.swift",
+     3: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_declarations_type_operators": [
+   {
+    "match": "(?<![-!%\\&*+./<=>^|~])(&)(?![-!%\\&*+./<=>^|~])",
+    "captures": {
+     1: "keyword.operator.type.composition.swift"
+    }
+   },
+   {
+    "match": "(?<![-!%\\&*+./<=>^|~])(~)(?![-!%\\&*+./<=>^|~])",
+    "captures": {
+     1: "keyword.operator.type.requirement-suppression.swift"
+    }
+   }
+  ],
+  "r_declarations_typealias": [
+   {
+    "match": "\\b(typealias)\\s+((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))\\s*",
+    "push": [
+     {
+      "meta_scope": "meta.definition.typealias.swift"
+     },
+     {
+      "match": "(?!\\G)$|(?=;|//|/\\*|$)",
+      "pop": true
+     },
+     {
+      "match": "\\G(?=<)",
+      "push": [
+       {
+        "match": "(?!\\G)",
+        "pop": true
+       },
+       {
+        "include": "r_declarations_generic_parameter_clause"
+       }
+      ]
+     },
+     {
+      "include": "r_declarations_typealias_assignment"
+     }
+    ],
+    "captures": {
+     1: "keyword.other.declaration-specifier.swift",
+     2: "entity.name.type.typealias.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_declarations_typealias_assignment": [
+   {
+    "match": "(=)\\s*",
+    "push": [
+     {
+      "match": "(?!\\G)$|(?=;|//|/\\*|$)",
+      "pop": true
+     },
+     {
+      "include": "r_declarations_available_types"
+     }
+    ],
+    "captures": {
+     1: "keyword.operator.assignment.swift"
+    }
+   }
+  ],
+  "r_declarations_typed_variable_declaration": [
+   {
+    "match": "\\b(?:(async)\\s+)?(let|var)\\b\\s+(?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>)\\s*:",
+    "push": [
+     {
+      "match": "(?=$|[={])",
+      "pop": true
+     },
+     {
+      "include": "r_declarations_available_types"
+     }
+    ],
+    "captures": {
+     1: "storage.modifier.async.swift",
+     2: "keyword.other.declaration-specifier.swift"
+    }
+   }
+  ],
+  "r_declarations_types_precedencegroup": [
+   {
+    "match": "\\b(?:BitwiseShift|Assignment|RangeFormation|Casting|Addition|NilCoalescing|Comparison|LogicalConjunction|LogicalDisjunction|Default|Ternary|Multiplication|FunctionArrow)Precedence\\b",
+    "scope": "support.type.swift"
+   }
+  ],
+  "r_expressions": [
+   {
+    "include": "r_expressions_without_trailing_closures_or_member_references"
+   },
+   {
+    "include": "r_expressions_trailing_closure"
+   },
+   {
+    "include": "r_member_reference"
+   }
+  ],
+  "r_expressions_trailing_closure": [
+   {
+    "match": "(#?(?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))(?=\\s*\\{)",
+    "scope": "meta.function-call.trailing-closure-only.swift",
+    "captures": {
+     1: "support.function.any-method.swift",
+     2: "punctuation.definition.identifier.swift",
+     3: "punctuation.definition.identifier.swift"
+    }
+   },
+   {
+    "match": "((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))\\s*(:)(?=\\s*\\{)",
+    "captures": {
+     1: "support.function.any-method.trailing-closure-label.swift",
+     2: "punctuation.definition.identifier.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.separator.argument-label.swift"
+    }
+   }
+  ],
+  "r_expressions_without_trailing_closures": [
+   {
+    "include": "r_expressions_without_trailing_closures_or_member_references"
+   }
+  ],
+  "r_expressions_without_trailing_closures_or_member_references": [
+   {
+    "include": "r_comments"
+   },
+   {
+    "include": "r_code_block"
+   },
+   {
+    "include": "r_attributes"
+   },
+   {
+    "include": "r_expressions_without_trailing_closures_or_member_references_closure_parameter"
+   },
+   {
+    "include": "r_literals"
+   },
+   {
+    "include": "r_operators"
+   },
+   {
+    "include": "r_builtin_types"
+   },
+   {
+    "include": "r_builtin_functions"
+   },
+   {
+    "include": "r_builtin_global_functions"
+   },
+   {
+    "include": "r_builtin_properties"
+   },
+   {
+    "include": "r_expressions_without_trailing_closures_or_member_references_compound_name"
+   },
+   {
+    "include": "r_conditionals"
+   },
+   {
+    "include": "r_keywords"
+   },
+   {
+    "include": "r_expressions_without_trailing_closures_or_member_references_availability_condition"
+   },
+   {
+    "include": "r_expressions_without_trailing_closures_or_member_references_function_or_macro_call_expression"
+   },
+   {
+    "include": "r_expressions_without_trailing_closures_or_member_references_macro_expansion"
+   },
+   {
+    "include": "r_expressions_without_trailing_closures_or_member_references_subscript_expression"
+   },
+   {
+    "include": "r_expressions_without_trailing_closures_or_member_references_parenthesized_expression"
+   },
+   {
+    "match": "\\b_\\b",
+    "scope": "support.variable.discard-value.swift"
+   }
+  ],
+  "r_expressions_without_trailing_closures_or_member_references_availability_condition": [
+   {
+    "match": "\\B(#(?:un)?available)(\\()",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.arguments.end.swift"
+     },
+     {
+      "match": "\\s*\\b((?:iOS|macOS|OSX|watchOS|tvOS|visionOS|UIKitForMac)(?:ApplicationExtension)?)\\b\\s+([0-9]+(?:\\.[0-9]+)*)\\b",
+      "captures": {
+       1: "keyword.other.platform.os.swift",
+       2: "constant.numeric.swift"
+      }
+     },
+     {
+      "match": "(\\*)\\s*(.*?)(?=[),])",
+      "captures": {
+       1: "keyword.other.platform.all.swift",
+       2: "invalid.illegal.character-not-allowed-here.swift"
+      }
+     },
+     {
+      "match": "[^),\\s]+",
+      "scope": "invalid.illegal.character-not-allowed-here.swift"
+     }
+    ],
+    "captures": {
+     1: "support.function.availability-condition.swift",
+     2: "punctuation.definition.arguments.begin.swift"
+    }
+   }
+  ],
+  "r_expressions_without_trailing_closures_or_member_references_closure_parameter": [
+   {
+    "match": "\\$[0-9]+",
+    "scope": "variable.language.closure-parameter.swift"
+   }
+  ],
+  "r_expressions_without_trailing_closures_or_member_references_compound_name": [
+   {
+    "match": "((?<q1>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q1>))\\(((((?<q2>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q2>)):)+)\\)",
+    "captures": {
+     1: "entity.name.function.compound-name.swift",
+     2: "punctuation.definition.entity.swift",
+     3: "punctuation.definition.entity.swift"
+    }
+   }
+  ],
+  "r_expressions_without_trailing_closures_or_member_references_expression_element_list": [
+   {
+    "include": "r_comments"
+   },
+   {
+    "match": "((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))\\s*(:)",
+    "push": [
+     {
+      "match": "(?=[]),])",
+      "pop": true
+     },
+     {
+      "include": "r_expressions"
+     }
+    ],
+    "captures": {
+     1: "support.function.any-method.swift",
+     2: "punctuation.definition.identifier.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.separator.argument-label.swift"
+    }
+   },
+   {
+    "match": "(?![]),])(?=\\S)",
+    "push": [
+     {
+      "match": "(?=[]),])",
+      "pop": true
+     },
+     {
+      "include": "r_expressions"
+     }
+    ]
+   }
+  ],
+  "r_expressions_without_trailing_closures_or_member_references_function_or_macro_call_expression": [
+   {
+    "match": "(#?(?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))\\s*(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.function-call.swift"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.arguments.end.swift"
+     },
+     {
+      "include": "r_expressions_without_trailing_closures_or_member_references_expression_element_list"
+     }
+    ],
+    "captures": {
+     1: "support.function.any-method.swift",
+     2: "punctuation.definition.identifier.swift",
+     3: "punctuation.definition.identifier.swift",
+     4: "punctuation.definition.arguments.begin.swift"
+    }
+   },
+   {
+    "match": "(?<=[])>_`}\\p{L}\\p{N}\\p{M}])\\s*(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.function-call.swift"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.arguments.end.swift"
+     },
+     {
+      "include": "r_expressions_without_trailing_closures_or_member_references_expression_element_list"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.arguments.begin.swift"
+    }
+   }
+  ],
+  "r_expressions_without_trailing_closures_or_member_references_macro_expansion": [
+   {
+    "match": "(#(?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))",
+    "scope": "support.function.any-method.swift"
+   }
+  ],
+  "r_expressions_without_trailing_closures_or_member_references_parenthesized_expression": [
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "match": "(\\))\\s*((?:\\b(?:async|throws|rethrows)\\s)*)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.section.tuple.end.swift"
+      }
+     },
+     {
+      "include": "r_expressions_without_trailing_closures_or_member_references_expression_element_list"
+     }
+    ],
+    "scope": "punctuation.section.tuple.begin.swift"
+   }
+  ],
+  "r_expressions_without_trailing_closures_or_member_references_subscript_expression": [
+   {
+    "match": "(?<=[_`\\p{L}\\p{N}\\p{M}])\\s*(\\[)",
+    "push": [
+     {
+      "meta_scope": "meta.subscript-expression.swift"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.definition.arguments.end.swift"
+     },
+     {
+      "include": "r_expressions_without_trailing_closures_or_member_references_expression_element_list"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.arguments.begin.swift"
+    }
+   }
+  ],
+  "r_keywords": [
+   {
+    "match": "(?<!\\.)\\b(?:if|else|guard|where|switch|case|default|fallthrough)\\b",
+    "scope": "keyword.control.branch.swift"
+   },
+   {
+    "match": "(?<!\\.)\\b(?:continue|break|fallthrough|return|yield)\\b",
+    "scope": "keyword.control.transfer.swift"
+   },
+   {
+    "match": "(?<!\\.)\\b(?:while|for|in|each)\\b",
+    "scope": "keyword.control.loop.swift"
+   },
+   {
+    "match": "(?<=\\s)\\bof\\b(?=\\s+[(\\[_\\p{L}\\d\\p{N}\\p{M}])",
+    "scope": "keyword.other.inline-array.swift"
+   },
+   {
+    "match": "\\bany\\b(?=\\s*`?[_\\p{L}])",
+    "scope": "keyword.other.operator.type.existential.swift"
+   },
+   {
+    "match": "(?<!\\.)\\b(repeat)\\b(\\s*)",
+    "captures": {
+     1: "keyword.control.loop.swift",
+     2: "punctuation.whitespace.trailing.repeat.swift"
+    }
+   },
+   {
+    "match": "(?<!\\.)\\bdefer\\b",
+    "scope": "keyword.control.defer.swift"
+   },
+   {
+    "match": "(?<!\\.)\\b(?:(await\\s+try)|(await))\\b",
+    "captures": {
+     1: "invalid.illegal.try-must-precede-await.swift",
+     2: "keyword.control.await.swift"
+    }
+   },
+   {
+    "match": "(?<!\\.)\\b(?:catch|throw|try)\\b|\\btry[!?]\\B",
+    "scope": "keyword.control.exception.swift"
+   },
+   {
+    "match": "(?<!\\.)\\b(?:|re)throws\\b",
+    "scope": "storage.modifier.exception.swift"
+   },
+   {
+    "match": "(?<!\\.)\\b(do)\\b(\\s*)",
+    "captures": {
+     1: "keyword.control.exception.swift",
+     2: "punctuation.whitespace.trailing.do.swift"
+    }
+   },
+   {
+    "match": "(?<!\\.)\\b(?:(async)\\s+)?(let|var)\\b",
+    "captures": {
+     1: "storage.modifier.async.swift",
+     2: "keyword.other.declaration-specifier.swift"
+    }
+   },
+   {
+    "match": "(?<!\\.)\\b(?:associatedtype|operator|typealias)\\b",
+    "scope": "keyword.other.declaration-specifier.swift"
+   },
+   {
+    "match": "(?<!\\.)\\b(class|enum|extension|precedencegroup|protocol|struct|actor)\\b(?=\\s*`?[_\\p{L}])"
+   },
+   {
+    "match": "(?<!\\.)\\b(?:inout|static|final|lazy|mutating|nonmutating|optional|indirect|required|override|dynamic|convenience|infix|prefix|postfix|distributed|borrowing|consuming)\\b",
+    "scope": "storage.modifier.swift"
+   },
+   {
+    "match": "(?<!\\.)\\bnonisolated(?:\\(nonsending\\)|\\b)",
+    "scope": "storage.modifier.swift"
+   },
+   {
+    "match": "\\binit[!?]|\\binit\\b|(?<!\\.)\\b(?:func|deinit|subscript|didSet|set|willSet|yielding\\s+borrow|yielding\\s+mutate)\\b",
+    "scope": "storage.type.function.swift"
+   },
+   {
+    "match": "\\b(get)(?:\\s+(throws\\s+async)|\\s+(async)(?:\\s+(throws))?)?\\b",
+    "captures": {
+     1: "storage.type.function.swift",
+     2: "invalid.illegal.async-must-precede-throws.swift",
+     3: "storage.modifier.async.swift",
+     4: "storage.modifier.exception.swift"
+    }
+   },
+   {
+    "match": "(?<!\\.)\\b(?:fileprivate|private|internal|public|open|package)\\b",
+    "scope": "keyword.other.declaration-specifier.accessibility.swift"
+   },
+   {
+    "match": "(?<!\\.)\\bunowned\\((?:|un)safe\\)|(?<!\\.)\\b(?:weak|unowned)\\b",
+    "scope": "keyword.other.capture-specifier.swift"
+   },
+   {
+    "match": "(?<=\\.)(?:(dynamicType|self)|(Protocol|Type))\\b",
+    "captures": {
+     1: "keyword.other.type.swift",
+     2: "keyword.other.type.metatype.swift"
+    }
+   },
+   {
+    "match": "(?<!\\.)\\b(?:super|self|Self)\\b",
+    "scope": "variable.language.swift"
+   },
+   {
+    "match": "(?:\\B#(?:file|filePath|fileID|line|column|function|dsohandle|isolation)|\\b__(?:FILE|LINE|COLUMN|FUNCTION|DSO_HANDLE)__)\\b",
+    "scope": "support.variable.swift"
+   },
+   {
+    "match": "(?<!\\.)\\bimport\\b",
+    "scope": "keyword.control.import.swift"
+   },
+   {
+    "match": "(?<!\\.)\\bconsume(?=\\s+`?[_\\p{L}])",
+    "scope": "keyword.control.consume.swift"
+   },
+   {
+    "match": "(?<!\\.)\\bcopy(?=\\s+`?[_\\p{L}])",
+    "scope": "keyword.control.copy.swift"
+   }
+  ],
+  "r_literals": [
+   {
+    "include": "r_literals_boolean"
+   },
+   {
+    "include": "r_literals_numeric"
+   },
+   {
+    "include": "r_literals_string"
+   },
+   {
+    "match": "\\bnil\\b",
+    "scope": "constant.language.nil.swift"
+   },
+   {
+    "match": "\\B#((?:color|image|file)Literal)\\b",
+    "scope": "support.function.object-literal.swift"
+   },
+   {
+    "match": "\\B#externalMacro\\b",
+    "scope": "support.function.builtin-macro.swift"
+   },
+   {
+    "match": "\\B#keyPath\\b",
+    "scope": "support.function.key-path.swift"
+   },
+   {
+    "match": "\\B(#selector)(\\()(?:\\s*([gs]etter)\\s*(:))?",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.arguments.end.swift"
+     },
+     {
+      "include": "r_expressions"
+     }
+    ],
+    "captures": {
+     1: "support.function.selector-reference.swift",
+     2: "punctuation.definition.arguments.begin.swift",
+     3: "support.variable.parameter.swift",
+     4: "punctuation.separator.argument-label.swift"
+    }
+   },
+   {
+    "include": "r_literals_regular_expression_literal"
+   }
+  ],
+  "r_literals_boolean": [
+   {
+    "match": "\\b(true|false)\\b",
+    "scope": "constant.language.boolean.swift"
+   }
+  ],
+  "r_literals_numeric": [
+   {
+    "match": "(\\B-|\\b)(?<![]()\\[_{}\\p{L}\\p{N}\\p{M}]\\.)[0-9][0-9_]*(?=\\.[0-9]|[Ee])(?:\\.[0-9][0-9_]*)?(?:[Ee][-+]?[0-9][0-9_]*)?\\b(?!\\.[0-9])",
+    "scope": "constant.numeric.float.decimal.swift"
+   },
+   {
+    "match": "(\\B-|\\b)(?<![]()\\[_{}\\p{L}\\p{N}\\p{M}]\\.)(0x\\h[_\\h]*)(?:\\.\\h[_\\h]*)?[Pp][-+]?[0-9][0-9_]*\\b(?!\\.[0-9])",
+    "scope": "constant.numeric.float.hexadecimal.swift"
+   },
+   {
+    "match": "(\\B-|\\b)(?<![]()\\[_{}\\p{L}\\p{N}\\p{M}]\\.)(0x\\h[_\\h]*)(?:\\.\\h[_\\h]*)?[Pp][-+]?\\w*\\b(?!\\.[0-9])",
+    "scope": "invalid.illegal.numeric.float.invalid-exponent.swift"
+   },
+   {
+    "match": "(\\B-|\\b)(?<![]()\\[_{}\\p{L}\\p{N}\\p{M}]\\.)(0x\\h[_\\h]*)\\.[0-9][.\\w]*",
+    "scope": "invalid.illegal.numeric.float.missing-exponent.swift"
+   },
+   {
+    "match": "(?<=\\s|^)-?\\.[0-9][.\\w]*",
+    "scope": "invalid.illegal.numeric.float.missing-leading-zero.swift"
+   },
+   {
+    "match": "(\\B-|\\b)0[box]_[_\\h]*(?:[EPep][-+]?\\w+)?[.\\w]+",
+    "scope": "invalid.illegal.numeric.leading-underscore.swift"
+   },
+   {
+    "match": "(?<=[]()\\[_{}\\p{L}\\p{N}\\p{M}]\\.)[0-9]+\\b"
+   },
+   {
+    "match": "(\\B-|\\b)(?<![]()\\[_{}\\p{L}\\p{N}\\p{M}]\\.)0b[01][01_]*\\b(?!\\.[0-9])",
+    "scope": "constant.numeric.integer.binary.swift"
+   },
+   {
+    "match": "(\\B-|\\b)(?<![]()\\[_{}\\p{L}\\p{N}\\p{M}]\\.)0o[0-7][0-7_]*\\b(?!\\.[0-9])",
+    "scope": "constant.numeric.integer.octal.swift"
+   },
+   {
+    "match": "(\\B-|\\b)(?<![]()\\[_{}\\p{L}\\p{N}\\p{M}]\\.)[0-9][0-9_]*\\b(?!\\.[0-9])",
+    "scope": "constant.numeric.integer.decimal.swift"
+   },
+   {
+    "match": "(\\B-|\\b)(?<![]()\\[_{}\\p{L}\\p{N}\\p{M}]\\.)0x\\h[_\\h]*\\b(?!\\.[0-9])",
+    "scope": "constant.numeric.integer.hexadecimal.swift"
+   },
+   {
+    "match": "(\\B-|\\b)[0-9][.\\w]*",
+    "scope": "invalid.illegal.numeric.other.swift"
+   }
+  ],
+  "r_literals_regular_expression_literal": [
+   {
+    "match": "(#+)/\\n",
+    "push": [
+     {
+      "meta_scope": "string.regexp.block.swift"
+     },
+     {
+      "match": "/\\1",
+      "pop": true
+     },
+     {
+      "include": "r_literals_regular_expression_literal_regex_guts"
+     },
+     {
+      "include": "r_literals_regular_expression_literal_line_comment"
+     }
+    ]
+   },
+   {
+    "match": "(/)(?!\\s)(?!/)(?:\\\\\\s(?=/)|(?<guts>(?>(?:\\\\Q(?:(?!\\\\E)(?!/).)*+(?:\\\\E|(?=/))|\\\\.|\\(\\?#[^)]*\\)|\\(\\?(?>\\{(?:[^{].*?|\\{[^{].*?}|\\{\\{[^{].*?}}|\\{\\{\\{[^{].*?}}}|\\{\\{\\{\\{[^{].*?}}}}|\\{\\{\\{\\{\\{.+?}}}}})})(?:\\[(?!\\d)\\w+])?[<>X]?\\)|\\[(?:\\\\.|[^]\\[\\\\]|\\[(?:\\\\.|[^]\\[\\\\]|\\[(?:\\\\.|[^]\\[\\\\]|\\[(?:\\\\.|[^]\\[\\\\])+])+])+])+]|\\(\\g<guts>?+\\)|(?:(?!/)[^()\\[\\\\])+)+))?+(?<!\\s))(/)",
+    "scope": "string.regexp.line.swift",
+    "captures": {
+     1: "punctuation.definition.string.begin.regexp.swift",
+     3: "punctuation.definition.string.end.regexp.swift"
+    }
+   },
+   {
+    "match": "((#+)/)(?<guts>(?>(?:\\\\Q(?:(?!\\\\E)(?!/\\2).)*+(?:\\\\E|(?=/\\2))|\\\\.|\\(\\?#[^)]*\\)|\\(\\?(?>\\{(?:[^{].*?|\\{[^{].*?}|\\{\\{[^{].*?}}|\\{\\{\\{[^{].*?}}}|\\{\\{\\{\\{[^{].*?}}}}|\\{\\{\\{\\{\\{.+?}}}}})})(?:\\[(?!\\d)\\w+])?[<>X]?\\)|\\[(?:\\\\.|[^]\\[\\\\]|\\[(?:\\\\.|[^]\\[\\\\]|\\[(?:\\\\.|[^]\\[\\\\]|\\[(?:\\\\.|[^]\\[\\\\])+])+])+])+]|\\(\\g<guts>?+\\)|(?:(?!/\\2)[^()\\[\\\\])+)+))?+(/\\2)|#+/.+(\\n)",
+    "scope": "string.regexp.line.extended.swift",
+    "captures": {
+     1: "punctuation.definition.string.begin.regexp.swift",
+     4: "punctuation.definition.string.end.regexp.swift",
+     5: "invalid.illegal.returns-not-allowed.regexp"
+    }
+   }
+  ],
+  "r_literals_regular_expression_literal_backreference_or_subpattern": [
+   {
+    "match": "(\\\\g\\{)(?:((?!\\d)\\w+)(?:([-+])(\\d+))?|([-+]?\\d+)(?:([-+])(\\d+))?)(})",
+    "captures": {
+     1: "constant.character.escape.backslash.regexp",
+     2: "variable.other.group-name.regexp",
+     3: "keyword.operator.recursion-level.regexp",
+     4: "constant.numeric.integer.decimal.regexp",
+     5: "constant.numeric.integer.decimal.regexp",
+     6: "keyword.operator.recursion-level.regexp",
+     7: "constant.numeric.integer.decimal.regexp",
+     8: "constant.character.escape.backslash.regexp"
+    }
+   },
+   {
+    "match": "(\\\\g)([-+]?\\d+)(?:([-+])(\\d+))?",
+    "captures": {
+     1: "constant.character.escape.backslash.regexp",
+     2: "constant.numeric.integer.decimal.regexp",
+     3: "keyword.operator.recursion-level.regexp",
+     4: "constant.numeric.integer.decimal.regexp"
+    }
+   },
+   {
+    "match": "(\\\\[gk]<)(?:((?!\\d)\\w+)(?:([-+])(\\d+))?|([-+]?\\d+)(?:([-+])(\\d+))?)(>)",
+    "captures": {
+     1: "constant.character.escape.backslash.regexp",
+     2: "variable.other.group-name.regexp",
+     3: "keyword.operator.recursion-level.regexp",
+     4: "constant.numeric.integer.decimal.regexp",
+     5: "constant.numeric.integer.decimal.regexp",
+     6: "keyword.operator.recursion-level.regexp",
+     7: "constant.numeric.integer.decimal.regexp",
+     8: "constant.character.escape.backslash.regexp"
+    }
+   },
+   {
+    "match": "(\\\\[gk]')(?:((?!\\d)\\w+)(?:([-+])(\\d+))?|([-+]?\\d+)(?:([-+])(\\d+))?)(')",
+    "captures": {
+     1: "constant.character.escape.backslash.regexp",
+     2: "variable.other.group-name.regexp",
+     3: "keyword.operator.recursion-level.regexp",
+     4: "constant.numeric.integer.decimal.regexp",
+     5: "constant.numeric.integer.decimal.regexp",
+     6: "keyword.operator.recursion-level.regexp",
+     7: "constant.numeric.integer.decimal.regexp",
+     8: "constant.character.escape.backslash.regexp"
+    }
+   },
+   {
+    "match": "(\\\\k\\{)((?!\\d)\\w+)(?:([-+])(\\d+))?(})",
+    "captures": {
+     1: "constant.character.escape.backslash.regexp",
+     2: "variable.other.group-name.regexp",
+     3: "keyword.operator.recursion-level.regexp",
+     4: "constant.numeric.integer.decimal.regexp",
+     5: "constant.character.escape.backslash.regexp"
+    }
+   },
+   {
+    "match": "\\\\[1-9][0-9]+",
+    "scope": "keyword.other.back-reference.regexp"
+   },
+   {
+    "match": "(\\(\\?(?:P[=>]|&))((?!\\d)\\w+)(?:([-+])(\\d+))?(\\))",
+    "captures": {
+     1: "keyword.other.back-reference.regexp",
+     2: "variable.other.group-name.regexp",
+     3: "keyword.operator.recursion-level.regexp",
+     4: "constant.numeric.integer.decimal.regexp",
+     5: "keyword.other.back-reference.regexp"
+    }
+   },
+   {
+    "match": "\\(\\?R\\)",
+    "scope": "keyword.other.back-reference.regexp"
+   },
+   {
+    "match": "(\\(\\?)([-+]?\\d+)(?:([-+])(\\d+))?(\\))",
+    "captures": {
+     1: "keyword.other.back-reference.regexp",
+     2: "constant.numeric.integer.decimal.regexp",
+     3: "keyword.operator.recursion-level.regexp",
+     4: "constant.numeric.integer.decimal.regexp",
+     5: "keyword.other.back-reference.regexp"
+    }
+   }
+  ],
+  "r_literals_regular_expression_literal_backtracking_directive_or_global_matching_option": [
+   {
+    "match": "(\\(\\*)(?:(ACCEPT|FAIL|F|MARK(?=:)|(?=:)|COMMIT|PRUNE|SKIP|THEN)(?:(:)([^)]+))?|(LIMIT_(?:DEPTH|HEAP|MATCH))(=)(\\d+)|(CRLF|CR|ANYCRLF|ANY|LF|NUL|BSR_ANYCRLF|BSR_UNICODE|NOTEMPTY_ATSTART|NOTEMPTY|NO_AUTO_POSSESS|NO_DOTSTAR_ANCHOR|NO_JIT|NO_START_OPT|UTF|UCP))(\\))",
+    "captures": {
+     1: "keyword.control.directive.regexp",
+     2: "keyword.control.directive.regexp",
+     3: "keyword.control.directive.regexp",
+     4: "variable.language.tag.regexp",
+     5: "keyword.control.directive.regexp",
+     6: "keyword.operator.assignment.regexp",
+     7: "constant.numeric.integer.decimal.regexp",
+     8: "keyword.control.directive.regexp",
+     9: "keyword.control.directive.regexp"
+    }
+   }
+  ],
+  "r_literals_regular_expression_literal_callout": [
+   {
+    "match": "(\\()(?<keyw>\\?C)(?:(?<num>\\d+)|`(?<name>(?:[^`]|``)*)`|'(?<name>(?:[^']|'')*)'|\"(?<name>(?:[^\"]|\"\")*)\"|\\^(?<name>(?:[^^]|\\^\\^)*)\\^|%(?<name>(?:[^%]|%%)*)%|#(?<name>(?:[^#]|##)*)#|\\$(?<name>(?:[^$]|\\$\\$)*)\\$|\\{(?<name>(?:[^}]|}})*)})?(\\))|(\\()(?<keyw>\\*)(?<name>(?!\\d)\\w+)(?:\\[(?<tag>(?!\\d)\\w+)])?(?:\\{[^,}]+(?:,[^,}]+)*})?(\\))|(\\()(?<keyw>\\?)(?>(\\{(?:\\g<20>|(?!\\{).*?)}))(?:\\[(?<tag>(?!\\d)\\w+)])?(?<keyw>[<>X]?)(\\))",
+    "scope": "meta.callout.regexp",
+    "captures": {
+     1: "punctuation.definition.group.regexp",
+     2: "keyword.control.callout.regexp",
+     3: "constant.numeric.integer.decimal.regexp",
+     4: "entity.name.function.callout.regexp",
+     5: "entity.name.function.callout.regexp",
+     6: "entity.name.function.callout.regexp",
+     7: "entity.name.function.callout.regexp",
+     8: "entity.name.function.callout.regexp",
+     9: "entity.name.function.callout.regexp",
+     10: "entity.name.function.callout.regexp",
+     11: "entity.name.function.callout.regexp",
+     12: "punctuation.definition.group.regexp",
+     13: "punctuation.definition.group.regexp",
+     14: "keyword.control.callout.regexp",
+     15: "entity.name.function.callout.regexp",
+     16: "variable.language.tag-name.regexp",
+     17: "punctuation.definition.group.regexp",
+     18: "punctuation.definition.group.regexp",
+     19: "keyword.control.callout.regexp",
+     21: "variable.language.tag-name.regexp",
+     22: "keyword.control.callout.regexp",
+     23: "punctuation.definition.group.regexp"
+    }
+   }
+  ],
+  "r_literals_regular_expression_literal_character_properties": [
+   {
+    "match": "\\\\[Pp]\\{([-\\s\\w]+(?:=[-\\s\\w]+)?)}|(\\[:)([-\\s\\w]+(?:=[-\\s\\w]+)?)(:])",
+    "scope": "constant.other.character-class.set.regexp",
+    "captures": {
+     1: "support.variable.character-property.regexp",
+     2: "punctuation.definition.character-class.regexp",
+     3: "support.variable.character-property.regexp",
+     4: "punctuation.definition.character-class.regexp"
+    }
+   }
+  ],
+  "r_literals_regular_expression_literal_custom_char_class": [
+   {
+    "match": "(\\[)(\\^)?",
+    "push": [
+     {
+      "meta_scope": "constant.other.character-class.set.regexp"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.definition.character-class.regexp"
+     },
+     {
+      "include": "r_literals_regular_expression_literal_custom_char_class_members"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.character-class.regexp",
+     2: "keyword.operator.negation.regexp"
+    }
+   }
+  ],
+  "r_literals_regular_expression_literal_custom_char_class_members": [
+   {
+    "match": "\\\\b",
+    "scope": "constant.character.escape.backslash.regexp"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_custom_char_class"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_quote"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_set_operators"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_unicode_scalars"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_character_properties"
+   }
+  ],
+  "r_literals_regular_expression_literal_group_option_toggle": [
+   {
+    "match": "\\(\\?(?:\\^(?:[DJPSUWimnswx]|xx|y\\{[gw]})*|(?:[DJPSUWimnswx]|xx|y\\{[gw]})+|(?:[DJPSUWimnswx]|xx|y\\{[gw]})*-(?:[DJPSUWimnswx]|xx|y\\{[gw]})*)\\)",
+    "scope": "keyword.other.option-toggle.regexp"
+   }
+  ],
+  "r_literals_regular_expression_literal_group_or_conditional": [
+   {
+    "match": "(\\()(\\?~)",
+    "push": [
+     {
+      "meta_scope": "meta.group.absent.regexp"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.group.regexp"
+     },
+     {
+      "include": "r_literals_regular_expression_literal_regex_guts"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.group.regexp",
+     2: "keyword.control.conditional.absent.regexp"
+    }
+   },
+   {
+    "match": "(\\()(?<cond>\\?\\()(?:(?<NumberRef>(?<num>[-+]?\\d+)(?:(?<op>[-+])(?<num>\\d+))?)|(?<cond>R)\\g<NumberRef>?|(?<cond>R&)(?<NamedRef>(?<name>(?!\\d)\\w+)(?:(?<op>[-+])(?<num>\\d+))?)|(?<cond><)(?:\\g<NamedRef>|\\g<NumberRef>)(?<cond>>)|(?<cond>')(?:\\g<NamedRef>|\\g<NumberRef>)(?<cond>')|(?<cond>DEFINE)|(?<cond>VERSION)(?<compar>>?=)(?<num>\\d+\\.\\d+))(?<cond>\\))|(\\()(?<cond>\\?)(?=\\()",
+    "push": [
+     {
+      "meta_scope": "meta.group.conditional.regexp"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.group.regexp"
+     },
+     {
+      "include": "r_literals_regular_expression_literal_regex_guts"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.group.regexp",
+     2: "keyword.control.conditional.regexp",
+     4: "constant.numeric.integer.decimal.regexp",
+     5: "keyword.operator.recursion-level.regexp",
+     6: "constant.numeric.integer.decimal.regexp",
+     7: "keyword.control.conditional.regexp",
+     8: "keyword.control.conditional.regexp",
+     10: "variable.other.group-name.regexp",
+     11: "keyword.operator.recursion-level.regexp",
+     12: "constant.numeric.integer.decimal.regexp",
+     13: "keyword.control.conditional.regexp",
+     14: "keyword.control.conditional.regexp",
+     15: "keyword.control.conditional.regexp",
+     16: "keyword.control.conditional.regexp",
+     17: "keyword.control.conditional.regexp",
+     18: "keyword.control.conditional.regexp",
+     19: "keyword.operator.comparison.regexp",
+     20: "constant.numeric.integer.decimal.regexp",
+     21: "keyword.control.conditional.regexp",
+     22: "punctuation.definition.group.regexp",
+     23: "keyword.control.conditional.regexp"
+    }
+   },
+   {
+    "match": "(\\()((\\?)(?:([!*:=>|]|<[!*=])|P?<(?:((?!\\d)\\w+)(-))?((?!\\d)\\w+)>|'(?:((?!\\d)\\w+)(-))?((?!\\d)\\w+)'|(?:\\^(?:[DJPSUWimnswx]|xx|y\\{[gw]})*|(?:[DJPSUWimnswx]|xx|y\\{[gw]})+|(?:[DJPSUWimnswx]|xx|y\\{[gw]})*-(?:[DJPSUWimnswx]|xx|y\\{[gw]})*):)|\\*(atomic|pla|positive_lookahead|nla|negative_lookahead|plb|positive_lookbehind|nlb|negative_lookbehind|napla|non_atomic_positive_lookahead|naplb|non_atomic_positive_lookbehind|sr|script_run|asr|atomic_script_run):)?+",
+    "push": [
+     {
+      "meta_scope": "meta.group.regexp"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.group.regexp"
+     },
+     {
+      "include": "r_literals_regular_expression_literal_regex_guts"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.group.regexp",
+     2: "keyword.other.group-options.regexp",
+     3: "punctuation.definition.group.regexp",
+     4: "punctuation.definition.group.regexp",
+     5: "variable.other.group-name.regexp",
+     6: "keyword.operator.balancing-group.regexp",
+     7: "variable.other.group-name.regexp",
+     8: "variable.other.group-name.regexp",
+     9: "keyword.operator.balancing-group.regexp",
+     10: "variable.other.group-name.regexp"
+    }
+   }
+  ],
+  "r_literals_regular_expression_literal_line_comment": [
+   {
+    "match": "(#).*$",
+    "scope": "comment.line.regexp",
+    "captures": {
+     1: "punctuation.definition.comment.regexp"
+    }
+   }
+  ],
+  "r_literals_regular_expression_literal_quote": [
+   {
+    "match": "\\\\Q",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.regexp.swift"
+     },
+     {
+      "match": "\\\\E|(\\n)",
+      "pop": true,
+      "scope": "constant.character.escape.backslash.regexp",
+      "captures": {
+       1: "invalid.illegal.returns-not-allowed.regexp"
+      }
+     }
+    ],
+    "scope": "constant.character.escape.backslash.regexp"
+   }
+  ],
+  "r_literals_regular_expression_literal_regex_guts": [
+   {
+    "include": "r_literals_regular_expression_literal_quote"
+   },
+   {
+    "match": "\\(\\?#",
+    "push": [
+     {
+      "meta_scope": "comment.block.regexp"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.comment.end.regexp"
+     }
+    ],
+    "scope": "punctuation.definition.comment.begin.regexp"
+   },
+   {
+    "match": "<\\{",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.expression.regexp"
+     },
+     {
+      "match": "}>",
+      "pop": true,
+      "scope": "punctuation.section.embedded.end.regexp"
+     }
+    ],
+    "scope": "punctuation.section.embedded.begin.regexp"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_unicode_scalars"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_character_properties"
+   },
+   {
+    "match": "[$^]|\\\\[ABGYZbyz]|\\\\K",
+    "scope": "keyword.control.anchor.regexp"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_backtracking_directive_or_global_matching_option"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_callout"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_backreference_or_subpattern"
+   },
+   {
+    "match": "\\.|\\\\[CDHNORSVWXdhsvw]",
+    "scope": "constant.character.character-class.regexp"
+   },
+   {
+    "match": "\\\\c.",
+    "scope": "constant.character.entity.control-character.regexp"
+   },
+   {
+    "match": "\\\\[^c]",
+    "scope": "constant.character.escape.backslash.regexp"
+   },
+   {
+    "match": "\\|",
+    "scope": "keyword.operator.or.regexp"
+   },
+   {
+    "match": "[*+?]",
+    "scope": "keyword.operator.quantifier.regexp"
+   },
+   {
+    "match": "\\{(?:\\s*\\d+\\s*(?:,\\s*\\d*\\s*)?}|\\s*,\\s*\\d+\\s*})",
+    "scope": "keyword.operator.quantifier.regexp"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_custom_char_class"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_group_option_toggle"
+   },
+   {
+    "include": "r_literals_regular_expression_literal_group_or_conditional"
+   }
+  ],
+  "r_literals_regular_expression_literal_set_operators": [
+   {
+    "match": "&&",
+    "scope": "keyword.operator.intersection.regexp.swift"
+   },
+   {
+    "match": "--",
+    "scope": "keyword.operator.subtraction.regexp.swift"
+   },
+   {
+    "match": "~~",
+    "scope": "keyword.operator.symmetric-difference.regexp.swift"
+   }
+  ],
+  "r_literals_regular_expression_literal_unicode_scalars": [
+   {
+    "match": "\\\\(?:u\\{\\s*(?:\\h+\\s*)+}|u\\h{4}|x\\{\\h+}|x\\h{0,2}|U\\h{8}|o\\{[0-7]+}|0[0-7]{0,3}|N\\{(?:U\\+\\h{1,8}|[-\\s\\w]+)})",
+    "scope": "constant.character.numeric.regexp"
+   }
+  ],
+  "r_literals_string": [
+   {
+    "match": "\"\"\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.block.swift"
+     },
+     {
+      "match": "\"\"\"(#*)",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.swift",
+      "captures": {
+       1: "invalid.illegal.extra-closing-delimiter.swift"
+      }
+     },
+     {
+      "match": "\\G(?:.+(?=\"\"\")|.+)",
+      "scope": "invalid.illegal.content-after-opening-delimiter.swift"
+     },
+     {
+      "match": "\\\\\\s*\\n",
+      "scope": "constant.character.escape.newline.swift"
+     },
+     {
+      "include": "r_literals_string_string_guts"
+     },
+     {
+      "match": "\\S((?!\\\\\\().)*(?=\"\"\")",
+      "scope": "invalid.illegal.content-before-closing-delimiter.swift"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.swift"
+   },
+   {
+    "match": "#\"\"\"(?!#)(?=(?:[^\"]|\"(?!#))*$)",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.block.raw.swift"
+     },
+     {
+      "match": "\"\"\"#(#*)",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.swift",
+      "captures": {
+       1: "invalid.illegal.extra-closing-delimiter.swift"
+      }
+     },
+     {
+      "match": "\\G(?:.+(?=\"\"\")|.+)",
+      "scope": "invalid.illegal.content-after-opening-delimiter.swift"
+     },
+     {
+      "match": "\\\\#\\s*\\n",
+      "scope": "constant.character.escape.newline.swift"
+     },
+     {
+      "include": "r_literals_string_raw_string_guts"
+     },
+     {
+      "match": "\\S((?!\\\\#\\().)*(?=\"\"\")",
+      "scope": "invalid.illegal.content-before-closing-delimiter.swift"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.swift"
+   },
+   {
+    "match": "(?<!#)(##+)\"\"\"(?!\\1)(?=(?:[^\"]|\"(?!\\1))*$)",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.block.raw.swift"
+     },
+     {
+      "match": "\"\"\"\\1(#*)",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.swift",
+      "captures": {
+       1: "invalid.illegal.extra-closing-delimiter.swift"
+      }
+     },
+     {
+      "match": "\\G(?:.+(?=\"\"\")|.+)",
+      "scope": "invalid.illegal.content-after-opening-delimiter.swift"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.swift"
+   },
+   {
+    "match": "\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.single-line.swift"
+     },
+     {
+      "match": "\"(#*)",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.swift",
+      "captures": {
+       1: "invalid.illegal.extra-closing-delimiter.swift"
+      }
+     },
+     {
+      "match": "[\\n\\r]",
+      "scope": "invalid.illegal.returns-not-allowed.swift"
+     },
+     {
+      "include": "r_literals_string_string_guts"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.swift"
+   },
+   {
+    "match": "(?<!#)(##+)\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.single-line.raw.swift"
+     },
+     {
+      "match": "\"\\1(#*)",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.raw.swift",
+      "captures": {
+       1: "invalid.illegal.extra-closing-delimiter.swift"
+      }
+     },
+     {
+      "match": "[\\n\\r]",
+      "scope": "invalid.illegal.returns-not-allowed.swift"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.raw.swift"
+   },
+   {
+    "match": "#\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.single-line.raw.swift"
+     },
+     {
+      "match": "\"#(#*)",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.raw.swift",
+      "captures": {
+       1: "invalid.illegal.extra-closing-delimiter.swift"
+      }
+     },
+     {
+      "match": "[\\n\\r]",
+      "scope": "invalid.illegal.returns-not-allowed.swift"
+     },
+     {
+      "include": "r_literals_string_raw_string_guts"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.raw.swift"
+   }
+  ],
+  "r_literals_string_raw_string_guts": [
+   {
+    "match": "\\\\#[\"'0\\\\nrt]",
+    "scope": "constant.character.escape.swift"
+   },
+   {
+    "match": "\\\\#u\\{\\h{1,8}}",
+    "scope": "constant.character.escape.unicode.swift"
+   },
+   {
+    "match": "\\\\#\\(",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.line.swift"
+     },
+     {
+      "meta_content_scope": "source.swift"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.section.embedded.end.swift"
+     },
+     {
+      "include": "main"
+     },
+     {
+      "match": "\\(",
+      "push": [
+       {
+        "match": "\\)",
+        "pop": true
+       }
+      ]
+     }
+    ],
+    "scope": "punctuation.section.embedded.begin.swift"
+   },
+   {
+    "match": "\\\\#.",
+    "scope": "invalid.illegal.escape-not-recognized"
+   }
+  ],
+  "r_literals_string_string_guts": [
+   {
+    "match": "\\\\[\"'0\\\\nrt]",
+    "scope": "constant.character.escape.swift"
+   },
+   {
+    "match": "\\\\u\\{\\h{1,8}}",
+    "scope": "constant.character.escape.unicode.swift"
+   },
+   {
+    "match": "\\\\\\(",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.line.swift"
+     },
+     {
+      "meta_content_scope": "source.swift"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.section.embedded.end.swift"
+     },
+     {
+      "include": "main"
+     },
+     {
+      "match": "\\(",
+      "push": [
+       {
+        "match": "\\)",
+        "pop": true
+       }
+      ]
+     }
+    ],
+    "scope": "punctuation.section.embedded.begin.swift"
+   },
+   {
+    "match": "\\\\.",
+    "scope": "invalid.illegal.escape-not-recognized"
+   }
+  ],
+  "r_member_reference": [
+   {
+    "match": "(?<=\\.)((?<q>`?)[_\\p{L}][_\\p{L}\\p{N}\\p{M}]*(\\k<q>))",
+    "captures": {
+     1: "variable.other.swift",
+     2: "punctuation.definition.identifier.swift",
+     3: "punctuation.definition.identifier.swift"
+    }
+   }
+  ],
+  "r_operators": [
+   {
+    "match": "\\b(is\\b|as([!?]\\B|\\b))",
+    "scope": "keyword.operator.type-casting.swift"
+   },
+   {
+    "match": "(?=(?<oph>[-!%\\&*+/<-?^|~¡-§©«¬®°±¶»¿×÷‖‗†-‧‰-‾⁁-⁓⁕-⁞←-⏿─-❵➔-⯿⸀-⹿、。〃〈-〰])|\\.(\\g<oph>|[.̀-ͯ᷀-᷿⃐-⃿︀-️︠-︯\\x{E0100}-\\x{E01EF}]))",
+    "push": [
+     {
+      "match": "(?!\\G)",
+      "pop": true
+     },
+     {
+      "match": "\\G(?<=^|[(,:;\\[{\\s])((?!(//|/\\*|\\*/))([-!%\\&*+/<-?^|~¡-§©«¬®°±¶»¿×÷̀-ͯ᷀-᷿‖‗†-‧‰-‾⁁-⁓⁕-⁞⃐-⃿←-⏿─-❵➔-⯿⸀-⹿、。〃〈-〰︀-️︠-︯\\x{E0100}-\\x{E01EF}]))++(?![]),:;}\\s]|\\z)"
+     },
+     {
+      "match": "\\G(?<!^|[(,:;\\[{\\s])((?!(//|/\\*|\\*/))([-!%\\&*+/<-?^|~¡-§©«¬®°±¶»¿×÷̀-ͯ᷀-᷿‖‗†-‧‰-‾⁁-⁓⁕-⁞⃐-⃿←-⏿─-❵➔-⯿⸀-⹿、。〃〈-〰︀-️︠-︯\\x{E0100}-\\x{E01EF}]))++(?=[]),:;}\\s]|\\z)"
+     },
+     {
+      "match": "\\G((?!(//|/\\*|\\*/))([-!%\\&*+/<-?^|~¡-§©«¬®°±¶»¿×÷̀-ͯ᷀-᷿‖‗†-‧‰-‾⁁-⁓⁕-⁞⃐-⃿←-⏿─-❵➔-⯿⸀-⹿、。〃〈-〰︀-️︠-︯\\x{E0100}-\\x{E01EF}]))++"
+     },
+     {
+      "match": "\\G(?<=^|[(,:;\\[{\\s])\\.((?!(//|/\\*|\\*/))([-!%\\&*+./<-?^|~¡-§©«¬®°±¶»¿×÷̀-ͯ᷀-᷿‖‗†-‧‰-‾⁁-⁓⁕-⁞⃐-⃿←-⏿─-❵➔-⯿⸀-⹿、。〃〈-〰︀-️︠-︯\\x{E0100}-\\x{E01EF}]))++(?![]),:;}\\s]|\\z)"
+     },
+     {
+      "match": "\\G(?<!^|[(,:;\\[{\\s])\\.((?!(//|/\\*|\\*/))([-!%\\&*+./<-?^|~¡-§©«¬®°±¶»¿×÷̀-ͯ᷀-᷿‖‗†-‧‰-‾⁁-⁓⁕-⁞⃐-⃿←-⏿─-❵➔-⯿⸀-⹿、。〃〈-〰︀-️︠-︯\\x{E0100}-\\x{E01EF}]))++(?=[]),:;}\\s]|\\z)"
+     },
+     {
+      "match": "\\G\\.((?!(//|/\\*|\\*/))([-!%\\&*+./<-?^|~¡-§©«¬®°±¶»¿×÷̀-ͯ᷀-᷿‖‗†-‧‰-‾⁁-⁓⁕-⁞⃐-⃿←-⏿─-❵➔-⯿⸀-⹿、。〃〈-〰︀-️︠-︯\\x{E0100}-\\x{E01EF}]))++"
+     }
+    ]
+   },
+   {
+    "match": ":",
+    "scope": "keyword.operator.ternary.swift"
+   }
+  ],
+  "r_root": [
+   {
+    "include": "r_compiler_control"
+   },
+   {
+    "include": "r_declarations"
+   },
+   {
+    "include": "r_expressions"
+   }
+  ]
+ }
+}

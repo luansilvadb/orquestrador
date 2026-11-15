@@ -31,8 +31,6 @@ pub struct Backend {
     pub avisos: crate::terminal::motor::Avisos,
     /// O `interface.json`; `RefCell` porque o backend é compartilhado por `Rc`.
     pub estado: orquestrador_ui::estado::Compartilhado,
-    /// Liga o poll do Git; os testes desligam para o executor ficar ocioso.
-    pub poll_git: bool,
 }
 
 impl Backend {
@@ -40,11 +38,11 @@ impl Backend {
     pub fn real() -> (Backend, Remetente, Receptor) {
         let cfg_path = config::config_path().unwrap_or_default();
         let interface = cfg_path.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.join("interface.json"));
-        Self::com(cli::Exes::real(), session::Places::real(), cfg_path, interface, true)
+        Self::com(cli::Exes::real(), session::Places::real(), cfg_path, interface)
     }
 
     pub fn com(
-        exes: cli::Exes, places: session::Places, cfg_path: PathBuf, arquivo_interface: Option<PathBuf>, poll_git: bool,
+        exes: cli::Exes, places: session::Places, cfg_path: PathBuf, arquivo_interface: Option<PathBuf>,
     ) -> (Backend, Remetente, Receptor) {
         let (tx, rx) = async_channel::unbounded();
         let emissor = tx.clone();
@@ -56,31 +54,7 @@ impl Backend {
         let sink: TermSink = Arc::new(move |projeto, id, _seq, bytes| destino.receber(projeto, id, bytes));
         let projetos = Arc::new(Projects::new(exes, places, cfg_path, emit).with_term_sink(sink));
         terminais.ligar(&projetos);
-        (Backend { projetos, terminais, avisos, estado: std::rc::Rc::new(RefCell::new(Estado::abrir(arquivo_interface))), poll_git }, tx, rx)
-    }
-}
-
-/// O resumo do Git que a moldura mostra: branch, contadores de sync e alterados (badge).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ResumoGit {
-    pub branch: String,
-    pub ahead: u32,
-    pub behind: u32,
-    pub alterados: usize,
-}
-
-/// `None` quando o projeto não é a raiz de um repositório (mesma regra de `isRepo` no React).
-pub fn resumo_git(projetos: &Projects, id: &str) -> Option<ResumoGit> {
-    use orquestrador_core::ide::git;
-    let repo = projetos.core(id).ok()?.repo().ok()?;
-    match git::estado(&repo).ok()? {
-        git::Estado::Repo { status } => Some(ResumoGit {
-            branch: status.branch,
-            ahead: status.ahead,
-            behind: status.behind,
-            alterados: status.files.len(),
-        }),
-        _ => None,
+        (Backend { projetos, terminais, avisos, estado: std::rc::Rc::new(RefCell::new(Estado::abrir(arquivo_interface))) }, tx, rx)
     }
 }
 

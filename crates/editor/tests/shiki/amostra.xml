@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Comentario -->
+<projeto xmlns="http://exemplo.com/ns" versao="1.0">
+  <nome>Orquestrador</nome>
+  <dependencias>
+    <dependencia id="serde" opcional="false"/>
+    <dependencia id="regex">
+      <versao>1.0</versao>
+    </dependencia>
+  </dependencias>
+  <descricao><![CDATA[Texto <livre> & cru]]></descricao>
+  <entidade>&amp; &lt;</entidade>
+</projeto>

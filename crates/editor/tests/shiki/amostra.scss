@@ -1,0 +1,21 @@
+// Variaveis
+$cor: #ff0000;
+$espaco: 4px * 2;
+
+@mixin centro($dir: row) {
+  display: flex;
+  flex-direction: $dir;
+}
+
+.painel {
+  @include centro(column);
+  color: darken($cor, 10%);
+  &:hover { opacity: 0.8; }
+  .titulo {
+    margin: $espaco auto;
+    @extend %base;
+  }
+  @each $n in 1, 2, 3 {
+    .col-#{$n} { width: 100% / $n; }
+  }
+}

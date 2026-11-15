@@ -23,3 +23,8 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Wind
 
 [dev-dependencies]
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }
+
+[[example]]
+# Nome próprio: o exemplo `vitrine` da árvore colide no mesmo diretório de saída.
+name = "vitrine-midia"
+path = "examples/vitrine.rs"

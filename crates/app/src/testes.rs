@@ -31,7 +31,7 @@ fn montar(cx: &mut TestAppContext, tmp: &Tmp) -> (WindowHandle<Root>, Entity<Ban
     let places = session::Places { temp: tmp.0.join("temp"), codex_rules: tmp.0.join("rules") };
     let exes = cli::Exes::new("claude.exe", "codex.exe", "orquestrador-gpui.exe");
     let (backend, _tx, eventos) =
-        Backend::com(exes, places, tmp.0.join("config.json"), Some(tmp.0.join("interface.json")), false);
+        Backend::com(exes, places, tmp.0.join("config.json"), Some(tmp.0.join("interface.json")));
     let backend = Rc::new(backend);
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -258,7 +258,7 @@ fn bancada_sem_janela(cx: &mut TestAppContext, tmp: &Tmp) -> Entity<Bancada> {
     let places = session::Places { temp: tmp.0.join("temp"), codex_rules: tmp.0.join("rules") };
     let exes = cli::Exes::new("claude.exe", "codex.exe", "orquestrador-gpui.exe");
     let (backend, _tx, eventos) =
-        Backend::com(exes, places, tmp.0.join("config.json"), Some(tmp.0.join("interface.json")), false);
+        Backend::com(exes, places, tmp.0.join("config.json"), Some(tmp.0.join("interface.json")));
     let backend = Rc::new(backend);
     cx.update(|cx| cx.new(|cx| Bancada::new(backend, eventos, Vec::new(), cx)))
 }
@@ -287,4 +287,322 @@ fn paineis_e_terminal_voltam_ao_reabrir(cx: &mut TestAppContext) {
         assert_eq!(b.largura_painel, crate::tema::PAINEL);
         assert!(b.terminal_aberto);
     });
+}
+
+// ---------- ligações entre as telas ----------
+
+/// Projeto com README e src/a.rs, aberto e desenhado.
+fn com_projeto(cx: &mut TestAppContext, tmp: &Tmp, nome: &str) -> (WindowHandle<Root>, Entity<Bancada>, String) {
+    let pasta = tmp.0.join(nome);
+    std::fs::create_dir_all(pasta.join("src")).expect("pasta do projeto");
+    std::fs::write(pasta.join("README.md"), "# Orquestrador\n\nlinha dois\n").expect("README");
+    std::fs::write(pasta.join("src").join("a.rs"), "fn main() {}\n").expect("a.rs");
+    let (janela, bancada) = montar(cx, tmp);
+    cx.update(|cx| bancada.update(cx, |b, cx| b.abrir(pasta, cx)));
+    cx.run_until_parked();
+    desenhar(cx, janela);
+    let id = cx.update(|cx| bancada.read(cx).ativa.clone().expect("aba ativa"));
+    (janela, bancada, id)
+}
+
+fn desenhar(cx: &mut TestAppContext, janela: WindowHandle<Root>) {
+    cx.update_window(janela.into(), |_, window, cx| window.render_frame(cx)).expect("janela");
+    cx.run_until_parked();
+    cx.update_window(janela.into(), |_, window, cx| window.render_frame(cx)).expect("janela");
+}
+
+fn abertos(cx: &mut TestAppContext, bancada: &Entity<Bancada>, id: &str) -> Vec<String> {
+    cx.update(|cx| bancada.read(cx).telas[id].editor.read(cx).caminhos_abertos())
+}
+
+fn alvos(cx: &mut TestAppContext, bancada: &Entity<Bancada>, id: &str) -> Vec<orquestrador_editor::Alvo> {
+    cx.update(|cx| bancada.read(cx).telas[id].editor.read(cx).workspace().abas().map(|t| t.alvo.clone()).collect())
+}
+
+#[gpui_kit::test]
+fn arvore_abre_no_editor_e_remapeia(cx: &mut TestAppContext) {
+    use orquestrador_arvore::EventoArvore;
+    let tmp = Tmp::new("arvore");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "p");
+    let arvore = cx.update(|cx| bancada.read(cx).telas[&id].arvore.clone());
+    cx.update(|cx| {
+        arvore.update(cx, |_, cx| cx.emit(EventoArvore::Abrir { caminho: "README.md".into(), fixo: true, ao_lado: false }))
+    });
+    desenhar(cx, janela);
+    assert_eq!(abertos(cx, &bancada, &id), ["README.md"]);
+
+    cx.update(|cx| {
+        arvore.update(cx, |_, cx| cx.emit(EventoArvore::Renomeado { de: "README.md".into(), para: "LEIA.md".into() }))
+    });
+    desenhar(cx, janela);
+    assert_eq!(abertos(cx, &bancada, &id), ["LEIA.md"]);
+
+    cx.update(|cx| arvore.update(cx, |_, cx| cx.emit(EventoArvore::Excluidos(vec!["LEIA.md".into()]))));
+    desenhar(cx, janela);
+    assert!(abertos(cx, &bancada, &id).is_empty());
+
+    // Pesquisar na pasta e Histórico Git trocam a tela da lateral.
+    cx.update(|cx| arvore.update(cx, |_, cx| cx.emit(EventoArvore::Pesquisar("src".into()))));
+    desenhar(cx, janela);
+    assert_eq!(cx.update(|cx| bancada.read(cx).rota), Rota::Pesquisa);
+    cx.update(|cx| arvore.update(cx, |_, cx| cx.emit(EventoArvore::HistoricoGit("src/a.rs".into()))));
+    desenhar(cx, janela);
+    assert_eq!(cx.update(|cx| bancada.read(cx).rota), Rota::Git);
+
+    // Abrir no Terminal cria um shell na pasta e abre o painel.
+    cx.update(|cx| arvore.update(cx, |_, cx| cx.emit(EventoArvore::AbrirNoTerminal("src".into()))));
+    cx.update(|cx| {
+        let b = bancada.read(cx);
+        assert!(b.terminal_aberto);
+        let p = &b.terminais.read(cx).projetos[&Some(id.clone())];
+        assert_eq!(p.shells.last().and_then(|s| s.cwd.clone()).as_deref(), Some("src"));
+    });
+}
+
+#[gpui_kit::test]
+fn pesquisa_abre_na_linha(cx: &mut TestAppContext) {
+    use orquestrador_pesquisa::EventoPesquisa;
+    let tmp = Tmp::new("pesquisa");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "p");
+    let pesquisa = cx.update(|cx| bancada.read(cx).telas[&id].pesquisa.clone());
+    cx.update(|cx| {
+        pesquisa.update(cx, |_, cx| {
+            cx.emit(EventoPesquisa::AbrirArquivo { caminho: "src/a.rs".into(), linha: 1, coluna: 4, permanente: true })
+        })
+    });
+    desenhar(cx, janela);
+    assert_eq!(abertos(cx, &bancada, &id), ["src/a.rs"]);
+}
+
+#[gpui_kit::test]
+fn git_abre_diff_e_arquivo(cx: &mut TestAppContext) {
+    use orquestrador_git::{Alvo as G, EventoGit, Lado as L};
+    let tmp = Tmp::new("git");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "p");
+    let git = cx.update(|cx| bancada.read(cx).telas[&id].git.clone());
+    cx.update(|cx| {
+        git.update(cx, |_, cx| {
+            cx.emit(EventoGit::AbrirAlvo { alvo: G::Diff { lado: L::Alteracoes, caminho: "README.md".into() }, permanente: true })
+        })
+    });
+    desenhar(cx, janela);
+    assert!(alvos(cx, &bancada, &id).iter().any(|a| matches!(
+        a,
+        orquestrador_editor::Alvo::Diff { side: orquestrador_editor::Lado::Unstaged, path } if path == "README.md"
+    )));
+    cx.update(|cx| git.update(cx, |_, cx| cx.emit(EventoGit::AbrirArquivo { caminho: "src/a.rs".into(), permanente: true })));
+    desenhar(cx, janela);
+    assert!(abertos(cx, &bancada, &id).contains(&"src/a.rs".to_string()));
+}
+
+#[gpui_kit::test]
+fn ctrl_clique_do_terminal_abre_no_editor(cx: &mut TestAppContext) {
+    use crate::terminal::vista::{AbrirLinks, Alvo};
+    let tmp = Tmp::new("links");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "p");
+    cx.update(|cx| bancada.update(cx, |b, cx| b.ir(Rota::Git, cx)));
+    cx.update_window(janela.into(), |_, window, cx| {
+        let f = cx.global::<AbrirLinks>().0.clone().expect("a bancada liga os links");
+        f(&Alvo::Arquivo { caminho: "README.md".into(), linha: Some(3), coluna: Some(1) }, window, cx);
+        f(&Alvo::Pasta("src".into()), window, cx);
+    })
+    .expect("janela");
+    desenhar(cx, janela);
+    assert_eq!(abertos(cx, &bancada, &id), ["README.md"]);
+    assert_eq!(cx.update(|cx| bancada.read(cx).rota), Rota::Arquivos, "pasta revelada na árvore");
+}
+
+#[gpui_kit::test]
+fn trocar_de_projeto_preserva_editor_e_vista(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("troca");
+    let (janela, bancada, a) = com_projeto(cx, &tmp, "a");
+    let pasta_b = tmp.0.join("b");
+    std::fs::create_dir_all(&pasta_b).expect("b");
+    cx.update(|cx| bancada.update(cx, |b, cx| b.abrir(pasta_b, cx)));
+    cx.run_until_parked();
+    desenhar(cx, janela);
+    let b_id = cx.update(|cx| bancada.read(cx).ativa.clone().expect("b ativa"));
+    assert_ne!(a, b_id);
+    cx.update(|cx| bancada.update(cx, |b, cx| b.ir(Rota::Git, cx)));
+
+    cx.update(|cx| bancada.update(cx, |b, cx| b.selecionar(&a, cx)));
+    desenhar(cx, janela);
+    let editor_a = cx.update(|cx| bancada.read(cx).telas[&a].editor.clone());
+    cx.update_window(janela.into(), |_, window, cx| {
+        let op = orquestrador_editor::Abertura { permanente: true, ..Default::default() };
+        editor_a.update(cx, |e, cx| e.abrir_arquivo("README.md", op, window, cx));
+    })
+    .expect("janela");
+    desenhar(cx, janela);
+    assert_eq!(cx.update(|cx| bancada.read(cx).rota), Rota::Arquivos, "cada projeto tem a sua tela");
+
+    cx.update(|cx| bancada.update(cx, |b, cx| b.selecionar(&b_id, cx)));
+    desenhar(cx, janela);
+    assert_eq!(cx.update(|cx| bancada.read(cx).rota), Rota::Git, "a vista de b voltou");
+    assert!(abertos(cx, &bancada, &b_id).is_empty());
+
+    cx.update(|cx| bancada.update(cx, |b, cx| b.selecionar(&a, cx)));
+    desenhar(cx, janela);
+    assert_eq!(abertos(cx, &bancada, &a), ["README.md"]);
+    assert_eq!(cx.update(|cx| bancada.read(cx).telas[&a].editor.clone()), editor_a, "a mesma entidade, sem remontar");
+}
+
+/// Abre README.md no editor do projeto e acrescenta texto, deixando-o sujo.
+fn sujar_readme(cx: &mut TestAppContext, janela: WindowHandle<Root>, bancada: &Entity<Bancada>, id: &str) {
+    let editor = cx.update(|cx| bancada.read(cx).telas[id].editor.clone());
+    cx.update_window(janela.into(), |_, window, cx| {
+        let op = orquestrador_editor::Abertura { permanente: true, ..Default::default() };
+        editor.update(cx, |e, cx| e.abrir_arquivo("README.md", op, window, cx));
+    })
+    .expect("janela");
+    desenhar(cx, janela);
+    cx.update_window(janela.into(), |_, window, cx| {
+        let doc = editor.read(cx).editor_de("README.md").expect("documento aberto");
+        doc.update(cx, |s, cx| s.replace("x", window, cx));
+    })
+    .expect("janela");
+    desenhar(cx, janela);
+    assert_eq!(cx.update(|cx| editor.read(cx).nao_salvos()), ["README.md"]);
+}
+
+#[gpui_kit::test]
+fn fechar_aba_com_nao_salvos_pergunta(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("fechar");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "p");
+    sujar_readme(cx, janela, &bancada, &id);
+
+    let fechar = gpui_kit::SharedString::from(format!("fechar-aba-{id}"));
+    cx.update_window(janela.into(), |_, window, cx| {
+        window.click(fechar.clone(), cx);
+        window.render_frame(cx);
+        assert!(window.find("fechar-confirmacao").visible());
+        window.click("fechar-cancelar", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("fechar-confirmacao").is_none());
+    })
+    .expect("janela");
+    assert_eq!(cx.update(|cx| bancada.read(cx).abas.len()), 1, "Cancelar mantém a aba");
+
+    cx.update_window(janela.into(), |_, window, cx| {
+        window.click(fechar.clone(), cx);
+        window.render_frame(cx);
+        window.click("fechar-descartar", cx);
+    })
+    .expect("janela");
+    cx.run_until_parked();
+    assert!(cx.update(|cx| bancada.read(cx).abas.is_empty()));
+    let disco = std::fs::read_to_string(tmp.0.join("p").join("README.md")).expect("README");
+    assert!(disco.starts_with('#'), "Descartar não grava");
+}
+
+#[gpui_kit::test]
+fn fechar_janela_com_nao_salvos_pergunta_e_salva(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("janela");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "p");
+    sujar_readme(cx, janela, &bancada, &id);
+    cx.update_window(janela.into(), |_, window, cx| {
+        let pode = bancada.update(cx, |b, cx| b.pode_fechar_janela(window, cx));
+        assert!(!pode, "não salvo segura a janela");
+        window.render_frame(cx);
+        assert!(window.find("fechar-confirmacao").visible());
+        window.click("fechar-salvar", cx);
+    })
+    .expect("janela");
+    cx.run_until_parked();
+    assert!(cx.update(|cx| bancada.read(cx).janela_liberada), "salvo, a janela fecha");
+    let disco = std::fs::read_to_string(tmp.0.join("p").join("README.md")).expect("README");
+    assert!(disco.starts_with('x'), "Salvar gravou: {disco:?}");
+}
+
+#[test]
+fn caminho_relativo_ao_projeto() {
+    use crate::bancada::relativo;
+    assert_eq!(relativo("C:\\p\\exemplo", "c:\\P\\exemplo\\src\\a.rs").as_deref(), Some("src/a.rs"));
+    assert_eq!(relativo("C:\\p\\exemplo", "C:\\p\\exemplo2\\a.rs"), None);
+    assert_eq!(relativo("C:\\p\\exemplo", "C:\\p\\exemplo"), None);
+}
+
+#[gpui_kit::test]
+fn fabrica_cria_midia_e_conflito(cx: &mut TestAppContext) {
+    use crate::telas::Conteudo;
+    let tmp = Tmp::new("fabrica");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "p");
+    std::fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../midia/tests/fixtures/logo.png"),
+        tmp.0.join("p").join("logo.png"),
+    )
+    .expect("png");
+    let editor = cx.update(|cx| bancada.read(cx).telas[&id].editor.clone());
+    cx.update_window(janela.into(), |_, window, cx| {
+        let op = orquestrador_editor::Abertura { permanente: true, ..Default::default() };
+        editor.update(cx, |e, cx| {
+            e.abrir_arquivo("logo.png", op, window, cx);
+            e.abrir_alvo(orquestrador_editor::Alvo::Conflict { path: "src/a.rs".into() }, op, window, cx);
+        });
+    })
+    .expect("janela");
+    desenhar(cx, janela);
+    cx.update(|cx| {
+        let t = &bancada.read(cx).telas[&id];
+        let c = t.conteudos.borrow();
+        assert!(c.iter().any(|(_, v)| matches!(v, Conteudo::Midia(_))), "aba de imagem");
+        assert!(c.iter().any(|(_, v)| matches!(v, Conteudo::Conflito(_))), "aba de conflito");
+    });
+}
+
+#[gpui_kit::test]
+fn caminho_externo_abre_no_projeto_que_o_contem(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("externo");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "p");
+    let solto = tmp.0.join("solto.ts");
+    std::fs::write(&solto, "export const solto = true;\n").expect("solto");
+    let dentro = tmp.0.join("p").join("src").join("a.rs");
+    cx.update(|cx| bancada.update(cx, |b, cx| b.abrir_caminhos(vec![dentro, solto.clone()], cx)));
+    desenhar(cx, janela);
+    let abertos = abertos(cx, &bancada, &id);
+    assert!(abertos.contains(&"src/a.rs".to_string()), "do projeto, relativo: {abertos:?}");
+    assert!(abertos.iter().any(|c| c.ends_with("solto.ts")), "fora de projeto, no ativo: {abertos:?}");
+    // Pasta já aberta só foca a aba existente.
+    cx.update(|cx| bancada.update(cx, |b, cx| b.abrir(tmp.0.join("p"), cx)));
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| bancada.read(cx).abas.len()), 1);
+}
+
+#[gpui_kit::test]
+fn fechar_janela_lista_arquivos_do_projeto_inativo_com_prefixo(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("prefixo");
+    let (janela, bancada, a) = com_projeto(cx, &tmp, "a");
+    sujar_readme(cx, janela, &bancada, &a);
+    let b = tmp.0.join("b");
+    std::fs::create_dir_all(&b).expect("b");
+    cx.update(|cx| bancada.update(cx, |x, cx| x.abrir(b, cx)));
+    cx.run_until_parked();
+    desenhar(cx, janela);
+    cx.update_window(janela.into(), |_, window, cx| {
+        assert!(!bancada.update(cx, |b, cx| b.pode_fechar_janela(window, cx)));
+        assert_eq!(bancada.read(cx).fechamento.as_ref().expect("pergunta").arquivos, ["a: README.md"]);
+        window.render_frame(cx);
+        window.click("fechar-cancelar", cx);
+    })
+    .expect("janela");
+    assert!(cx.update(|cx| !bancada.read(cx).janela_liberada), "Cancelar não fecha");
+}
+
+#[gpui_kit::test]
+fn dica_do_fechar_alinha_a_direita(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("dica");
+    let (janela, bancada) = montar(cx, &tmp);
+    cx.update_window(janela.into(), |_, window, cx| {
+        window.render_frame(cx);
+        bancada.update(cx, |b, cx| {
+            b.dica_janela = Some(("Fechar", 0));
+            cx.notify();
+        });
+        window.render_frame(cx);
+        let dica = window.find("dica-janela");
+        let largura = window.viewport_size().width;
+        assert!((dica.bounds().right() - largura).abs() < gpui_kit::px(1.), "borda direita na da janela");
+        assert_eq!(dica.bounds().top(), crate::tema::TITLEBAR + gpui_kit::px(4.));
+    })
+    .expect("janela");
 }

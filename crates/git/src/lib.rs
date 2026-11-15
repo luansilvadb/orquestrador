@@ -1,9 +1,12 @@
 //! A tela Git (lateral) e as vistas de comparação e de conflito do editor, porte de `src/git/` e de
 //! `src/editor/{diff-view,compare-rows,conflict-view}.tsx`. API pública em `README.md`.
+// O `orquestrador-editor` traz o Oniguruma, que exporta símbolos: o link.exe avisa que criou a .lib dos testes.
+#![cfg_attr(test, allow(linker_messages))]
 // A saída dos macros do GPUI aponta para `gpui::`; o alias resolve tudo pelo Kit.
 extern crate gpui_kit as gpui;
 
 pub mod comparar;
+pub mod comparador;
 pub mod comum;
 pub mod conflito_texto;
 pub mod fonte;
@@ -17,7 +20,6 @@ pub mod tela;
 mod tela_grafo;
 pub mod conflito;
 pub mod diff;
-mod tema_local;
 #[cfg(test)]
 mod testes;
 
@@ -28,9 +30,10 @@ pub use tela::{EventoGit, TelaGit};
 pub use diff::{EventoDiff, VisaoDiff};
 pub use conflito::{EventoConflito, RascunhoConflito, VisaoConflito};
 
-/// Atalhos das vistas (F8/Shift+F8 no comparador, Ctrl+S no conflito). Chame uma vez, depois do `gpui_kit::init`.
+/// Atalhos das vistas (F8/Shift+F8 no comparador, Ctrl+S no conflito, Shift+F10 e tecla de menu na tela Git). Chame uma vez, depois do `gpui_kit::init`.
 pub fn init(cx: &mut gpui_kit::App) {
     realce::aquecer();
     diff::init(cx);
+    tela::init(cx);
     conflito::init(cx);
 }

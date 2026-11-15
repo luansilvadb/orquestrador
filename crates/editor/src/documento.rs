@@ -60,7 +60,7 @@ pub fn registrar_atalhos(cx: &mut App) {
 
 /// Medidas do editor do Antigravity: texto de 14 px em linhas de 19 px, Consolas.
 pub const FONTE_EDITOR: &str = "Consolas";
-pub const TAMANHO_EDITOR: Pixels = px(14.);
+pub const TAMANHO_EDITOR: Pixels = px(15.5);
 pub const LINHA_EDITOR: Pixels = px(19.);
 
 pub mod cor {
@@ -190,8 +190,34 @@ impl Documento {
             let p = t.offset_to_position(off);
             s.set_cursor_position(p, window, cx);
             s.focus(window, cx);
+            centralizar(off, 3, window, cx);
         });
     }
+}
+
+/// O `scrollIntoView(pos, { y: 'center' })` do `goTo`: o Kit só rola com o layout pronto (logo depois de abrir, nada
+/// acontece) e só até a borda. No quadro seguinte, põe a linha do cursor no meio da área, se ele não saiu de `off`.
+fn centralizar(off: usize, tentativas: u8, window: &mut Window, cx: &mut Context<EditorState>) {
+    cx.on_next_frame(window, move |s, window, cx| {
+        if s.cursor() != off {
+            return;
+        }
+        let caixa = s.input_bounds();
+        match s.range_to_bounds(&(off..off)) {
+            Some(b) if caixa.size.height > px(0.) => {
+                let delta = b.center().y - (caixa.origin.y + caixa.size.height / 2.);
+                let o = s.scroll_offset();
+                s.set_scroll_offset(gpui::point(o.x, (o.y - delta).min(px(0.))), cx);
+            }
+            _ if tentativas > 0 => {
+                // Sem layout ou fora da parte desenhada: rola até a borda e tenta de novo.
+                let p = s.text().offset_to_position(off);
+                s.set_cursor_position(p, window, cx);
+                centralizar(off, tentativas - 1, window, cx);
+            }
+            _ => {}
+        }
+    });
 }
 
 /// O nome de linguagem que vai para o `EditorState`: o próprio caminho (a fábrica de realce resolve a gramática). Sem

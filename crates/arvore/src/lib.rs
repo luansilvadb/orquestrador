@@ -5,6 +5,6 @@ extern crate gpui_kit as gpui;
 pub mod modelo;
 mod vista;
 
-pub use vista::{Arrasto, EventoArvore, Explorador, ALTURA_LINHA};
+pub use vista::{registrar_atalhos, Arrasto, EventoArvore, Explorador, FocarAnterior, FocarProximo, ALTURA_LINHA};
 #[cfg(test)]
 mod testes;

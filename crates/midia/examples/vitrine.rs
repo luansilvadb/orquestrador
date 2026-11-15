@@ -1,7 +1,8 @@
 //! Janela 1400×900 com a aba de mídia na posição do editor central das capturas de referência (x 325..828, y 88..878),
 //! com os dados do mock: `assets/logo.png` (PNG 32×32), `midia/tom.wav` (2 s em silêncio), `midia/clipe.webm` (VP8 64×48
 //! de 2 s) e `midia/quebrado.png` (leitura que falha).
-//! Uso: cargo run -p orquestrador-midia --example vitrine -- imagem|audio|video|erro
+//! Uso: cargo run -p orquestrador-midia --example vitrine-midia -- imagem|audio|video|tocar|pip|erro [arquivo]
+//! `tocar` toca na aba; `pip` toca e abre o picture-in-picture; `arquivo` troca a mídia do cenário (medir memória com um vídeo longo).
 use gpui_kit::{div, prelude::*, px, size, App, Bounds, Context, Entity, Window, WindowBounds, WindowOptions};
 use orquestrador_midia::VisaoMidia;
 use orquestrador_ui::tema::{self, cor};
@@ -59,7 +60,7 @@ fn preparar(modo: &str) -> PathBuf {
             std::fs::write(&c, wav_silencio(2)).expect("wav");
             c
         }
-        "video" => {
+        "video" | "tocar" | "pip" => {
             let c = raiz.join("midia/clipe.webm");
             std::fs::copy(fixtures.join("clipe.webm"), &c).expect("webm");
             c
@@ -75,7 +76,9 @@ fn preparar(modo: &str) -> PathBuf {
 
 fn main() {
     let modo = std::env::args().nth(1).unwrap_or_else(|| "imagem".into());
-    let caminho = preparar(&modo);
+    let caminho = std::env::args().nth(2).map(PathBuf::from).unwrap_or_else(|| preparar(&modo));
+    let pip = modo == "pip";
+    let tocar = pip || modo == "tocar";
     gpui_kit::application().with_assets(orquestrador_ui::recursos::Recursos).run(move |cx: &mut App| {
         gpui_kit::init(cx);
         tema::aplicar(cx);
@@ -84,6 +87,25 @@ fn main() {
         let opcoes = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
         gpui_kit::open_window(opcoes, cx, move |window, cx| {
             let midia = cx.new(|cx| VisaoMidia::new(caminho, window, cx));
+            if tocar {
+                let m = midia.downgrade();
+                cx.spawn(async move |cx| {
+                    for _ in 0..100 {
+                        cx.background_executor().timer(std::time::Duration::from_millis(50)).await;
+                        let pronto = m.update(cx, |v, _| v.estado_reproducao().is_some_and(|e| e.info.pronto)).unwrap_or(true);
+                        if pronto {
+                            break;
+                        }
+                    }
+                    let _ = m.update(cx, |v, cx| {
+                        v.tocar(cx);
+                        if pip {
+                            v.abrir_pip(cx);
+                        }
+                    });
+                })
+                .detach();
+            }
             cx.new(|_| Vitrine { midia })
         })
         .expect("janela");

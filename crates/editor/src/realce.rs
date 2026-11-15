@@ -3,13 +3,13 @@
 //! mesmo do Shiki; as gramáticas são as do `two-face` (as do bat), escolhidas pela linguagem de [`crate::linguagem`].
 use crate::linguagem;
 use gpui::{FontStyle, FontWeight, HighlightStyle, Hsla, Rgba, SharedString, Task, UnderlineStyle};
-use gpui_kit::component::input::{EditorState, FoldRange, HighlightStyleResolver, InputEdit, InputHighlighter, InputHighlighterFactory, Rope};
+use gpui_kit::component::input::{EditorState, FoldRange, HighlightStyleResolver, InputEdit, InputHighlighter, InputHighlighterFactory, Rope, RopeExt};
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use syntect::highlighting::{
     Color, FontStyle as Estilo, HighlightIterator, HighlightState, Highlighter, ScopeSelectors, StyleModifier, Theme, ThemeItem,
@@ -23,7 +23,9 @@ pub const LIMITE_COR: usize = 200_000;
 const SINCRONO_ATE: usize = 8 * 1024;
 const ESPERA: Duration = Duration::from_millis(30);
 
-static SINTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
+/// As gramáticas do `two-face` e, por cima (vencem na busca por escopo), as TextMate do Shiki convertidas para
+/// sublime-syntax (`assets/gramaticas`), já montadas e ligadas em `assets/sintaxes.packdump` (teste `gerar_sintaxes`).
+static SINTAXES: LazyLock<SyntaxSet> = LazyLock::new(|| syntect::dumps::from_binary(include_bytes!("../assets/sintaxes.packdump")));
 
 #[derive(Deserialize)]
 struct TemaJson {
@@ -120,6 +122,9 @@ fn hsla(c: Color) -> Hsla {
 /// A gramática do `syntect` para a linguagem Shiki.
 pub(crate) fn sintaxe(lang: &str, caminho: &str) -> Option<&'static SyntaxReference> {
     let s = &*SINTAXES;
+    if let Some(x) = s.find_syntax_by_name(&format!("shiki-{lang}")) {
+        return Some(x);
+    }
     let especial = match lang {
         "tsx" => Some("TypeScriptReact"),
         "typescript" => Some("TypeScript"),
@@ -156,106 +161,402 @@ fn estilo(st: syntect::highlighting::Style) -> HighlightStyle {
     }
 }
 
-/// Colore o texto inteiro: sintaxe pelo tema e, por cima, os pares de colchetes fora de string e comentário.
-pub fn colorir(sintaxe: Option<&SyntaxReference>, texto: &str) -> Trechos {
-    if texto.len() > LIMITE_COR * 4 || crate::armazem::tamanho_js(texto) > LIMITE_COR {
-        return Vec::new();
+static REALCADOR: LazyLock<Highlighter<'static>> = LazyLock::new(|| Highlighter::new(&TEMA));
+
+/// Linhas entre dois estados guardados do parser.
+const PASSO: usize = 16;
+/// Até esta distância (linhas) do fim da parte exata, a região pedida é colorida exata na hora; acima, sai de um estado
+/// próximo (ou do inicial) e fica provisória até o segundo plano chegar, como o CodeMirror faz ao pular o parse.
+const SALTO: usize = 96;
+/// Duração de cada fatia do trabalho em segundo plano (o desenho espera no máximo uma fatia).
+const FATIA: Duration = Duration::from_millis(4);
+
+/// Estado no início de uma linha: parser, pilha de escopos do tema e colchetes abertos (caractere e nível).
+#[derive(Clone, PartialEq, Eq)]
+struct Estado {
+    parse: Option<ParseState>,
+    tema: HighlightState,
+    abertos: Vec<(u8, usize)>,
+}
+
+impl Estado {
+    fn inicial(sintaxe: Option<&SyntaxReference>) -> Estado {
+        Estado { parse: sintaxe.map(ParseState::new), tema: HighlightState::new(&REALCADOR, ScopeStack::new()), abertos: Vec::new() }
     }
-    let hl = Highlighter::new(&TEMA);
+}
+
+#[derive(Clone, Copy)]
+struct Token {
+    ini: u32,
+    fim: u32,
+    estilo: u16,
+}
+
+struct Linha {
+    tokens: Box<[Token]>,
+    exata: bool,
+}
+
+/// Cores de uma linha (`linha` com o fim de linha), em deslocamentos relativos a ela, avançando o estado.
+fn colorir_linha(estado: &mut Estado, linha: &str) -> Trechos {
     let (fora_str, fora_com, lista) = &*ESCOPOS;
-    let mut trechos: Trechos = Vec::new();
-    // Pilha de colchetes abertos: caractere e nível.
-    let mut abertos: Vec<(u8, usize)> = Vec::new();
-    let mut offset = 0;
-    let mut parse = sintaxe.map(ParseState::new);
-    let mut estado = HighlightState::new(&hl, ScopeStack::new());
-    // Trechos da linha atual: as sobreposições dos colchetes partem só este vetor pequeno.
     let mut da_linha: Trechos = Vec::new();
-    for linha in syntect::util::LinesWithEndings::from(texto) {
-        da_linha.clear();
-        let ops = match parse.as_mut().map(|p| p.parse_line(linha, &SINTAXES)) {
-            Some(Ok(ops)) => Some(ops),
-            Some(Err(_)) => {
-                parse = None;
-                None
+    let ops = match estado.parse.as_mut().map(|p| p.parse_line(linha, &SINTAXES)) {
+        Some(Ok(ops)) => Some(ops),
+        Some(Err(_)) => {
+            estado.parse = None;
+            None
+        }
+        None => None,
+    };
+    // Faixas de string/comentário da linha, onde os colchetes não contam.
+    let mut fora: Vec<Range<usize>> = Vec::new();
+    let mut listas: Vec<Range<usize>> = Vec::new();
+    if let Some(ops) = &ops {
+        let mut pilha = estado.tema.path.clone();
+        let mut cursor = 0;
+        let mut marcar = |a: usize, b: usize, pilha: &ScopeStack| {
+            if a >= b {
+                return;
             }
-            None => None,
+            let escopos = pilha.as_slice();
+            if escopos.iter().any(|e| fora_str.is_prefix_of(*e) || fora_com.is_prefix_of(*e)) {
+                fora.push(a..b);
+            }
+            if escopos.iter().any(|e| lista.is_prefix_of(*e)) {
+                listas.push(a..b);
+            }
         };
-        // Faixas de string/comentário da linha, onde os colchetes não contam.
-        let mut fora: Vec<Range<usize>> = Vec::new();
-        let mut listas: Vec<Range<usize>> = Vec::new();
-        if let Some(ops) = &ops {
-            let mut pilha = estado.path.clone();
-            let mut cursor = 0;
-            let mut marcar = |a: usize, b: usize, pilha: &ScopeStack| {
-                if a >= b {
-                    return;
+        for (i, op) in ops {
+            marcar(cursor, *i, &pilha);
+            let _ = pilha.apply(op);
+            cursor = *i;
+        }
+        marcar(cursor, linha.len(), &pilha);
+        let mut pos = 0;
+        let util = linha.trim_end_matches(['\n', '\r']).len();
+        for (st, pedaco) in HighlightIterator::new(&mut estado.tema, ops, linha, &REALCADOR) {
+            let fim = pos + pedaco.len();
+            let alcance = pos..fim.min(util).max(pos);
+            if !alcance.is_empty() {
+                let e = estilo(st);
+                match da_linha.last_mut() {
+                    Some((r, s)) if r.end == alcance.start && *s == e => r.end = alcance.end,
+                    _ => da_linha.push((alcance, e)),
                 }
-                let escopos = pilha.as_slice();
-                if escopos.iter().any(|e| fora_str.is_prefix_of(*e) || fora_com.is_prefix_of(*e)) {
-                    fora.push(a..b);
-                }
-                if escopos.iter().any(|e| lista.is_prefix_of(*e)) {
-                    listas.push(a..b);
-                }
-            };
-            for (i, op) in ops {
-                marcar(cursor, *i, &pilha);
-                let _ = pilha.apply(op);
-                cursor = *i;
             }
-            marcar(cursor, linha.len(), &pilha);
-            let mut pos = 0;
-            let util = linha.trim_end_matches(['\n', '\r']).len();
-            for (st, pedaco) in HighlightIterator::new(&mut estado, ops, linha, &hl) {
-                let fim = pos + pedaco.len();
-                let alcance = pos..fim.min(util).max(pos);
-                if !alcance.is_empty() {
-                    let e = estilo(st);
-                    match da_linha.last_mut() {
-                        Some((r, s)) if r.end == alcance.start && *s == e => r.end = alcance.end,
-                        _ => da_linha.push((alcance, e)),
+            pos = fim;
+        }
+    }
+    // Colchetes, como o caminho "pares lidos do texto" de bracket-colors.ts.
+    let abertos = &mut estado.abertos;
+    for (i, b) in linha.bytes().enumerate() {
+        if !b"()[]{}".contains(&b) || fora.iter().any(|r| r.contains(&i)) {
+            continue;
+        }
+        let cor = match b {
+            b'(' | b'[' | b'{' => {
+                let n = abertos.len();
+                abertos.push((b, n));
+                gpui::rgb(NIVEIS[n % 3]).into()
+            }
+            _ => {
+                let abre = match b {
+                    b')' => b'(',
+                    b']' => b'[',
+                    _ => b'{',
+                };
+                match abertos.iter().rposition(|(c, _)| *c == abre) {
+                    Some(topo) => {
+                        let n = abertos[topo].1;
+                        abertos.truncate(topo);
+                        gpui::rgb(NIVEIS[n % 3]).into()
                     }
+                    None => cor_inesperado(),
                 }
-                pos = fim;
+            }
+        };
+        sobrepor(&mut da_linha, i..i + 1, cor);
+    }
+    for r in listas {
+        sobrepor(&mut da_linha, r, cor_lista());
+    }
+    da_linha
+}
+
+fn acima_do_limite(texto: &Rope) -> bool {
+    texto.len() > LIMITE_COR && (texto.len() > LIMITE_COR * 4 || texto.len_utf16() > LIMITE_COR)
+}
+
+/// Realce incremental: guarda o estado do parser a cada [`PASSO`] linhas e as cores por linha; colore primeiro o que
+/// é pedido (a parte visível) e o resto em fatias; depois de uma edição, reprocessa a partir da linha editada até o
+/// estado voltar a ser igual ao guardado.
+pub struct Motor {
+    sintaxe: Option<&'static SyntaxReference>,
+    texto: Rope,
+    ligado: bool,
+    linhas: Vec<Option<Linha>>,
+    /// Estado no início da linha `i`. Até `frente` são exatos; depois, podem ser de antes da última edição.
+    estados: Vec<Option<Box<Estado>>>,
+    /// Linhas `[0, frente)` têm cores exatas.
+    frente: usize,
+    /// Faixas de linhas cujas cores valem se o estado na entrada delas for o guardado (texto intacto desde então).
+    reserva: Vec<Range<usize>>,
+    paleta: Vec<HighlightStyle>,
+    /// Linhas visíveis pedidas por último, para só redesenhar quando o trabalho as alcança.
+    visivel: Range<usize>,
+    /// Linhas processadas desde a criação (medida dos testes).
+    pub processadas: usize,
+}
+
+// SAFETY: o que impede o `Send` automático são as `Region` do Oniguruma guardadas no `ParseState` (ponteiros para
+// memória que só ele possui). O `Motor` fica num `Mutex` e é usado por uma thread de cada vez, sem compartilhar essas
+// regiões.
+unsafe impl Send for Motor {}
+
+impl Motor {
+    pub fn novo(sintaxe: Option<&'static SyntaxReference>, texto: Rope) -> Motor {
+        let n = texto.lines_len();
+        let ligado = !acima_do_limite(&texto);
+        let mut estados: Vec<Option<Box<Estado>>> = (0..n).map(|_| None).collect();
+        if ligado {
+            estados[0] = Some(Box::new(Estado::inicial(sintaxe)));
+        }
+        Motor {
+            sintaxe,
+            texto,
+            ligado,
+            linhas: (0..n).map(|_| None).collect(),
+            estados,
+            frente: 0,
+            reserva: Vec::new(),
+            paleta: Vec::new(),
+            visivel: 0..0,
+            processadas: 0,
+        }
+    }
+
+    /// Todas as linhas exatas.
+    pub fn pronto(&self) -> bool {
+        !self.ligado || self.frente >= self.linhas.len()
+    }
+
+    /// Estados guardados (medida de memória dos testes).
+    pub fn estados_guardados(&self) -> usize {
+        self.estados.iter().filter(|e| e.is_some()).count()
+    }
+
+    fn indice(&mut self, e: HighlightStyle) -> u16 {
+        match self.paleta.iter().position(|p| *p == e) {
+            Some(i) => i as u16,
+            None => {
+                self.paleta.push(e);
+                (self.paleta.len() - 1) as u16
             }
         }
-        // Colchetes, como o caminho "pares lidos do texto" de bracket-colors.ts.
-        for (i, b) in linha.bytes().enumerate() {
-            if !b"()[]{}".contains(&b) || fora.iter().any(|r| r.contains(&i)) {
+    }
+
+    /// Linha `i` com o fim de linha (as gramáticas do `two-face` contam com ele).
+    fn texto_linha(&self, i: usize) -> String {
+        let mut l = self.texto.slice_line(i).to_string();
+        if i + 1 < self.linhas.len() {
+            l.push('\n');
+        }
+        l
+    }
+
+    /// Colore a linha `i` a partir de `estado`, guardando as cores.
+    fn processar(&mut self, i: usize, estado: &mut Estado, exata: bool) {
+        let linha = self.texto_linha(i);
+        let trechos = colorir_linha(estado, &linha);
+        let tokens = trechos.into_iter().map(|(r, s)| Token { ini: r.start as u32, fim: r.end as u32, estilo: self.indice(s) }).collect();
+        self.linhas[i] = Some(Linha { tokens, exata });
+        self.processadas += 1;
+    }
+
+    /// Estado exato no início de `frente`, reprocessando desde o último guardado.
+    fn estado_na_frente(&mut self) -> Estado {
+        let j = (0..=self.frente.min(self.linhas.len().saturating_sub(1))).rev().find(|&j| self.estados[j].is_some()).unwrap_or(0);
+        let mut e = self.estados[j].as_deref().cloned().unwrap_or_else(|| Estado::inicial(self.sintaxe));
+        for i in j..self.frente {
+            self.processar(i, &mut e, true);
+        }
+        e
+    }
+
+    /// Avança a parte exata até a linha `ate` (exclusiva) ou até o tempo acabar. Devolve se tocou a parte visível.
+    fn avancar(&mut self, ate: usize, prazo: Option<std::time::Instant>) -> bool {
+        let ate = ate.min(self.linhas.len());
+        if !self.ligado || self.frente >= ate {
+            return false;
+        }
+        let mut tocou = false;
+        let mut e = self.estado_na_frente();
+        let mut i = self.frente;
+        while i < ate {
+            if i > 0 {
+                // Convergência: o estado de entrada é o guardado e as linhas seguintes não mudaram desde então.
+                if let Some(k) = self.reserva.iter().position(|r| r.contains(&i)) {
+                    if self.estados[i].as_deref() == Some(&e) {
+                        let fim = self.reserva[k].end;
+                        self.reserva.drain(..=k);
+                        tocou |= self.visivel.start < fim && i < self.visivel.end;
+                        i = fim;
+                        self.frente = i;
+                        if i >= ate {
+                            break;
+                        }
+                        e = self.estado_na_frente();
+                        continue;
+                    }
+                }
+                if i % PASSO == 0 || self.estados[i].is_some() {
+                    self.estados[i] = Some(Box::new(e.clone()));
+                }
+            }
+            tocou |= self.visivel.contains(&i);
+            self.processar(i, &mut e, true);
+            i += 1;
+            self.frente = i;
+            self.reserva.retain(|r| r.end > i);
+            if prazo.is_some_and(|p| std::time::Instant::now() >= p) {
+                break;
+            }
+        }
+        tocou
+    }
+
+    /// Fatia de trabalho em segundo plano. Devolve (terminou, tocou a parte visível).
+    pub fn fatia(&mut self, tempo: Duration) -> (bool, bool) {
+        let tocou = self.avancar(usize::MAX, Some(std::time::Instant::now() + tempo));
+        (self.pronto(), tocou)
+    }
+
+    /// Garante cores nas linhas `[a, b)`: exatas se perto da parte exata, provisórias se longe.
+    pub fn preparar(&mut self, a: usize, b: usize) {
+        let b = b.min(self.linhas.len());
+        self.visivel = a..b;
+        if !self.ligado || a >= b {
+            return;
+        }
+        if a <= self.frente + SALTO {
+            self.avancar(b, None);
+            return;
+        }
+        if (a..b).all(|i| self.linhas[i].is_some()) {
+            return;
+        }
+        // Provisório: do último estado guardado perto de `a` (talvez desatualizado), ou do inicial.
+        let j = (a.saturating_sub(SALTO)..=a).rev().find(|&j| self.estados[j].is_some());
+        let (inicio, mut e) = match j {
+            Some(j) => (j, self.estados[j].as_deref().cloned().unwrap()),
+            None => (a, Estado::inicial(self.sintaxe)),
+        };
+        for i in inicio..b {
+            if i < a || self.linhas[i].as_ref().is_some_and(|l| l.exata) {
+                let mut lixo = e.clone();
+                // Só para levar o estado adiante.
+                let _ = colorir_linha(&mut lixo, &self.texto_linha(i));
+                e = lixo;
                 continue;
             }
-            let cor = match b {
-                b'(' | b'[' | b'{' => {
-                    let n = abertos.len();
-                    abertos.push((b, n));
-                    gpui::rgb(NIVEIS[n % 3]).into()
-                }
-                _ => {
-                    let abre = match b {
-                        b')' => b'(',
-                        b']' => b'[',
-                        _ => b'{',
-                    };
-                    match abertos.iter().rposition(|(c, _)| *c == abre) {
-                        Some(topo) => {
-                            let n = abertos[topo].1;
-                            abertos.truncate(topo);
-                            gpui::rgb(NIVEIS[n % 3]).into()
-                        }
-                        None => cor_inesperado(),
-                    }
-                }
-            };
-            sobrepor(&mut da_linha, i..i + 1, cor);
+            self.processar(i, &mut e, false);
         }
-        for r in listas {
-            sobrepor(&mut da_linha, r, cor_lista());
-        }
-        trechos.extend(da_linha.drain(..).map(|(r, s)| (offset + r.start..offset + r.end, s)));
-        offset += linha.len();
     }
-    trechos
+
+    /// Aplica uma edição do Kit (`texto` já editado).
+    pub fn editar(&mut self, ed: &InputEdit, texto: Rope) {
+        self.texto = texto;
+        let ligado = !acima_do_limite(&self.texto);
+        if ligado != self.ligado {
+            *self = Motor::novo(self.sintaxe, self.texto.clone());
+            return;
+        }
+        if !ligado {
+            let n = self.texto.lines_len();
+            self.linhas.resize_with(n, || None);
+            self.estados.resize_with(n, || None);
+            return;
+        }
+        let a = ed.start_position.row;
+        if a >= self.linhas.len() {
+            *self = Motor::novo(self.sintaxe, self.texto.clone());
+            return;
+        }
+        let oe = ed.old_end_position.row.min(self.linhas.len().saturating_sub(1)).max(a);
+        let ne = ed.new_end_position.row.max(a);
+        let d = ne as isize - oe as isize;
+        let mover = |x: usize| (x as isize + d).max(0) as usize;
+        self.linhas.splice(a..=oe, (a..=ne).map(|_| None));
+        self.estados.splice(a + 1..=oe, (a + 1..=ne).map(|_| None));
+        // A edição pode ter vindo depois de linhas que o Kit conta de outro jeito; o vetor segue o texto.
+        let n = self.texto.lines_len();
+        self.linhas.resize_with(n, || None);
+        self.estados.resize_with(n, || None);
+        let mut reserva: Vec<Range<usize>> = Vec::new();
+        for r in std::mem::take(&mut self.reserva) {
+            if r.start < a {
+                reserva.push(r.start..r.end.min(a));
+            }
+            if r.end > oe + 1 {
+                reserva.push(mover(r.start.max(oe + 1))..mover(r.end));
+            }
+        }
+        if self.frente > oe + 1 {
+            reserva.push(ne + 1..mover(self.frente));
+        }
+        reserva.retain(|r| !r.is_empty() && r.start < n);
+        reserva.sort_by_key(|r| r.start);
+        self.reserva = reserva;
+        self.frente = self.frente.min(a);
+    }
+
+    /// Estilos de `alcance` (bytes), sem buracos.
+    pub fn estilos(&self, alcance: &Range<usize>) -> Trechos {
+        let mut out = Vec::new();
+        let mut cursor = alcance.start;
+        if self.ligado && alcance.start < alcance.end {
+            let a = self.texto.offset_to_point(alcance.start).row;
+            let b = self.texto.offset_to_point(alcance.end.saturating_sub(1).max(alcance.start)).row;
+            for i in a..=b.min(self.linhas.len().saturating_sub(1)) {
+                let Some(l) = &self.linhas[i] else { continue };
+                let base = self.texto.line_start_offset(i);
+                for t in l.tokens.iter() {
+                    let (x, y) = ((base + t.ini as usize).max(alcance.start), (base + t.fim as usize).min(alcance.end));
+                    if x >= y || y <= cursor {
+                        continue;
+                    }
+                    if cursor < x {
+                        out.push((cursor..x, HighlightStyle::default()));
+                    }
+                    out.push((x.max(cursor)..y, self.paleta[t.estilo as usize]));
+                    cursor = y;
+                }
+            }
+        }
+        if cursor < alcance.end {
+            out.push((cursor..alcance.end, HighlightStyle::default()));
+        }
+        out
+    }
+
+    /// Todos os trechos, em deslocamentos absolutos.
+    pub fn trechos(&self) -> Trechos {
+        let mut out = Vec::new();
+        for (i, l) in self.linhas.iter().enumerate() {
+            let Some(l) = l else { continue };
+            let base = self.texto.line_start_offset(i);
+            out.extend(l.tokens.iter().map(|t| (base + t.ini as usize..base + t.fim as usize, self.paleta[t.estilo as usize])));
+        }
+        out
+    }
+}
+
+/// Colore o texto inteiro: sintaxe pelo tema e, por cima, os pares de colchetes fora de string e comentário.
+pub fn colorir(sintaxe: Option<&'static SyntaxReference>, texto: &str) -> Trechos {
+    let mut m = Motor::novo(sintaxe, Rope::from(texto));
+    m.avancar(usize::MAX, None);
+    m.trechos()
 }
 
 /// Escopos que contam nos colchetes e no marcador de lista.
@@ -281,46 +582,6 @@ fn sobrepor(trechos: &mut Trechos, alcance: Range<usize>, cor: Hsla) {
         }
         _ => trechos.insert(i, (alcance, novo(None))),
     }
-}
-
-/// Estilos de `alcance`, sem buracos.
-fn estilos_em(trechos: &[(Range<usize>, HighlightStyle)], alcance: &Range<usize>) -> Trechos {
-    let primeiro = trechos.partition_point(|(r, _)| r.end <= alcance.start);
-    let mut out = Vec::new();
-    let mut cursor = alcance.start;
-    for (r, s) in &trechos[primeiro..] {
-        if r.start >= alcance.end {
-            break;
-        }
-        let (a, b) = (r.start.max(alcance.start), r.end.min(alcance.end));
-        if a >= b || b <= cursor {
-            continue;
-        }
-        if cursor < a {
-            out.push((cursor..a, HighlightStyle::default()));
-        }
-        out.push((a.max(cursor)..b, *s));
-        cursor = b;
-    }
-    if cursor < alcance.end {
-        out.push((cursor..alcance.end, HighlightStyle::default()));
-    }
-    out
-}
-
-fn deslocar(trechos: &mut Trechos, e: &InputEdit) {
-    let delta = e.new_end_byte as isize - e.old_end_byte as isize;
-    trechos.retain_mut(|(r, _)| {
-        if r.end <= e.start_byte {
-            true
-        } else if r.start >= e.old_end_byte {
-            r.start = r.start.saturating_add_signed(delta);
-            r.end = r.end.saturating_add_signed(delta);
-            true
-        } else {
-            false
-        }
-    });
 }
 
 /// Dobras por chaves fora de strings e comentários de linha.
@@ -365,10 +626,53 @@ fn dobras(texto: &str) -> Vec<FoldRange> {
 
 struct Realce {
     lang: SharedString,
-    sintaxe: Option<&'static SyntaxReference>,
-    trechos: Rc<RefCell<Trechos>>,
+    motor: Arc<Mutex<Motor>>,
     dobras: Rc<RefCell<Vec<FoldRange>>>,
     tarefa: Option<Task<()>>,
+    tarefa_dobras: Option<Task<()>>,
+}
+
+impl Realce {
+    /// Continua a colorir em segundo plano, redesenhando quando o trabalho chega à parte visível.
+    fn agendar(&mut self, window: &mut gpui::Window, cx: &mut gpui::Context<EditorState>) {
+        if self.motor.lock().is_ok_and(|m| m.pronto()) {
+            self.tarefa = None;
+            return;
+        }
+        let motor = self.motor.clone();
+        self.tarefa = Some(cx.spawn_in(window, async move |ent, cx| loop {
+            let m = motor.clone();
+            let (fim, tocou) = cx.background_executor().spawn(async move { m.lock().map(|mut m| m.fatia(FATIA)).unwrap_or((true, false)) }).await;
+            if tocou && ent.update(cx, |_, cx| cx.notify()).is_err() {
+                break;
+            }
+            if fim {
+                break;
+            }
+        }));
+    }
+
+    fn atualizar_dobras(&mut self, edicao: bool, texto: &Rope, dobrar: bool, window: &mut gpui::Window, cx: &mut gpui::Context<EditorState>) {
+        if !dobrar {
+            self.tarefa_dobras = None;
+            self.dobras.borrow_mut().clear();
+            return;
+        }
+        if texto.len() <= SINCRONO_ATE {
+            self.tarefa_dobras = None;
+            *self.dobras.borrow_mut() = dobras(&texto.to_string());
+            return;
+        }
+        let (dobras_rc, texto) = (self.dobras.clone(), texto.clone());
+        self.tarefa_dobras = Some(cx.spawn_in(window, async move |ent, cx| {
+            if edicao {
+                cx.background_executor().timer(ESPERA).await;
+            }
+            let d = cx.background_executor().spawn(async move { dobras(&texto.to_string()) }).await;
+            *dobras_rc.borrow_mut() = d.clone();
+            let _ = ent.update(cx, |s, cx| s.apply_highlighter_fold_candidates(d, cx));
+        }));
+    }
 }
 
 impl InputHighlighter for Realce {
@@ -377,52 +681,27 @@ impl InputHighlighter for Realce {
     }
 
     fn update(&mut self, edit: Option<InputEdit>, texto: &Rope, dobrar: bool, window: &mut gpui::Window, cx: &mut gpui::Context<EditorState>) {
-        if let Some(e) = edit {
-            deslocar(&mut self.trechos.borrow_mut(), &e);
-        }
-        if texto.len() <= SINCRONO_ATE {
-            self.tarefa = None;
-            let t = texto.to_string();
-            *self.trechos.borrow_mut() = colorir(self.sintaxe, &t);
-            *self.dobras.borrow_mut() = if dobrar { dobras(&t) } else { Vec::new() };
-            return;
-        }
-        let (sintaxe, trechos, dobras_rc, texto) = (self.sintaxe, self.trechos.clone(), self.dobras.clone(), texto.clone());
-        let primeira = edit.is_none();
-        self.tarefa = Some(cx.spawn_in(window, async move |ent, cx| {
-            if !primeira {
-                cx.background_executor().timer(ESPERA).await;
+        if let Ok(mut m) = self.motor.lock() {
+            match &edit {
+                Some(e) => m.editar(e, texto.clone()),
+                None => *m = Motor::novo(m.sintaxe, texto.clone()),
             }
-            let (t, d) = cx
-                .background_executor()
-                .spawn(async move {
-                    let t = texto.to_string();
-                    (colorir(sintaxe, &t), if dobrar { dobras(&t) } else { Vec::new() })
-                })
-                .await;
-            *trechos.borrow_mut() = t;
-            *dobras_rc.borrow_mut() = d.clone();
-            let _ = ent.update(cx, |s, cx| s.apply_highlighter_fold_candidates(d, cx));
-        }));
+        }
+        self.agendar(window, cx);
+        self.atualizar_dobras(edit.is_some(), texto, dobrar, window, cx);
     }
 
     fn styles(&self, alcance: &Range<usize>, _: &dyn HighlightStyleResolver) -> Vec<(Range<usize>, HighlightStyle)> {
-        estilos_em(&self.trechos.borrow(), alcance)
+        let Ok(mut m) = self.motor.lock() else { return vec![(alcance.clone(), HighlightStyle::default())] };
+        let a = m.texto.offset_to_point(alcance.start).row;
+        let b = m.texto.offset_to_point(alcance.end.saturating_sub(1).max(alcance.start)).row + 1;
+        m.preparar(a, b);
+        m.estilos(alcance)
     }
 
     fn fold_ranges(&self, _: &Rope) -> Vec<FoldRange> {
         self.dobras.borrow().clone()
     }
-}
-
-thread_local! {
-    /// Cores atuais por nome de linguagem do editor (o caminho), para o minimapa desenhar com as mesmas cores.
-    static REGISTRO: RefCell<std::collections::HashMap<String, std::rc::Weak<RefCell<Trechos>>>> = RefCell::default();
-}
-
-/// Trechos coloridos do editor cujo nome de linguagem é `caminho`.
-pub fn trechos_de(caminho: &str) -> Option<Rc<RefCell<Trechos>>> {
-    REGISTRO.with(|r| r.borrow().get(caminho).and_then(std::rc::Weak::upgrade))
 }
 
 /// Fábrica para o `EditorState`: o "nome de linguagem" que o editor recebe é o caminho do arquivo, e daí sai a
@@ -431,18 +710,12 @@ pub fn fabrica() -> InputHighlighterFactory {
     Rc::new(|caminho: &str| {
         let lang = linguagem::linguagem(caminho);
         let sintaxe = lang.as_deref().and_then(|l| sintaxe(l, caminho));
-        let trechos: Rc<RefCell<Trechos>> = Rc::default();
-        REGISTRO.with(|r| {
-            let mut r = r.borrow_mut();
-            r.retain(|_, w| w.strong_count() > 0);
-            r.insert(caminho.to_string(), Rc::downgrade(&trechos));
-        });
         Some(Box::new(Realce {
             lang: caminho.to_string().into(),
-            sintaxe,
-            trechos,
+            motor: Arc::new(Mutex::new(Motor::novo(sintaxe, Rope::new()))),
             dobras: Rc::default(),
             tarefa: None,
+            tarefa_dobras: None,
         }) as Box<dyn InputHighlighter>)
     })
 }
@@ -450,6 +723,7 @@ pub fn fabrica() -> InputHighlighterFactory {
 #[cfg(test)]
 mod testes {
     use super::*;
+    use std::time::Instant;
 
     fn cor_de(trechos: &Trechos, t: &str, trecho: &str) -> Option<Hsla> {
         let i = t.find(trecho).unwrap();
@@ -506,25 +780,154 @@ mod testes {
         }
     }
 
+    /// TSX real repetido até `linhas`.
+    fn amostra(linhas: usize) -> String {
+        let base = include_str!("../examples/dados/editor-workspace.tsx");
+        base.lines().cycle().take(linhas).map(|l| format!("{l}\n")).collect()
+    }
+
+    fn edicao(antes: &Rope, depois: &Rope, ini: usize, fim_velho: usize, fim_novo: usize) -> InputEdit {
+        InputEdit {
+            start_byte: ini,
+            old_end_byte: fim_velho,
+            new_end_byte: fim_novo,
+            start_position: antes.offset_to_point(ini),
+            old_end_position: antes.offset_to_point(fim_velho),
+            new_end_position: depois.offset_to_point(fim_novo),
+        }
+    }
+
+    fn estilos_de(m: &mut Motor) -> Trechos {
+        let n = m.texto.lines_len();
+        m.preparar(0, n);
+        m.estilos(&(0..m.texto.len()))
+    }
+
+    /// Só os trechos com estilo, para comparar com [`colorir`].
+    fn com_estilo(t: Trechos) -> Trechos {
+        t.into_iter().filter(|(_, s)| *s != HighlightStyle::default()).collect()
+    }
+
+    // Limites em release (as metas); em debug, folga para o código sem otimização.
+    fn limite(ms: u64) -> Duration {
+        Duration::from_millis(if cfg!(debug_assertions) { ms * 30 } else { ms })
+    }
+
+    fn terminar(m: &mut Motor) {
+        while !m.fatia(Duration::from_secs(1)).0 {}
+    }
+
     #[test]
-    fn colore_3000_linhas_em_tempo_util() {
-        // 3000 linhas abaixo do limite de cor (200 mil caracteres), como um arquivo grande comum.
-        let linha = "export const x = f(a, 'b', [1, 2]); // comentário\n";
-        let t = linha.repeat(3000);
-        let ini = std::time::Instant::now();
-        let tr = colorir(sintaxe("typescript", "a.ts"), &t);
-        let gasto = ini.elapsed();
-        eprintln!("3000 linhas coloridas em {gasto:?}");
-        assert!(!tr.is_empty());
-        // Em segundo plano; mesmo sem otimização tem de caber em poucos segundos.
-        assert!(gasto < std::time::Duration::from_secs(if cfg!(debug_assertions) { 30 } else { 3 }));
+    fn tela_visivel_colorida_na_hora() {
+        let s = sintaxe("tsx", "a.tsx");
+        // Gramática e tema carregados, como depois do primeiro arquivo.
+        let _ = colorir(s, "const x = 1;\n");
+        // 50 mil linhas curtas, abaixo do limite de cor.
+        let curto: String = "a;\n".repeat(50_000);
+        for (nome, t) in [("3000", amostra(3000)), ("50 mil", curto)] {
+            let ini = Instant::now();
+            let mut m = Motor::novo(s, Rope::from(t.as_str()));
+            let alcance = 0..m.texto.line_start_offset(60);
+            m.preparar(0, 60);
+            let e = m.estilos(&alcance);
+            let gasto = ini.elapsed();
+            eprintln!("{nome} linhas: tela visível em {gasto:?}");
+            assert!(e.iter().any(|(_, s)| s.color.is_some()));
+            assert!(gasto < limite(50), "{nome}: {gasto:?}");
+            assert!(m.processadas <= 60 + PASSO, "só a parte visível: {}", m.processadas);
+            // Pular para o meio também é imediato (provisório até o segundo plano chegar).
+            let ini = Instant::now();
+            let meio = m.linhas.len() / 2;
+            m.preparar(meio, meio + 60);
+            let gasto = ini.elapsed();
+            eprintln!("{nome} linhas: meio em {gasto:?}");
+            assert!(gasto < limite(50), "{nome} meio: {gasto:?}");
+            assert!(m.linhas[meio + 10].is_some());
+            let ini = Instant::now();
+            terminar(&mut m);
+            eprintln!("{nome} linhas: arquivo todo em segundo plano em {:?}", ini.elapsed());
+            // Memória: um estado a cada PASSO linhas.
+            assert!(m.estados_guardados() <= m.linhas.len() / PASSO + 2, "{}", m.estados_guardados());
+        }
+    }
+
+    #[test]
+    fn provisorio_vira_exato() {
+        // Um comentário de bloco aberto longe da região pedida: o provisório erra e o segundo plano corrige.
+        let mut t = String::from("/*\n");
+        t.push_str(&"const x = 1;\n".repeat(400));
+        t.push_str("*/\n");
+        let s = sintaxe("typescript", "a.ts");
+        let mut m = Motor::novo(s, Rope::from(t.as_str()));
+        m.preparar(300, 310);
+        terminar(&mut m);
+        assert_eq!(com_estilo(estilos_de(&mut m)), colorir(s, &t));
+    }
+
+    #[test]
+    fn digitar_no_meio_reprocessa_pouco_e_fica_igual() {
+        let s = sintaxe("tsx", "a.tsx");
+        let t = amostra(3000);
+        let mut rope = Rope::from(t.as_str());
+        let mut m = Motor::novo(s, rope.clone());
+        terminar(&mut m);
+        // Letras numa linha do meio, uma de cada vez.
+        let linha = 1500;
+        for (k, c) in "abc".chars().enumerate() {
+            let pos = rope.line_start_offset(linha) + k;
+            let antes = rope.clone();
+            rope.insert(pos, &c.to_string());
+            let ed = edicao(&antes, &rope, pos, pos, pos + 1);
+            let p0 = m.processadas;
+            let ini = Instant::now();
+            m.editar(&ed, rope.clone());
+            m.preparar(linha - 20, linha + 40);
+            let gasto = ini.elapsed();
+            terminar(&mut m);
+            let feitas = m.processadas - p0;
+            eprintln!("tecla: {feitas} linhas, {gasto:?}");
+            assert!(feitas <= 2 * PASSO + 1, "recoloriu demais: {feitas}");
+            assert!(gasto < limite(30), "{gasto:?}");
+        }
+        // Quebra de linha, remoção de várias linhas e um comentário aberto no fim.
+        for (a, b, novo) in [(10, Some(10), "\n\n"), (20, Some(40), ""), (2900, None, "/* aberto\nx\n")] {
+            let (ini, fim) = (rope.line_start_offset(a), b.map_or(rope.len(), |b| rope.line_start_offset(b)));
+            let antes = rope.clone();
+            rope.remove(ini..fim);
+            rope.insert(ini, novo);
+            m.editar(&edicao(&antes, &rope, ini, fim, ini + novo.len()), rope.clone());
+            m.preparar(0, 50);
+            terminar(&mut m);
+        }
+        assert_eq!(com_estilo(estilos_de(&mut m)), colorir(s, &rope.to_string()));
+    }
+
+    #[test]
+    fn colchete_novo_recolore_o_resto() {
+        let s = sintaxe("typescript", "a.ts");
+        let t = "f(1);\n".repeat(100);
+        let mut rope = Rope::from(t.as_str());
+        let mut m = Motor::novo(s, rope.clone());
+        terminar(&mut m);
+        let antes = rope.clone();
+        rope.insert(0, "(");
+        m.editar(&edicao(&antes, &rope, 0, 0, 1), rope.clone());
+        terminar(&mut m);
+        assert_eq!(com_estilo(estilos_de(&mut m)), colorir(s, &rope.to_string()));
     }
 
     #[test]
     fn estilos_cobrem_o_alcance() {
-        let tr: Trechos = vec![(2..4, HighlightStyle::default())];
-        let e = estilos_em(&tr, &(0..6));
-        assert_eq!(e.iter().map(|(r, _)| r.clone()).collect::<Vec<_>>(), [0..2, 2..4, 4..6]);
+        let mut m = Motor::novo(None, Rope::from("ab(c)\nx"));
+        m.preparar(0, 2);
+        let e = m.estilos(&(1..7));
+        assert_eq!(e.first().map(|(r, _)| r.start), Some(1));
+        assert_eq!(e.last().map(|(r, _)| r.end), Some(7));
+        assert!(e.windows(2).all(|w| w[0].0.end == w[1].0.start));
+        assert_eq!(cor_de(&e, "ab(c)\nx", "("), Some(gpui::rgb(NIVEIS[0]).into()));
     }
 }
 
+#[cfg(test)]
+#[path = "../tests/shiki/comparar.rs"]
+mod comparar_shiki;

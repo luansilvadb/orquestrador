@@ -1,0 +1,576 @@
+%YAML 1.2
+---
+{
+ "name": "shiki-yaml",
+ "scope": "source.yaml",
+ "file_extensions": [],
+ "hidden": true,
+ "contexts": {
+  "main": [
+   {
+    "include": "r_comment"
+   },
+   {
+    "include": "r_property"
+   },
+   {
+    "include": "r_directive"
+   },
+   {
+    "match": "^---",
+    "scope": "entity.other.document.begin.yaml"
+   },
+   {
+    "match": "^\\.{3}",
+    "scope": "entity.other.document.end.yaml"
+   },
+   {
+    "include": "r_node"
+   }
+  ],
+  "r_block_collection": [
+   {
+    "include": "r_block_sequence"
+   },
+   {
+    "include": "r_block_mapping"
+   }
+  ],
+  "r_block_mapping": [
+   {
+    "include": "r_block_pair"
+   }
+  ],
+  "r_block_node": [
+   {
+    "include": "r_prototype"
+   },
+   {
+    "include": "r_block_scalar"
+   },
+   {
+    "include": "r_block_collection"
+   },
+   {
+    "include": "r_flow_scalar_plain_out"
+   },
+   {
+    "include": "r_flow_node"
+   }
+  ],
+  "r_block_pair": [
+   {
+    "match": "\\?",
+    "push": [
+     {
+      "meta_scope": "meta.block-mapping.yaml"
+     },
+     {
+      "match": "(?=\\?)|^ *(:)|(:)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.separator.key-value.mapping.yaml",
+       2: "invalid.illegal.expected-newline.yaml"
+      }
+     },
+     {
+      "include": "r_block_node"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.key-value.begin.yaml"
+    }
+   },
+   {
+    "match": "(?=(?:[^-\\]!\"#%\\&'*,:>?@\\[`{|}\\s]|[-:?]\\S)([^:\\s]|:\\S|\\s+(?![#\\s]))*\\s*:(\\s|$))",
+    "push": [
+     {
+      "match": "(?=\\s*$|\\s+#|\\s*:(\\s|$))",
+      "pop": true
+     },
+     {
+      "include": "r_flow_scalar_plain_out_implicit_type"
+     },
+     {
+      "match": "[^-\\]!\"#%\\&'*,:>?@\\[`{|}\\s]|[-:?]\\S",
+      "push": [
+       {
+        "meta_scope": "string.unquoted.plain.out.yaml"
+       },
+       {
+        "meta_content_scope": "entity.name.tag.yaml"
+       },
+       {
+        "match": "(?=\\s*$|\\s+#|\\s*:(\\s|$))",
+        "pop": true
+       }
+      ],
+      "scope": "entity.name.tag.yaml"
+     }
+    ]
+   },
+   {
+    "match": ":(?=\\s|$)",
+    "scope": "punctuation.separator.key-value.mapping.yaml"
+   }
+  ],
+  "r_block_scalar": [
+   {
+    "match": "(?:(\\|)|(>))([1-9])?([-+])?(.*\\n?)",
+    "push": [
+     {
+      "match": "^(?=\\S)|(?!\\G)",
+      "pop": true
+     },
+     {
+      "match": "^( +)(?! )",
+      "push": [
+       {
+        "meta_scope": "string.unquoted.block.yaml"
+       },
+       {
+        "match": "^(?!\\1|\\s*$)",
+        "pop": true
+       }
+      ]
+     }
+    ],
+    "captures": {
+     1: "keyword.control.flow.block-scalar.literal.yaml",
+     2: "keyword.control.flow.block-scalar.folded.yaml",
+     3: "constant.numeric.indentation-indicator.yaml",
+     4: "storage.modifier.chomping-indicator.yaml"
+    }
+   }
+  ],
+  "r_block_sequence": [
+   {
+    "match": "(-)(?!\\S)",
+    "scope": "punctuation.definition.block.sequence.item.yaml"
+   }
+  ],
+  "r_comment": [
+   {
+    "match": "(?:^([\\t ]*)|[\\t ]+)(?=#\\p{print}*$)",
+    "push": [
+     {
+      "match": "(?!\\G)",
+      "pop": true
+     },
+     {
+      "match": "#",
+      "push": [
+       {
+        "meta_scope": "comment.line.number-sign.yaml"
+       },
+       {
+        "match": "\\n",
+        "pop": true
+       }
+      ],
+      "scope": "punctuation.definition.comment.yaml"
+     }
+    ],
+    "captures": {
+     1: "punctuation.whitespace.comment.leading.yaml"
+    }
+   }
+  ],
+  "r_directive": [
+   {
+    "match": "^%",
+    "push": [
+     {
+      "meta_scope": "meta.directive.yaml"
+     },
+     {
+      "match": "(?=$|[\\t ]+($|#))",
+      "pop": true
+     },
+     {
+      "match": "\\G(YAML)[\\t ]+(\\d+\\.\\d+)",
+      "captures": {
+       1: "keyword.other.directive.yaml.yaml",
+       2: "constant.numeric.yaml-version.yaml"
+      }
+     },
+     {
+      "match": "\\G(TAG)(?:[\\t ]+(!(?:[-0-9A-Za-z]*!)?)(?:[\\t ]+(!(?:%\\h{2}|[]!#$\\&-;=?-\\[_a-z~])*|(?![]!,\\[{}])(?:%\\h{2}|[]!#$\\&-;=?-\\[_a-z~])+))?)?",
+      "captures": {
+       1: "keyword.other.directive.tag.yaml",
+       2: "storage.type.tag-handle.yaml",
+       3: "support.type.tag-prefix.yaml"
+      }
+     },
+     {
+      "match": "\\G(\\w+)(?:[\\t ]+(\\w+)(?:[\\t ]+(\\w+))?)?",
+      "captures": {
+       1: "support.other.directive.reserved.yaml",
+       2: "string.unquoted.directive-name.yaml",
+       3: "string.unquoted.directive-parameter.yaml"
+      }
+     },
+     {
+      "match": "\\S+",
+      "scope": "invalid.illegal.unrecognized.yaml"
+     }
+    ],
+    "scope": "punctuation.definition.directive.begin.yaml"
+   }
+  ],
+  "r_flow_alias": [
+   {
+    "match": "((\\*))([^],/\\[{}\\s]+)([^],}\\s]\\S*)?",
+    "captures": {
+     1: "keyword.control.flow.alias.yaml",
+     2: "punctuation.definition.alias.yaml",
+     3: "variable.other.alias.yaml",
+     4: "invalid.illegal.character.anchor.yaml"
+    }
+   }
+  ],
+  "r_flow_collection": [
+   {
+    "include": "r_flow_sequence"
+   },
+   {
+    "include": "r_flow_mapping"
+   }
+  ],
+  "r_flow_mapping": [
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "meta_scope": "meta.flow-mapping.yaml"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.definition.mapping.end.yaml"
+     },
+     {
+      "include": "r_prototype"
+     },
+     {
+      "match": ",",
+      "scope": "punctuation.separator.mapping.yaml"
+     },
+     {
+      "include": "r_flow_pair"
+     }
+    ],
+    "scope": "punctuation.definition.mapping.begin.yaml"
+   }
+  ],
+  "r_flow_node": [
+   {
+    "include": "r_prototype"
+   },
+   {
+    "include": "r_flow_alias"
+   },
+   {
+    "include": "r_flow_collection"
+   },
+   {
+    "include": "r_flow_scalar"
+   }
+  ],
+  "r_flow_pair": [
+   {
+    "match": "\\?",
+    "push": [
+     {
+      "meta_scope": "meta.flow-pair.explicit.yaml"
+     },
+     {
+      "match": "(?=[],}])",
+      "pop": true
+     },
+     {
+      "include": "r_prototype"
+     },
+     {
+      "include": "r_flow_pair"
+     },
+     {
+      "include": "r_flow_node"
+     },
+     {
+      "match": ":(?=\\s|$|[],\\[{}])",
+      "push": [
+       {
+        "match": "(?=[],}])",
+        "pop": true
+       },
+       {
+        "include": "r_flow_value"
+       }
+      ],
+      "scope": "punctuation.separator.key-value.mapping.yaml"
+     }
+    ],
+    "scope": "punctuation.definition.key-value.begin.yaml"
+   },
+   {
+    "match": "(?=(?:[^-\\]!\"#%\\&'*,:>?@\\[`{|}\\s]|[-:?][^],\\[{}\\s])([^],:\\[{}\\s]|:[^],\\[{}\\s]|\\s+(?![#\\s]))*\\s*:(\\s|$))",
+    "push": [
+     {
+      "meta_scope": "meta.flow-pair.key.yaml"
+     },
+     {
+      "match": "(?=\\s*$|\\s+#|\\s*:(\\s|$)|\\s*:[],\\[{}]|\\s*[],\\[{}])",
+      "pop": true
+     },
+     {
+      "include": "r_flow_scalar_plain_in_implicit_type"
+     },
+     {
+      "match": "[^-\\]!\"#%\\&'*,:>?@\\[`{|}\\s]|[-:?][^],\\[{}\\s]",
+      "push": [
+       {
+        "meta_scope": "string.unquoted.plain.in.yaml"
+       },
+       {
+        "meta_content_scope": "entity.name.tag.yaml"
+       },
+       {
+        "match": "(?=\\s*$|\\s+#|\\s*:(\\s|$)|\\s*:[],\\[{}]|\\s*[],\\[{}])",
+        "pop": true
+       }
+      ],
+      "scope": "entity.name.tag.yaml"
+     }
+    ]
+   },
+   {
+    "include": "r_flow_node"
+   },
+   {
+    "match": ":(?=\\s|$|[],\\[{}])",
+    "push": [
+     {
+      "meta_scope": "meta.flow-pair.yaml"
+     },
+     {
+      "match": "(?=[],}])",
+      "pop": true,
+      "scope": "punctuation.separator.key-value.mapping.yaml"
+     },
+     {
+      "include": "r_flow_value"
+     }
+    ],
+    "scope": "punctuation.separator.key-value.mapping.yaml"
+   }
+  ],
+  "r_flow_scalar": [
+   {
+    "include": "r_flow_scalar_double_quoted"
+   },
+   {
+    "include": "r_flow_scalar_single_quoted"
+   },
+   {
+    "include": "r_flow_scalar_plain_in"
+   }
+  ],
+  "r_flow_scalar_double_quoted": [
+   {
+    "match": "\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.yaml"
+     },
+     {
+      "match": "\"",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.yaml"
+     },
+     {
+      "match": "\\\\([ \"/0LN\\\\_abefnprtv]|x\\d\\d|u\\d{4}|U\\d{8})",
+      "scope": "constant.character.escape.yaml"
+     },
+     {
+      "match": "\\\\\\n",
+      "scope": "constant.character.escape.double-quoted.newline.yaml"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.yaml"
+   }
+  ],
+  "r_flow_scalar_plain_in": [
+   {
+    "include": "r_flow_scalar_plain_in_implicit_type"
+   },
+   {
+    "match": "[^-\\]!\"#%\\&'*,:>?@\\[`{|}\\s]|[-:?][^],\\[{}\\s]",
+    "push": [
+     {
+      "meta_scope": "string.unquoted.plain.in.yaml"
+     },
+     {
+      "match": "(?=\\s*$|\\s+#|\\s*:(\\s|$)|\\s*:[],\\[{}]|\\s*[],\\[{}])",
+      "pop": true
+     }
+    ]
+   }
+  ],
+  "r_flow_scalar_plain_in_implicit_type": [
+   {
+    "match": "(?:(null|Null|NULL|~)|([Yy]|yes|Yes|YES|[Nn]|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)|([-+]?0b[01_]+|[-+]?0[0-7_]+|[-+]?(?:0|[1-9][0-9_]*)|[-+]?0x[_\\h]+|[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+)|([-+]?(?:[0-9][0-9_]*)?\\.[.0-9]*(?:[Ee][-+][0-9]+)?|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*|[-+]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN))|(\\d{4}-\\d{2}-\\d{2}|\\d{4}-\\d{1,2}-\\d{1,2}(?:[Tt]|[\\t ]+)\\d{1,2}:\\d{2}:\\d{2}(?:\\.\\d*)?(?:[\\t ]*Z|[-+]\\d{1,2}(?::\\d{1,2})?)?)|(=)|(<<))(?=\\s*$|\\s+#|\\s*:(\\s|$)|\\s*:[],\\[{}]|\\s*[],\\[{}])",
+    "captures": {
+     1: "constant.language.null.yaml",
+     2: "constant.language.boolean.yaml",
+     3: "constant.numeric.integer.yaml",
+     4: "constant.numeric.float.yaml",
+     5: "constant.other.timestamp.yaml",
+     6: "constant.language.value.yaml",
+     7: "constant.language.merge.yaml"
+    }
+   }
+  ],
+  "r_flow_scalar_plain_out": [
+   {
+    "include": "r_flow_scalar_plain_out_implicit_type"
+   },
+   {
+    "match": "[^-\\]!\"#%\\&'*,:>?@\\[`{|}\\s]|[-:?]\\S",
+    "push": [
+     {
+      "meta_scope": "string.unquoted.plain.out.yaml"
+     },
+     {
+      "match": "(?=\\s*$|\\s+#|\\s*:(\\s|$))",
+      "pop": true
+     }
+    ]
+   }
+  ],
+  "r_flow_scalar_plain_out_implicit_type": [
+   {
+    "match": "(?:(null|Null|NULL|~)|([Yy]|yes|Yes|YES|[Nn]|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)|([-+]?0b[01_]+|[-+]?0[0-7_]+|[-+]?(?:0|[1-9][0-9_]*)|[-+]?0x[_\\h]+|[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+)|([-+]?(?:[0-9][0-9_]*)?\\.[.0-9]*(?:[Ee][-+][0-9]+)?|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*|[-+]?\\.(?:inf|Inf|INF)|\\.(?:nan|NaN|NAN))|(\\d{4}-\\d{2}-\\d{2}|\\d{4}-\\d{1,2}-\\d{1,2}(?:[Tt]|[\\t ]+)\\d{1,2}:\\d{2}:\\d{2}(?:\\.\\d*)?(?:[\\t ]*Z|[-+]\\d{1,2}(?::\\d{1,2})?)?)|(=)|(<<))(?=\\s*$|\\s+#|\\s*:(\\s|$))",
+    "captures": {
+     1: "constant.language.null.yaml",
+     2: "constant.language.boolean.yaml",
+     3: "constant.numeric.integer.yaml",
+     4: "constant.numeric.float.yaml",
+     5: "constant.other.timestamp.yaml",
+     6: "constant.language.value.yaml",
+     7: "constant.language.merge.yaml"
+    }
+   }
+  ],
+  "r_flow_scalar_single_quoted": [
+   {
+    "match": "'",
+    "push": [
+     {
+      "meta_scope": "string.quoted.single.yaml"
+     },
+     {
+      "match": "'(?!')",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.yaml"
+     },
+     {
+      "match": "''",
+      "scope": "constant.character.escape.single-quoted.yaml"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.yaml"
+   }
+  ],
+  "r_flow_sequence": [
+   {
+    "match": "\\[",
+    "push": [
+     {
+      "meta_scope": "meta.flow-sequence.yaml"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.definition.sequence.end.yaml"
+     },
+     {
+      "include": "r_prototype"
+     },
+     {
+      "match": ",",
+      "scope": "punctuation.separator.sequence.yaml"
+     },
+     {
+      "include": "r_flow_pair"
+     },
+     {
+      "include": "r_flow_node"
+     }
+    ],
+    "scope": "punctuation.definition.sequence.begin.yaml"
+   }
+  ],
+  "r_flow_value": [
+   {
+    "match": "\\G(?![],}])",
+    "push": [
+     {
+      "meta_scope": "meta.flow-pair.value.yaml"
+     },
+     {
+      "match": "(?=[],}])",
+      "pop": true
+     },
+     {
+      "include": "r_flow_node"
+     }
+    ]
+   }
+  ],
+  "r_node": [
+   {
+    "include": "r_block_node"
+   }
+  ],
+  "r_property": [
+   {
+    "match": "(?=[!\\&])",
+    "push": [
+     {
+      "meta_scope": "meta.property.yaml"
+     },
+     {
+      "match": "(?!\\G)",
+      "pop": true
+     },
+     {
+      "match": "\\G((&))([^],/\\[{}\\s]+)(\\S+)?",
+      "captures": {
+       1: "keyword.control.property.anchor.yaml",
+       2: "punctuation.definition.anchor.yaml",
+       3: "entity.name.type.anchor.yaml",
+       4: "invalid.illegal.character.anchor.yaml"
+      }
+     },
+     {
+      "match": "\\G!(?:<(?:%\\h{2}|[]!#$\\&-;=?-\\[_a-z~])+>|(?:[-0-9A-Za-z]*!)?(?:%\\h{2}|[#$\\&-+\\--;=?-Z_a-z~])+|)(?=[\\t ]|$)",
+      "scope": "storage.type.tag-handle.yaml"
+     },
+     {
+      "match": "\\S+",
+      "scope": "invalid.illegal.tag-handle.yaml"
+     }
+    ]
+   }
+  ],
+  "r_prototype": [
+   {
+    "include": "r_comment"
+   },
+   {
+    "include": "r_property"
+   }
+  ]
+ }
+}

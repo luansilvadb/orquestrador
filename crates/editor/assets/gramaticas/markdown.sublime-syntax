@@ -1,0 +1,3185 @@
+%YAML 1.2
+---
+{
+ "name": "shiki-markdown",
+ "scope": "text.html.markdown",
+ "file_extensions": [],
+ "hidden": true,
+ "contexts": {
+  "main": [
+   {
+    "include": "r_frontMatter"
+   },
+   {
+    "include": "r_block"
+   }
+  ],
+  "r_ampersand": [
+   {
+    "match": "&(?!([0-9A-Za-z]+|#[0-9]+|#x\\h+);)",
+    "scope": "meta.other.valid-ampersand.markdown"
+   }
+  ],
+  "r_block": [
+   {
+    "include": "r_separator"
+   },
+   {
+    "include": "r_heading"
+   },
+   {
+    "include": "r_blockquote"
+   },
+   {
+    "include": "r_lists"
+   },
+   {
+    "include": "r_fenced_code_block"
+   },
+   {
+    "include": "r_raw_block"
+   },
+   {
+    "include": "r_link_def"
+   },
+   {
+    "include": "r_html"
+   },
+   {
+    "include": "r_table"
+   },
+   {
+    "include": "r_paragraph"
+   }
+  ],
+  "r_blockquote": [
+   {
+    "match": "(^|\\G) {0,3}(>) ?",
+    "push": [
+     {
+      "meta_scope": "markup.quote.markdown"
+     },
+     {
+      "match": "^(?!(^|)\\s*(>) ?)",
+      "pop": true
+     },
+     {
+      "include": "r_block"
+     }
+    ],
+    "captures": {
+     2: "punctuation.definition.quote.begin.markdown"
+    }
+   }
+  ],
+  "r_bold": [
+   {
+    "match": "(?<open>(\\*\\*(?=\\w)|(?<!\\w)\\*\\*|(?<!\\w)\\b__))(?=\\S)(?=(<[^>]*+>|(?<raw>`+)([^`]|(?!(?<!`)\\k<raw>(?!`))`)*+\\k<raw>|\\\\[-\\]!#(-+.>\\[\\\\_`{}]?+|\\[((?<square>[^]\\[\\\\]|\\\\.|\\[\\g<square>*+])*+](( ?\\[[^]]*+])|(\\([\\t ]*+<?(.*?)>?[\\t ]*+((?<title>[\"'])(.*?)\\k<title>)?\\))))|(?!(?<=\\S)\\k<open>).)++(?<=\\S)(?=__\\b|\\*\\*)\\k<open>)",
+    "push": [
+     {
+      "meta_scope": "markup.bold.markdown"
+     },
+     {
+      "match": "(?<=\\S)(\\1)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.bold.markdown"
+      }
+     },
+     {
+      "match": "(?=<[^>]*?>)",
+      "push": [
+       {
+        "include": "scope:text.html.derivative"
+       },
+       {
+        "match": "(?<=>)",
+        "pop": true
+       }
+      ]
+     },
+     {
+      "include": "r_escape"
+     },
+     {
+      "include": "r_ampersand"
+     },
+     {
+      "include": "r_bracket"
+     },
+     {
+      "include": "r_raw"
+     },
+     {
+      "include": "r_bold"
+     },
+     {
+      "include": "r_italic"
+     },
+     {
+      "include": "r_image_inline"
+     },
+     {
+      "include": "r_link_inline"
+     },
+     {
+      "include": "r_link_inet"
+     },
+     {
+      "include": "r_link_email"
+     },
+     {
+      "include": "r_image_ref"
+     },
+     {
+      "include": "r_link_ref_literal"
+     },
+     {
+      "include": "r_link_ref"
+     },
+     {
+      "include": "r_link_ref_shortcut"
+     },
+     {
+      "include": "r_strikethrough"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.bold.markdown"
+    }
+   }
+  ],
+  "r_bracket": [
+   {
+    "match": "<(?![!$/?A-Za-z])",
+    "scope": "meta.other.valid-bracket.markdown"
+   }
+  ],
+  "r_escape": [
+   {
+    "match": "\\\\[-\\]!#(-+.>\\[\\\\_`{}]",
+    "scope": "constant.character.escape.markdown"
+   }
+  ],
+  "r_fenced_code_block": [
+   {
+    "include": "r_fenced_code_block_css"
+   },
+   {
+    "include": "r_fenced_code_block_basic"
+   },
+   {
+    "include": "r_fenced_code_block_ini"
+   },
+   {
+    "include": "r_fenced_code_block_java"
+   },
+   {
+    "include": "r_fenced_code_block_lua"
+   },
+   {
+    "include": "r_fenced_code_block_makefile"
+   },
+   {
+    "include": "r_fenced_code_block_perl"
+   },
+   {
+    "include": "r_fenced_code_block_r"
+   },
+   {
+    "include": "r_fenced_code_block_ruby"
+   },
+   {
+    "include": "r_fenced_code_block_php"
+   },
+   {
+    "include": "r_fenced_code_block_sql"
+   },
+   {
+    "include": "r_fenced_code_block_vs_net"
+   },
+   {
+    "include": "r_fenced_code_block_xml"
+   },
+   {
+    "include": "r_fenced_code_block_xsl"
+   },
+   {
+    "include": "r_fenced_code_block_yaml"
+   },
+   {
+    "include": "r_fenced_code_block_dosbatch"
+   },
+   {
+    "include": "r_fenced_code_block_clojure"
+   },
+   {
+    "include": "r_fenced_code_block_coffee"
+   },
+   {
+    "include": "r_fenced_code_block_c"
+   },
+   {
+    "include": "r_fenced_code_block_cpp"
+   },
+   {
+    "include": "r_fenced_code_block_diff"
+   },
+   {
+    "include": "r_fenced_code_block_dockerfile"
+   },
+   {
+    "include": "r_fenced_code_block_git_commit"
+   },
+   {
+    "include": "r_fenced_code_block_git_rebase"
+   },
+   {
+    "include": "r_fenced_code_block_go"
+   },
+   {
+    "include": "r_fenced_code_block_groovy"
+   },
+   {
+    "include": "r_fenced_code_block_pug"
+   },
+   {
+    "include": "r_fenced_code_block_ignore"
+   },
+   {
+    "include": "r_fenced_code_block_js"
+   },
+   {
+    "include": "r_fenced_code_block_js_regexp"
+   },
+   {
+    "include": "r_fenced_code_block_json"
+   },
+   {
+    "include": "r_fenced_code_block_jsonc"
+   },
+   {
+    "include": "r_fenced_code_block_jsonl"
+   },
+   {
+    "include": "r_fenced_code_block_less"
+   },
+   {
+    "include": "r_fenced_code_block_objc"
+   },
+   {
+    "include": "r_fenced_code_block_swift"
+   },
+   {
+    "include": "r_fenced_code_block_scss"
+   },
+   {
+    "include": "r_fenced_code_block_perl6"
+   },
+   {
+    "include": "r_fenced_code_block_powershell"
+   },
+   {
+    "include": "r_fenced_code_block_python"
+   },
+   {
+    "include": "r_fenced_code_block_julia"
+   },
+   {
+    "include": "r_fenced_code_block_regexp_python"
+   },
+   {
+    "include": "r_fenced_code_block_rust"
+   },
+   {
+    "include": "r_fenced_code_block_scala"
+   },
+   {
+    "include": "r_fenced_code_block_shell"
+   },
+   {
+    "include": "r_fenced_code_block_ts"
+   },
+   {
+    "include": "r_fenced_code_block_tsx"
+   },
+   {
+    "include": "r_fenced_code_block_csharp"
+   },
+   {
+    "include": "r_fenced_code_block_fsharp"
+   },
+   {
+    "include": "r_fenced_code_block_dart"
+   },
+   {
+    "include": "r_fenced_code_block_handlebars"
+   },
+   {
+    "include": "r_fenced_code_block_markdown"
+   },
+   {
+    "include": "r_fenced_code_block_log"
+   },
+   {
+    "include": "r_fenced_code_block_erlang"
+   },
+   {
+    "include": "r_fenced_code_block_elixir"
+   },
+   {
+    "include": "r_fenced_code_block_latex"
+   },
+   {
+    "include": "r_fenced_code_block_bibtex"
+   },
+   {
+    "include": "r_fenced_code_block_twig"
+   },
+   {
+    "include": "r_fenced_code_block_yang"
+   },
+   {
+    "include": "r_fenced_code_block_abap"
+   },
+   {
+    "include": "r_fenced_code_block_restructuredtext"
+   },
+   {
+    "include": "r_fenced_code_block_unknown"
+   }
+  ],
+  "r_fenced_code_block_abap": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(abap)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.abap"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.abap"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_basic": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(html?|shtml|xhtml|inc|tmpl|tpl)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.html"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.html.basic"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_bibtex": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(bibtex)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.bibtex"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.bibtex"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_c": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:([ch])((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.c"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.c"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_clojure": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(cl(?:js??|ojure))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.clojure"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.clojure"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_coffee": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(coffee|Cakefile|coffee.erb)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.coffee"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.coffee"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_cpp": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(c(?:pp|\\+\\+|xx))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.cpp source.cpp"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.cpp"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_csharp": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(c(?:s|sharp|#))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.csharp"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.cs"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_css": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(css(?:|.erb))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.css"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.css"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_dart": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(dart)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.dart"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.dart"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_diff": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(patch|diff|rej)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.diff"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.diff"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_dockerfile": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:([Dd]ockerfile)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.dockerfile"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.dockerfile"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_dosbatch": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(bat(?:|ch))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.dosbatch"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.batchfile"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_elixir": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(elixir)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.elixir"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.elixir"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_erlang": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(erlang)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.erlang"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.erlang"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_fsharp": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(f(?:s|sharp|#))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.fsharp"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.fsharp"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_git_commit": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:((?:COMMIT_EDIT|MERGE_)MSG)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.git_commit"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.git-commit"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_git_rebase": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(git-rebase-todo)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.git_rebase"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.git-rebase"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_go": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(go(?:|lang))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.go"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.go"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_groovy": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(g(?:roovy|vy))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.groovy"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.groovy"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_handlebars": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(h(?:andlebars|bs))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.handlebars"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.html.handlebars"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_ignore": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:((?:git|)ignore)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.ignore"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.ignore"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_ini": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(ini|conf)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.ini"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.ini"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_java": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(java|bsh)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.java"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.java"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_js": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(jsx??|javascript|es6|mjs|cjs|dataviewjs|\\{\\.js.+?})((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.javascript"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.js"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_js_regexp": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(regexp)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.js_regexp"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.js.regexp"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_json": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(json5??|sublime-settings|sublime-menu|sublime-keymap|sublime-mousemap|sublime-theme|sublime-build|sublime-project|sublime-completions)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.json"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.json"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_jsonc": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(jsonc)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.jsonc"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.json.comments"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_jsonl": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(jsonl(?:|ines))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.jsonl"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.json.lines"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_julia": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(julia|\\{\\.julia.+?})((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.julia"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.julia"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_latex": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:((?:la|)tex)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.latex"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.tex.latex"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_less": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(less)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.less"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.css.less"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_log": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(log)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.log"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.log"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_lua": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(lua)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.lua"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.lua"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_makefile": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:((?:[Mm]|GNUm|OCamlM)akefile)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.makefile"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.makefile"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_markdown": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(m(?:arkdown|d))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.markdown"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.html.markdown"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_objc": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(objectivec|objective-c|mm|objc|obj-c|[hm])((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.objc"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.objc"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_perl": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(perl|pl|pm|pod|t|PL|psgi|vcl)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.perl"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.perl"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_perl6": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(perl6|p6|pl6|pm6|nqp)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.perl6"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.perl.6"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_php": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(php3??|php4|php5|phpt|phtml|aw|ctp)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.php"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.html.basic"
+       },
+       {
+        "include": "scope:source.php"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_powershell": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(p(?:owershell|s1|sm1|sd1|wsh))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.powershell"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.powershell"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_pug": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(jade|pug)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.pug"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.pug"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_python": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(python|py3??|rpy|pyw|cpy|SConstruct|Sconstruct|sconstruct|SConscript|gypi??|\\{\\.python.+?})((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.python"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.python"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_r": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:([RSrs]|Rprofile|\\{\\.r.+?})((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.r"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.r"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_regexp_python": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(re)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.regexp_python"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.regexp.python"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_restructuredtext": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(r(?:estructuredtext|st))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.restructuredtext"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.rst"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_ruby": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(ruby|rbx??|rjs|Rakefile|rake|cgi|fcgi|gemspec|irbrc|Capfile|ru|prawn|Cheffile|Gemfile|Guardfile|Hobofile|Vagrantfile|Appraisals|Rantfile|Berksfile|Berksfile.lock|Thorfile|Puppetfile)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.ruby"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.ruby"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_rust": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(rust|rs|\\{\\.rust.+?})((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.rust"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.rust"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_scala": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(s(?:cala|bt))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.scala"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.scala"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_scss": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(scss)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.scss"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.css.scss"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_shell": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(shell|sh|bash|zsh|bashrc|bash_profile|bash_login|profile|bash_logout|.textmate_init|\\{\\.bash.+?})((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.shellscript"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.shell"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_sql": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(sql|ddl|dml)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.sql"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.sql"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_swift": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(swift)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.swift"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.swift"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_ts": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(t(?:ypescript|s))((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.typescript"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.ts"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_tsx": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(tsx)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.typescriptreact"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.tsx"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_twig": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(twig)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.twig"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.twig"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_unknown": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?=([^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language"
+    }
+   }
+  ],
+  "r_fenced_code_block_vs_net": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(vb)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.vs_net"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.asp.vb.net"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_xml": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(xml|xsd|tld|jsp|pt|cpt|dtml|rss|opml)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.xml"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.xml"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_xsl": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(xslt??)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.xsl"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.xml.xsl"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_yaml": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(ya?ml)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.yaml"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.yaml"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_fenced_code_block_yang": [
+   {
+    "match": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(yang)((\\s+|[,:?{])[^`]*)?$)",
+    "push": [
+     {
+      "meta_scope": "markup.fenced_code.block.markdown"
+     },
+     {
+      "match": "(^|\\G)(\\2|\\s{0,3})(\\3)\\s*$",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.markdown"
+      }
+     },
+     {
+      "match": "(^|\\G)(\\s*)(.*)",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.yang"
+       },
+       {
+        "match": "^(?!(^|)(?!\\s*([`~]{3,})\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.yang"
+       }
+      ]
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.markdown",
+     4: "fenced_code.block.language.markdown",
+     5: "fenced_code.block.language.attributes.markdown"
+    }
+   }
+  ],
+  "r_frontMatter": [
+   {
+    "match": "\\A(?=(-{3,}))",
+    "push": [
+     {
+      "match": "\\A(-{3,})(.*)$",
+      "push": [
+       {
+        "meta_content_scope": "meta.embedded.block.frontmatter"
+       },
+       {
+        "match": "^(?!^(?!(?: {0,3}\\1-*[\\t ]*|[\\t ]*\\.{3})$))",
+        "pop": true
+       },
+       {
+        "include": "scope:source.yaml"
+       }
+      ],
+      "captures": {
+       1: "punctuation.definition.begin.frontmatter",
+       2: "comment.frontmatter"
+      }
+     },
+     {
+      "match": "^(?: {0,3}\\1-*[\\t ]*|[\\t ]*\\.{3})$",
+      "pop": true,
+      "scope": "punctuation.definition.end.frontmatter"
+     }
+    ]
+   }
+  ],
+  "r_heading": [
+   {
+    "match": "(?:^|\\G) {0,3}(#{1,6}\\s+(.*?)(\\s+#{1,6})?\\s*)$",
+    "scope": "markup.heading.markdown"
+   }
+  ],
+  "r_heading_setext": [
+   {
+    "match": "^(={3,})(?=[\\t ]*$\\n?)",
+    "scope": "markup.heading.setext.1.markdown"
+   },
+   {
+    "match": "^(-{3,})(?=[\\t ]*$\\n?)",
+    "scope": "markup.heading.setext.2.markdown"
+   }
+  ],
+  "r_html": [
+   {
+    "match": "(^|\\G)\\s*(<!--)",
+    "push": [
+     {
+      "meta_scope": "comment.block.html"
+     },
+     {
+      "match": "(-->)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.comment.html",
+       2: "punctuation.definition.comment.html"
+      }
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.comment.html",
+     2: "punctuation.definition.comment.html"
+    }
+   },
+   {
+    "match": "(?i)(^|\\G)\\s*(?=<(script|style|pre)(\\s|$|>)(?!.*?</(script|style|pre)>))",
+    "push": [
+     {
+      "match": "(?i)(.*)((</)(script|style|pre)(>))",
+      "pop": true,
+      "captures": {
+       3: "punctuation.definition.tag.begin.html",
+       4: "entity.name.tag.html",
+       5: "punctuation.definition.tag.end.html"
+      }
+     },
+     {
+      "match": "(\\s*|$)",
+      "push": [
+       {
+        "match": "^(?!(?i)^(?!.*</(script|style|pre)>))",
+        "pop": true
+       },
+       {
+        "include": "scope:text.html.derivative"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "match": "(?i)(^|\\G)\\s*(?=</?[A-Za-z]+[^\\&/;gt\\s]*(\\s|$|/?>))",
+    "push": [
+     {
+      "match": "^(?!^(?!\\s*$))",
+      "pop": true
+     },
+     {
+      "include": "scope:text.html.derivative"
+     }
+    ]
+   },
+   {
+    "match": "(^|\\G)\\s*(?=(<(?:[-0-9A-Za-z](/?>|\\s.*?>)|/[-0-9A-Za-z]>))\\s*$)",
+    "push": [
+     {
+      "match": "^(?!^(?!\\s*$))",
+      "pop": true
+     },
+     {
+      "include": "scope:text.html.derivative"
+     }
+    ]
+   }
+  ],
+  "r_image_inline": [
+   {
+    "match": "(!\\[)((?<square>[^]\\[\\\\]|\\\\.|\\[\\g<square>*+])*+)(])(\\()[\\t ]*((<)((?:\\\\[<>]|[^\\n<>])*)(>)|((?<url>(?>[^()\\s]+)|\\(\\g<url>*\\))*))[\\t ]*(?:((\\().+?(\\)))|((\").+?(\"))|((').+?(')))?\\s*(\\))",
+    "scope": "meta.image.inline.markdown",
+    "captures": {
+     1: "punctuation.definition.link.description.begin.markdown",
+     2: "string.other.link.description.markdown",
+     4: "punctuation.definition.link.description.end.markdown",
+     5: "punctuation.definition.metadata.markdown",
+     7: "punctuation.definition.link.markdown",
+     8: "markup.underline.link.image.markdown",
+     9: "punctuation.definition.link.markdown",
+     10: "markup.underline.link.image.markdown",
+     12: "string.other.link.description.title.markdown",
+     13: "punctuation.definition.string.begin.markdown",
+     14: "punctuation.definition.string.end.markdown",
+     15: "string.other.link.description.title.markdown",
+     16: "punctuation.definition.string.begin.markdown",
+     17: "punctuation.definition.string.end.markdown",
+     18: "string.other.link.description.title.markdown",
+     19: "punctuation.definition.string.begin.markdown",
+     20: "punctuation.definition.string.end.markdown",
+     21: "punctuation.definition.metadata.markdown"
+    }
+   }
+  ],
+  "r_image_ref": [
+   {
+    "match": "(!\\[)((?<square>[^]\\[\\\\]|\\\\.|\\[\\g<square>*+])*+)(]) ?(\\[)(.*?)(])",
+    "scope": "meta.image.reference.markdown",
+    "captures": {
+     1: "punctuation.definition.link.description.begin.markdown",
+     2: "string.other.link.description.markdown",
+     4: "punctuation.definition.link.description.end.markdown",
+     5: "punctuation.definition.constant.markdown",
+     6: "constant.other.reference.link.markdown",
+     7: "punctuation.definition.constant.markdown"
+    }
+   }
+  ],
+  "r_inline": [
+   {
+    "include": "r_ampersand"
+   },
+   {
+    "include": "r_bracket"
+   },
+   {
+    "include": "r_bold"
+   },
+   {
+    "include": "r_italic"
+   },
+   {
+    "include": "r_raw"
+   },
+   {
+    "include": "r_strikethrough"
+   },
+   {
+    "include": "r_escape"
+   },
+   {
+    "include": "r_image_inline"
+   },
+   {
+    "include": "r_image_ref"
+   },
+   {
+    "include": "r_link_email"
+   },
+   {
+    "include": "r_link_inet"
+   },
+   {
+    "include": "r_link_inline"
+   },
+   {
+    "include": "r_link_ref"
+   },
+   {
+    "include": "r_link_ref_literal"
+   },
+   {
+    "include": "r_link_ref_shortcut"
+   }
+  ],
+  "r_italic": [
+   {
+    "match": "(?<open>(\\*(?=\\w)|(?<!\\w)\\*|(?<!\\w)\\b_))(?=\\S)(?=(<[^>]*+>|(?<raw>`+)([^`]|(?!(?<!`)\\k<raw>(?!`))`)*+\\k<raw>|\\\\[-\\]!#(-+.>\\[\\\\_`{}]?+|\\[((?<square>[^]\\[\\\\]|\\\\.|\\[\\g<square>*+])*+](( ?\\[[^]]*+])|(\\([\\t ]*+<?(.*?)>?[\\t ]*+((?<title>[\"'])(.*?)\\k<title>)?\\))))|\\k<open>\\k<open>|(?!(?<=\\S)\\k<open>).)++(?<=\\S)(?=_\\b|\\*)\\k<open>)",
+    "push": [
+     {
+      "meta_scope": "markup.italic.markdown"
+     },
+     {
+      "match": "(?<=\\S)(\\1)((?!\\1)|(?=\\1\\1))",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.italic.markdown"
+      }
+     },
+     {
+      "match": "(?=<[^>]*?>)",
+      "push": [
+       {
+        "include": "scope:text.html.derivative"
+       },
+       {
+        "match": "(?<=>)",
+        "pop": true
+       }
+      ]
+     },
+     {
+      "include": "r_escape"
+     },
+     {
+      "include": "r_ampersand"
+     },
+     {
+      "include": "r_bracket"
+     },
+     {
+      "include": "r_raw"
+     },
+     {
+      "include": "r_bold"
+     },
+     {
+      "include": "r_image_inline"
+     },
+     {
+      "include": "r_link_inline"
+     },
+     {
+      "include": "r_link_inet"
+     },
+     {
+      "include": "r_link_email"
+     },
+     {
+      "include": "r_image_ref"
+     },
+     {
+      "include": "r_link_ref_literal"
+     },
+     {
+      "include": "r_link_ref"
+     },
+     {
+      "include": "r_link_ref_shortcut"
+     },
+     {
+      "include": "r_strikethrough"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.italic.markdown"
+    }
+   }
+  ],
+  "r_link_def": [
+   {
+    "match": "\\s*(\\[)([^]]+?)(])(:)[\\t ]*(?:(<)((?:\\\\[<>]|[^\\n<>])*)(>)|(\\S+?))[\\t ]*(?:((\\().+?(\\)))|((\").+?(\"))|((').+?(')))?\\s*$",
+    "scope": "meta.link.reference.def.markdown",
+    "captures": {
+     1: "punctuation.definition.constant.markdown",
+     2: "constant.other.reference.link.markdown",
+     3: "punctuation.definition.constant.markdown",
+     4: "punctuation.separator.key-value.markdown",
+     5: "punctuation.definition.link.markdown",
+     6: "markup.underline.link.markdown",
+     7: "punctuation.definition.link.markdown",
+     8: "markup.underline.link.markdown",
+     9: "string.other.link.description.title.markdown",
+     10: "punctuation.definition.string.begin.markdown",
+     11: "punctuation.definition.string.end.markdown",
+     12: "string.other.link.description.title.markdown",
+     13: "punctuation.definition.string.begin.markdown",
+     14: "punctuation.definition.string.end.markdown",
+     15: "string.other.link.description.title.markdown",
+     16: "punctuation.definition.string.begin.markdown",
+     17: "punctuation.definition.string.end.markdown"
+    }
+   }
+  ],
+  "r_link_email": [
+   {
+    "match": "(<)((?:mailto:)?[!#-'*+\\--9=?A-Z^-~]+@[-0-9A-Za-z]+(?:\\.[-0-9A-Za-z]+)*)(>)",
+    "scope": "meta.link.email.lt-gt.markdown",
+    "captures": {
+     1: "punctuation.definition.link.markdown",
+     2: "markup.underline.link.markdown",
+     4: "punctuation.definition.link.markdown"
+    }
+   }
+  ],
+  "r_link_inet": [
+   {
+    "match": "(<)((?:https?|ftp)://.*?)(>)",
+    "scope": "meta.link.inet.markdown",
+    "captures": {
+     1: "punctuation.definition.link.markdown",
+     2: "markup.underline.link.markdown",
+     3: "punctuation.definition.link.markdown"
+    }
+   }
+  ],
+  "r_link_inline": [
+   {
+    "match": "(\\[)((?<square>[^]\\[\\\\]|\\\\.|\\[\\g<square>*+])*+)(])(\\()[\\t ]*((<)((?:\\\\[<>]|[^\\n<>])*)(>)|((?<url>(?>[^()\\s]+)|\\(\\g<url>*\\))*))[\\t ]*(?:((\\()[^()]*(\\)))|((\")[^\"]*(\"))|((')[^']*(')))?\\s*(\\))",
+    "scope": "meta.link.inline.markdown",
+    "captures": {
+     1: "punctuation.definition.link.title.begin.markdown",
+     2: "string.other.link.title.markdown",
+     4: "punctuation.definition.link.title.end.markdown",
+     5: "punctuation.definition.metadata.markdown",
+     7: "punctuation.definition.link.markdown",
+     8: "markup.underline.link.markdown",
+     9: "punctuation.definition.link.markdown",
+     10: "markup.underline.link.markdown",
+     12: "string.other.link.description.title.markdown",
+     13: "punctuation.definition.string.begin.markdown",
+     14: "punctuation.definition.string.end.markdown",
+     15: "string.other.link.description.title.markdown",
+     16: "punctuation.definition.string.begin.markdown",
+     17: "punctuation.definition.string.end.markdown",
+     18: "string.other.link.description.title.markdown",
+     19: "punctuation.definition.string.begin.markdown",
+     20: "punctuation.definition.string.end.markdown",
+     21: "punctuation.definition.metadata.markdown"
+    }
+   }
+  ],
+  "r_link_ref": [
+   {
+    "match": "(?<![]\\\\])(\\[)((?<square>[^]\\[\\\\]|\\\\.|\\[\\g<square>*+])*+)(])(\\[)([^]]*+)(])",
+    "scope": "meta.link.reference.markdown",
+    "captures": {
+     1: "punctuation.definition.link.title.begin.markdown",
+     2: "string.other.link.title.markdown",
+     4: "punctuation.definition.link.title.end.markdown",
+     5: "punctuation.definition.constant.begin.markdown",
+     6: "constant.other.reference.link.markdown",
+     7: "punctuation.definition.constant.end.markdown"
+    }
+   }
+  ],
+  "r_link_ref_literal": [
+   {
+    "match": "(?<![]\\\\])(\\[)((?<square>[^]\\[\\\\]|\\\\.|\\[\\g<square>*+])*+)(]) ?(\\[)(])",
+    "scope": "meta.link.reference.literal.markdown",
+    "captures": {
+     1: "punctuation.definition.link.title.begin.markdown",
+     2: "string.other.link.title.markdown",
+     4: "punctuation.definition.link.title.end.markdown",
+     5: "punctuation.definition.constant.begin.markdown",
+     6: "punctuation.definition.constant.end.markdown"
+    }
+   }
+  ],
+  "r_link_ref_shortcut": [
+   {
+    "match": "(?<![]\\\\])(\\[)((?:[^]\\[\\\\\\s]|\\\\[]\\[])+?)((?<!\\\\)])",
+    "scope": "meta.link.reference.markdown",
+    "captures": {
+     1: "punctuation.definition.link.title.begin.markdown",
+     2: "string.other.link.title.markdown",
+     3: "punctuation.definition.link.title.end.markdown"
+    }
+   }
+  ],
+  "r_list_paragraph": [
+   {
+    "match": "(^|\\G)(?=\\S)(?![*->]\\s|[0-9]+\\.\\s)",
+    "push": [
+     {
+      "meta_scope": "meta.paragraph.markdown"
+     },
+     {
+      "match": "^(?!(^|)(?!\\s*$|#| {0,3}([-*>_] {2,}){3,}[\\t ]*$\\n?| {0,3}[*->]| {0,3}[0-9]+\\.))",
+      "pop": true
+     },
+     {
+      "include": "r_inline"
+     },
+     {
+      "include": "scope:text.html.derivative"
+     },
+     {
+      "include": "r_heading_setext"
+     }
+    ]
+   }
+  ],
+  "r_lists": [
+   {
+    "match": "(^|\\G)( {0,3})([-*+])([\\t ])",
+    "push": [
+     {
+      "meta_scope": "markup.list.unnumbered.markdown"
+     },
+     {
+      "match": "^(?!((^|)( {2,4}|\\t))|^([\\t ]*)$)",
+      "pop": true
+     },
+     {
+      "include": "r_block"
+     },
+     {
+      "include": "r_list_paragraph"
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.list.begin.markdown"
+    }
+   },
+   {
+    "match": "(^|\\G)( {0,3})([0-9]+[).])([\\t ])",
+    "push": [
+     {
+      "meta_scope": "markup.list.numbered.markdown"
+     },
+     {
+      "match": "^(?!((^|)( {2,4}|\\t))|^([\\t ]*)$)",
+      "pop": true
+     },
+     {
+      "include": "r_block"
+     },
+     {
+      "include": "r_list_paragraph"
+     }
+    ],
+    "captures": {
+     3: "punctuation.definition.list.begin.markdown"
+    }
+   }
+  ],
+  "r_paragraph": [
+   {
+    "match": "(^|\\G) {0,3}(?=[^\\t\\n ])",
+    "push": [
+     {
+      "meta_scope": "meta.paragraph.markdown"
+     },
+     {
+      "match": "^(?!(^|)((?=\\s*[-=]{3,}\\s*$)| {4,}(?=[^\\t\\n ])))",
+      "pop": true
+     },
+     {
+      "include": "r_inline"
+     },
+     {
+      "include": "scope:text.html.derivative"
+     },
+     {
+      "include": "r_heading_setext"
+     }
+    ]
+   }
+  ],
+  "r_raw": [
+   {
+    "match": "(`+)((?:[^`]|(?!(?<!`)\\1(?!`))`)*+)(\\1)",
+    "scope": "markup.inline.raw.string.markdown",
+    "captures": {
+     1: "punctuation.definition.raw.markdown",
+     3: "punctuation.definition.raw.markdown"
+    }
+   }
+  ],
+  "r_raw_block": [
+   {
+    "match": "(^|\\G)( {4}|\\t)",
+    "push": [
+     {
+      "meta_scope": "markup.raw.block.markdown"
+     },
+     {
+      "match": "^(?!(^|)( {4}|\\t))",
+      "pop": true
+     }
+    ]
+   }
+  ],
+  "r_separator": [
+   {
+    "match": "(^|\\G) {0,3}([-*_])( {0,2}\\2){2,}[\\t ]*$\\n?",
+    "scope": "meta.separator.markdown"
+   }
+  ],
+  "r_strikethrough": [
+   {
+    "match": "(?<!\\\\)(~{2,})(?!(?<=\\w~~)_)((?:[^~]|(?!(?<![\\\\~])\\1(?!~))~)*+)(\\1)(?!(?<=_\\1)\\w)",
+    "scope": "markup.strikethrough.markdown",
+    "captures": {
+     1: "punctuation.definition.strikethrough.markdown",
+     3: "punctuation.definition.strikethrough.markdown"
+    }
+   }
+  ],
+  "r_table": [
+   {
+    "match": "(^|\\G)(\\|)(?=[^|].+\\|\\s*$)",
+    "push": [
+     {
+      "meta_scope": "markup.table.markdown"
+     },
+     {
+      "match": "^(?!(^|)(?=\\|))",
+      "pop": true
+     },
+     {
+      "match": "\\|",
+      "scope": "punctuation.definition.table.markdown"
+     },
+     {
+      "match": "(?<=\\|)\\s*(:?-+:?)\\s*(?=\\|)",
+      "captures": {
+       1: "punctuation.separator.table.markdown"
+      }
+     },
+     {
+      "match": "(?<=\\|)\\s*(?=\\S)((\\\\\\||[^|])+)(?<=\\S)\\s*(?=\\|)"
+     }
+    ],
+    "captures": {
+     2: "punctuation.definition.table.markdown"
+    }
+   }
+  ]
+ }
+}

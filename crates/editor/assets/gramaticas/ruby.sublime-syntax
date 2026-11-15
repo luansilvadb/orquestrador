@@ -1,0 +1,2842 @@
+%YAML 1.2
+---
+{
+ "name": "shiki-ruby",
+ "scope": "source.ruby",
+ "file_extensions": [],
+ "hidden": true,
+ "contexts": {
+  "main": [
+   {
+    "match": "\\b(class)\\s+(([0-9A-Z_a-z]+)((::)[0-9A-Z_a-z]+)*)\\s*((<)\\s*(([0-9A-Z_a-z]+)((::)[0-9A-Z_a-z]+)*))?",
+    "scope": "meta.class.ruby",
+    "captures": {
+     1: "keyword.control.class.ruby",
+     2: "entity.name.type.class.ruby",
+     5: "punctuation.separator.namespace.ruby",
+     7: "punctuation.separator.inheritance.ruby",
+     8: "entity.other.inherited-class.ruby",
+     11: "punctuation.separator.namespace.ruby"
+    }
+   },
+   {
+    "match": "\\b(module)\\s+(([0-9A-Z_a-z]+)((::)[0-9A-Z_a-z]+)*)",
+    "scope": "meta.module.ruby",
+    "captures": {
+     1: "keyword.control.module.ruby",
+     2: "entity.name.type.module.ruby",
+     5: "punctuation.separator.namespace.ruby"
+    }
+   },
+   {
+    "match": "\\b(class)\\s*(<<)\\s*",
+    "scope": "meta.class.ruby",
+    "captures": {
+     1: "keyword.control.class.ruby",
+     2: "punctuation.separator.inheritance.ruby"
+    }
+   },
+   {
+    "match": "(?<!\\.)\\belse(\\s)+if\\b",
+    "scope": "invalid.deprecated.ruby"
+   },
+   {
+    "match": "^\\s*([_a-z][0-9A-Z_a-z]*)\\s*((&&|\\|\\|)=)",
+    "captures": {
+     1: "variable.ruby",
+     2: "keyword.operator.assignment.augmented.ruby"
+    }
+   },
+   {
+    "match": "(?<!\\.)\\b(case|if|elsif|unless|until|while)\\b\\s*(\\()*?\\s*([_a-z][0-9A-Z_a-z]*)\\s*((&&|\\|\\|)=)",
+    "captures": {
+     1: "keyword.control.ruby",
+     3: "variable.ruby",
+     4: "keyword.operator.assignment.augmented.ruby"
+    }
+   },
+   {
+    "match": "^\\s*([_a-z][0-9A-Z_a-z]*)\\s*(([-%*+/]|\\*\\*|[\\&^|]|<<|>>)=)",
+    "captures": {
+     1: "variable.ruby",
+     2: "keyword.operator.assignment.augmented.ruby"
+    }
+   },
+   {
+    "match": "(?<!\\.)\\b(case|if|elsif|unless|until|while)\\b\\s*(\\()*?\\s*([_a-z][0-9A-Z_a-z]*)\\s*(([-%*+/]|\\*\\*|[\\&^|]|<<|>>)=)",
+    "captures": {
+     1: "keyword.control.ruby",
+     3: "variable.ruby",
+     4: "keyword.operator.assignment.augmented.ruby"
+    }
+   },
+   {
+    "match": "^\\s*([_a-z][0-9A-Z_a-z]*)\\s*(?==[^=>])",
+    "captures": {
+     1: "variable.ruby"
+    }
+   },
+   {
+    "match": "(?<!\\.)\\b(case|if|elsif|unless|until|while)\\b\\s*(\\()*?\\s*([_a-z][0-9A-Z_a-z]*)\\s*=[^=>]",
+    "captures": {
+     1: "keyword.control.ruby",
+     3: "variable.ruby"
+    }
+   },
+   {
+    "match": "(?>[A-Z_a-z]\\w*[!?]?)(:)(?!:)",
+    "scope": "constant.language.symbol.hashkey.ruby",
+    "captures": {
+     1: "punctuation.definition.constant.hashkey.ruby"
+    }
+   },
+   {
+    "match": "(?<!:)(:)(?>[A-Z_a-z]\\w*[!?]?)(?=\\s*=>)",
+    "scope": "constant.language.symbol.hashkey.ruby",
+    "captures": {
+     1: "punctuation.definition.constant.ruby"
+    }
+   },
+   {
+    "match": "(?<!\\.)\\b(BEGIN|begin|case|class|else|elsif|END|end|ensure|for|if|in|module|rescue|then|unless|until|when|while)\\b(?![!?])",
+    "scope": "keyword.control.ruby"
+   },
+   {
+    "match": "(?<!\\.)\\bdo\\b",
+    "scope": "keyword.control.start-block.ruby"
+   },
+   {
+    "match": "(?<=\\{)(\\s+)",
+    "scope": "meta.syntax.ruby.start-block"
+   },
+   {
+    "match": "(?<!\\.)\\b(alias|alias_method|break|next|redo|retry|return|super|undef|yield)\\b(?![!?])|\\bdefined\\?|\\b(block_given|iterator)\\?",
+    "scope": "keyword.control.pseudo-method.ruby"
+   },
+   {
+    "match": "\\bnil\\b(?![!?])",
+    "scope": "constant.language.nil.ruby"
+   },
+   {
+    "match": "\\b(true|false)\\b(?![!?])",
+    "scope": "constant.language.boolean.ruby"
+   },
+   {
+    "match": "\\b(__(FILE|LINE)__)\\b(?![!?])",
+    "scope": "variable.language.ruby"
+   },
+   {
+    "match": "\\bself\\b(?![!?])",
+    "scope": "variable.language.self.ruby"
+   },
+   {
+    "match": "\\b(initialize|new|loop|include|extend|prepend|raise|fail|attr_reader|attr_writer|attr_accessor|attr|catch|throw|private|private_class_method|module_function|public|public_class_method|protected|refine|using)\\b(?![!?])",
+    "scope": "keyword.other.special-method.ruby"
+   },
+   {
+    "match": "\\b(?<!\\.|::)(require(?:|_relative))\\b(?![!?])",
+    "push": [
+     {
+      "meta_scope": "meta.require.ruby"
+     },
+     {
+      "match": "$|(?=[#}])",
+      "pop": true,
+      "captures": {
+       1: "keyword.other.special-method.ruby"
+      }
+     },
+     {
+      "include": "main"
+     }
+    ],
+    "captures": {
+     1: "keyword.other.special-method.ruby"
+    }
+   },
+   {
+    "match": "(@)[A-Z_a-z]\\w*",
+    "scope": "variable.other.readwrite.instance.ruby",
+    "captures": {
+     1: "punctuation.definition.variable.ruby"
+    }
+   },
+   {
+    "match": "(@@)[A-Z_a-z]\\w*",
+    "scope": "variable.other.readwrite.class.ruby",
+    "captures": {
+     1: "punctuation.definition.variable.ruby"
+    }
+   },
+   {
+    "match": "(\\$)[A-Z_a-z]\\w*",
+    "scope": "variable.other.readwrite.global.ruby",
+    "captures": {
+     1: "punctuation.definition.variable.ruby"
+    }
+   },
+   {
+    "match": "(\\$)([!\\&'+@`]|\\d+|[\"$*,./:-?\\\\_~]|-[0FIadilpv])",
+    "scope": "variable.other.readwrite.global.pre-defined.ruby",
+    "captures": {
+     1: "punctuation.definition.variable.ruby"
+    }
+   },
+   {
+    "match": "\\b(ENV)\\[",
+    "push": [
+     {
+      "meta_scope": "meta.environment-variable.ruby"
+     },
+     {
+      "match": "]",
+      "pop": true
+     },
+     {
+      "include": "main"
+     }
+    ],
+    "captures": {
+     1: "variable.other.constant.ruby"
+    }
+   },
+   {
+    "match": "\\b[A-Z]\\w*(?=((\\.|::)[A-Za-z]|\\[))",
+    "scope": "support.class.ruby"
+   },
+   {
+    "match": "\\b((abort|at_exit|autoload|binding|callcc|caller|caller_locations|chomp|chop|eval|exec|exit|fork|format|gets|global_variables|gsub|lambda|load|local_variables|open|p|printf??|proc|putc|puts|rand|readlines??|select|set_trace_func|sleep|spawn|sprintf|srand|sub|syscall|system|test|trace_var|trap|untrace_var|warn)\\b(?![!?])|autoload\\?|exit!)",
+    "scope": "support.function.kernel.ruby"
+   },
+   {
+    "match": "\\b[A-Z_]\\w*\\b",
+    "scope": "variable.other.constant.ruby"
+   },
+   {
+    "match": "(->)\\(",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true
+     },
+     {
+      "match": "(?=[\\&*A-Z_a-z])",
+      "push": [
+       {
+        "match": "(?=[),])",
+        "pop": true
+       },
+       {
+        "include": "r_method_parameters"
+       }
+      ]
+     },
+     {
+      "include": "r_method_parameters"
+     }
+    ],
+    "captures": {
+     1: "support.function.kernel.ruby"
+    }
+   },
+   {
+    "match": "(?=def\\b)(?<=^|\\s)(def)\\s+((?>[A-Z_a-z]\\w*(?>\\.|::))?(?>[A-Z_a-z]\\w*(?>[!?]|=(?!>))?|===?|!=|>[=>]?|<=>|<[<=]?|[%\\&/`|]|\\*\\*?|=?~|[-+]@?|\\[]=?))\\s*(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.function.method.with-arguments.ruby"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.parameters.ruby"
+     },
+     {
+      "match": "(?=[\\&*A-Z_a-z])",
+      "push": [
+       {
+        "match": "(?=[),])",
+        "pop": true
+       },
+       {
+        "include": "r_method_parameters"
+       }
+      ]
+     },
+     {
+      "include": "r_method_parameters"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.def.ruby",
+     2: "entity.name.function.ruby",
+     3: "punctuation.definition.parameters.ruby"
+    }
+   },
+   {
+    "match": "(?=def\\b)(?<=^|\\s)(def)\\s+((?>[A-Z_a-z]\\w*(?>\\.|::))?(?>[A-Z_a-z]\\w*(?>[!?]|=(?!>))?|===?|!=|>[=>]?|<=>|<[<=]?|[%\\&/`|]|\\*\\*?|=?~|[-+]@?|\\[]=?))[\\t ](?=[\\t ]*[^#;\\s])",
+    "push": [
+     {
+      "meta_scope": "meta.function.method.with-arguments.ruby"
+     },
+     {
+      "match": "(?=;)|(?<=[]!\"')?`}\\w])(?=\\s*#|\\s*$)",
+      "pop": true
+     },
+     {
+      "match": "(?=[\\&*A-Z_a-z])",
+      "push": [
+       {
+        "match": "(?=[,;]|\\s*#|\\s*$)",
+        "pop": true
+       },
+       {
+        "include": "r_method_parameters"
+       }
+      ]
+     },
+     {
+      "include": "r_method_parameters"
+     }
+    ],
+    "captures": {
+     1: "keyword.control.def.ruby",
+     2: "entity.name.function.ruby"
+    }
+   },
+   {
+    "match": "(?=def\\b)(?<=^|\\s)(def)\\b(\\s+((?>[A-Z_a-z]\\w*(?>\\.|::))?(?>[A-Z_a-z]\\w*(?>[!?]|=(?!>))?|===?|!=|>[=>]?|<=>|<[<=]?|[%\\&/`|]|\\*\\*?|=?~|[-+]@?|\\[]=?)))?",
+    "scope": "meta.function.method.without-arguments.ruby",
+    "captures": {
+     1: "keyword.control.def.ruby",
+     3: "entity.name.function.ruby"
+    }
+   },
+   {
+    "match": "\\b(\\d(?>_?\\d)*(\\.(?![^\\s\\d])(?>_?\\d)*)?([Ee][-+]?\\d(?>_?\\d)*)?|0(?:[Xx]\\h(?>_?\\h)*|[Oo]?[0-7](?>_?[0-7])*|[Bb][01](?>_?[01])*|[Dd]\\d(?>_?\\d)*))\\b",
+    "scope": "constant.numeric.ruby"
+   },
+   {
+    "match": ":'",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.ruby"
+     },
+     {
+      "match": "'",
+      "pop": true,
+      "scope": "punctuation.definition.symbol.end.ruby"
+     },
+     {
+      "match": "\\\\['\\\\]",
+      "scope": "constant.character.escape.ruby"
+     }
+    ],
+    "scope": "punctuation.definition.symbol.begin.ruby"
+   },
+   {
+    "match": ":\"",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.interpolated.ruby"
+     },
+     {
+      "match": "\"",
+      "pop": true,
+      "scope": "punctuation.section.symbol.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     }
+    ],
+    "scope": "punctuation.section.symbol.begin.ruby"
+   },
+   {
+    "match": "(?<!\\()/=",
+    "scope": "keyword.operator.assignment.augmented.ruby"
+   },
+   {
+    "match": "'",
+    "push": [
+     {
+      "meta_scope": "string.quoted.single.ruby"
+     },
+     {
+      "match": "'",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "match": "\\\\['\\\\]",
+      "scope": "constant.character.escape.ruby"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.interpolated.ruby"
+     },
+     {
+      "match": "\"",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "(?<!\\.)`",
+    "push": [
+     {
+      "meta_scope": "string.interpolated.ruby"
+     },
+     {
+      "match": "`",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "(?<![)\\w])((/))(?![*+?])(?!\\s*$)(?=(?:\\\\/|[^/])*+/[eimnosux]*\\s*(?:[]#),.:?}]|\\|\\||&&|<=>|=>|==|=~|!~|!=|;|$|if|else|elsif|then|do|end|unless|while|until|or|and))",
+    "push": [
+     {
+      "meta_content_scope": "string.regexp.interpolated.ruby"
+     },
+     {
+      "match": "((/[eimnosux]*))",
+      "pop": true,
+      "captures": {
+       1: "string.regexp.interpolated.ruby",
+       2: "punctuation.section.regexp.ruby"
+      }
+     },
+     {
+      "include": "r_regex_sub"
+     }
+    ],
+    "captures": {
+     1: "string.regexp.interpolated.ruby",
+     2: "punctuation.section.regexp.ruby"
+    }
+   },
+   {
+    "match": "%r\\{",
+    "push": [
+     {
+      "meta_scope": "string.regexp.interpolated.ruby"
+     },
+     {
+      "match": "}[eimnosux]*",
+      "pop": true,
+      "scope": "punctuation.section.regexp.end.ruby"
+     },
+     {
+      "include": "r_regex_sub"
+     },
+     {
+      "include": "r_nest_curly_r"
+     }
+    ],
+    "scope": "punctuation.section.regexp.begin.ruby"
+   },
+   {
+    "match": "%r\\[",
+    "push": [
+     {
+      "meta_scope": "string.regexp.interpolated.ruby"
+     },
+     {
+      "match": "][eimnosux]*",
+      "pop": true,
+      "scope": "punctuation.section.regexp.end.ruby"
+     },
+     {
+      "include": "r_regex_sub"
+     },
+     {
+      "include": "r_nest_brackets_r"
+     }
+    ],
+    "scope": "punctuation.section.regexp.begin.ruby"
+   },
+   {
+    "match": "%r\\(",
+    "push": [
+     {
+      "meta_scope": "string.regexp.interpolated.ruby"
+     },
+     {
+      "match": "\\)[eimnosux]*",
+      "pop": true,
+      "scope": "punctuation.section.regexp.end.ruby"
+     },
+     {
+      "include": "r_regex_sub"
+     },
+     {
+      "include": "r_nest_parens_r"
+     }
+    ],
+    "scope": "punctuation.section.regexp.begin.ruby"
+   },
+   {
+    "match": "%r<",
+    "push": [
+     {
+      "meta_scope": "string.regexp.interpolated.ruby"
+     },
+     {
+      "match": ">[eimnosux]*",
+      "pop": true,
+      "scope": "punctuation.section.regexp.end.ruby"
+     },
+     {
+      "include": "r_regex_sub"
+     },
+     {
+      "include": "r_nest_ltgt_r"
+     }
+    ],
+    "scope": "punctuation.section.regexp.begin.ruby"
+   },
+   {
+    "match": "%r(\\W)",
+    "push": [
+     {
+      "meta_scope": "string.regexp.interpolated.ruby"
+     },
+     {
+      "match": "\\1[eimnosux]*",
+      "pop": true,
+      "scope": "punctuation.section.regexp.end.ruby"
+     },
+     {
+      "include": "r_regex_sub"
+     }
+    ],
+    "scope": "punctuation.section.regexp.begin.ruby"
+   },
+   {
+    "match": "%I\\[",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.interpolated.ruby"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_brackets_i"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%I\\(",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.interpolated.ruby"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_parens_i"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%I<",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.interpolated.ruby"
+     },
+     {
+      "match": ">",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_ltgt_i"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%I\\{",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.interpolated.ruby"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_curly_i"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%I(\\W)",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.interpolated.ruby"
+     },
+     {
+      "match": "\\1",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%i\\[",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.ruby"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "match": "\\\\[]\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_brackets"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%i\\(",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.ruby"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "match": "\\\\[)\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_parens"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%i<",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.ruby"
+     },
+     {
+      "match": ">",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "match": "\\\\[>\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_ltgt"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%i\\{",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.ruby"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "match": "\\\\[\\\\}]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_curly"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%i(\\W)",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.ruby"
+     },
+     {
+      "match": "\\1",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "match": "\\\\."
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%W\\[",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.interpolated.ruby"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_brackets_i"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%W\\(",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.interpolated.ruby"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_parens_i"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%W<",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.interpolated.ruby"
+     },
+     {
+      "match": ">",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_ltgt_i"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%W\\{",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.interpolated.ruby"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_curly_i"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%W(\\W)",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.interpolated.ruby"
+     },
+     {
+      "match": "\\1",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%w\\[",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.ruby"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "match": "\\\\[]\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_brackets"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%w\\(",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.ruby"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "match": "\\\\[)\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_parens"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%w<",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.ruby"
+     },
+     {
+      "match": ">",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "match": "\\\\[>\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_ltgt"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%w\\{",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.ruby"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "match": "\\\\[\\\\}]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_curly"
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%w(\\W)",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.ruby"
+     },
+     {
+      "match": "\\1",
+      "pop": true,
+      "scope": "punctuation.section.array.end.ruby"
+     },
+     {
+      "match": "\\\\."
+     }
+    ],
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "%[Qx]?\\(",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.interpolated.ruby"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_parens_i"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "%[Qx]?\\[",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.interpolated.ruby"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_brackets_i"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "%[Qx]?\\{",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.interpolated.ruby"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_curly_i"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "%[Qx]?<",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.interpolated.ruby"
+     },
+     {
+      "match": ">",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_ltgt_i"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "%[Qx](\\W)",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.interpolated.ruby"
+     },
+     {
+      "match": "\\1",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "%([^=\\w\\s])",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.interpolated.ruby"
+     },
+     {
+      "match": "\\1",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "%q\\(",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.ruby"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "match": "\\\\[)\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_parens"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "%q<",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.ruby"
+     },
+     {
+      "match": ">",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "match": "\\\\[>\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_ltgt"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "%q\\[",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.ruby"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "match": "\\\\[]\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_brackets"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "%q\\{",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.ruby"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "match": "\\\\[\\\\}]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_curly"
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "%q(\\W)",
+    "push": [
+     {
+      "meta_scope": "string.quoted.other.ruby"
+     },
+     {
+      "match": "\\1",
+      "pop": true,
+      "scope": "punctuation.definition.string.end.ruby"
+     },
+     {
+      "match": "\\\\."
+     }
+    ],
+    "scope": "punctuation.definition.string.begin.ruby"
+   },
+   {
+    "match": "%s\\(",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.ruby"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.symbol.end.ruby"
+     },
+     {
+      "match": "\\\\[)\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_parens"
+     }
+    ],
+    "scope": "punctuation.definition.symbol.begin.ruby"
+   },
+   {
+    "match": "%s<",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.ruby"
+     },
+     {
+      "match": ">",
+      "pop": true,
+      "scope": "punctuation.definition.symbol.end.ruby"
+     },
+     {
+      "match": "\\\\[>\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_ltgt"
+     }
+    ],
+    "scope": "punctuation.definition.symbol.begin.ruby"
+   },
+   {
+    "match": "%s\\[",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.ruby"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.definition.symbol.end.ruby"
+     },
+     {
+      "match": "\\\\[]\\\\]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_brackets"
+     }
+    ],
+    "scope": "punctuation.definition.symbol.begin.ruby"
+   },
+   {
+    "match": "%s\\{",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.ruby"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.definition.symbol.end.ruby"
+     },
+     {
+      "match": "\\\\[\\\\}]",
+      "scope": "constant.character.escape.ruby"
+     },
+     {
+      "include": "r_nest_curly"
+     }
+    ],
+    "scope": "punctuation.definition.symbol.begin.ruby"
+   },
+   {
+    "match": "%s(\\W)",
+    "push": [
+     {
+      "meta_scope": "constant.language.symbol.ruby"
+     },
+     {
+      "match": "\\1",
+      "pop": true,
+      "scope": "punctuation.definition.symbol.end.ruby"
+     },
+     {
+      "match": "\\\\."
+     }
+    ],
+    "scope": "punctuation.definition.symbol.begin.ruby"
+   },
+   {
+    "match": "(?<!:)(:)(?>[$A-Z_a-z]\\w*(?>[!?]|=(?![=>]))?|===?|<=>|>[=>]?|<[<=]?|[%\\&/`|]|\\*\\*?|=?~|[-+]@?|\\[]=?|@@?[A-Z_a-z]\\w*)",
+    "scope": "constant.language.symbol.ruby",
+    "captures": {
+     1: "punctuation.definition.constant.ruby"
+    }
+   },
+   {
+    "match": "^=begin",
+    "push": [
+     {
+      "meta_scope": "comment.block.documentation.ruby"
+     },
+     {
+      "match": "^=end",
+      "pop": true,
+      "scope": "punctuation.definition.comment.ruby"
+     }
+    ],
+    "scope": "punctuation.definition.comment.ruby"
+   },
+   {
+    "include": "r_yard"
+   },
+   {
+    "match": "(^[\\t ]+)?(?=#)",
+    "push": [
+     {
+      "match": "(?!\\G)",
+      "pop": true
+     },
+     {
+      "match": "#",
+      "push": [
+       {
+        "meta_scope": "comment.line.number-sign.ruby"
+       },
+       {
+        "match": "\\n",
+        "pop": true
+       }
+      ],
+      "scope": "punctuation.definition.comment.ruby"
+     }
+    ],
+    "captures": {
+     1: "punctuation.whitespace.comment.leading.ruby"
+    }
+   },
+   {
+    "match": "(?<!\\w)\\?(\\\\(x\\h{1,2}(?!\\h)\\b|0[0-7]{0,2}(?![0-7])\\b|[^0CMx])|(\\\\[CM]-)+\\w|[^\\\\\\s])",
+    "scope": "constant.numeric.ruby"
+   },
+   {
+    "match": "^__END__\\n",
+    "push": [
+     {
+      "meta_content_scope": "text.plain"
+     },
+     {
+      "match": "(?=not)impossible",
+      "pop": true,
+      "scope": "string.unquoted.program-block.ruby"
+     },
+     {
+      "match": "(?=<?xml|<(?i:html\\b)|!DOCTYPE (?i:html\\b))",
+      "push": [
+       {
+        "meta_scope": "text.html.embedded.ruby"
+       },
+       {
+        "match": "(?=not)impossible",
+        "pop": true
+       },
+       {
+        "include": "scope:text.html.basic"
+       }
+      ]
+     }
+    ],
+    "scope": "string.unquoted.program-block.ruby"
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)HTML)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.html"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)HTML)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)HTML)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "text.html"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)HTML)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:text.html.basic"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)HAML)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.haml"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)HAML)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)HAML)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "text.haml"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)HAML)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:text.haml"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)XML)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.xml"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)XML)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)XML)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "text.xml"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)XML)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:text.xml"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)SQL)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.sql"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)SQL)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)SQL)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "source.sql"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)SQL)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:source.sql"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)G(?:RAPHQL|QL))\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.graphql"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)G(?:RAPHQL|QL))$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)G(?:RAPHQL|QL))\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "source.graphql"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)G(?:RAPHQL|QL))\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:source.graphql"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)CSS)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.css"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)CSS)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)CSS)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "source.css"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)CSS)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:source.css"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)CPP)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.cpp"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)CPP)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)CPP)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "source.cpp"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)CPP)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:source.cpp"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)C)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.c"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)C)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)C)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "source.c"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)C)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:source.c"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)J(?:S|AVASCRIPT))\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.js"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)J(?:S|AVASCRIPT))$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)J(?:S|AVASCRIPT))\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "source.js"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)J(?:S|AVASCRIPT))\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:source.js"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)JQUERY)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.js.jquery"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)JQUERY)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)JQUERY)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "source.js.jquery"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)JQUERY)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:source.js.jquery"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)SH(?:|ELL))\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.shell"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)SH(?:|ELL))$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)SH(?:|ELL))\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "source.shell"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)SH(?:|ELL))\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:source.shell"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)LUA)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.lua"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)LUA)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)LUA)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "source.lua"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)LUA)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:source.lua"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)RUBY)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.ruby"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)RUBY)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)RUBY)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "source.ruby"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)RUBY)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:source.ruby"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)YA?ML)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.yaml"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)YA?ML)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)YA?ML)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "source.yaml"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)YA?ML)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:source.yaml"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?=(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)SLIM)\\b\\1))",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.block.slim"
+     },
+     {
+      "match": "^\\s*((?:[_\\w]+_|)SLIM)$\\n?",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "match": "(?><<[-~]?([\"'`]?)((?:[_\\w]+_|)SLIM)\\b\\1)",
+      "push": [
+       {
+        "meta_content_scope": "text.slim"
+       },
+       {
+        "match": "^(?!^(?!\\s*((?:[_\\w]+_|)SLIM)\\s*$))",
+        "pop": true
+       },
+       {
+        "include": "r_heredoc"
+       },
+       {
+        "include": "r_interpolated_ruby"
+       },
+       {
+        "include": "scope:text.slim"
+       },
+       {
+        "include": "r_escaped_char"
+       }
+      ],
+      "scope": "string.definition.begin.ruby"
+     }
+    ]
+   },
+   {
+    "match": "(?>=\\s*<<([\"'`]?)([A-Z_a-z]\\w*)\\1)",
+    "push": [
+     {
+      "meta_content_scope": "string.unquoted.heredoc.ruby"
+     },
+     {
+      "match": "^\\2$",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "include": "r_heredoc"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     }
+    ],
+    "scope": "string.definition.begin.ruby"
+   },
+   {
+    "match": "(?>((<<[-~]?([\"'`]?)([A-Z_a-z]\\w*)\\3,\\s?)*<<[-~]?([\"'`]?)([A-Z_a-z]\\w*)\\5))(.*)",
+    "push": [
+     {
+      "meta_content_scope": "string.unquoted.heredoc.ruby"
+     },
+     {
+      "match": "^\\s*\\6$",
+      "pop": true,
+      "scope": "string.definition.end.ruby"
+     },
+     {
+      "include": "r_heredoc"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     }
+    ],
+    "captures": {
+     1: "string.definition.begin.ruby"
+    }
+   },
+   {
+    "match": "(?<=\\{|\\{\\s+|[^$0-:@-Z_a-z]do|^do|[^$0-:@-Z_a-z]do\\s+|^do\\s+)(\\|)",
+    "push": [
+     {
+      "meta_scope": "meta.block.parameters.ruby"
+     },
+     {
+      "match": "(?<!\\|)(\\|)(?!\\|)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.separator.variable.ruby"
+      }
+     },
+     {
+      "match": "(?![(,|\\s])",
+      "push": [
+       {
+        "match": "(?=,|\\|\\s*)",
+        "pop": true
+       },
+       {
+        "match": "\\G((?:&|\\*\\*?)?)([A-Z_a-z][_\\w]*)",
+        "captures": {
+         1: "storage.type.variable.ruby",
+         2: "variable.other.block.ruby"
+        }
+       }
+      ]
+     },
+     {
+      "match": ",",
+      "scope": "punctuation.separator.variable.ruby"
+     }
+    ],
+    "captures": {
+     1: "punctuation.separator.variable.ruby"
+    }
+   },
+   {
+    "match": "=>",
+    "scope": "punctuation.separator.key-value"
+   },
+   {
+    "match": "->",
+    "scope": "support.function.kernel.ruby"
+   },
+   {
+    "match": "<<=|%=|&{1,2}=|\\*=|\\*\\*=|\\+=|-=|\\^=|\\|{1,2}=|<<",
+    "scope": "keyword.operator.assignment.augmented.ruby"
+   },
+   {
+    "match": "<=>|<(?![<=])|>(?![<=>])|<=|>=|===?|=~|!=|!~|(?<=[\\t ])\\?",
+    "scope": "keyword.operator.comparison.ruby"
+   },
+   {
+    "match": "(?<!\\.)\\b(and|not|or)\\b(?![!?])",
+    "scope": "keyword.operator.logical.ruby"
+   },
+   {
+    "match": "(?<=^|[\\t !])!|&&|\\|\\||\\^",
+    "scope": "keyword.operator.logical.ruby"
+   },
+   {
+    "match": "(&\\.)\\s*(?![A-Z])",
+    "captures": {
+     1: "keyword.operator.logical.ruby"
+    }
+   },
+   {
+    "match": "([%\\&]|\\*\\*|[-*+/])",
+    "scope": "keyword.operator.arithmetic.ruby"
+   },
+   {
+    "match": "=",
+    "scope": "keyword.operator.assignment.ruby"
+   },
+   {
+    "match": "[|~]|>>",
+    "scope": "keyword.operator.other.ruby"
+   },
+   {
+    "match": ";",
+    "scope": "punctuation.separator.statement.ruby"
+   },
+   {
+    "match": ",",
+    "scope": "punctuation.separator.object.ruby"
+   },
+   {
+    "match": "(::)\\s*(?=[A-Z])",
+    "captures": {
+     1: "punctuation.separator.namespace.ruby"
+    }
+   },
+   {
+    "match": "(\\.|::)\\s*(?![A-Z])",
+    "captures": {
+     1: "punctuation.separator.method.ruby"
+    }
+   },
+   {
+    "match": ":",
+    "scope": "punctuation.separator.other.ruby"
+   },
+   {
+    "match": "\\{",
+    "scope": "punctuation.section.scope.begin.ruby"
+   },
+   {
+    "match": "}",
+    "scope": "punctuation.section.scope.end.ruby"
+   },
+   {
+    "match": "\\[",
+    "scope": "punctuation.section.array.begin.ruby"
+   },
+   {
+    "match": "]",
+    "scope": "punctuation.section.array.end.ruby"
+   },
+   {
+    "match": "[()]",
+    "scope": "punctuation.section.function.ruby"
+   },
+   {
+    "match": "(?<=[^.]\\.|::)(?=[A-Za-z][!0-9?A-Z_a-z]*[^!0-9?A-Z_a-z])",
+    "push": [
+     {
+      "meta_scope": "meta.function-call.ruby"
+     },
+     {
+      "match": "(?<=[!0-9?A-Z_a-z])(?=[^!0-9?A-Z_a-z])",
+      "pop": true
+     },
+     {
+      "match": "([A-Za-z][!0-9?A-Z_a-z]*)(?=[^!0-9?A-Z_a-z])",
+      "scope": "entity.name.function.ruby"
+     }
+    ]
+   },
+   {
+    "match": "([A-Za-z]\\w*[!?]?)(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.function-call.ruby"
+     },
+     {
+      "match": "(\\))",
+      "pop": true,
+      "captures": {
+       1: "punctuation.section.function.ruby"
+      }
+     },
+     {
+      "include": "main"
+     }
+    ],
+    "captures": {
+     1: "entity.name.function.ruby",
+     2: "punctuation.section.function.ruby"
+    }
+   }
+  ],
+  "r_escaped_char": [
+   {
+    "match": "\\\\(?:[0-7]{1,3}|x[A-Fa-f\\d]{1,2}|.)",
+    "scope": "constant.character.escape.ruby"
+   }
+  ],
+  "r_heredoc": [
+   {
+    "match": "^<<[-~]?[A-Z_a-z]\\w*",
+    "push": [
+     {
+      "match": "$",
+      "pop": true
+     },
+     {
+      "include": "main"
+     }
+    ]
+   }
+  ],
+  "r_interpolated_ruby": [
+   {
+    "match": "#\\{",
+    "push": [
+     {
+      "meta_scope": "meta.embedded.line.ruby"
+     },
+     {
+      "meta_content_scope": "source.ruby"
+     },
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.embedded.end.ruby"
+     },
+     {
+      "include": "r_nest_curly_and_self"
+     },
+     {
+      "include": "main"
+     }
+    ],
+    "scope": "punctuation.section.embedded.begin.ruby"
+   },
+   {
+    "match": "(#@)[A-Z_a-z]\\w*",
+    "scope": "variable.other.readwrite.instance.ruby",
+    "captures": {
+     1: "punctuation.definition.variable.ruby"
+    }
+   },
+   {
+    "match": "(#@@)[A-Z_a-z]\\w*",
+    "scope": "variable.other.readwrite.class.ruby",
+    "captures": {
+     1: "punctuation.definition.variable.ruby"
+    }
+   },
+   {
+    "match": "(#\\$)[A-Z_a-z]\\w*",
+    "scope": "variable.other.readwrite.global.ruby",
+    "captures": {
+     1: "punctuation.definition.variable.ruby"
+    }
+   }
+  ],
+  "r_method_parameters": [
+   {
+    "include": "r_parens"
+   },
+   {
+    "include": "r_braces"
+   },
+   {
+    "include": "r_brackets"
+   },
+   {
+    "include": "r_params"
+   },
+   {
+    "include": "main"
+   }
+  ],
+  "r_nest_brackets": [
+   {
+    "match": "\\[",
+    "push": [
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_nest_brackets"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_nest_brackets_i": [
+   {
+    "match": "\\[",
+    "push": [
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_brackets_i"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_nest_brackets_r": [
+   {
+    "match": "\\[",
+    "push": [
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_regex_sub"
+     },
+     {
+      "include": "r_nest_brackets_r"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_nest_curly": [
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_nest_curly"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_nest_curly_and_self": [
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_nest_curly_and_self"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   },
+   {
+    "include": "main"
+   }
+  ],
+  "r_nest_curly_i": [
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_curly_i"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_nest_curly_r": [
+   {
+    "match": "\\{",
+    "push": [
+     {
+      "match": "}",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_regex_sub"
+     },
+     {
+      "include": "r_nest_curly_r"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_nest_ltgt": [
+   {
+    "match": "<",
+    "push": [
+     {
+      "match": ">",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_nest_ltgt"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_nest_ltgt_i": [
+   {
+    "match": "<",
+    "push": [
+     {
+      "match": ">",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_ltgt_i"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_nest_ltgt_r": [
+   {
+    "match": "<",
+    "push": [
+     {
+      "match": ">",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_regex_sub"
+     },
+     {
+      "include": "r_nest_ltgt_r"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_nest_parens": [
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_nest_parens"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_nest_parens_i": [
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_interpolated_ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     },
+     {
+      "include": "r_nest_parens_i"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_nest_parens_r": [
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.section.scope.ruby"
+     },
+     {
+      "include": "r_regex_sub"
+     },
+     {
+      "include": "r_nest_parens_r"
+     }
+    ],
+    "scope": "punctuation.section.scope.ruby"
+   }
+  ],
+  "r_regex_sub": [
+   {
+    "include": "r_interpolated_ruby"
+   },
+   {
+    "include": "r_escaped_char"
+   },
+   {
+    "match": "(\\{)\\d+(,\\d+)?(})",
+    "scope": "string.regexp.arbitrary-repetition.ruby",
+    "captures": {
+     1: "punctuation.definition.arbitrary-repetition.ruby",
+     3: "punctuation.definition.arbitrary-repetition.ruby"
+    }
+   },
+   {
+    "match": "\\[(?:\\^?])?",
+    "push": [
+     {
+      "meta_scope": "string.regexp.character-class.ruby"
+     },
+     {
+      "match": "]",
+      "pop": true,
+      "scope": "punctuation.definition.character-class.ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     }
+    ],
+    "scope": "punctuation.definition.character-class.ruby"
+   },
+   {
+    "match": "\\(\\?#",
+    "push": [
+     {
+      "meta_scope": "comment.line.number-sign.ruby"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.comment.end.ruby"
+     },
+     {
+      "include": "r_escaped_char"
+     }
+    ],
+    "scope": "punctuation.definition.comment.begin.ruby"
+   },
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "meta_scope": "string.regexp.group.ruby"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "scope": "punctuation.definition.group.ruby"
+     },
+     {
+      "include": "r_regex_sub"
+     }
+    ],
+    "scope": "punctuation.definition.group.ruby"
+   },
+   {
+    "match": "(?<=^|\\s)(#)\\s(?=[-\\t !,.0-9?A-Za-z[^\\x00-\\x7F]]*$)",
+    "push": [
+     {
+      "meta_scope": "comment.line.number-sign.ruby"
+     },
+     {
+      "match": "$\\n?",
+      "pop": true,
+      "scope": "punctuation.definition.comment.ruby"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.comment.ruby"
+    }
+   }
+  ],
+  "r_yard": [
+   {
+    "include": "r_yard_comment"
+   },
+   {
+    "include": "r_yard_param_types"
+   },
+   {
+    "include": "r_yard_option"
+   },
+   {
+    "include": "r_yard_tag"
+   },
+   {
+    "include": "r_yard_types"
+   },
+   {
+    "include": "r_yard_directive"
+   },
+   {
+    "include": "r_yard_see"
+   },
+   {
+    "include": "r_yard_macro_attribute"
+   }
+  ],
+  "r_yard_comment": [
+   {
+    "match": "^(\\s*)(#)(\\s*)(@)(abstract|api|author|deprecated|example|macro|note|overload|since|todo|version)(?=\\s|$)",
+    "push": [
+     {
+      "meta_scope": "comment.line.number-sign.ruby"
+     },
+     {
+      "meta_content_scope": "comment.line.string.yard.ruby"
+     },
+     {
+      "match": "^(?!\\s*#\\3\\s{2,}|\\s*#\\s*$)",
+      "pop": true
+     },
+     {
+      "include": "r_yard"
+     },
+     {
+      "include": "r_yard_continuation"
+     }
+    ],
+    "captures": {
+     2: "punctuation.definition.comment.ruby",
+     4: "comment.line.keyword.punctuation.yard.ruby",
+     5: "comment.line.keyword.yard.ruby"
+    }
+   }
+  ],
+  "r_yard_continuation": [
+   {
+    "match": "^\\s*#",
+    "scope": "punctuation.definition.comment.ruby"
+   }
+  ],
+  "r_yard_directive": [
+   {
+    "match": "^(\\s*)(#)(\\s*)(@!)(endgroup|group|method|parse|scope|visibility)(\\s+((\\[).+(])))?(?=\\s)",
+    "push": [
+     {
+      "meta_scope": "comment.line.number-sign.ruby"
+     },
+     {
+      "meta_content_scope": "comment.line.string.yard.ruby"
+     },
+     {
+      "match": "^(?!\\s*#\\3\\s{2,}|\\s*#\\s*$)",
+      "pop": true
+     },
+     {
+      "include": "r_yard"
+     },
+     {
+      "include": "r_yard_continuation"
+     }
+    ],
+    "captures": {
+     2: "punctuation.definition.comment.ruby",
+     4: "comment.line.keyword.punctuation.yard.ruby",
+     5: "comment.line.keyword.yard.ruby",
+     7: "comment.line.type.yard.ruby",
+     8: "comment.line.punctuation.yard.ruby",
+     9: "comment.line.punctuation.yard.ruby"
+    }
+   }
+  ],
+  "r_yard_macro_attribute": [
+   {
+    "match": "^(\\s*)(#)(\\s*)(@!)(attribute|macro)(\\s+((\\[).+(])))?(?=\\s)(\\s+([_a-z]\\w*:?))?",
+    "push": [
+     {
+      "meta_scope": "comment.line.number-sign.ruby"
+     },
+     {
+      "meta_content_scope": "comment.line.string.yard.ruby"
+     },
+     {
+      "match": "^(?!\\s*#\\3\\s{2,}|\\s*#\\s*$)",
+      "pop": true
+     },
+     {
+      "include": "r_yard"
+     },
+     {
+      "include": "r_yard_continuation"
+     }
+    ],
+    "captures": {
+     2: "punctuation.definition.comment.ruby",
+     4: "comment.line.keyword.punctuation.yard.ruby",
+     5: "comment.line.keyword.yard.ruby",
+     7: "comment.line.type.yard.ruby",
+     8: "comment.line.punctuation.yard.ruby",
+     9: "comment.line.punctuation.yard.ruby",
+     11: "comment.line.parameter.yard.ruby"
+    }
+   }
+  ],
+  "r_yard_option": [
+   {
+    "match": "^(\\s*)(#)(\\s*)(@)(option)(?=\\s)(?>\\s+([_a-z]\\w*:?))?(?>\\s+((\\[).+(])))?(?>\\s+((\\S*)))?(?>\\s+((\\().+(\\))))?",
+    "push": [
+     {
+      "meta_scope": "comment.line.number-sign.ruby"
+     },
+     {
+      "meta_content_scope": "comment.line.string.yard.ruby"
+     },
+     {
+      "match": "^(?!\\s*#\\3\\s{2,}|\\s*#\\s*$)",
+      "pop": true
+     },
+     {
+      "include": "r_yard"
+     },
+     {
+      "include": "r_yard_continuation"
+     }
+    ],
+    "captures": {
+     2: "punctuation.definition.comment.ruby",
+     4: "comment.line.keyword.punctuation.yard.ruby",
+     5: "comment.line.keyword.yard.ruby",
+     6: "comment.line.parameter.yard.ruby",
+     7: "comment.line.type.yard.ruby",
+     8: "comment.line.punctuation.yard.ruby",
+     9: "comment.line.punctuation.yard.ruby",
+     10: "comment.line.keyword.yard.ruby",
+     11: "comment.line.hashkey.yard.ruby",
+     12: "comment.line.defaultvalue.yard.ruby",
+     13: "comment.line.punctuation.yard.ruby",
+     14: "comment.line.punctuation.yard.ruby"
+    }
+   }
+  ],
+  "r_yard_param_types": [
+   {
+    "match": "^(\\s*)(#)(\\s*)(@)(attr|attr_reader|attr_writer|yieldparam|param)(?=\\s)(?>\\s+(?>([_a-z]\\w*:?)|((\\[).+(]))))?(?>\\s+(?>((\\[).+(]))|([_a-z]\\w*:?)))?",
+    "push": [
+     {
+      "meta_scope": "comment.line.number-sign.ruby"
+     },
+     {
+      "meta_content_scope": "comment.line.string.yard.ruby"
+     },
+     {
+      "match": "^(?!\\s*#\\3\\s{2,}|\\s*#\\s*$)",
+      "pop": true
+     },
+     {
+      "include": "r_yard"
+     },
+     {
+      "include": "r_yard_continuation"
+     }
+    ],
+    "captures": {
+     2: "punctuation.definition.comment.ruby",
+     4: "comment.line.keyword.punctuation.yard.ruby",
+     5: "comment.line.keyword.yard.ruby",
+     6: "comment.line.parameter.yard.ruby",
+     7: "comment.line.type.yard.ruby",
+     8: "comment.line.punctuation.yard.ruby",
+     9: "comment.line.punctuation.yard.ruby",
+     10: "comment.line.type.yard.ruby",
+     11: "comment.line.punctuation.yard.ruby",
+     12: "comment.line.punctuation.yard.ruby",
+     13: "comment.line.parameter.yard.ruby"
+    }
+   }
+  ],
+  "r_yard_see": [
+   {
+    "match": "^(\\s*)(#)(\\s*)(@)(see)(?=\\s)(\\s+(.+?))?(?=\\s|$)",
+    "push": [
+     {
+      "meta_scope": "comment.line.number-sign.ruby"
+     },
+     {
+      "meta_content_scope": "comment.line.string.yard.ruby"
+     },
+     {
+      "match": "^(?!\\s*#\\3\\s{2,}|\\s*#\\s*$)",
+      "pop": true
+     },
+     {
+      "include": "r_yard"
+     },
+     {
+      "include": "r_yard_continuation"
+     }
+    ],
+    "captures": {
+     2: "punctuation.definition.comment.ruby",
+     4: "comment.line.keyword.punctuation.yard.ruby",
+     5: "comment.line.keyword.yard.ruby",
+     7: "comment.line.parameter.yard.ruby"
+    }
+   }
+  ],
+  "r_yard_tag": [
+   {
+    "match": "^(\\s*)(#)(\\s*)(@)(private)$",
+    "scope": "comment.line.number-sign.ruby",
+    "captures": {
+     2: "punctuation.definition.comment.ruby",
+     4: "comment.line.keyword.punctuation.yard.ruby",
+     5: "comment.line.keyword.yard.ruby"
+    }
+   }
+  ],
+  "r_yard_types": [
+   {
+    "match": "^(\\s*)(#)(\\s*)(@)(raise|return|yield(?:return)?)(?=\\s)(\\s+((\\[).+(])))?",
+    "push": [
+     {
+      "meta_scope": "comment.line.number-sign.ruby"
+     },
+     {
+      "meta_content_scope": "comment.line.string.yard.ruby"
+     },
+     {
+      "match": "^(?!\\s*#\\3\\s{2,}|\\s*#\\s*$)",
+      "pop": true
+     },
+     {
+      "include": "r_yard"
+     },
+     {
+      "include": "r_yard_continuation"
+     }
+    ],
+    "captures": {
+     2: "punctuation.definition.comment.ruby",
+     4: "comment.line.keyword.punctuation.yard.ruby",
+     5: "comment.line.keyword.yard.ruby",
+     7: "comment.line.type.yard.ruby",
+     8: "comment.line.punctuation.yard.ruby",
+     9: "comment.line.punctuation.yard.ruby"
+    }
+   }
+  ]
+ }
+}

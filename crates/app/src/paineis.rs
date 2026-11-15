@@ -75,7 +75,7 @@ fn item_status(id: &'static str) -> gpui_kit::Stateful<gpui_kit::Div> {
 
 impl Bancada {
     pub(crate) fn nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let alterados = self.git_ativo().map_or(0, |g| g.alterados);
+        let alterados = self.telas_ativas().and_then(|t| t.resumo()).map_or(0, |g| g.alterados);
         div()
             .id("nav")
             .flex()
@@ -144,6 +144,12 @@ impl Bancada {
     }
 
     pub(crate) fn lateral(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let telas = self.telas_ativas();
+        let conteudo: Option<gpui_kit::AnyElement> = telas.map(|t| match self.rota {
+            Rota::Arquivos => t.arvore.clone().into_any_element(),
+            Rota::Pesquisa => t.pesquisa.clone().into_any_element(),
+            Rota::Git => t.git.clone().into_any_element(),
+        });
         let (id, titulo, convite) = match self.rota {
             Rota::Arquivos => ("tela-arquivos", "Arquivos", "Abra uma pasta para explorar os arquivos."),
             Rota::Pesquisa => ("tela-pesquisa", "Pesquisar", "Abra uma pasta para pesquisar nos arquivos."),
@@ -166,7 +172,8 @@ impl Bancada {
                     .flex()
                     .flex_col()
                     .size_full()
-                    .when(self.ativa.is_some(), |d| d.child(cabecalho(titulo)))
+                    .when_some(conteudo, |d, c| d.child(div().flex_1().min_h_0().child(c)))
+                    .when(self.ativa.is_some() && telas.is_none(), |d| d.child(cabecalho(titulo)))
                     .when(self.ativa.is_none(), |d| d.child(convite_abrir_pasta(convite, cx)))
                     .test_support(),
             )
@@ -174,7 +181,8 @@ impl Bancada {
     }
 
     pub(crate) fn centro(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let projeto = self.ativa.is_some();
+        // O editor do projeto ativo (ou o sem projeto): abas, grupos, diffs, conflitos, mídia e a marca d'água vazia.
+        let editor = self.editor_ativo();
         div()
             .flex()
             .flex_col()
@@ -183,22 +191,13 @@ impl Bancada {
             .h_full()
             .child(
                 div()
+                    .id("area-editor")
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_h_0()
-                    // Faixa das abas do editor (30 px, medidas do Antigravity), vazia nesta fase.
-                    .when(projeto, |d| d.child(div().flex_none().h(px(30.)).border_b_1().border_color(cor::hairline())))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .overflow_hidden()
-                            .child(icone(ic::MARCA_MONO, 240., cor::marca_dagua())),
-                    ),
+                    .when_some(editor, |d, e| d.child(e))
+                    .test_support(),
             )
             .when(self.terminal_aberto, |d| d.child(self.painel_terminal(cx)))
     }
@@ -268,7 +267,8 @@ impl Bancada {
     }
 
     pub(crate) fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let git = self.git_ativo().cloned();
+        let git = self.telas_ativas().and_then(|t| t.resumo());
+        let sincronizando = self.telas_ativas().is_some_and(|t| t.sincronizando);
         // O portão de abertura (terminal/portao.rs) cobre a janela enquanto o uso não foi liberado.
         let abertura = self.terminais.read(cx).abertura.clone();
         let bloqueada = !abertura.read(cx).pronto();
@@ -290,19 +290,36 @@ impl Bancada {
                         .flex_shrink(1.)
                         .min_w_0()
                         .on_click(cx.listener(|this, _, _, cx| this.ir(Rota::Git, cx)))
+                        .tooltip({
+                            let dica: gpui_kit::SharedString = format!("{}, branch atual", git.branch).into();
+                            move |window, cx| gpui_kit::component::tooltip::Tooltip::new(dica.clone()).build(window, cx)
+                        })
                         .child(div().truncate().child(git.branch.clone())),
                 )
-                .child(
+                .child({
+                    let dica: gpui_kit::SharedString = if sincronizando {
+                        "Sincronizando…".into()
+                    } else {
+                        match &contagem {
+                            Some(c) => format!("Sincronizar as alterações ({c})").into(),
+                            None => "Sincronizar as alterações".into(),
+                        }
+                    };
                     item_status("status-sync")
+                        .when(sincronizando, |d| d.hover(|s| s.bg(gpui_kit::transparent_black())))
+                        .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(dica.clone()).build(window, cx))
+                        .when(!sincronizando, |d| d.on_click(cx.listener(|this, _, window, cx| this.sincronizar(window, cx))))
                         .child(icone(ic::SINCRONIZAR, 14., cor::text_primary()))
-                        .when_some(contagem, |d, c| d.child(c)),
-                )
+                        .when_some(contagem, |d, c| d.child(c))
+                        .test_support()
+                })
             })
             .child(
                 item_status("status-terminal")
                     .ml_auto()
                     .when(self.terminal_aberto, |d| d.bg(cor::fill_hover()))
                     .on_click(cx.listener(|this, _, _, cx| this.alternar_terminal(cx)))
+                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("Painel Terminal (Ctrl+`)").build(window, cx))
                     .child(icone(ic::TERMINAL, 14., cor::text_primary()))
                     .child("Terminal")
                     .test_support(),

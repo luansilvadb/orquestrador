@@ -1,20 +1,24 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// O FFmpeg estático exporta símbolos e o link.exe avisa que criou a .lib do executável; é só informativo.
+#![allow(linker_messages)]
 // A saída dos macros do GPUI aponta para `gpui::`; o alias resolve tudo pelo Kit.
 extern crate gpui_kit as gpui;
 
 mod backend;
 mod bancada;
 mod estado;
+mod fechamento;
 mod instancia;
 mod moldura;
 mod paineis;
+mod telas;
 use orquestrador_ui::{recursos, tema};
 mod terminal;
 #[cfg(test)]
 mod testes;
 
-use bancada::{AlternarTerminal, Bancada};
-use gpui_kit::{px, size, AppContext, Bounds, KeyBinding, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowOptions};
+use bancada::Bancada;
+use gpui_kit::{px, size, AppContext, Bounds, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowOptions};
 use std::rc::Rc;
 
 fn main() {
@@ -49,7 +53,6 @@ fn abrir_janela(iniciais: Vec<std::path::PathBuf>) {
     gpui_kit::application().with_assets(recursos::Recursos).run(move |cx| {
         gpui_kit::init(cx);
         tema::aplicar(cx);
-        cx.bind_keys([KeyBinding::new("ctrl-`", AlternarTerminal, Some("Bancada"))]);
         let (backend, remetente, eventos) = backend::Backend::real();
         if !cfg!(debug_assertions) {
             instancia::escutar(remetente);
@@ -67,6 +70,11 @@ fn abrir_janela(iniciais: Vec<std::path::PathBuf>) {
         let aberta = gpui_kit::open_window(opcoes, cx, move |window, cx| {
             let view = cx.new(|cx| Bancada::new(backend, eventos, iniciais, cx));
             window.focus(&view.read(cx).foco.clone(), cx);
+            // Fechar a janela com arquivos não salvos ou terminais trabalhando pergunta antes (fechamento.rs).
+            let v = view.downgrade();
+            window.on_window_should_close(cx, move |window, cx| {
+                v.update(cx, |b, cx| b.pode_fechar_janela(window, cx)).unwrap_or(true)
+            });
             view
         });
         if let Err(e) = aberta {

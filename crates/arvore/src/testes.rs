@@ -1,6 +1,6 @@
 //! Porte da parte de árvore de `tests/check-files-search-ui.mjs`, numa janela de teste do Kit com o core numa pasta
 //! temporária de verdade (o lugar do `src/backend/mock.ts`). Excluir manda os arquivos temporários à Lixeira. Recortar,
-//! copiar e colar usam o clipboard de arquivos do Windows, que é do usuário: ficam de fora daqui.
+//! copiar e colar usam o clipboard de arquivos do Windows de verdade: o teste guarda o conteúdo do usuário e devolve no fim.
 use crate::{EventoArvore, Explorador};
 use gpui_kit::base::Root;
 use gpui_kit::test::TestWindowExt;
@@ -564,4 +564,207 @@ fn menus_da_raiz_e_de_varios_itens(cx: &mut TestAppContext) {
     m.direito("docs");
     m.menu("Localizar na Pasta...");
     assert!(m.eventos().contains(&EventoArvore::Pesquisar("docs".into())));
+}
+
+#[gpui_kit::test]
+fn tab_leva_o_foco_para_a_arvore(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("tab");
+    exemplo(&tmp.0);
+    cx.update(crate::registrar_atalhos);
+    let mut m = montar(cx, &tmp.0);
+    m.janela(|w, cx| w.blur(cx));
+    m.esperar();
+    assert!(!m.focado(false));
+    m.tecla("tab");
+    assert!(m.focado(false), "Tab não chegou à árvore");
+}
+
+#[gpui_kit::test]
+fn shift_f10_abre_o_menu_na_linha_focada(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("f10");
+    exemplo(&tmp.0);
+    let mut m = montar(cx, &tmp.0);
+    m.expandir(&["docs"]);
+    m.clicar("docs/rascunho-painel.md");
+    m.tecla("shift-f10");
+    let (posicao, linha) = m.ler(|a, _| (a.posicao_menu(), a.limites_linha("docs/rascunho-painel.md")));
+    let linha = linha.expect("linha desenhada");
+    let esperado = gpui_kit::point(linha.origin.x + px(24.), linha.origin.y + linha.size.height / 2.);
+    assert_eq!(posicao, Some(esperado), "o menu do teclado sai na conta do React (24 px, meio da linha)");
+}
+
+#[gpui_kit::test]
+fn arraste_desenha_a_copia_da_linha_sob_o_ponteiro(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("copia");
+    exemplo(&tmp.0);
+    let mut m = montar(cx, &tmp.0);
+    m.clicar("README.md");
+    let linha = m.ler(|a, _| a.limites_linha("README.md")).expect("linha");
+    let inicio = linha.origin + gpui_kit::point(px(40.), px(11.));
+    let delta = gpui_kit::point(px(30.), px(90.));
+    m.cx.simulate_mouse_down(inicio, gpui_kit::MouseButton::Left, Default::default());
+    m.cx.simulate_mouse_move(inicio + gpui_kit::point(px(10.), px(30.)), Some(gpui_kit::MouseButton::Left), Default::default());
+    m.cx.simulate_mouse_move(inicio + delta, Some(gpui_kit::MouseButton::Left), Default::default());
+    m.cx.run_until_parked();
+    let copia = m.cx.debug_bounds("arvore-arrasto").expect("sem imagem de arraste");
+    assert_eq!(copia.size, linha.size, "a cópia tem o tamanho da linha");
+    assert_eq!(copia.origin, linha.origin + delta, "a cópia acompanha o ponteiro no ponto em que foi agarrada");
+    m.cx.simulate_mouse_up(inicio + delta, gpui_kit::MouseButton::Left, Default::default());
+    m.esperar();
+}
+
+#[gpui_kit::test]
+fn minimizada_para_a_atualizacao_e_restaurar_retoma(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("minimizada");
+    exemplo(&tmp.0);
+    let mut m = montar(cx, &tmp.0);
+    crate::vista::MINIMIZADA_NO_TESTE.with(|c| c.set(true));
+    m.esperar();
+    assert!(m.ler(|a, _| a.rodadas_paradas()));
+    arquivo(&tmp.0, "novo.txt", "x");
+    for _ in 0..5 {
+        m.cx.executor().advance_clock(Duration::from_secs(2));
+        m.esperar();
+    }
+    assert!(!m.tem("novo.txt"), "minimizada não deveria reler");
+    crate::vista::MINIMIZADA_NO_TESTE.with(|c| c.set(false));
+    m.esperar();
+    m.esperar();
+    assert!(m.tem("novo.txt"), "restaurar relê na hora");
+}
+
+/// Guarda o clipboard do usuário (os formatos em memória global) e devolve tudo ao sair, mesmo com o teste falhando.
+#[cfg(windows)]
+mod clipboard {
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, OpenClipboard, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
+
+    pub struct Guarda(pub Vec<(u32, Vec<u8>)>);
+
+    fn abrir() {
+        for _ in 0..50 {
+            // SAFETY: chamada simples da API; `fechar` fecha.
+            if unsafe { OpenClipboard(std::ptr::null_mut()) } != 0 {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("clipboard ocupado");
+    }
+
+    fn fechar() {
+        // SAFETY: aberto em `abrir`.
+        unsafe { CloseClipboard() };
+    }
+
+    /// Formatos que não são memória global (bitmaps, metarquivos, paletas e os privados de GDI) ficam de fora.
+    fn global(f: u32) -> bool {
+        !matches!(f, 2 | 3 | 9 | 14 | 0x80..=0x8F | 0x300..=0x3FF)
+    }
+
+    pub fn ler() -> Vec<(u32, Vec<u8>)> {
+        abrir();
+        let mut v = Vec::new();
+        let mut f = 0;
+        // SAFETY: clipboard aberto; cada handle é travado e destravado na hora.
+        unsafe {
+            loop {
+                f = EnumClipboardFormats(f);
+                if f == 0 {
+                    break;
+                }
+                if !global(f) {
+                    continue;
+                }
+                let h = GetClipboardData(f);
+                if h.is_null() {
+                    continue;
+                }
+                let n = GlobalSize(h);
+                let p = GlobalLock(h) as *const u8;
+                if p.is_null() {
+                    continue;
+                }
+                v.push((f, std::slice::from_raw_parts(p, n).to_vec()));
+                GlobalUnlock(h);
+            }
+        }
+        fechar();
+        v
+    }
+
+    pub fn escrever(formatos: &[(u32, Vec<u8>)]) {
+        abrir();
+        // SAFETY: clipboard aberto; o sistema fica dono de cada bloco entregue ao `SetClipboardData`.
+        unsafe {
+            EmptyClipboard();
+            for (f, bytes) in formatos {
+                let h = GlobalAlloc(GMEM_MOVEABLE, bytes.len().max(1));
+                let p = GlobalLock(h) as *mut u8;
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+                GlobalUnlock(h);
+                SetClipboardData(*f, h);
+            }
+        }
+        fechar();
+    }
+
+    impl Guarda {
+        pub fn new() -> Guarda {
+            Guarda(ler())
+        }
+    }
+
+    impl Drop for Guarda {
+        fn drop(&mut self) {
+            escrever(&self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+#[gpui_kit::test]
+fn copiar_recortar_e_colar_pelo_clipboard_de_arquivos(cx: &mut TestAppContext) {
+    use orquestrador_core::platform;
+    let guarda = clipboard::Guarda::new();
+    let tmp = Tmp::new("clipboard");
+    exemplo(&tmp.0);
+    let mut m = montar(cx, &tmp.0);
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let raiz = canon(&tmp.0);
+    let no_clip = || platform::snapshot().paths.iter().map(|p| canon(p)).collect::<Vec<_>>();
+
+    // Copiar: o clipboard do Windows passa a ter o arquivo, e colar numa pasta duplica.
+    m.clicar("README.md");
+    m.tecla("ctrl-c");
+    m.esperar();
+    assert_eq!(no_clip(), [raiz.join("README.md")]);
+    assert!(!platform::snapshot().cut);
+    m.clicar("dados");
+    m.tecla("ctrl-v");
+    m.esperar();
+    assert!(tmp.0.join("dados/README.md").is_file() && tmp.0.join("README.md").is_file(), "copiar e colar");
+    assert_eq!(no_clip(), [raiz.join("README.md")], "colar uma cópia mantém o clipboard");
+
+    // Recortar e colar: move, avisa a bancada e esvazia o clipboard.
+    m.clicar("debug.log");
+    m.tecla("ctrl-x");
+    m.esperar();
+    assert!(platform::snapshot().cut);
+    m.clicar("tests");
+    m.tecla("ctrl-v");
+    m.esperar();
+    assert!(tmp.0.join("tests/debug.log").is_file() && !tmp.0.join("debug.log").exists(), "recortar e colar move");
+    assert!(m.eventos().iter().any(|e| matches!(e, EventoArvore::Movidos(v) if v.iter().any(|x| x.from == "debug.log" && x.to == "tests/debug.log"))));
+    assert!(no_clip().is_empty(), "o recorte colado sai do clipboard");
+
+    // O conteúdo do usuário volta.
+    let antes = guarda.0.clone();
+    drop(guarda);
+    let depois = clipboard::ler();
+    for (f, bytes) in &antes {
+        assert!(depois.iter().any(|(g, b)| g == f && b == bytes), "formato {f} do usuário não voltou");
+    }
 }

@@ -1,0 +1,1247 @@
+%YAML 1.2
+---
+{
+ "name": "shiki-graphql",
+ "scope": "source.graphql",
+ "file_extensions": [],
+ "hidden": true,
+ "contexts": {
+  "main": [
+   {
+    "include": "r_graphql"
+   }
+  ],
+  "r_graphql": [
+   {
+    "include": "r_graphql_comment"
+   },
+   {
+    "include": "r_graphql_description_docstring"
+   },
+   {
+    "include": "r_graphql_description_singleline"
+   },
+   {
+    "include": "r_graphql_fragment_definition"
+   },
+   {
+    "include": "r_graphql_directive_definition"
+   },
+   {
+    "include": "r_graphql_type_interface"
+   },
+   {
+    "include": "r_graphql_enum"
+   },
+   {
+    "include": "r_graphql_scalar"
+   },
+   {
+    "include": "r_graphql_union"
+   },
+   {
+    "include": "r_graphql_schema"
+   },
+   {
+    "include": "r_graphql_operation_def"
+   }
+  ],
+  "r_graphql_ampersand": [
+   {
+    "match": "\\s*(&)",
+    "captures": {
+     1: "keyword.operator.logical.graphql"
+    }
+   }
+  ],
+  "r_graphql_arguments": [
+   {
+    "match": "\\s*(\\()",
+    "push": [
+     {
+      "meta_scope": "meta.arguments.graphql"
+     },
+     {
+      "match": "\\s*(\\))",
+      "pop": true,
+      "captures": {
+       1: "meta.brace.round.directive.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "match": "\\s*([A-Z_a-z][0-9A-Z_a-z]*)\\s*(:)",
+      "push": [
+       {
+        "match": "(?=\\s*(?:([A-Z_a-z][0-9A-Z_a-z]*)\\s*(:)|\\)))|\\s*(,)",
+        "pop": true,
+        "captures": {
+         3: "punctuation.comma.graphql"
+        }
+       },
+       {
+        "include": "r_graphql_comment"
+       },
+       {
+        "include": "r_graphql_description_docstring"
+       },
+       {
+        "include": "r_graphql_description_singleline"
+       },
+       {
+        "include": "r_graphql_directive"
+       },
+       {
+        "include": "r_graphql_value"
+       },
+       {
+        "include": "r_graphql_skip_newlines"
+       }
+      ],
+      "captures": {
+       1: "variable.parameter.graphql",
+       2: "punctuation.colon.graphql"
+      }
+     }
+    ],
+    "captures": {
+     1: "meta.brace.round.directive.graphql"
+    }
+   }
+  ],
+  "r_graphql_boolean_value": [
+   {
+    "match": "\\s*\\b(true|false)\\b",
+    "captures": {
+     1: "constant.language.boolean.graphql"
+    }
+   }
+  ],
+  "r_graphql_colon": [
+   {
+    "match": "\\s*(:)",
+    "captures": {
+     1: "punctuation.colon.graphql"
+    }
+   }
+  ],
+  "r_graphql_comma": [
+   {
+    "match": "\\s*(,)",
+    "captures": {
+     1: "punctuation.comma.graphql"
+    }
+   }
+  ],
+  "r_graphql_comment": [
+   {
+    "match": "(\\s*)(#).*",
+    "scope": "comment.line.graphql.js",
+    "captures": {
+     1: "punctuation.whitespace.comment.leading.graphql"
+    }
+   },
+   {
+    "match": "(\"\"\")",
+    "push": [
+     {
+      "meta_scope": "comment.line.graphql.js"
+     },
+     {
+      "match": "(\"\"\")",
+      "pop": true
+     }
+    ],
+    "captures": {
+     1: "punctuation.whitespace.comment.leading.graphql"
+    }
+   },
+   {
+    "match": "(\")",
+    "push": [
+     {
+      "meta_scope": "comment.line.graphql.js"
+     },
+     {
+      "match": "(\")",
+      "pop": true
+     }
+    ],
+    "captures": {
+     1: "punctuation.whitespace.comment.leading.graphql"
+    }
+   }
+  ],
+  "r_graphql_description_docstring": [
+   {
+    "match": "\"\"\"",
+    "push": [
+     {
+      "meta_scope": "comment.block.graphql"
+     },
+     {
+      "match": "\"\"\"",
+      "pop": true
+     }
+    ]
+   }
+  ],
+  "r_graphql_description_singleline": [
+   {
+    "match": "#(?=([^\"]*\"[^\"]*\")*[^\"]*$).*$",
+    "scope": "comment.line.number-sign.graphql"
+   }
+  ],
+  "r_graphql_directive": [
+   {
+    "match": "\\s*((@)\\s*([A-Z_a-z][0-9A-Z_a-z]*))",
+    "push": [
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_arguments"
+     },
+     {
+      "include": "r_graphql_skip_newlines"
+     },
+     {
+      "match": "(?=.)",
+      "pop": true
+     }
+    ],
+    "captures": {
+     1: "entity.name.function.directive.graphql"
+    }
+   }
+  ],
+  "r_graphql_directive_definition": [
+   {
+    "match": "\\s*\\b(directive)\\b\\s*(@[A-Z_a-z][0-9A-Z_a-z]*)",
+    "push": [
+     {
+      "include": "r_graphql_variable_definitions"
+     },
+     {
+      "match": "\\s*\\b(on)\\b\\s*([A-Z_a-z]*)",
+      "push": [
+       {
+        "include": "r_graphql_skip_newlines"
+       },
+       {
+        "include": "r_graphql_comment"
+       },
+       {
+        "match": "\\s*(\\|)\\s*([A-Z_a-z]*)",
+        "captures": {
+         2: "support.type.location.graphql"
+        }
+       },
+       {
+        "match": "(?=.)",
+        "pop": true
+       }
+      ],
+      "captures": {
+       1: "keyword.on.graphql",
+       2: "support.type.location.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_skip_newlines"
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "match": "(?=.)",
+      "pop": true
+     }
+    ],
+    "captures": {
+     1: "keyword.directive.graphql",
+     2: "entity.name.function.directive.graphql",
+     3: "keyword.on.graphql",
+     4: "support.type.graphql"
+    }
+   }
+  ],
+  "r_graphql_enum": [
+   {
+    "match": "\\s*+\\b(enum)\\b\\s*([A-Z_a-z][0-9A-Z_a-z]*)",
+    "push": [
+     {
+      "meta_scope": "meta.enum.graphql"
+     },
+     {
+      "match": "(?<=})",
+      "pop": true
+     },
+     {
+      "match": "\\s*(\\{)",
+      "push": [
+       {
+        "meta_scope": "meta.type.object.graphql"
+       },
+       {
+        "match": "\\s*(})",
+        "pop": true,
+        "captures": {
+         1: "punctuation.operation.graphql"
+        }
+       },
+       {
+        "include": "r_graphql_comment"
+       },
+       {
+        "include": "r_graphql_description_docstring"
+       },
+       {
+        "include": "r_graphql_description_singleline"
+       },
+       {
+        "include": "r_graphql_directive"
+       },
+       {
+        "include": "r_graphql_enum_value"
+       }
+      ],
+      "captures": {
+       1: "punctuation.operation.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_directive"
+     }
+    ],
+    "captures": {
+     1: "keyword.enum.graphql",
+     2: "support.type.enum.graphql"
+    }
+   }
+  ],
+  "r_graphql_enum_value": [
+   {
+    "match": "\\s*(?!=\\b(true|false|null)\\b)([A-Z_a-z][0-9A-Z_a-z]*)",
+    "scope": "constant.character.enum.graphql"
+   }
+  ],
+  "r_graphql_field": [
+   {
+    "match": "\\s*([A-Z_a-z][0-9A-Z_a-z]*)\\s*(:)",
+    "captures": {
+     1: "string.unquoted.alias.graphql",
+     2: "punctuation.colon.graphql"
+    }
+   },
+   {
+    "match": "\\s*([A-Z_a-z][0-9A-Z_a-z]*)",
+    "captures": {
+     1: "variable.graphql"
+    }
+   },
+   {
+    "include": "r_graphql_arguments"
+   },
+   {
+    "include": "r_graphql_directive"
+   },
+   {
+    "include": "r_graphql_selection_set"
+   },
+   {
+    "include": "r_graphql_skip_newlines"
+   }
+  ],
+  "r_graphql_float_value": [
+   {
+    "match": "\\s*(-?(0|[1-9][0-9]*)(\\.[0-9]+)?(([Ee])([-+])?[0-9]+)?)",
+    "captures": {
+     1: "constant.numeric.float.graphql"
+    }
+   }
+  ],
+  "r_graphql_fragment_definition": [
+   {
+    "match": "\\s*\\b(fragment)\\b\\s*([A-Z_a-z][0-9A-Z_a-z]*)?\\s*\\b(on)\\b\\s*([A-Z_a-z][0-9A-Z_a-z]*)",
+    "push": [
+     {
+      "meta_scope": "meta.fragment.graphql"
+     },
+     {
+      "match": "(?<=})",
+      "pop": true,
+      "captures": {
+       1: "keyword.fragment.graphql",
+       2: "entity.name.fragment.graphql",
+       3: "keyword.on.graphql",
+       4: "support.type.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_selection_set"
+     },
+     {
+      "include": "r_graphql_directive"
+     },
+     {
+      "include": "r_graphql_skip_newlines"
+     }
+    ],
+    "captures": {
+     1: "keyword.fragment.graphql",
+     2: "entity.name.fragment.graphql",
+     3: "keyword.on.graphql",
+     4: "support.type.graphql"
+    }
+   }
+  ],
+  "r_graphql_fragment_spread": [
+   {
+    "match": "\\s*(\\.\\.\\.)\\s*(?!\\bon\\b)([A-Z_a-z][0-9A-Z_a-z]*)",
+    "push": [
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_selection_set"
+     },
+     {
+      "include": "r_graphql_directive"
+     },
+     {
+      "include": "r_graphql_skip_newlines"
+     },
+     {
+      "match": "(?=.)",
+      "pop": true,
+      "captures": {
+       1: "keyword.operator.spread.graphql",
+       2: "variable.fragment.graphql"
+      }
+     }
+    ],
+    "captures": {
+     1: "keyword.operator.spread.graphql",
+     2: "variable.fragment.graphql"
+    }
+   }
+  ],
+  "r_graphql_ignore_spaces": [
+   {
+    "match": "\\s*"
+   }
+  ],
+  "r_graphql_inline_fragment": [
+   {
+    "match": "\\s*(\\.\\.\\.)\\s*(?:\\b(on)\\b\\s*([A-Z_a-z][0-9A-Z_a-z]*))?",
+    "push": [
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_selection_set"
+     },
+     {
+      "include": "r_graphql_directive"
+     },
+     {
+      "include": "r_graphql_skip_newlines"
+     },
+     {
+      "match": "(?=.)",
+      "pop": true,
+      "captures": {
+       1: "keyword.operator.spread.graphql",
+       2: "keyword.on.graphql",
+       3: "support.type.graphql"
+      }
+     }
+    ],
+    "captures": {
+     1: "keyword.operator.spread.graphql",
+     2: "keyword.on.graphql",
+     3: "support.type.graphql"
+    }
+   }
+  ],
+  "r_graphql_input_types": [
+   {
+    "include": "r_graphql_scalar_type"
+   },
+   {
+    "match": "\\s*([A-Z_a-z][0-9A-Z_a-z]*)(?:\\s*(!))?",
+    "captures": {
+     1: "support.type.graphql",
+     2: "keyword.operator.nulltype.graphql"
+    }
+   },
+   {
+    "match": "\\s*(\\[)",
+    "push": [
+     {
+      "meta_scope": "meta.type.list.graphql"
+     },
+     {
+      "match": "\\s*(])(?:\\s*(!))?",
+      "pop": true,
+      "captures": {
+       1: "meta.brace.square.graphql",
+       2: "keyword.operator.nulltype.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_input_types"
+     },
+     {
+      "include": "r_graphql_comma"
+     }
+    ],
+    "captures": {
+     1: "meta.brace.square.graphql",
+     2: "keyword.operator.nulltype.graphql"
+    }
+   }
+  ],
+  "r_graphql_list_value": [
+   {
+    "match": "\\s*+(\\[)",
+    "push": [
+     {
+      "meta_scope": "meta.listvalues.graphql"
+     },
+     {
+      "match": "\\s*(])",
+      "pop": true,
+      "captures": {
+       1: "meta.brace.square.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_value"
+     }
+    ],
+    "captures": {
+     1: "meta.brace.square.graphql"
+    }
+   }
+  ],
+  "r_graphql_name": [
+   {
+    "match": "\\s*([A-Z_a-z][0-9A-Z_a-z]*)",
+    "captures": {
+     1: "entity.name.function.graphql"
+    }
+   }
+  ],
+  "r_graphql_null_value": [
+   {
+    "match": "\\s*\\b(null)\\b",
+    "captures": {
+     1: "constant.language.null.graphql"
+    }
+   }
+  ],
+  "r_graphql_object_field": [
+   {
+    "match": "\\s*(([A-Z_a-z][0-9A-Z_a-z]*))\\s*(:)",
+    "captures": {
+     1: "constant.object.key.graphql",
+     2: "string.unquoted.graphql",
+     3: "punctuation.graphql"
+    }
+   }
+  ],
+  "r_graphql_object_value": [
+   {
+    "match": "\\s*+(\\{)",
+    "push": [
+     {
+      "meta_scope": "meta.objectvalues.graphql"
+     },
+     {
+      "match": "\\s*(})",
+      "pop": true,
+      "captures": {
+       1: "meta.brace.curly.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_object_field"
+     },
+     {
+      "include": "r_graphql_value"
+     }
+    ],
+    "captures": {
+     1: "meta.brace.curly.graphql"
+    }
+   }
+  ],
+  "r_graphql_operation_def": [
+   {
+    "include": "r_graphql_query_mutation"
+   },
+   {
+    "include": "r_graphql_name"
+   },
+   {
+    "include": "r_graphql_variable_definitions"
+   },
+   {
+    "include": "r_graphql_directive"
+   },
+   {
+    "include": "r_graphql_selection_set"
+   }
+  ],
+  "r_graphql_query_mutation": [
+   {
+    "match": "\\s*\\b(query|mutation)\\b",
+    "captures": {
+     1: "keyword.operation.graphql"
+    }
+   }
+  ],
+  "r_graphql_scalar": [
+   {
+    "match": "\\s*\\b(scalar)\\b\\s*([A-Z_a-z][0-9A-Z_a-z]*)",
+    "captures": {
+     1: "keyword.scalar.graphql",
+     2: "entity.scalar.graphql"
+    }
+   }
+  ],
+  "r_graphql_scalar_type": [
+   {
+    "match": "\\s*\\b(Int|Float|String|Boolean|ID)\\b(?:\\s*(!))?",
+    "captures": {
+     1: "support.type.builtin.graphql",
+     2: "keyword.operator.nulltype.graphql"
+    }
+   }
+  ],
+  "r_graphql_schema": [
+   {
+    "match": "\\s*\\b(schema)\\b",
+    "push": [
+     {
+      "match": "(?<=})",
+      "pop": true
+     },
+     {
+      "match": "\\s*(\\{)",
+      "push": [
+       {
+        "match": "\\s*(})",
+        "pop": true,
+        "captures": {
+         1: "punctuation.operation.graphql"
+        }
+       },
+       {
+        "match": "\\s*([A-Z_a-z][0-9A-Z_a-z]*)(?=\\s*\\(|:)",
+        "push": [
+         {
+          "match": "(?=\\s*(([A-Z_a-z][0-9A-Z_a-z]*)\\s*([(:])|(})))|\\s*(,)",
+          "pop": true,
+          "captures": {
+           5: "punctuation.comma.graphql"
+          }
+         },
+         {
+          "match": "\\s*([A-Z_a-z][0-9A-Z_a-z]*)",
+          "captures": {
+           1: "support.type.graphql"
+          }
+         },
+         {
+          "include": "r_graphql_comment"
+         },
+         {
+          "include": "r_graphql_description_docstring"
+         },
+         {
+          "include": "r_graphql_description_singleline"
+         },
+         {
+          "include": "r_graphql_colon"
+         },
+         {
+          "include": "r_graphql_skip_newlines"
+         }
+        ],
+        "captures": {
+         1: "variable.arguments.graphql"
+        }
+       },
+       {
+        "include": "r_graphql_comment"
+       },
+       {
+        "include": "r_graphql_description_docstring"
+       },
+       {
+        "include": "r_graphql_description_singleline"
+       },
+       {
+        "include": "r_graphql_skip_newlines"
+       }
+      ],
+      "captures": {
+       1: "punctuation.operation.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_directive"
+     },
+     {
+      "include": "r_graphql_skip_newlines"
+     }
+    ],
+    "captures": {
+     1: "keyword.schema.graphql"
+    }
+   }
+  ],
+  "r_graphql_selection_set": [
+   {
+    "match": "\\s*(\\{)",
+    "push": [
+     {
+      "meta_scope": "meta.selectionset.graphql"
+     },
+     {
+      "match": "\\s*(})",
+      "pop": true,
+      "captures": {
+       1: "punctuation.operation.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_field"
+     },
+     {
+      "include": "r_graphql_fragment_spread"
+     },
+     {
+      "include": "r_graphql_inline_fragment"
+     },
+     {
+      "include": "r_graphql_comma"
+     },
+     {
+      "include": "r_native_interpolation"
+     }
+    ],
+    "captures": {
+     1: "punctuation.operation.graphql"
+    }
+   }
+  ],
+  "r_graphql_skip_newlines": [
+   {
+    "match": "\\s*\\n"
+   }
+  ],
+  "r_graphql_string_content": [
+   {
+    "match": "\\\\[\"'/\\\\bfnrt]",
+    "scope": "constant.character.escape.graphql"
+   },
+   {
+    "match": "\\\\u(\\h{4})",
+    "scope": "constant.character.escape.graphql"
+   }
+  ],
+  "r_graphql_string_value": [
+   {
+    "match": "\\s*+((\"))",
+    "push": [
+     {
+      "meta_content_scope": "string.quoted.double.graphql"
+     },
+     {
+      "match": "\\s*+(?:((\"))|(\\n))",
+      "pop": true,
+      "captures": {
+       1: "string.quoted.double.graphql",
+       2: "punctuation.definition.string.end.graphql",
+       3: "invalid.illegal.newline.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_string_content"
+     }
+    ],
+    "captures": {
+     1: "string.quoted.double.graphql",
+     2: "punctuation.definition.string.begin.graphql"
+    }
+   }
+  ],
+  "r_graphql_type_definition": [
+   {
+    "match": "\\s*([A-Z_a-z][0-9A-Z_a-z]*)(?=\\s*\\(|:)",
+    "push": [
+     {
+      "match": "(?=\\s*(([A-Z_a-z][0-9A-Z_a-z]*)\\s*([(:])|(})))|\\s*(,)",
+      "pop": true,
+      "captures": {
+       5: "punctuation.comma.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_directive"
+     },
+     {
+      "include": "r_graphql_variable_definitions"
+     },
+     {
+      "include": "r_graphql_type_object"
+     },
+     {
+      "include": "r_graphql_colon"
+     },
+     {
+      "include": "r_graphql_input_types"
+     }
+    ],
+    "captures": {
+     1: "variable.graphql"
+    }
+   }
+  ],
+  "r_graphql_type_interface": [
+   {
+    "match": "\\s*\\b(?:(extends?)?\\b\\s*\\b(type)|(interface)|(input))\\b\\s*([A-Z_a-z][0-9A-Z_a-z]*)?",
+    "push": [
+     {
+      "meta_scope": "meta.type.interface.graphql"
+     },
+     {
+      "match": "\\s*\\b(implements)\\b\\s*",
+      "push": [
+       {
+        "match": "\\s*(?=\\{)",
+        "pop": true
+       },
+       {
+        "match": "\\s*([A-Z_a-z][0-9A-Z_a-z]*)",
+        "captures": {
+         1: "support.type.graphql"
+        }
+       },
+       {
+        "include": "r_graphql_comment"
+       },
+       {
+        "include": "r_graphql_description_docstring"
+       },
+       {
+        "include": "r_graphql_description_singleline"
+       },
+       {
+        "include": "r_graphql_directive"
+       },
+       {
+        "include": "r_graphql_ampersand"
+       },
+       {
+        "include": "r_graphql_comma"
+       }
+      ],
+      "captures": {
+       1: "keyword.implements.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_directive"
+     },
+     {
+      "include": "r_graphql_type_object"
+     },
+     {
+      "include": "r_graphql_ignore_spaces"
+     },
+     {
+      "match": "(?=.)",
+      "pop": true,
+      "captures": {
+       1: "keyword.type.graphql",
+       2: "keyword.type.graphql",
+       3: "keyword.interface.graphql",
+       4: "keyword.input.graphql",
+       5: "support.type.graphql"
+      }
+     }
+    ],
+    "captures": {
+     1: "keyword.type.graphql",
+     2: "keyword.type.graphql",
+     3: "keyword.interface.graphql",
+     4: "keyword.input.graphql",
+     5: "support.type.graphql"
+    }
+   }
+  ],
+  "r_graphql_type_object": [
+   {
+    "match": "\\s*(\\{)",
+    "push": [
+     {
+      "meta_scope": "meta.type.object.graphql"
+     },
+     {
+      "match": "\\s*(})",
+      "pop": true,
+      "captures": {
+       1: "punctuation.operation.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_type_definition"
+     }
+    ],
+    "captures": {
+     1: "punctuation.operation.graphql"
+    }
+   }
+  ],
+  "r_graphql_union": [
+   {
+    "match": "\\s*\\b(union)\\b\\s*([A-Z_a-z][0-9A-Z_a-z]*)",
+    "push": [
+     {
+      "match": "\\s*(=)\\s*([A-Z_a-z][0-9A-Z_a-z]*)",
+      "push": [
+       {
+        "include": "r_graphql_comment"
+       },
+       {
+        "include": "r_graphql_description_docstring"
+       },
+       {
+        "include": "r_graphql_description_singleline"
+       },
+       {
+        "include": "r_graphql_skip_newlines"
+       },
+       {
+        "match": "\\s*(\\|)\\s*([A-Z_a-z][0-9A-Z_a-z]*)",
+        "captures": {
+         1: "punctuation.or.graphql",
+         2: "support.type.graphql"
+        }
+       },
+       {
+        "match": "(?=.)",
+        "pop": true,
+        "captures": {
+         1: "punctuation.assignment.graphql",
+         2: "support.type.graphql"
+        }
+       }
+      ],
+      "captures": {
+       1: "punctuation.assignment.graphql",
+       2: "support.type.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_skip_newlines"
+     },
+     {
+      "match": "(?=.)",
+      "pop": true,
+      "captures": {
+       1: "keyword.union.graphql",
+       2: "support.type.graphql"
+      }
+     }
+    ],
+    "captures": {
+     1: "keyword.union.graphql",
+     2: "support.type.graphql"
+    }
+   }
+  ],
+  "r_graphql_union_mark": [
+   {
+    "match": "\\s*(\\|)",
+    "captures": {
+     1: "punctuation.union.graphql"
+    }
+   }
+  ],
+  "r_graphql_value": [
+   {
+    "include": "r_graphql_comment"
+   },
+   {
+    "include": "r_graphql_description_docstring"
+   },
+   {
+    "include": "r_graphql_variable_name"
+   },
+   {
+    "include": "r_graphql_float_value"
+   },
+   {
+    "include": "r_graphql_string_value"
+   },
+   {
+    "include": "r_graphql_boolean_value"
+   },
+   {
+    "include": "r_graphql_null_value"
+   },
+   {
+    "include": "r_graphql_enum_value"
+   },
+   {
+    "include": "r_graphql_list_value"
+   },
+   {
+    "include": "r_graphql_object_value"
+   }
+  ],
+  "r_graphql_variable_assignment": [
+   {
+    "match": "\\s(=)",
+    "push": [
+     {
+      "include": "r_graphql_value"
+     },
+     {
+      "match": "(?=[\\n),])",
+      "pop": true
+     }
+    ],
+    "captures": {
+     1: "punctuation.assignment.graphql"
+    }
+   }
+  ],
+  "r_graphql_variable_definition": [
+   {
+    "match": "\\s*(\\$?[A-Z_a-z][0-9A-Z_a-z]*)(?=\\s*\\(|:)",
+    "push": [
+     {
+      "meta_scope": "meta.variables.graphql"
+     },
+     {
+      "match": "(?=\\s*((\\$?[A-Z_a-z][0-9A-Z_a-z]*)\\s*([(:])|([)}])))|\\s*(,)",
+      "pop": true,
+      "captures": {
+       5: "punctuation.comma.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_directive"
+     },
+     {
+      "include": "r_graphql_colon"
+     },
+     {
+      "include": "r_graphql_input_types"
+     },
+     {
+      "include": "r_graphql_variable_assignment"
+     },
+     {
+      "include": "r_graphql_skip_newlines"
+     }
+    ],
+    "captures": {
+     1: "variable.parameter.graphql"
+    }
+   }
+  ],
+  "r_graphql_variable_definitions": [
+   {
+    "match": "\\s*(\\()",
+    "push": [
+     {
+      "match": "\\s*(\\))",
+      "pop": true,
+      "captures": {
+       1: "meta.brace.round.graphql"
+      }
+     },
+     {
+      "include": "r_graphql_comment"
+     },
+     {
+      "include": "r_graphql_description_docstring"
+     },
+     {
+      "include": "r_graphql_description_singleline"
+     },
+     {
+      "include": "r_graphql_variable_definition"
+     }
+    ],
+    "captures": {
+     1: "meta.brace.round.graphql"
+    }
+   }
+  ],
+  "r_graphql_variable_name": [
+   {
+    "match": "\\s*(\\$[A-Z_a-z][0-9A-Z_a-z]*)",
+    "captures": {
+     1: "variable.graphql"
+    }
+   }
+  ],
+  "r_native_interpolation": [
+   {
+    "match": "\\s*(\\$\\{)",
+    "push": [
+     {
+      "meta_scope": "native.interpolation"
+     },
+     {
+      "match": "(})",
+      "pop": true,
+      "captures": {
+       1: "keyword.other.substitution.end"
+      }
+     },
+     {
+      "include": "scope:source.js"
+     },
+     {
+      "include": "scope:source.ts"
+     },
+     {
+      "include": "scope:source.js.jsx"
+     },
+     {
+      "include": "scope:source.tsx"
+     }
+    ],
+    "captures": {
+     1: "keyword.other.substitution.begin"
+    }
+   }
+  ]
+ }
+}

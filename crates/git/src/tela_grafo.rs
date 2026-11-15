@@ -539,11 +539,26 @@ impl TelaGit {
                     );
             }
         }
+        // `placement="right"` do Lobe: à direita da linha com 6 px de afastamento e centrado nela. A altura vem do desenho
+        // anterior; até ser medida, o cartão fica invisível.
+        let altura = self.hover.altura.clone();
+        let h = altura.get();
+        let corpo = corpo.when(h <= 0., |d| d.invisible()).child(
+            canvas(move |b, window, _| {
+                let nova = f32::from(b.size.height);
+                if altura.replace(nova) != nova {
+                    window.refresh();
+                }
+            }, |_, _, _, _| {})
+            .absolute()
+            .size_full(),
+        );
+        let topo = ancora.top() + ancora.size.height / 2. - px(h / 2.);
         Some(
             deferred(
                 anchored()
                     .position_mode(gpui_kit::AnchoredPositionMode::Window)
-                    .position(point(ancora.right() + px(4.), ancora.top()))
+                    .position(point(ancora.right() + px(6.), topo))
                     .snap_to_window_with_margin(px(8.))
                     .child(corpo),
             )
@@ -731,8 +746,13 @@ impl TelaGit {
         let (copia_hash, copia_assunto) = (c.commit.hash.clone(), c.commit.subject.clone());
         let registro = self.linhas_grafo.clone();
         let chave = hash.clone();
+        let chave_foco = format!("c:{hash}");
+        let foco_l = self.foco_linha(&chave_foco, cx);
+        let (foco_clique, registro2, k2) = (foco_l.clone(), self.limites_linha.clone(), chave_foco.clone());
         let linha_commit = div()
             .id(("commit-grafo", i))
+            .track_focus(&foco_l)
+            .on_action(cx.listener(move |this, _: &crate::tela::MenuContexto, window, cx| this.menu_pelo_teclado(&chave_foco, window, cx)))
             .relative()
             .flex()
             .w_full()
@@ -750,7 +770,8 @@ impl TelaGit {
                     this.sair_hover(&h1, cx);
                 }
             }))
-            .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &gpui_kit::MouseDownEvent, _, cx| {
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &gpui_kit::MouseDownEvent, window, cx| {
+                window.focus(&foco_clique, cx);
                 if !e.modifiers.control && !e.modifiers.shift && !e.modifiers.platform {
                     this.pre_ler_commit(&h2, cx);
                 }
@@ -763,6 +784,7 @@ impl TelaGit {
             })
             .child(canvas(move |b, _, _| {
                 registro.borrow_mut().insert(chave.clone(), b);
+                registro2.borrow_mut().insert(k2.clone(), b);
             }, |_, _, _, _| {}).absolute().size_full())
             .child(faixas_commit(linha.clone(), head))
             .child(

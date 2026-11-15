@@ -1,5 +1,5 @@
 //! Janela 1400×900 com a coluna do editor na posição das capturas de referência (x 325..828, y 36..878), sobre um
-//! projeto temporário com os textos do mock (`examples/dados`, gerados por `gerar-dados-vitrine.mjs`).
+//! projeto temporário com os textos do mock (`examples/dados`, ver o README).
 //! Uso: cargo run -p orquestrador-editor --example vitrine -- arquivos|varias|menu|lista|dividido|rapido|md-preview|md-codigo|binario|vazio
 use gpui_kit::{div, prelude::*, px, size, App, Bounds, Context, Entity, Window, WindowBounds, WindowOptions};
 use orquestrador_editor::armazem::Chaves;

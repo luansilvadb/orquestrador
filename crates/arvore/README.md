@@ -12,7 +12,10 @@ let arvore = cx.new(|cx| Explorador::new(raiz_do_projeto, "nome-da-pasta", windo
 ```
 
 A primeira leitura sai na hora; depois relê a raiz e as pastas abertas a cada 1,5 s com a janela em foco e 10 s sem
-foco, só com a tela ativa e a seção do projeto aberta.
+foco, só com a tela ativa e a seção do projeto aberta; com a janela minimizada para e volta ao restaurar.
+
+`registrar_atalhos(cx)`, uma vez no início do app: Tab e Shift+Tab percorrem o foco (`window.focus_next`/`focus_prev`),
+como no navegador; o painel da árvore é parada de Tab.
 
 Métodos para a bancada:
 
