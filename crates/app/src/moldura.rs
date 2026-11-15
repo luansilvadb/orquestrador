@@ -280,10 +280,10 @@ impl Bancada {
                     ))
                     .child(self.botao_com_dica(
                         1,
-                        if maximizada { "Restaurar" } else { "Maximizar" },
+                        controle_maximizar(maximizada).0,
                         orquestrador_ui::widgets::botao_janela(
                             "janela-maximizar",
-                            if maximizada { icone::RESTAURAR } else { icone::MAXIMIZAR },
+                            controle_maximizar(maximizada).1,
                             WindowControlArea::Max,
                             false,
                         ),
@@ -492,4 +492,14 @@ fn rolar_faixa(rolagem: &gpui_kit::ScrollHandle, e: &gpui_kit::ScrollEvent, wind
     rolagem.set_offset(o);
     cx.stop_propagation();
     window.refresh();
+}
+
+/// Dica e ícone do botão do meio, relidos a cada quadro: o Windows alterna maximizar e restaurar (o botão, o duplo
+/// clique na barra e o snap), e `is_maximized` é o `IsZoomed`, que o snap lateral não liga, como o `isMaximized` do Tauri.
+pub(crate) fn controle_maximizar(maximizada: bool) -> (&'static str, &'static str) {
+    if maximizada {
+        ("Restaurar", icone::RESTAURAR)
+    } else {
+        ("Maximizar", icone::MAXIMIZAR)
+    }
 }

@@ -130,6 +130,9 @@ pub use native::set_text_content_type;
 pub use native::{NativeMenu, NativeMenuItem};
 pub use rope_ext::{InputEdit, Point, RopeExt, RopeLines};
 pub use ropey::Rope;
+// Orquestrador: as regras de cor da seleção e do cursor ao lado da medianiz, para os testes do app.
+#[doc(hidden)]
+pub use element::{caret_beside_gutter, selection_color};
 pub use search::{SearchMatcher, SearchSession};
 pub use state::*;
 pub use textarea::{Textarea, TextareaState};

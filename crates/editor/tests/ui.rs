@@ -378,3 +378,73 @@ fn rascunho_de_conflito_marca_sujo_recupera_e_descarta(cx: &mut TestAppContext) 
     assert!(cx.read(|cx| a.read(cx).nao_salvos()).is_empty());
     assert_eq!(*relidos.borrow(), ["src/c.ts"], "a vista do conflito é avisada para reler");
 }
+
+// Lacunas do porte de tests/check-editor-style.mjs.
+
+fn par_no_cursor(cx: &mut TestAppContext, j: WindowHandle<Root>, a: &Entity<AreaEditor>, caminho: &str, sel: std::ops::Range<usize>) -> (Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>) {
+    let ed = cx.read(|cx| a.read(cx).editor_de(caminho)).expect("editor");
+    cx.update_window(j.into(), |_, window, cx| {
+        ed.update(cx, |s, cx| s.set_selected_range(sel, cx));
+        window.render_frame(cx);
+    })
+    .expect("janela");
+    cx.run_until_parked();
+    cx.update_window(j.into(), |_, window, cx| window.render_frame(cx)).expect("janela");
+    let mut pares = cx.read(|cx| a.read(cx).decoracoes(caminho).expect("doc").pares.get_ranges(cx));
+    let mut sem = cx.read(|cx| a.read(cx).colchetes_sem_par(caminho));
+    pares.sort_by_key(|r| r.start);
+    sem.sort_by_key(|r| r.start);
+    (pares, sem)
+}
+
+#[gpui_kit::test]
+fn caixa_no_par_sob_o_cursor_e_vermelho_sem_par(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("par-cursor");
+    std::fs::write(tmp.0.join("src/par.ts"), "f(a[1]);\ng(\"(\", 1);\nx = (]\n").unwrap();
+    let (j, a) = montar(cx, &tmp.raiz(), Rc::default());
+    com(cx, j, &a, |a, w, cx| a.abrir_arquivo("src/par.ts", Abertura { permanente: true, ..Default::default() }, w, cx));
+    cx.update_window(j.into(), |_, window, cx| window.render_frame(cx)).expect("janela");
+    cx.run_until_parked();
+    // `f|(a[1]);`: a abertura depois do cursor casa com o `)`.
+    assert_eq!(par_no_cursor(cx, j, &a, "src/par.ts", 1..1), (vec![1..2, 6..7], vec![]));
+    // `f(a[1]|);`: o `]` antes do cursor casa com o `[`.
+    assert_eq!(par_no_cursor(cx, j, &a, "src/par.ts", 5..5), (vec![3..4, 5..6], vec![]));
+    // Com seleção, sem par.
+    assert_eq!(par_no_cursor(cx, j, &a, "src/par.ts", 1..3), (vec![], vec![]));
+    // Longe de colchete, nada.
+    assert_eq!(par_no_cursor(cx, j, &a, "src/par.ts", 16..16), (vec![], vec![]));
+    // `x = (]`: tipos diferentes, os dois em vermelho e sem caixa.
+    let t = "f(a[1]);\ng(\"(\", 1);\nx = (]\n";
+    let abre = t.rfind('(').unwrap();
+    assert_eq!(par_no_cursor(cx, j, &a, "src/par.ts", abre..abre), (vec![], vec![abre..abre + 1, abre + 1..abre + 2]));
+    // O `(` da string não casa com o `)` de fora: só ele, sem par.
+    let na_string = t.find("\"(").unwrap() + 1;
+    let (caixas, sem) = par_no_cursor(cx, j, &a, "src/par.ts", na_string..na_string);
+    assert!(caixas.is_empty());
+    assert_eq!(sem, vec![na_string..na_string + 1]);
+}
+
+#[test]
+fn selecao_sem_foco_e_cursor_na_coluna_0() {
+    use gpui_kit::component::input::{caret_beside_gutter, selection_color};
+    use gpui_kit::{point, Hsla};
+    let com_foco: Hsla = orquestrador_editor::documento::cor::selecao();
+    let sem_foco: Hsla = orquestrador_editor::documento::cor::selecao_inativa();
+    assert_eq!(com_foco, gpui_kit::rgb(0x264f78).into());
+    assert_eq!(sem_foco, gpui_kit::rgb(0x3a3d41).into());
+    assert_eq!(selection_color(true, true, com_foco, Some(sem_foco)), Some(com_foco));
+    assert_eq!(selection_color(false, true, com_foco, Some(sem_foco)), Some(sem_foco), "editor sem foco");
+    assert_eq!(selection_color(false, false, com_foco, Some(sem_foco)), Some(sem_foco), "janela inativa");
+    assert_eq!(selection_color(false, false, com_foco, None), None, "sem a cor, o comportamento original do Kit");
+    // Medianiz até x = 50,4: o cursor da coluna 0 (x = 50,4) arredondado para 50 ficaria sob ela; vai a 51.
+    let cursor = |x: f32| Bounds::new(point(px(x), px(0.)), size(px(1.), px(16.)));
+    let r = caret_beside_gutter(cursor(50.4), cursor(50.), px(50.4), 1.);
+    assert_eq!(r.origin.x, px(51.));
+    assert!(r.origin.x >= px(50.4), "inteiro à direita da medianiz");
+    // Na coluna 3, nada muda; rolado para baixo da medianiz, também não.
+    assert_eq!(caret_beside_gutter(cursor(80.6), cursor(81.), px(50.4), 1.).origin.x, px(81.));
+    assert_eq!(caret_beside_gutter(cursor(20.), cursor(20.), px(50.4), 1.).origin.x, px(20.));
+    // Em 150%, o pixel do dispositivo seguinte à medianiz.
+    let r = caret_beside_gutter(cursor(50.4), cursor(50.), px(50.4), 1.5);
+    assert!((f32::from(r.origin.x) - 76. / 1.5).abs() < 1e-4);
+}

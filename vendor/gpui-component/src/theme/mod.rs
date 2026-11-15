@@ -205,6 +205,9 @@ pub struct Theme {
     // Orquestrador: cor do texto selecionado nos campos (o `::selection` do CSS); `None` mantém a cor do texto.
     #[serde(skip)]
     pub selection_foreground: Option<Hsla>,
+    // Orquestrador: cor da seleção com o campo sem foco ou a janela inativa; `None` esconde a seleção, como antes.
+    #[serde(skip)]
+    pub inactive_selection: Option<Hsla>,
     /// Show the scrollbar mode, default: Scrolling
     #[serde(alias = "scrollbar_show")]
     pub scrollbar_mode: ScrollbarMode,
@@ -780,6 +783,7 @@ impl From<&ThemeColor> for Theme {
             transparent: Hsla::transparent_black(),
             // Orquestrador: ver `selection_foreground`.
             selection_foreground: None,
+            inactive_selection: None,
             font_family: ".SystemUIFont".into(),
             font_size: px(16.),
             mono_font_family: mono_font::default_mono_font_family(),

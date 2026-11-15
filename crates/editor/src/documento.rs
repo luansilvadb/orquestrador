@@ -77,6 +77,10 @@ pub mod cor {
     pub fn selecao() -> Hsla {
         gpui::rgb(0x264f78).into()
     }
+    /// Seleção sem foco (`inactiveSelectionBackground`).
+    pub fn selecao_inativa() -> Hsla {
+        gpui::rgb(0x3a3d41).into()
+    }
     pub fn cursor() -> Hsla {
         gpui::rgb(0xaeafad).into()
     }
@@ -93,8 +97,13 @@ pub struct Documento {
     pub gutter: GutterDecorationCollection,
     pub regua: OverviewRulerDecorationCollection,
     pub trechos: RangeDecorationCollection,
+    /// Caixas do par de colchetes sob o cursor (par.rs).
+    pub pares: RangeDecorationCollection,
+    /// O motor do realce visto daqui e os colchetes sem par em vermelho.
+    pub ligacao: std::rc::Rc<realce::Ligacao>,
     /// `draft` do buffer está atrás do editor (só sincroniza quando alguém lê).
     sujo_cache: bool,
+    _par: gpui::Subscription,
 }
 
 impl Documento {
@@ -102,6 +111,7 @@ impl Documento {
         let texto = buffer.draft.clone();
         let linguagem = linguagem_do_editor(&buffer.path);
         let somente_leitura = buffer.read_only;
+        let ligacao = std::rc::Rc::new(realce::Ligacao::default());
         let editor = cx.new(|cx| {
             let mut s = EditorState::new(window, cx)
                 .language(linguagem)
@@ -114,14 +124,20 @@ impl Documento {
                 .gutter_decorations_width(px(16.))
                 .context_menu(false)
                 .default_value(texto);
-            s.set_highlighter_factory(realce::fabrica(), cx);
+            s.set_highlighter_factory(realce::fabrica_ligada(ligacao.clone()), cx);
             s.set_readonly(somente_leitura, cx);
             s
         });
-        let (gutter, regua, trechos) = editor.update(cx, |s, cx| {
-            (s.create_gutter_decorations_collection(Vec::new(), cx), s.create_overview_ruler_decorations_collection(Vec::new(), cx), s.create_range_decorations_collection(Vec::new(), cx))
+        let (gutter, regua, trechos, pares) = editor.update(cx, |s, cx| {
+            (
+                s.create_gutter_decorations_collection(Vec::new(), cx),
+                s.create_overview_ruler_decorations_collection(Vec::new(), cx),
+                s.create_range_decorations_collection(Vec::new(), cx),
+                s.create_range_decorations_collection(Vec::new(), cx),
+            )
         });
-        Documento { sujo_cache: buffer.sujo(), buffer, editor, gutter, regua, trechos }
+        let _par = observar_par(&editor, ligacao.clone(), pares.clone(), cx);
+        Documento { sujo_cache: buffer.sujo(), buffer, editor, gutter, regua, trechos, pares, ligacao, _par }
     }
 
     /// Texto atual do editor, com `\n`.
@@ -193,6 +209,26 @@ impl Documento {
             centralizar(off, 3, window, cx);
         });
     }
+}
+
+/// Refaz o par sob o cursor a cada mudança do editor (cursor, texto ou cores novas); só mexe nas decorações quando o
+/// resultado muda, senão o `notify` delas voltaria aqui.
+fn observar_par(editor: &Entity<EditorState>, ligacao: std::rc::Rc<realce::Ligacao>, pares: RangeDecorationCollection, cx: &mut App) -> gpui::Subscription {
+    let ultimo: std::rc::Rc<std::cell::RefCell<Option<crate::par::Casamento>>> = Default::default();
+    cx.observe(editor, move |ed, cx| {
+        let s = ed.read(cx);
+        let sel = s.selected_range();
+        // Com seleção, o CodeMirror não marca par.
+        let novo = if sel.is_empty() { crate::par::casar(s.text(), sel.start, &|i| ligacao.colchete_contado(i)) } else { None };
+        if *ultimo.borrow() == novo {
+            return;
+        }
+        let (caixas, sem_par) = crate::par::decoracoes(&novo);
+        *ultimo.borrow_mut() = novo;
+        *ligacao.sem_par.borrow_mut() = sem_par;
+        pares.set(caixas, cx);
+        ed.update(cx, |_, cx| cx.notify());
+    })
 }
 
 /// O `scrollIntoView(pos, { y: 'center' })` do `goTo`: o Kit só rola com o layout pronto (logo depois de abrir, nada
@@ -606,6 +642,7 @@ impl gpui::Element for ComTemaDoEditor {
             t.selection = cor::selecao();
             // O CodeMirror pinta a seleção por baixo e mantém a cor do texto.
             t.selection_foreground = None;
+            t.inactive_selection = Some(cor::selecao_inativa());
             t.caret = cor::cursor();
             let mut h = (*t.highlight_theme).clone();
             h.style.editor_background = Some(cor::fundo());

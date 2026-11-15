@@ -1242,6 +1242,46 @@ impl<M: InputModeKind> TextElement<M> {
                         fills.push((path, color));
                     }
                 }
+                // Orquestrador: caixa da marca inline do CodeMirror (fundo e anel interno de 1 px).
+                RangeDecorationStyle::InlineBox => {
+                    let Some(corners) = Self::layout_range_corners(decoration.range(), last_layout)
+                    else {
+                        continue;
+                    };
+                    let origin = bounds.origin + point(last_layout.line_number_width, px(0.));
+                    let rect = |builder: &mut gpui::PathBuilder, l: Pixels, t: Pixels, r: Pixels, b: Pixels| {
+                        builder.move_to(origin + point(l, t));
+                        builder.line_to(origin + point(r, t));
+                        builder.line_to(origin + point(r, b));
+                        builder.line_to(origin + point(l, b));
+                        builder.close();
+                    };
+                    let one = px(1.);
+                    let mut fill = gpui::PathBuilder::fill();
+                    let mut ring = gpui::PathBuilder::fill();
+                    for c in &corners {
+                        let (l, r) = (c.top_left.x, c.top_right.x);
+                        let (t, b) = (c.top_left.y + one, c.bottom_left.y - one);
+                        if r - l < one * 2. || b - t < one * 2. {
+                            continue;
+                        }
+                        rect(&mut fill, l, t, r, b);
+                        rect(&mut ring, l, t, r, t + one);
+                        rect(&mut ring, l, b - one, r, b);
+                        rect(&mut ring, l, t + one, l + one, b - one);
+                        rect(&mut ring, r - one, t + one, r, b - one);
+                    }
+                    if let Some(color) = decoration.color()
+                        && let Ok(path) = fill.build()
+                    {
+                        fills.push((path, color));
+                    }
+                    if let Some(color) = decoration.ring()
+                        && let Ok(path) = ring.build()
+                    {
+                        fills.push((path, color));
+                    }
+                }
                 RangeDecorationStyle::Frame => {
                     let color = decoration.color().unwrap_or(state.editor_style.foreground);
                     let Some(corners) = Self::layout_range_corners(decoration.range(), last_layout)
@@ -1346,7 +1386,8 @@ impl<M: InputModeKind> TextElement<M> {
         cx: &mut App,
     ) -> Vec<Path<Pixels>> {
         let state = self.state.read(cx);
-        if !state.has_selection_focus(window, cx) {
+        // Orquestrador: com `inactive_selection`, a seleção sem foco continua à vista (o CodeMirror).
+        if !state.has_selection_focus(window, cx) && state.editor_style.inactive_selection.is_none() {
             return vec![];
         }
 
@@ -3012,6 +3053,39 @@ impl PrepaintState {
     }
 }
 
+/// Orquestrador: a cor da seleção (`None`: não pinta). Com foco e janela ativa, `selection`; sem eles,
+/// `inactive`, ou nada com a janela inativa (o comportamento original, sem `inactive`).
+pub fn selection_color(focused: bool, window_active: bool, selection: Hsla, inactive: Option<Hsla>) -> Option<Hsla> {
+    if focused {
+        Some(selection)
+    } else if let Some(c) = inactive {
+        Some(c)
+    } else if window_active {
+        Some(selection)
+    } else {
+        None
+    }
+}
+
+/// Orquestrador: o cursor que não foi rolado para baixo da medianiz começa no primeiro pixel inteiro depois dela
+/// (o `.cm-cursor { margin-left: 0 }` do React); arredondado para a esquerda, a medianiz pintada depois o cobriria.
+pub fn caret_beside_gutter(
+    unsnapped: Bounds<Pixels>,
+    snapped: Bounds<Pixels>,
+    gutter_right: Pixels,
+    scale_factor: f32,
+) -> Bounds<Pixels> {
+    if unsnapped.origin.x + px(0.5) / scale_factor < gutter_right {
+        return snapped;
+    }
+    let min_x = (gutter_right * scale_factor).ceil() / scale_factor;
+    if snapped.origin.x < min_x {
+        Bounds::new(point(min_x, snapped.origin.y), snapped.size)
+    } else {
+        snapped
+    }
+}
+
 /// Align a caret to whole device pixels.
 ///
 /// Text positions are fractional, and a one-pixel caret at a fractional x is
@@ -4020,6 +4094,21 @@ impl<M: InputModeKind> Element for TextElement<M> {
             window.paint_path(path.clone(), *color);
         }
 
+        // Orquestrador: com foco e a janela ativa, a cor da seleção; senão `inactive_selection` (que também pinta com a
+        // janela inativa, como o CodeMirror, que perde o `cm-focused` junto com a janela).
+        let selection_focused =
+            window.is_window_active() && self.state.read(cx).has_selection_focus(window, cx);
+        if let Some(color) = selection_color(
+            selection_focused,
+            window.is_window_active(),
+            editor_style.selection,
+            editor_style.inactive_selection,
+        ) {
+            for path in prepaint.selection_paths.drain(..) {
+                window.paint_path(path, color);
+            }
+        }
+
         // Paint selections
         if window.is_window_active() {
             let secondary_selection = Hsla {
@@ -4034,9 +4123,6 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 }
             }
 
-            for path in prepaint.selection_paths.drain(..) {
-                window.paint_path(path, editor_style.selection);
-            }
 
             // Paint hover highlight
             if let Some(path) = prepaint.hover_highlight_path.take() {
@@ -4126,11 +4212,23 @@ impl<M: InputModeKind> Element for TextElement<M> {
 
         // Paint blinking cursors (shared blink state for all carets)
         if focused && show_cursor {
+            // Orquestrador: a medianiz, pintada depois, não cobre o cursor da coluna 0.
+            let gutter_right = prepaint.line_numbers.as_ref().map(|_| {
+                editor_gutter_bounds(
+                    input_bounds,
+                    prepaint.last_layout.line_number_width,
+                    prepaint.ghost_lines_height,
+                    editor_paddings,
+                )
+                .right()
+            });
             for cursor_info in prepaint.cursor_infos_with_scroll() {
-                window.paint_quad(fill(
-                    snap_caret_to_device_pixels(cursor_info.bounds, window.scale_factor()),
-                    editor_style.caret,
-                ));
+                let caret = snap_caret_to_device_pixels(cursor_info.bounds, window.scale_factor());
+                let caret = match gutter_right {
+                    Some(g) => caret_beside_gutter(cursor_info.bounds, caret, g, window.scale_factor()),
+                    None => caret,
+                };
+                window.paint_quad(fill(caret, editor_style.caret));
             }
         }
 

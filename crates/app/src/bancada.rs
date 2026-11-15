@@ -434,12 +434,44 @@ impl Bancada {
         self.pedir_fechar_projeto(id, window, cx);
     }
 
-    /// Fecha a aba e encerra o projeto no core; a vizinha à direita (ou à esquerda) vira a ativa.
+    /// Encerra o projeto no core e só então tira a aba (o `dropManagedProject` do App.tsx): se o core falhar, a aba fica,
+    /// o erro aparece e o X volta a responder.
     pub fn fechar_confirmado(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(indice) = self.abas.iter().position(|a| a.id == id) else { return };
+        if !self.abas.iter().any(|a| a.id == id) || self.fechando.as_deref() == Some(id) {
+            return;
+        }
         if let Some(t) = self.telas.get(id) {
             t.editor.update(cx, |ed, cx| ed.gravar_recuperacao(cx));
         }
+        self.fechando = Some(id.to_string());
+        let projetos = self.backend.projetos.clone();
+        let id = id.to_string();
+        let tarefa = cx.background_spawn({
+            let id = id.clone();
+            async move { projetos.close_project(&id) }
+        });
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            let r = tarefa.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.fechando.as_deref() == Some(id.as_str()) {
+                    this.fechando = None;
+                }
+                match r {
+                    Ok(()) => this.remover_aba(&id, cx),
+                    Err(e) => {
+                        orquestrador_ui::avisos::mostrar(orquestrador_ui::avisos::Aviso::erro(e, 7000), cx);
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Tira a aba já encerrada no core; a vizinha à direita (ou à esquerda) vira a ativa.
+    fn remover_aba(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(indice) = self.abas.iter().position(|a| a.id == id) else { return };
         self.abas.remove(indice);
         self.vistas.remove(&Some(id.to_string()));
         if self.ativa.as_deref() == Some(id) {
@@ -453,15 +485,6 @@ impl Bancada {
         }
         self.soltar_telas(id);
         self.terminais.update(cx, |t, cx| t.fechar_projeto(id, cx));
-        let projetos = self.backend.projetos.clone();
-        let id = id.to_string();
-        let tarefa = cx.background_spawn(async move { projetos.close_project(&id) });
-        cx.spawn(async move |_, cx| {
-            if let Err(e) = tarefa.await {
-                cx.update(|cx| orquestrador_ui::avisos::mostrar(orquestrador_ui::avisos::Aviso::erro(e, 7000), cx));
-            }
-        })
-        .detach();
         self.salvar();
         cx.notify();
     }

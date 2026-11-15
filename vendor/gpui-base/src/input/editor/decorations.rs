@@ -19,6 +19,10 @@ pub enum RangeDecorationStyle {
     /// Orquestrador: fill every visual row of the lines the range touches, across the whole width (a line
     /// background, like a CodeMirror line decoration).
     Lines,
+    /// Orquestrador: the inline box of a CodeMirror mark (`.cm-matchingBracket`): each visual row of the range,
+    /// 1 px shorter at the top and bottom (the font box inside the 19 px line), filled with `color` and with an inner
+    /// 1 px ring of `ring` (`box-shadow: inset 0 0 0 1px`).
+    InlineBox,
 }
 
 /// A geometric decoration over a UTF-8 byte range.
@@ -27,6 +31,7 @@ pub struct RangeDecoration {
     range: Range<usize>,
     style: RangeDecorationStyle,
     color: Option<Hsla>,
+    ring: Option<Hsla>,
 }
 
 impl RangeDecoration {
@@ -36,7 +41,19 @@ impl RangeDecoration {
             range,
             style: RangeDecorationStyle::default(),
             color: None,
+            ring: None,
         }
+    }
+
+    /// Orquestrador: the inner ring color of [`RangeDecorationStyle::InlineBox`].
+    pub fn ring(&self) -> Option<Hsla> {
+        self.ring
+    }
+
+    /// Orquestrador: set the inner ring color of [`RangeDecorationStyle::InlineBox`].
+    pub fn with_ring(mut self, ring: Hsla) -> Self {
+        self.ring = Some(ring);
+        self
     }
 
     /// The half-open UTF-8 byte range supplied to this decoration.

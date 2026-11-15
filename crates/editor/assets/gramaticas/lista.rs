@@ -1,8 +1,10 @@
 // Gerado: gramáticas TextMate do Shiki convertidas (ver README).
 &[
+    ("bat", include_str!("bat.sublime-syntax")),
     ("coffee", include_str!("coffee.sublime-syntax")),
     ("css", include_str!("css.sublime-syntax")),
     ("dart", include_str!("dart.sublime-syntax")),
+    ("gdscript", include_str!("gdscript.sublime-syntax")),
     ("graphql", include_str!("graphql.sublime-syntax")),
     ("haml", include_str!("haml.sublime-syntax")),
     ("java", include_str!("java.sublime-syntax")),

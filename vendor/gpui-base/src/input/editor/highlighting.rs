@@ -115,6 +115,8 @@ pub struct InputEditorStyle {
     pub selection: Hsla,
     // Orquestrador: cor do texto dentro da seleção; `None` mantém a do realce.
     pub selection_foreground: Option<Hsla>,
+    // Orquestrador: cor da seleção sem foco (o `inactiveSelectionBackground`); `None` esconde a seleção sem foco.
+    pub inactive_selection: Option<Hsla>,
     pub caret: Hsla,
     pub diagnostics: DiagnosticColors,
     pub highlight_styles: SharedHighlightStyleResolver,
@@ -171,6 +173,7 @@ impl Default for InputEditorStyle {
             border: Hsla::default(),
             selection: Hsla::default(),
             selection_foreground: None,
+            inactive_selection: None,
             caret: Hsla::default(),
             diagnostics: DiagnosticColors::default(),
             highlight_styles: Arc::new(NoHighlightStyles),

@@ -232,11 +232,18 @@ fn colorir_linha(estado: &mut Estado, linha: &str) -> Trechos {
     if let Some(ops) = &ops {
         let mut pilha = estado.tema.path.clone();
         let mut cursor = 0;
+        // No `.env`, o valor depois do `=` é texto para os pares, como no modo Properties do CodeMirror.
+        let mut valor = false;
         let mut marcar = |a: usize, b: usize, pilha: &ScopeStack| {
             if a >= b {
                 return;
             }
             let escopos = pilha.as_slice();
+            if valor {
+                fora.push(a..b);
+            } else if escopos.iter().any(|e| ATRIBUICAO_ENV.with(|t| t.is_prefix_of(*e))) {
+                valor = true;
+            }
             // Dentro de `${…}` da template string os colchetes voltam a contar, como no React.
             let texto = escopos.iter().rposition(|e| fora_str.is_prefix_of(*e) || fora_com.is_prefix_of(*e));
             let expressao = escopos.iter().rposition(|e| TEMPLATE.with(|t| t.is_prefix_of(*e)));
@@ -574,6 +581,22 @@ impl Motor {
         out
     }
 
+    /// O colchete em `off` conta nos pares (fora de string e comentário). Sem cor (arquivo grande) ou com a linha
+    /// ainda por colorir, conta.
+    pub fn colchete_contado(&self, off: usize) -> bool {
+        if !self.ligado || off >= self.texto.len() {
+            return true;
+        }
+        let row = self.texto.offset_to_point(off).row;
+        let Some(Some(l)) = self.linhas.get(row) else { return true };
+        let rel = off - self.texto.line_start_offset(row);
+        l.tokens
+            .iter()
+            .find(|t| (t.ini as usize..t.fim as usize).contains(&rel))
+            .and_then(|t| self.paleta[t.estilo as usize].color)
+            .is_some_and(|c| c == cor_inesperado() || NIVEIS.iter().any(|n| c == gpui::rgb(*n).into()))
+    }
+
     /// Todos os trechos, em deslocamentos absolutos.
     pub fn trechos(&self) -> Trechos {
         let mut out = Vec::new();
@@ -601,6 +624,7 @@ pub fn colorir_caminho(caminho: &str, texto: &str) -> Trechos {
 
 thread_local! {
     static TEMPLATE: Scope = Scope::new("meta.template.expression").unwrap();
+    static ATRIBUICAO_ENV: Scope = Scope::new("keyword.operator.assignment.env").unwrap();
 }
 
 /// Escopos que contam nos colchetes e no marcador de lista.
@@ -691,8 +715,22 @@ fn dobras(texto: &str) -> Vec<FoldRange> {
     out
 }
 
+/// O que o documento enxerga do realce: o motor atual (para o par sob o cursor) e os colchetes sem par em vermelho.
+#[derive(Default)]
+pub struct Ligacao {
+    motor: RefCell<Option<Arc<Mutex<Motor>>>>,
+    pub sem_par: RefCell<Vec<Range<usize>>>,
+}
+
+impl Ligacao {
+    pub fn colchete_contado(&self, off: usize) -> bool {
+        self.motor.borrow().as_ref().and_then(|m| m.lock().ok().map(|m| m.colchete_contado(off))).unwrap_or(true)
+    }
+}
+
 struct Realce {
     lang: SharedString,
+    ligacao: Option<Rc<Ligacao>>,
     motor: Arc<Mutex<Motor>>,
     dobras: Rc<RefCell<Vec<FoldRange>>>,
     tarefa: Option<Task<()>>,
@@ -763,7 +801,15 @@ impl InputHighlighter for Realce {
         let a = m.texto.offset_to_point(alcance.start).row;
         let b = m.texto.offset_to_point(alcance.end.saturating_sub(1).max(alcance.start)).row + 1;
         m.preparar(a, b);
-        m.estilos(alcance)
+        let mut out = m.estilos(alcance);
+        if let Some(l) = &self.ligacao {
+            for r in l.sem_par.borrow().iter() {
+                if r.start >= alcance.start && r.end <= alcance.end {
+                    sobrepor(&mut out, r.clone(), cor_inesperado());
+                }
+            }
+        }
+        out
     }
 
     fn fold_ranges(&self, _: &Rope) -> Vec<FoldRange> {
@@ -774,12 +820,27 @@ impl InputHighlighter for Realce {
 /// Fábrica para o `EditorState`: o "nome de linguagem" que o editor recebe é o caminho do arquivo, e daí sai a
 /// linguagem Shiki e a gramática. Sem gramática, ainda colore os colchetes, como o editor do React.
 pub fn fabrica() -> InputHighlighterFactory {
-    Rc::new(|caminho: &str| {
+    fabrica_com(None)
+}
+
+/// A fábrica que deixa o motor à vista de `ligacao` (o par sob o cursor do documento).
+pub fn fabrica_ligada(ligacao: Rc<Ligacao>) -> InputHighlighterFactory {
+    fabrica_com(Some(ligacao))
+}
+
+fn fabrica_com(ligacao: Option<Rc<Ligacao>>) -> InputHighlighterFactory {
+    Rc::new(move |caminho: &str| {
         let lang = linguagem::linguagem(caminho);
         let sintaxe = lang.as_deref().and_then(|l| sintaxe(l, caminho));
+        let motor = Arc::new(Mutex::new(Motor::novo(sintaxe, Rope::new())));
+        if let Some(l) = &ligacao {
+            *l.motor.borrow_mut() = Some(motor.clone());
+            l.sem_par.borrow_mut().clear();
+        }
         Some(Box::new(Realce {
             lang: caminho.to_string().into(),
-            motor: Arc::new(Mutex::new(Motor::novo(sintaxe, Rope::new()))),
+            ligacao: ligacao.clone(),
+            motor,
             dobras: Rc::default(),
             tarefa: None,
             tarefa_dobras: None,
@@ -791,6 +852,7 @@ pub fn fabrica() -> InputHighlighterFactory {
 mod testes {
     use super::*;
     use std::time::Instant;
+
 
     fn cor_de(trechos: &Trechos, t: &str, trecho: &str) -> Option<Hsla> {
         let i = t.find(trecho).unwrap();
@@ -1036,7 +1098,6 @@ mod testes {
     }
 
     #[test]
-    #[ignore = "lacuna: a gramática DotENV não marca o valor como texto, e os pares dele ganham cor"]
     fn dotenv_como_properties() {
         let t = "# comentário (a [b])\n[secao]\nCHAVE=valor (x)\n";
         assert_eq!(pares(".env.example", t), "----gg--");
@@ -1046,7 +1107,6 @@ mod testes {
     }
 
     #[test]
-    #[ignore = "lacuna: o rótulo do Batch File sai #C8C8C8, não #569CD6"]
     fn batch_rem_rotulo_set_variavel_string_e_operador() {
         let t = "@echo off\nREM nota (a)\nset NOME=1\n:inicio\necho \"olá %NOME%\" && goto inicio\nif exist x.txt (\n  del x.txt\n)\n";
         assert_eq!(pares("script.bat", t), "--gg");
@@ -1062,7 +1122,6 @@ mod testes {
     }
 
     #[test]
-    #[ignore = "lacuna: sem gramática GDScript embutida"]
     fn gdscript_dark_plus() {
         let t = "func mover():\n  var velocidade = 1\nvar energia = 2";
         assert_eq!(cor_em("player.gd", t, "func"), Some(gpui::rgb(0x569cd6).into()));

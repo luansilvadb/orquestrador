@@ -56,6 +56,22 @@ pub enum Resposta {
     Fechar,
 }
 
+/// O parágrafo do diálogo quando o projeto tem trabalho e nada a salvar.
+pub(crate) fn texto_do_trabalho(t: &ProjectSnapshot) -> String {
+    let mut s = String::new();
+    if t.orchestrator_open {
+        s.push_str("O orquestrador aberto será encerrado. ");
+    }
+    if t.executors_running > 0 {
+        s.push_str(&format!("{} executores em execução serão encerrados. ", t.executors_running));
+    }
+    if t.executors_queued > 0 {
+        s.push_str(&format!("{} executores na fila serão removidos. ", t.executors_queued));
+    }
+    s.push_str("Os shells deste projeto também serão fechados.");
+    s
+}
+
 fn tem_trabalho(s: &ProjectSnapshot) -> bool {
     s.orchestrator_open || s.executors_running > 0 || s.executors_queued > 0
 }
@@ -95,7 +111,7 @@ impl Bancada {
         }
     }
 
-    fn perguntar(&mut self, escopo: Escopo, arquivos: Vec<String>, terminais: bool, trabalho: Option<ProjectSnapshot>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn perguntar(&mut self, escopo: Escopo, arquivos: Vec<String>, terminais: bool, trabalho: Option<ProjectSnapshot>, window: &mut Window, cx: &mut Context<Self>) {
         let foco = cx.focus_handle();
         window.focus(&foco, cx);
         self.fechamento = Some(Fechamento {
@@ -307,18 +323,7 @@ impl Bancada {
                 ));
             }
         } else if let Some(t) = &f.trabalho {
-            let mut s = String::new();
-            if t.orchestrator_open {
-                s.push_str("O orquestrador aberto será encerrado. ");
-            }
-            if t.executors_running > 0 {
-                s.push_str(&format!("{} executores em execução serão encerrados. ", t.executors_running));
-            }
-            if t.executors_queued > 0 {
-                s.push_str(&format!("{} executores na fila serão removidos. ", t.executors_queued));
-            }
-            s.push_str("Os shells deste projeto também serão fechados.");
-            corpo = corpo.child(paragrafo(s));
+            corpo = corpo.child(paragrafo(texto_do_trabalho(t)));
         } else {
             corpo = corpo.child(paragrafo(
                 "Todos os terminais serão encerrados, inclusive os shells. O trabalho dos executores para no meio.".into(),

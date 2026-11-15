@@ -28,7 +28,8 @@ texto do GPUI Kit com realce `syntect`/dark-plus, Markdown com Preview, abrir r�
 | `caminhos_abertos()`, `texto_selecionado(cx)`, `atualizar(w, cx)`, `gravar_recuperacao(cx)` | `openPaths`, `selectedText`, `refresh`, `flushRecovery`. |
 | `definir_projeto`, `definir_ativo`, `definir_layout` | Projeto ativo, tela visível (liga a consulta ao disco de 2,5 s), layout opaco da bancada. |
 | `definir_fabrica_conteudo(FabricaConteudo)` | Vista das abas de diff, commit, conflito e mídia (`Fn(&Alvo, &mut Window, &mut App) -> Option<AnyView>`). |
-| `ao_abrir_documento(AoAbrirDocumento, w, cx)`, `decoracoes(caminho)`, `editor_de(caminho)` | Decorações extras: `InfoDocumento` traz `doc_id`, caminho e as coleções `gutter`, `regua` e `trechos` do Kit (o git gutter usa `trechos`). |
+| `ao_abrir_documento(AoAbrirDocumento, w, cx)`, `decoracoes(caminho)`, `editor_de(caminho)` | Decorações extras: `InfoDocumento` traz `doc_id`, caminho e as coleções `gutter`, `regua`, `trechos` e `pares` do Kit (o git gutter usa `trechos`; `pares` são as caixas do par de colchetes sob o cursor, `par.rs`). |
+| `colchetes_sem_par(caminho)` | Colchetes sob o cursor sem par, pintados de vermelho. |
 | `definir_fonte_git(Arc<dyn FonteGutter>, cx)` | De onde vêm a base do Git e a gravação do índice do git gutter (padrão: `gutter_git::FonteCore`, os comandos do core no projeto). A bancada passa a sua para serializar com a `GuardaGit`. |
 | `alteracoes_git(doc_id)`, `alteracao_aberta(doc_id)` | Blocos do Git do documento e o aberto. |
 | `pre_carregar(caminho, w, cx)`, `pre_carregado(caminho)` | Pré-leitura (`prefetch`): árvore, pesquisa e Git chamam ao passar o mouse ou apertar o botão num arquivo (`EventoGit::PreCarregar` com alvo de arquivo). Lê o texto e carrega a gramática; abrir usa o resultado. Vence 5 s depois de pedida ou 3 s depois de pronta, como no React, com teto de 16 entradas; mídia e arquivo aberto ficam de fora. |
@@ -77,7 +78,7 @@ Ficam versionados; os pacotes Node de onde vieram saíram do projeto.
 - `assets/dark-plus.json`: `colors` e `tokenColors` de `shiki/themes/dark-plus`.
 - `assets/gramaticas/*.sublime-syntax`: gramáticas TextMate do `@shikijs/langs` 4.5.0 convertidas mecanicamente
   (`begin`/`end` viram `push` com `meta_scope`, `while` vira `pop` na linha que não casa, `repository` vira contextos,
-  escopos cortados em 8 átomos, limite do `syntect`). Só onde a conversão acerta mais que o `two-face`: c, cpp, csharp,
+  escopos cortados em 8 átomos, limite do `syntect`; `bat` e `gdscript` também). Só onde a conversão acerta mais que o `two-face`: c, cpp, csharp,
   go, html, php, shellscript e vue continuam com o `two-face`. `assets/sintaxes.packdump` é o conjunto `two-face` +
   convertidas já ligado (carrega em ~20 ms); depois de mudar as gramáticas: `cargo test -p orquestrador-editor --lib
   gerar_sintaxes -- --ignored` (o teste `packdump_em_dia_com_as_gramaticas` acusa o esquecimento).

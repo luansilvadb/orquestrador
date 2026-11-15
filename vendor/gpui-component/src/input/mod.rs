@@ -43,6 +43,9 @@ pub use gpui_base::input::{
     highlight_characters, highlight_contains, highlight_prefix,
 };
 pub use gpui_base::input::{EditorMode, InputMode, InputModeKind, TextareaMode};
+// Orquestrador: ver `gpui_base::input::selection_color`.
+#[doc(hidden)]
+pub use gpui_base::input::{caret_beside_gutter, selection_color};
 #[doc(hidden)]
 mod editor;
 mod group;

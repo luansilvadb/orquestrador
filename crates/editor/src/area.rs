@@ -89,6 +89,8 @@ pub struct InfoDocumento {
     pub gutter: gpui_kit::component::input::GutterDecorationCollection,
     pub regua: gpui_kit::component::input::OverviewRulerDecorationCollection,
     pub trechos: gpui_kit::component::input::RangeDecorationCollection,
+    /// As caixas do par de colchetes sob o cursor.
+    pub pares: gpui_kit::component::input::RangeDecorationCollection,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -442,6 +444,12 @@ impl AreaEditor {
     pub fn decoracoes(&self, caminho: &str) -> Option<InfoDocumento> {
         let c = caminho.to_lowercase();
         self.docs.values().find(|d| d.buffer.path.to_lowercase() == c).map(info_de)
+    }
+
+    /// Colchetes sob o cursor sem par (em vermelho) no documento aberto em `caminho`.
+    pub fn colchetes_sem_par(&self, caminho: &str) -> Vec<std::ops::Range<usize>> {
+        let c = caminho.to_lowercase();
+        self.docs.values().find(|d| d.buffer.path.to_lowercase() == c).map(|d| d.ligacao.sem_par.borrow().clone()).unwrap_or_default()
     }
 
     // ---- Abrir ----
@@ -1770,6 +1778,7 @@ fn info_de(d: &Documento) -> InfoDocumento {
         gutter: d.gutter.clone(),
         regua: d.regua.clone(),
         trechos: d.trechos.clone(),
+        pares: d.pares.clone(),
     }
 }
 

@@ -521,3 +521,68 @@ fn tab_no_terminal_fica_no_shell(cx: &mut TestAppContext) {
     let ainda = cx.update_window(janela.into(), |_, window, _| foco.is_focused(window)).expect("janela");
     assert!(ainda, "o Tab global da árvore não tira o foco do terminal");
 }
+
+// Lacunas do porte de check-project-tabs-ui.mjs e check-titlebar-ui.mjs.
+
+#[gpui_kit::test]
+fn shell_sem_projeto_morre_ao_abrir_pasta_e_abre_de_novo_ao_fechar(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("shell-sem-projeto");
+    let pasta = tmp.0.join("projeto");
+    std::fs::create_dir_all(&pasta).expect("pasta");
+    let (janela, b) = montar(cx, &tmp, exes_padrao());
+    let t = terminais(cx, &b);
+    let primeiro = abrir_shells(cx, janela, &b, 1);
+    assert_eq!(primeiro.len(), 1);
+    b.update(cx, |b, cx| b.abrir(pasta.clone(), cx));
+    esperar(cx, janela, Duration::from_secs(10), |cx| cx.update(|cx| b.read(cx).ativa.is_some()));
+    // Com a pasta aberta, os shells sem projeto saem do painel (e morrem no core, `soltar_sem_projeto`).
+    esperar(cx, janela, Duration::from_secs(10), |cx| shells(cx, &t).is_empty());
+    assert!(cx.update(|cx| !t.read(cx).vistas.contains_key(&chave(None, &primeiro[0]))));
+    let id = cx.update(|cx| b.read(cx).ativa.clone()).expect("ativa");
+    if cx.update(|cx| b.read(cx).terminal_aberto) {
+        b.update(cx, |b, cx| b.alternar_terminal(cx));
+    }
+    b.update(cx, |b, cx| b.fechar_confirmado(&id, cx));
+    esperar(cx, janela, Duration::from_secs(10), |cx| cx.update(|cx| b.read(cx).abas.is_empty()));
+    if cx.update(|cx| b.read(cx).terminal_aberto) {
+        b.update(cx, |b, cx| b.alternar_terminal(cx));
+    }
+    let novo = abrir_shells(cx, janela, &b, 1);
+    assert_eq!(novo.len(), 1, "a aba do shell novo continua");
+    assert_ne!(novo, primeiro, "id novo, sem colidir com o que morreu");
+    let v = vista(cx, &t, &novo[0]);
+    assert!(cx.update(|cx| v.read(cx).vivo), "o shell novo abre sem erro");
+}
+
+#[gpui_kit::test]
+fn executor_em_execucao_nao_muda_o_titulo_e_marca_a_aba(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("executor-titulo");
+    let pasta = tmp.0.join("projeto");
+    std::fs::create_dir_all(&pasta).expect("pasta");
+    let (janela, b) = montar(cx, &tmp, exes_padrao());
+    b.update(cx, |b, cx| b.abrir(pasta.clone(), cx));
+    esperar(cx, janela, Duration::from_secs(10), |cx| cx.update(|cx| b.read(cx).ativa.is_some()));
+    let projeto = cx.update(|cx| b.read(cx).ativa.clone());
+    let id = projeto.clone().expect("ativa");
+    let t = terminais(cx, &b);
+    t.update(cx, |t, cx| {
+        t.projeto(&projeto).orquestrador = Some(super::painel::Orquestrador { escolha: Some(Choice::new("claude", "", "")), sobre: None });
+        let ev = serde_json::json!({ "project": projeto, "id": "exec-1", "batch": "b", "index": 0, "title": "Teste", "state": "running", "choice": null });
+        t.receber("node-added", &ev, cx);
+    });
+    desenhar(cx, janela);
+    assert_eq!(cx.update(|cx| b.read(cx).titulo()), "projeto - Orquestrador", "o título nativo não mostra o executor");
+    assert_eq!(cx.update(|cx| b.read(cx).ocupacao(&id, cx)), 1);
+    cx.update_window(janela.into(), |_, window, _| {
+        assert!(window.find(gpui_kit::SharedString::from(format!("ocupado-{id}"))).visible(), "ponto na aba");
+    })
+    .expect("janela");
+    t.update(cx, |t, cx| {
+        t.receber("node-state", &serde_json::json!({ "project": projeto, "id": "exec-1", "state": "done", "choice": null }), cx)
+    });
+    desenhar(cx, janela);
+    cx.update_window(janela.into(), |_, window, _| {
+        assert!(window.try_find(gpui_kit::SharedString::from(format!("ocupado-{id}"))).is_none());
+    })
+    .expect("janela");
+}

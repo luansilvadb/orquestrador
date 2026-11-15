@@ -1,0 +1,736 @@
+%YAML 1.2
+---
+{
+ "name": "shiki-bat",
+ "scope": "source.batchfile",
+ "file_extensions": [],
+ "hidden": true,
+ "contexts": {
+  "main": [
+   {
+    "include": "r_commands"
+   },
+   {
+    "include": "r_comments"
+   },
+   {
+    "include": "r_constants"
+   },
+   {
+    "include": "r_controls"
+   },
+   {
+    "include": "r_escaped_characters"
+   },
+   {
+    "include": "r_labels"
+   },
+   {
+    "include": "r_numbers"
+   },
+   {
+    "include": "r_operators"
+   },
+   {
+    "include": "r_parens"
+   },
+   {
+    "include": "r_strings"
+   },
+   {
+    "include": "r_variables"
+   }
+  ],
+  "r_command_set": [
+   {
+    "match": "(?<=^|[@\\s])(?i:SET)(?=$|\\s)",
+    "push": [
+     {
+      "match": "(?=$\\n|[\\&)<>|])",
+      "pop": true
+     },
+     {
+      "include": "r_command_set_inside"
+     }
+    ],
+    "captures": {
+     0: "keyword.command.batchfile"
+    }
+   }
+  ],
+  "r_command_set_group": [
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "match": "\\)",
+      "pop": true,
+      "captures": {
+       0: "punctuation.section.group.end.batchfile"
+      }
+     },
+     {
+      "include": "r_command_set_inside_arithmetic"
+     }
+    ],
+    "captures": {
+     0: "punctuation.section.group.begin.batchfile"
+    }
+   }
+  ],
+  "r_command_set_inside": [
+   {
+    "include": "r_escaped_characters"
+   },
+   {
+    "include": "r_variables"
+   },
+   {
+    "include": "r_numbers"
+   },
+   {
+    "include": "r_parens"
+   },
+   {
+    "include": "r_command_set_strings"
+   },
+   {
+    "include": "r_strings"
+   },
+   {
+    "match": "([^ ][^=]*)(=)",
+    "push": [
+     {
+      "match": "(?=$\\n|[\\&)<>|])",
+      "pop": true
+     },
+     {
+      "include": "r_escaped_characters"
+     },
+     {
+      "include": "r_variables"
+     },
+     {
+      "include": "r_numbers"
+     },
+     {
+      "include": "r_parens"
+     },
+     {
+      "include": "r_strings"
+     }
+    ],
+    "captures": {
+     1: "variable.other.readwrite.batchfile",
+     2: "keyword.operator.assignment.batchfile"
+    }
+   },
+   {
+    "match": "\\s+/[Aa]\\s+",
+    "push": [
+     {
+      "meta_scope": "meta.expression.set.batchfile"
+     },
+     {
+      "match": "(?=$\\n|[\\&)<>|])",
+      "pop": true
+     },
+     {
+      "match": "\"",
+      "push": [
+       {
+        "meta_scope": "string.quoted.double.batchfile"
+       },
+       {
+        "match": "\"",
+        "pop": true,
+        "captures": {
+         0: "punctuation.definition.string.end.batchfile"
+        }
+       },
+       {
+        "include": "r_command_set_inside_arithmetic"
+       },
+       {
+        "include": "r_command_set_group"
+       },
+       {
+        "include": "r_variables"
+       }
+      ],
+      "captures": {
+       0: "punctuation.definition.string.begin.batchfile"
+      }
+     },
+     {
+      "include": "r_command_set_inside_arithmetic"
+     },
+     {
+      "include": "r_command_set_group"
+     }
+    ]
+   },
+   {
+    "match": "\\s+/[Pp]\\s+",
+    "push": [
+     {
+      "match": "(?=$\\n|[\\&)<>|])",
+      "pop": true
+     },
+     {
+      "include": "r_command_set_strings"
+     },
+     {
+      "match": "([^ ][^=]*)(=)",
+      "push": [
+       {
+        "meta_scope": "meta.prompt.set.batchfile"
+       },
+       {
+        "match": "(?=$\\n|[\\&)<>|])",
+        "pop": true
+       },
+       {
+        "include": "r_strings"
+       }
+      ],
+      "captures": {
+       1: "variable.other.readwrite.batchfile",
+       2: "keyword.operator.assignment.batchfile"
+      }
+     }
+    ]
+   }
+  ],
+  "r_command_set_inside_arithmetic": [
+   {
+    "include": "r_command_set_operators"
+   },
+   {
+    "include": "r_numbers"
+   },
+   {
+    "match": ",",
+    "scope": "punctuation.separator.batchfile"
+   }
+  ],
+  "r_command_set_operators": [
+   {
+    "match": "([^ ]*)((?:[-*+/]|%%|[\\&^|]|<<|>>)=)",
+    "captures": {
+     1: "variable.other.readwrite.batchfile",
+     2: "keyword.operator.assignment.augmented.batchfile"
+    }
+   },
+   {
+    "match": "[-*+/]|%%|[\\&^|]|<<|>>|~",
+    "scope": "keyword.operator.arithmetic.batchfile"
+   },
+   {
+    "match": "!",
+    "scope": "keyword.operator.logical.batchfile"
+   },
+   {
+    "match": "([^ =]*)(=)",
+    "captures": {
+     1: "variable.other.readwrite.batchfile",
+     2: "keyword.operator.assignment.batchfile"
+    }
+   }
+  ],
+  "r_command_set_strings": [
+   {
+    "match": "(\")\\s*([^ ][^=]*)(=)",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.batchfile"
+     },
+     {
+      "match": "\"",
+      "pop": true,
+      "captures": {
+       0: "punctuation.definition.string.end.batchfile"
+      }
+     },
+     {
+      "include": "r_variables"
+     },
+     {
+      "include": "r_numbers"
+     },
+     {
+      "include": "r_escaped_characters"
+     }
+    ],
+    "captures": {
+     1: "punctuation.definition.string.begin.batchfile",
+     2: "variable.other.readwrite.batchfile",
+     3: "keyword.operator.assignment.batchfile"
+    }
+   }
+  ],
+  "r_commands": [
+   {
+    "match": "(?<=^|[@\\s])(?i:adprep|append|arp|assoc|at|atmadm|attrib|auditpol|autochk|autoconv|autofmt|bcdboot|bcdedit|bdehdcfg|bitsadmin|bootcfg|brea|cacls|cd|certreq|certutil|change|chcp|chdir|chglogon|chgport|chgusr|chkdsk|chkntfs|choice|cipher|clip|cls|clscluadmin|cluster|cmd|cmdkey|cmstp|color|comp|compact|convert|copy|cprofile|cscript|csvde|date|dcdiag|dcgpofix|dcpromo|defra|del|dfscmd|dfsdiag|dfsrmig|diantz|dir|dirquota|diskcomp|diskcopy|diskpart|diskperf|diskraid|diskshadow|dispdiag|doin|dnscmd|doskey|driverquery|dsacls|dsadd|dsamain|dsdbutil|dsget|dsmgmt|dsmod|dsmove|dsquery|dsrm|edit|endlocal|eraseesentutl|eventcreate|eventquery|eventtriggers|evntcmd|expand|extract|fc|filescrn|find|findstr|finger|flattemp|fonde|forfiles|format|freedisk|fsutil|ftp|ftype|fveupdate|getmac|gettype|gpfixup|gpresult|gpupdate|graftabl|hashgen|hep|helpctr|hostname|icacls|iisreset|inuse|ipconfig|ipxroute|irftp|ismserv|jetpack|klist|ksetup|ktmutil|ktpass|label|ldifd|ldp|lodctr|logman|logoff|lpq|lpr|macfile|makecab|manage-bde|mapadmin|md|mkdir|mklink|mmc|mode|more|mount|mountvol|move|mqbup|mqsvc|mqtgsvc|msdt|msg|msiexec|msinfo32|mstsc|nbtstat|net computer|net group|net localgroup|net print|net session|net share|net start|net stop|net user??|net view|net|netcfg|netdiag|netdom|netsh|netstat|nfsadmin|nfsshare|nfsstat|nlb|nlbmgr|nltest|nslookup|ntackup|ntcmdprompt|ntdsutil|ntfrsutl|openfiles|pagefileconfig|path|pathping|pause|pbadmin|pentnt|perfmon|ping|pnpunatten|pnputil|popd|powercfg|powershell|powershell_ise|print|prncnfg|prndrvr|prnjobs|prnmngr|prnport|prnqctl|prompt|pubprn|pushd|pushprinterconnections|pwlauncher|qappsrv|qprocess|query|quser|qwinsta|rasdial|rcp|rd|rdpsign|regentc|recover|redircmp|redirusr|reg|regini|regsvr32|relog|ren|rename|rendom|repadmin|repair-bde|replace|reset session|rxec|risetup|rmdir|robocopy|route|rpcinfo|rpcping|rsh|runas|rundll32|rwinsta|sc|schtasks|scp|scwcmd|secedit|serverceipoptin|servrmanagercmd|serverweroptin|setspn|setx|sfc|sftp|shadow|shift|showmount|shutdown|sort|ssh|ssh-add|ssh-agent|ssh-keygen|ssh-keyscan|start|storrept|subst|sxstrace|ysocmgr|systeminfo|takeown|tapicfg|taskkill|tasklist|tcmsetup|telnet|tftp|time|timeout|title|tlntadmn|tpmvscmgr|tacerpt|tracert|tree|tscon|tsdiscon|tsecimp|tskill|tsprof|type|typeperf|tzutil|uddiconfig|umount|unlodctr|ver|verifier|verif|vol|vssadmin|w32tm|waitfor|wbadmin|wdsutil|wecutil|wevtutil|where|whoami|winnt|winnt32|winpop|winrm|winrs|winsat|wlbs|wmic|wscript|wsl|xcopy)(?=$|\\s)",
+    "scope": "keyword.command.batchfile"
+   },
+   {
+    "match": "(?i)(?<=^|[@\\s])(echo)(?:(?=$|[.:])|\\s+(?:(o(?:n|ff))(?=\\s*$))?)",
+    "push": [
+     {
+      "match": "(?=$\\n|[\\&)<>|])",
+      "pop": true
+     },
+     {
+      "include": "r_escaped_characters"
+     },
+     {
+      "include": "r_variables"
+     },
+     {
+      "include": "r_numbers"
+     },
+     {
+      "include": "r_strings"
+     }
+    ],
+    "captures": {
+     1: "keyword.command.batchfile",
+     2: "keyword.other.special-method.batchfile"
+    }
+   },
+   {
+    "match": "(?i)(?<=^|[@\\s])(setlocal)(?:\\s*$|\\s+((?:En|Dis)able(?:Extensions|DelayedExpansion))(?=\\s*$))",
+    "captures": {
+     1: "keyword.command.batchfile",
+     2: "keyword.other.special-method.batchfile"
+    }
+   },
+   {
+    "include": "r_command_set"
+   }
+  ],
+  "r_comments": [
+   {
+    "match": "(?:^|(&))\\s*(?=(:[ +,:;=]))",
+    "push": [
+     {
+      "match": "\\n",
+      "pop": true
+     },
+     {
+      "match": "(:[ +,:;=])",
+      "push": [
+       {
+        "meta_scope": "comment.line.colon.batchfile"
+       },
+       {
+        "match": "(?=\\n)",
+        "pop": true
+       }
+      ],
+      "captures": {
+       1: "punctuation.definition.comment.batchfile"
+      }
+     }
+    ],
+    "captures": {
+     1: "keyword.operator.conditional.batchfile"
+    }
+   },
+   {
+    "match": "(?<=^|[@\\s])(?i)(REM)(\\.)",
+    "push": [
+     {
+      "meta_scope": "comment.line.rem.batchfile"
+     },
+     {
+      "match": "(?=$\\n|[\\&)<>|])",
+      "pop": true
+     }
+    ],
+    "captures": {
+     1: "keyword.command.rem.batchfile",
+     2: "punctuation.separator.batchfile"
+    }
+   },
+   {
+    "match": "(?<=^|[@\\s])(?i:rem)\\b",
+    "push": [
+     {
+      "meta_scope": "comment.line.rem.batchfile"
+     },
+     {
+      "match": "\\n",
+      "pop": true
+     },
+     {
+      "match": "[<>|]",
+      "scope": "invalid.illegal.unexpected-character.batchfile"
+     }
+    ],
+    "captures": {
+     0: "keyword.command.rem.batchfile"
+    }
+   }
+  ],
+  "r_constants": [
+   {
+    "match": "\\b(?i:NUL)\\b",
+    "scope": "constant.language.batchfile"
+   }
+  ],
+  "r_controls": [
+   {
+    "match": "(?i)(?<=^|\\s)(?:call|exit(?=$|\\s)|goto(?=$|[:\\s]))",
+    "scope": "keyword.control.statement.batchfile"
+   },
+   {
+    "match": "(?<=^|\\s)(?i)(if)\\s+(?:(not)\\s+)?(exist|defined|errorlevel|cmdextversion)(?=\\s)",
+    "captures": {
+     1: "keyword.control.conditional.batchfile",
+     2: "keyword.operator.logical.batchfile",
+     3: "keyword.other.special-method.batchfile"
+    }
+   },
+   {
+    "match": "(?<=^|\\s)(?i)(?:if|else)(?=$|\\s)",
+    "scope": "keyword.control.conditional.batchfile"
+   },
+   {
+    "match": "(?<=^|[\\&(^\\s])(?i)for(?=\\s)",
+    "push": [
+     {
+      "meta_scope": "meta.block.repeat.batchfile"
+     },
+     {
+      "match": "\\n",
+      "pop": true
+     },
+     {
+      "match": "(?<=[\\^\\s])(?i)in(?=\\s)",
+      "push": [
+       {
+        "match": "(?<=[)^\\s])(?i)do(?=\\s)|\\n",
+        "pop": true,
+        "captures": {
+         0: "keyword.control.repeat.do.batchfile"
+        }
+       },
+       {
+        "include": "main"
+       }
+      ],
+      "captures": {
+       0: "keyword.control.repeat.in.batchfile"
+      }
+     },
+     {
+      "include": "main"
+     }
+    ],
+    "captures": {
+     0: "keyword.control.repeat.batchfile"
+    }
+   }
+  ],
+  "r_escaped_characters": [
+   {
+    "match": "%%|\\^\\^!|\\^(?=.)|\\^\\n",
+    "scope": "constant.character.escape.batchfile"
+   }
+  ],
+  "r_labels": [
+   {
+    "match": "(?i)(?:^\\s*|(?<=call|goto)\\s*)(:)([^+,:;=\\s]\\S*)",
+    "captures": {
+     1: "punctuation.separator.batchfile",
+     2: "keyword.other.special-method.batchfile"
+    }
+   }
+  ],
+  "r_numbers": [
+   {
+    "match": "(?<=^|[=\\s])(0[Xx]\\h*|[-+]?\\d+)(?=$|[<>\\s])",
+    "scope": "constant.numeric.batchfile"
+   }
+  ],
+  "r_operators": [
+   {
+    "match": "@(?=\\S)",
+    "scope": "keyword.operator.at.batchfile"
+   },
+   {
+    "match": "(?<=\\s)(?i:EQU|NEQ|LSS|LEQ|GTR|GEQ)(?=\\s)|==",
+    "scope": "keyword.operator.comparison.batchfile"
+   },
+   {
+    "match": "(?<=\\s)(?i)(NOT)(?=\\s)",
+    "scope": "keyword.operator.logical.batchfile"
+   },
+   {
+    "match": "(?<!\\^)&&?|\\|\\|",
+    "scope": "keyword.operator.conditional.batchfile"
+   },
+   {
+    "match": "(?<!\\^)\\|",
+    "scope": "keyword.operator.pipe.batchfile"
+   },
+   {
+    "match": "<&?|>[\\&>]?",
+    "scope": "keyword.operator.redirection.batchfile"
+   }
+  ],
+  "r_parens": [
+   {
+    "match": "\\(",
+    "push": [
+     {
+      "meta_scope": "meta.group.batchfile"
+     },
+     {
+      "match": "\\)",
+      "pop": true,
+      "captures": {
+       0: "punctuation.section.group.end.batchfile"
+      }
+     },
+     {
+      "match": "[,;]",
+      "scope": "punctuation.separator.batchfile"
+     },
+     {
+      "include": "main"
+     }
+    ],
+    "captures": {
+     0: "punctuation.section.group.begin.batchfile"
+    }
+   }
+  ],
+  "r_repeatParameter": [
+   {
+    "match": "(%%)(?i:~[adfnpstxz]*(?:\\$PATH:)?)?[A-Za-z]",
+    "scope": "variable.parameter.repeat.batchfile",
+    "captures": {
+     1: "punctuation.definition.variable.batchfile"
+    }
+   }
+  ],
+  "r_strings": [
+   {
+    "match": "\"",
+    "push": [
+     {
+      "meta_scope": "string.quoted.double.batchfile"
+     },
+     {
+      "match": "(\")|(\\n)",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.string.end.batchfile",
+       2: "invalid.illegal.newline.batchfile"
+      }
+     },
+     {
+      "match": "%%",
+      "scope": "constant.character.escape.batchfile"
+     },
+     {
+      "include": "r_variables"
+     }
+    ],
+    "captures": {
+     0: "punctuation.definition.string.begin.batchfile"
+    }
+   }
+  ],
+  "r_variable": [
+   {
+    "match": "%(?=[^%]+%)",
+    "push": [
+     {
+      "meta_scope": "variable.other.readwrite.batchfile"
+     },
+     {
+      "match": "(%)|\\n",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.variable.end.batchfile"
+      }
+     },
+     {
+      "match": ":~",
+      "push": [
+       {
+        "meta_scope": "meta.variable.substring.batchfile"
+       },
+       {
+        "match": "(?=[\\n%])",
+        "pop": true
+       },
+       {
+        "include": "r_variable_substring"
+       }
+      ],
+      "captures": {
+       0: "punctuation.separator.batchfile"
+      }
+     },
+     {
+      "match": ":",
+      "push": [
+       {
+        "meta_scope": "meta.variable.substitution.batchfile"
+       },
+       {
+        "match": "(?=[\\n%])",
+        "pop": true
+       },
+       {
+        "include": "r_variable_replace"
+       },
+       {
+        "match": "=",
+        "push": [
+         {
+          "match": "(?=[\\n%])",
+          "pop": true
+         },
+         {
+          "include": "r_variable_delayed_expansion"
+         },
+         {
+          "match": "[^%]+",
+          "scope": "string.unquoted.batchfile"
+         }
+        ],
+        "captures": {
+         0: "punctuation.separator.batchfile"
+        }
+       }
+      ],
+      "captures": {
+       0: "punctuation.separator.batchfile"
+      }
+     }
+    ],
+    "captures": {
+     0: "punctuation.definition.variable.begin.batchfile"
+    }
+   }
+  ],
+  "r_variable_delayed_expansion": [
+   {
+    "match": "!(?=[^!]+!)",
+    "push": [
+     {
+      "meta_scope": "variable.other.readwrite.batchfile"
+     },
+     {
+      "match": "(!)|\\n",
+      "pop": true,
+      "captures": {
+       1: "punctuation.definition.variable.end.batchfile"
+      }
+     },
+     {
+      "match": ":~",
+      "push": [
+       {
+        "meta_scope": "meta.variable.substring.batchfile"
+       },
+       {
+        "match": "(?=[\\n!])",
+        "pop": true
+       },
+       {
+        "include": "r_variable_substring"
+       }
+      ],
+      "captures": {
+       0: "punctuation.separator.batchfile"
+      }
+     },
+     {
+      "match": ":",
+      "push": [
+       {
+        "meta_scope": "meta.variable.substitution.batchfile"
+       },
+       {
+        "match": "(?=[\\n!])",
+        "pop": true
+       },
+       {
+        "include": "r_escaped_characters"
+       },
+       {
+        "include": "r_variable_replace"
+       },
+       {
+        "include": "r_variable"
+       },
+       {
+        "match": "=",
+        "push": [
+         {
+          "match": "(?=[\\n!])",
+          "pop": true
+         },
+         {
+          "include": "r_variable"
+         },
+         {
+          "match": "[^!]+",
+          "scope": "string.unquoted.batchfile"
+         }
+        ],
+        "captures": {
+         0: "punctuation.separator.batchfile"
+        }
+       }
+      ],
+      "captures": {
+       0: "punctuation.separator.batchfile"
+      }
+     }
+    ],
+    "captures": {
+     0: "punctuation.definition.variable.begin.batchfile"
+    }
+   }
+  ],
+  "r_variable_replace": [
+   {
+    "match": "[^\\n!%=]+",
+    "scope": "string.unquoted.batchfile"
+   }
+  ],
+  "r_variable_substring": [
+   {
+    "match": "([-+]?\\d+)(?:(,)([-+]?\\d+))?",
+    "captures": {
+     1: "constant.numeric.batchfile",
+     2: "punctuation.separator.batchfile",
+     3: "constant.numeric.batchfile"
+    }
+   }
+  ],
+  "r_variables": [
+   {
+    "match": "(%)(?:(?i:~[adfnpstxz]*(?:\\$PATH:)?)?\\d|\\*)",
+    "scope": "variable.parameter.batchfile",
+    "captures": {
+     1: "punctuation.definition.variable.batchfile"
+    }
+   },
+   {
+    "include": "r_variable"
+   },
+   {
+    "include": "r_variable_delayed_expansion"
+   }
+  ]
+ }
+}

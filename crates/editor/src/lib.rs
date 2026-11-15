@@ -15,6 +15,7 @@ pub mod markdown;
 pub mod migalhas;
 pub mod minimapa;
 pub mod modelo;
+pub mod par;
 pub mod realce;
 
 pub use area::{Abertura, AoAbrirDocumento, AoDescartarConflito, AreaEditor, EventoEditor, FabricaConteudo, InfoDocumento};

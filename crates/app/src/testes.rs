@@ -971,3 +971,156 @@ fn cores_dos_controles_da_janela() {
     assert_eq!(cor::fill_hover(), gpui_kit::rgba(0xffffff1a).into(), "hover branco a 10%");
     assert_eq!(cor::close_red(), gpui_kit::rgba(0xe81123e6).into(), "Fechar #E81123 a 90%");
 }
+
+// Lacunas do porte de check-titlebar-ui.mjs e check-project-tabs-ui.mjs.
+
+#[test]
+fn maximizar_alterna_dica_e_icone() {
+    let (rotulo, icone) = crate::moldura::controle_maximizar(false);
+    let (rotulo_max, icone_max) = crate::moldura::controle_maximizar(true);
+    assert_eq!((rotulo, rotulo_max), ("Maximizar", "Restaurar"));
+    assert_ne!(icone, icone_max, "o desenho de Restaurar difere do de Maximizar");
+    assert_eq!(crate::moldura::controle_maximizar(false).1, icone, "Restaurar volta ao desenho original");
+}
+
+#[gpui_kit::test]
+fn janela_normal_mostra_maximizar(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("maximizar");
+    let (janela, _) = montar(cx, &tmp);
+    cx.update_window(janela.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!window.is_maximized());
+        assert!(window.find("janela-maximizar").visible());
+    })
+    .expect("janela");
+}
+
+#[gpui_kit::test]
+fn sem_projeto_tela_limpa_e_convites(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("sem-projeto");
+    let (janela, bancada) = montar(cx, &tmp);
+    cx.run_until_parked();
+    cx.update_window(janela.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("tela-arquivos").is_none(), "faixa fechada");
+        assert!(window.try_find("painel-orquestrador").is_none(), "painel do Orquestrador oculto");
+        window.click("nav-git", cx);
+        window.render_frame(cx);
+        assert!(window.find("tela-git").visible());
+        assert!(window.find("abrir-pasta-convite").visible(), "convite com Abrir pasta");
+        window.click("nav-pesquisa", cx);
+        window.render_frame(cx);
+        assert!(window.find("tela-pesquisa").visible());
+        window.click("nav-pesquisa", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("tela-pesquisa").is_none(), "o mesmo botão fecha a faixa");
+    })
+    .expect("janela");
+    assert_eq!(cx.update(|cx| bancada.read(cx).titulo()), "Orquestrador");
+}
+
+#[gpui_kit::test]
+fn fechar_a_ultima_pasta_volta_a_tela_sem_projeto(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("ultima-volta");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "a");
+    cx.update(|cx| bancada.update(cx, |b, cx| b.fechar_confirmado(&id, cx)));
+    cx.run_until_parked();
+    desenhar(cx, janela);
+    assert!(cx.update(|cx| bancada.read(cx).abas.is_empty()));
+    cx.update_window(janela.into(), |_, window, _| {
+        assert!(window.try_find("tela-arquivos").is_none());
+        assert!(window.try_find("painel-orquestrador").is_none());
+        assert!(window.find("area-editor").visible(), "o editor sem projeto fica no centro");
+    })
+    .expect("janela");
+    assert!(cx.update(|cx| bancada.read(cx).solto.is_some()), "editor sem projeto montado");
+}
+
+#[gpui_kit::test]
+fn fechar_com_erro_do_core_mantem_a_aba_e_mostra_o_erro(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("fechar-erro");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "a");
+    // O core já não conhece o projeto: o `close_project` da aba falha.
+    cx.update(|cx| bancada.read(cx).backend.projetos.close_project(&id)).expect("fecha no core");
+    let clicar = |cx: &mut TestAppContext| {
+        cx.update_window(janela.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.click(gpui_kit::SharedString::from(format!("fechar-aba-{id}")), cx);
+        })
+        .expect("janela");
+        cx.run_until_parked();
+    };
+    clicar(cx);
+    assert_eq!(nomes(cx, &bancada), ["a"], "a aba fica");
+    assert!(cx.update(|cx| bancada.read(cx).fechando.is_none()), "o X volta a responder");
+    let erros = |cx: &mut TestAppContext| {
+        cx.update(|cx| orquestrador_ui::avisos::visiveis(cx)).iter().filter(|a| a.titulo == "Este projeto não está aberto. Abra a pasta novamente.").count()
+    };
+    let antes = erros(cx);
+    assert!(antes >= 1, "{:?}", cx.update(|cx| orquestrador_ui::avisos::visiveis(cx)).iter().map(|a| a.titulo.clone()).collect::<Vec<_>>());
+    clicar(cx);
+    assert_eq!(nomes(cx, &bancada), ["a"]);
+    assert!(erros(cx) >= 1);
+    assert!(cx.update(|cx| bancada.read(cx).fechando.is_none()));
+}
+
+#[gpui_kit::test]
+fn fechar_projeto_com_orquestrador_pede_confirmacao(cx: &mut TestAppContext) {
+    use crate::fechamento::{texto_do_trabalho, Escopo, Resposta};
+    use orquestrador_core::core::projects::ProjectSnapshot;
+    let tmp = Tmp::new("fechar-orq");
+    let (janela, bancada) = montar(cx, &tmp);
+    abrir_pastas(cx, &bancada, &tmp, &["a", "b"]);
+    let b_id = cx.update(|cx| bancada.read(cx).ativa.clone()).expect("ativa");
+    let trabalho = ProjectSnapshot { orchestrator_open: true, executors_running: 0, executors_queued: 0 };
+    assert_eq!(texto_do_trabalho(&trabalho), "O orquestrador aberto será encerrado. Os shells deste projeto também serão fechados.");
+    assert_eq!(
+        texto_do_trabalho(&ProjectSnapshot { orchestrator_open: false, executors_running: 2, executors_queued: 3 }),
+        "2 executores em execução serão encerrados. 3 executores na fila serão removidos. Os shells deste projeto também serão fechados."
+    );
+    cx.update_window(janela.into(), |_, window, cx| {
+        bancada.update(cx, |b, cx| b.perguntar(Escopo::Projeto(b_id.clone()), Vec::new(), true, Some(trabalho), window, cx));
+        window.render_frame(cx);
+        assert!(window.find("fechar-encerrar").visible(), "Fechar projeto e encerrar");
+        assert!(window.try_find("fechar-salvar").is_none());
+        assert_eq!(bancada.read(cx).fechamento.as_ref().unwrap().botoes(), [Resposta::Cancelar, Resposta::Fechar]);
+        window.click("fechar-encerrar", cx);
+    })
+    .expect("janela");
+    cx.run_until_parked();
+    assert_eq!(nomes(cx, &bancada), ["a"]);
+}
+
+#[gpui_kit::test]
+fn sincronizar_fica_no_projeto_de_origem(cx: &mut TestAppContext) {
+    use orquestrador_git::simulado::{ModoSimulado, Simulado};
+    use std::sync::Arc;
+    let tmp = Tmp::new("sincronizar");
+    let (janela, bancada) = montar(cx, &tmp);
+    abrir_pastas(cx, &bancada, &tmp, &["a", "b"]);
+    desenhar(cx, janela);
+    let (a, b) = cx.update(|cx| (bancada.read(cx).abas[0].id.clone(), bancada.read(cx).abas[1].id.clone()));
+    let (sa, sb) = (Arc::new(Simulado::new(ModoSimulado::Repo)), Arc::new(Simulado::new(ModoSimulado::Repo)));
+    cx.update(|cx| {
+        bancada.update(cx, |bc, cx| {
+            bc.telas.get_mut(&a).unwrap().fonte = sa.clone();
+            bc.telas.get_mut(&b).unwrap().fonte = sb.clone();
+            bc.selecionar(&a, cx);
+        })
+    });
+    desenhar(cx, janela);
+    cx.update_window(janela.into(), |_, window, cx| {
+        bancada.update(cx, |bc, cx| {
+            bc.sincronizar(window, cx);
+            // Troca de aba com a sincronização em curso.
+            bc.selecionar(&b, cx);
+        })
+    })
+    .expect("janela");
+    cx.run_until_parked();
+    desenhar(cx, janela);
+    assert_eq!(sa.contar("git_pull"), 1, "pull no projeto de origem");
+    assert_eq!(sb.contar("git_pull") + sb.contar("git_push"), 0, "nada no projeto que ficou ativo");
+    assert!(cx.update(|cx| !bancada.read(cx).telas[&a].sincronizando), "terminou na origem");
+    assert_eq!(cx.update(|cx| bancada.read(cx).ativa.clone()), Some(b));
+}
