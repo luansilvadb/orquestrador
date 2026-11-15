@@ -1,0 +1,17 @@
+[package]
+name = "orquestrador-pesquisa"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "orquestrador_pesquisa"
+
+[dependencies]
+orquestrador-core = { path = "../core" }
+orquestrador-ui = { path = "../ui" }
+gpui-kit = "=0.9.1"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+gpui-kit = { version = "=0.9.1", features = ["test-support"] }

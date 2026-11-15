@@ -310,7 +310,7 @@ fn apply_one(dir: &Path, listed: &[String], re: &Regex, rep: &str, preserve: boo
 /// Monta o padrão da consulta. Literal escapa o texto; palavra inteira prende em `\b`, no literal só do lado em que o
 /// termo começa ou termina com caractere de palavra (`\b` antes de `$` ou `@` nunca casaria). Sem diferença de caixa por padrão.
 /// Consulta com quebra de linha ou que não compila é recusada com a razão em português.
-fn compile(query: &Query) -> Result<Regex, String> {
+pub fn compile(query: &Query) -> Result<Regex, String> {
     if query.text.contains(['\n', '\r', '\0']) {
         return Err("A consulta não pode ter quebra de linha.".into());
     }

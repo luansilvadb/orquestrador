@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/ui", "crates/app", "src-tauri"]
+members = ["crates/core", "crates/ui", "crates/app", "crates/editor", "crates/pesquisa", "crates/arvore", "crates/git", "src-tauri", "crates/midia"]
 
 # Versão única do app: `agents/mcp.rs` anuncia a do pacote core.
 [workspace.package]

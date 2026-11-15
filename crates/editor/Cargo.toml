@@ -1,0 +1,29 @@
+[package]
+name = "orquestrador-editor"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "orquestrador_editor"
+
+[dependencies]
+orquestrador-core = { path = "../core" }
+orquestrador-ui = { path = "../ui" }
+gpui-kit = "=0.9.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+syntect = { version = "5.3", default-features = false, features = ["parsing", "default-syntaxes", "regex-fancy"] }
+two-face = { version = "0.4.5", default-features = false, features = ["syntect-fancy"] }
+dprint-plugin-typescript = "*"
+dprint-plugin-json = "*"
+dprint-plugin-markdown = "*"
+malva = { version = "*", features = ["config_serde"] }
+markup_fmt = { version = "*", features = ["config_serde"] }
+pretty_yaml = { version = "*", features = ["config_serde"] }
+serde_yaml = "0.9"
+json5 = "0.4"
+anyhow = "1"
+
+[dev-dependencies]
+gpui-kit = { version = "=0.9.1", features = ["test-support"] }
