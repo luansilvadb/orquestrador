@@ -182,6 +182,7 @@ impl Render for AbrirRapido {
                     .rounded(tema::RAIO_XS)
                     .cursor_pointer()
                     .text_size(tema::TEXTO_BODY)
+                    .line_height(px(20.))
                     .when(sel, |d| d.bg(gpui::rgb(0x1b1b1b)))
                     .on_hover(cx.listener(move |a, dentro: &bool, _, cx| {
                         if *dentro && a.indice != i {
@@ -237,7 +238,7 @@ impl Render for AbrirRapido {
                                 .rounded(tema::RAIO_MD)
                                 .bg(gpui::rgb(0x1b1b1b))
                                 .text_size(tema::TEXTO_TITLE)
-                                .child(Input::new(&campo).appearance(false).large()),
+                                .child(Input::new(&campo).appearance(false).large().text_size(tema::TEXTO_TITLE)),
                         )
                         .child(div().text_size(tema::TEXTO_LABEL).text_color(if self.erro.is_some() { cor::signal_error() } else { cor::text_secondary() }).child(resumo))
                         .child(lista),

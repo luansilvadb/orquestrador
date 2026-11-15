@@ -401,7 +401,8 @@ pub fn desenhar_codigo(no: &MarkdownNode, window: &mut Window, cx: &mut App) -> 
                     .overflow_x_scroll()
                     .whitespace_nowrap()
                     .font_family(mono.clone())
-                    .text_size(px(FONTE * 0.85))
+                    // 0,85 em no Lobe; medido no React, a Cascadia sai com 12,6 px.
+                    .text_size(px(12.6))
                     .text_color(lobe::texto())
                     .child(TextoRico::new(SharedString::from(format!("{id}-texto")), texto.clone(), marcas, mono)),
             )
@@ -469,7 +470,8 @@ pub fn desenhar_codigo(no: &MarkdownNode, window: &mut Window, cx: &mut App) -> 
 /// como a caixa vazia de 32 px do navegador.
 pub fn desenhar_imagens(no: &MarkdownNode, fonte: &dyn Fn(&str) -> Option<gpui::ImageSource>) -> AnyElement {
     let Some(Imagens(itens)) = no.data::<Imagens>() else { return div().into_any_element() };
-    let caixa = || div().size(px(32.)).rounded(px(8.)).border_1().border_color(lobe::fill_secundario()).into_any_element();
+    // Caixa de 32 px com o contorno de `box-shadow` (1 px por fora): 34 px visíveis.
+    let caixa = || div().size(px(34.)).my(px(1.)).rounded(px(9.)).border_1().border_color(lobe::fill_secundario()).into_any_element();
     div()
         .w_full()
         .flex()
@@ -540,11 +542,14 @@ pub fn desenhar_tabela(no: &MarkdownNode, _window: &mut Window, _cx: &mut App) -
                 .child(TextoRico::new(SharedString::from(format!("md-tabela-{chave}-{i}-{j}")), c.texto, c.marcas, mono.clone()))
         }))
     };
+    // O contorno do React é `box-shadow` (fora da caixa): 1 px a mais acima e abaixo, e a primeira linha 1 px mais baixa.
     div()
         .flex()
+        .my(px(1.))
         .child(
             div()
                 .id(SharedString::from(format!("md-tabela-{chave}")))
+                .pt(px(1.))
                 .flex()
                 .flex_none()
                 .max_w_full()

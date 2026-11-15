@@ -63,7 +63,7 @@ cargo run --release --manifest-path crates/app/empacotamento/compat-tauri/Cargo.
 
 ### Teste de ponta a ponta local
 
-Com chave temporária e nomes de teste, para não tocar na instalação real: `ORQ_ATUALIZACAO_URL` e `ORQ_ATUALIZACAO_CHAVE` na compilação trocam canal e chave; `-Produto OrquestradorTeste -Binario orquestrador-teste` trocam pasta, registro e associações. O roteiro está em `crates/app/empacotamento/e2e.ps1`.
+Com chave temporária e nomes de teste, para não tocar na instalação real: `ORQ_ATUALIZACAO_URL` e `ORQ_ATUALIZACAO_CHAVE` na compilação trocam canal e chave, e `ORQ_INSTANCIA` troca o mutex e o pipe da instância única (sem isso, com o app real aberto, o de teste cede a vez a ele e sai); `-Produto OrquestradorTeste -Binario orquestrador-teste` trocam pasta, registro e associações. O roteiro está em `crates/app/empacotamento/e2e.ps1`.
 
 ## Publicar uma versão
 

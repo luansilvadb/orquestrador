@@ -100,4 +100,19 @@ Marcos da abertura (ms desde `main`, execução quente): antes, DirectWrite 80, 
 
 Decomposição com carga (p50 / p95): janela 3,67 / 5,46 → 1,27 / 1,73; pty 11,12 / 12,16 → 12,18 / 18,36.
 
-A parte do app caiu 3,7 ms no p95, mas o eco do pwsh nos shells do app subiu: a letra volta do pwsh em ~17,4 ms (o Backspace em ~11,5), medido no byte que chega do PTY, a partir da 27ª tecla (as 26 primeiras, uma de cada letra, ficam em ~11,5). O app escreve só a tecla. Fora do app o mesmo pwsh ecoa em 11,8 ms em todas as teclas (`eco_conpty` e `bancada_latencia`, inclusive com `LOCALAPPDATA`/`TEMP` vazios, na pasta do repositório de teste, em 200x50, com o roteiro de comandos do `medir` e com o processo num Job). A causa não foi achada; a rodada r1 tinha pty p95 12,16.
+A parte do app caiu 3,7 ms no p95, mas o eco do pwsh nos shells do app subiu: a letra volta do pwsh em ~17,4 ms (o Backspace em ~11,5), medido no byte que chega do PTY, a partir da 27ª tecla (as 26 primeiras, uma de cada letra, ficam em ~11,5). O app escreve só a tecla. Fora do app o mesmo pwsh ecoa em 11,8 ms em todas as teclas (`eco_conpty` e `bancada_latencia`, inclusive com `LOCALAPPDATA`/`TEMP` vazios, na pasta do repositório de teste, em 200x50, com o roteiro de comandos do `medir` e com o processo num Job). Causa (achada depois): o próprio `cargo xtask medir`. `App::latencia` compilava a regex de `orq-latencia.txt` a cada par de teclas, no xtask de dev sem otimização, logo antes de postar a letra; só passa a fazer isso quando o arquivo existe, e o app o grava a cada 50 amostras, a primeira na 26ª letra. Provas, com um registro temporário de escritas e leituras no PTY: com o alfabeto de 10 letras o salto continuou na 26ª tecla; adiando a primeira gravação para 150 amostras, ele foi para a 76ª; com a regex compilada uma vez, sumiu. O Backspace não sofria porque vem depois de uma pausa sem leitura do arquivo. palpite: a rajada de CPU do xtask desloca o pwsh do núcleo ou da fase do tique. O app e o core não mudaram.
+
+## Rodada de 15/11/2026, com a regex do xtask compilada uma vez (`target\par-latencia\final3\`)
+
+Rodadas com outros executores compilando (até 16 `rustc`) deram abertura de 364 e 908 ms e digitação com carga p95 de 38 e 58 ms; a tabela é a rodada com a máquina quieta (0 a 2 `rustc`).
+
+| Medida | Antes | Depois | Meta | |
+|---|---|---|---|---|
+| Abertura, mediana (ms) | 230 | 270 (267, 249, 270, 305, 452) | < 400 | ok |
+| RAM ociosa (MB privados / working set) | 130 / 81 | 131 / 84 | < 150 | ok |
+| RAM com 4 despejando (15 s); pico | 265 / 205; 266 | 265 / 208; 266 | < 500 | ok |
+| RAM 30 s depois do fim | 265 / 207 | 265 / 209 (fim: 265) | não crescer | ok |
+| Digitação sem carga, p50 / p95 / máx | 13,32 / 19,39 / 21,21 | 12,69 / 13,73 / 37,35 | | |
+| Digitação com carga, p50 / p95 / máx | 13,47 / 19,84 / 20,92 | 12,58 / 13,41 / 16,36 | p95 < 16 | ok |
+
+Decomposição com carga (p50 / p95): pty 12,18 / 18,36 → 11,34 / 12,14; janela 1,27 / 1,73 → 1,20 / 1,64.

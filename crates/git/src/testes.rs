@@ -483,6 +483,20 @@ fn diff_do_commit_le_uma_vez(cx: &mut TestAppContext) {
     assert_eq!(s.contar("git_commit_diff"), 1, "histórico é imutável: lê uma vez");
 }
 
+#[gpui_kit::test]
+fn commit_so_renomeado_mostra_comparador_vazio(cx: &mut TestAppContext) {
+    let s = Arc::new(Simulado::default());
+    s.patch_de_commit("src/lib/utils.ts", "diff --git a/src/utils.ts b/src/lib/utils.ts\nsimilarity index 100%\nrename from src/utils.ts\nrename to src/lib/utils.ts\n");
+    let fonte: Fonte = s.clone();
+    let alvo = Alvo::Commit { hash: "4b2e8d0a1c3f5e7b9d2a4c6e8f0b1d3a5c7e9f11".into(), caminho: "src/lib/utils.ts".into() };
+    let (j, v) = montar_vista(cx, move |w, cx| VisaoDiff::new(fonte, GuardaGit::new(), alvo, w, cx));
+    // Desenha a vista com o comparador sem fileiras.
+    na_janela(cx, j, |w, cx| v.update(cx, |_, cx| { cx.notify(); w.refresh(); }));
+    cx.run_until_parked();
+    assert!(cx.read(|cx| v.read(cx).tem_comparador()), "renomeação pura não é erro de interpretação");
+    assert_eq!(cx.read(|cx| v.read(cx).total_unidades()), 0);
+}
+
 const DOIS: &str = "topo\n<<<<<<< ours\natual-1\n=======\nrecebida-1\n>>>>>>> theirs\nmeio\n<<<<<<< ours\natual-2\n=======\nrecebida-2\n>>>>>>> theirs\nfim\n";
 
 #[gpui_kit::test]

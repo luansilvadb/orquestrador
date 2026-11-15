@@ -40,6 +40,10 @@ pub mod cor {
     pub fn badge_git() -> Hsla { rgb(0x307e9f).into() }
     /// Fundo dos `DraggablePanel` (Orquestrador e Terminal), medido nas capturas de referência.
     pub fn painel_arrastavel() -> Hsla { rgb(0x0b0b0b).into() }
+    /// Máscara do `Modal` do Lobe UI: `colorBgContainer` (o painel) a 60%, que clareia o preto em vez de escurecer.
+    pub fn mascara() -> Hsla { rgba(0x0d0d0d99).into() }
+    /// `::selection` do Lobe UI (`yellow9`), que vale também nos campos de texto.
+    pub fn selecao() -> Hsla { rgb(0xffef5c).into() }
     /// Marca d'água do editor vazio: `#ECEAE4` a 6%.
     pub fn marca_dagua() -> Hsla { rgba(0xeceae40f).into() }
 }
@@ -120,6 +124,7 @@ pub fn aplicar(cx: &mut App) {
     t.accent_foreground = cor::text_primary();
     t.popover = cor::raised_black();
     t.popover_foreground = cor::text_primary();
+    t.selection = cor::selecao();
     t.primary = cor::ink_white();
     t.primary_hover = cor::ink_white_hover();
     t.primary_active = cor::ink_white_active();

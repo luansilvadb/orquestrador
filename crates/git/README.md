@@ -71,6 +71,11 @@ Na tela Git, Shift+F10 e a tecla de menu abrem o menu de contexto da linha focad
 `preparo` (reexporta o crate `orquestrador-hunks`, também usado pelo git gutter do editor): `{trechos, preparar_bloco, tirar_bloco, aplicar, tocam, linhas_antigas, ir_para_bloco}` (porte de
 `git-stage.ts` e da parte pura de `git-hunk.ts`): o texto novo do índice para `git::write_index`.
 
+## Texto como o Chromium
+
+`colagem::comparar(a, b)`: o `localeCompare(b, 'pt-BR')` (ICU). `quebra::linhas(texto, largura, medir)`: as linhas com o
+`text-wrap: pretty` que o tema do Lobe liga em todo o app.
+
 ## Vitrine
 
 `cargo run -p orquestrador-git --example vitrine-git -- <cena>`, cena = `alteracoes`, `historico`, `commit-diff`,

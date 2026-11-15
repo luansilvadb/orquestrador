@@ -145,7 +145,7 @@ fn main() {
                         if modo2 == "menu" {
                             // Botão direito na aba App.tsx.
                             use gpui_kit::{point, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput};
-                            let position = point(px(370.), px(50.));
+                            let position = point(px(379.), px(57.));
                             let base = MouseDownEvent { button: MouseButton::Right, position, modifiers: Modifiers::default(), click_count: 1, first_mouse: false };
                             window.dispatch_event(PlatformInput::MouseDown(base), cx);
                             let solta = MouseUpEvent { button: MouseButton::Right, position, modifiers: Modifiers::default(), click_count: 1 };

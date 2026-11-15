@@ -75,7 +75,25 @@ pub fn realcar(caminho: &str, texto: &str) -> Vec<(Range<usize>, HighlightStyle)
         }
         base += linha.len();
     }
+    modificador_type(texto, &mut saida);
     saida
+}
+
+/// A gramática TypeScript do `two-face` não conhece o modificador `type` de `import { type X }`/`export { type X }` e
+/// o pinta como identificador; o Shiki o marca `keyword.control.type`, #C586C0 no Dark+ (conferido na referência).
+fn modificador_type(texto: &str, saida: &mut [(Range<usize>, HighlightStyle)]) {
+    let cor_chave: Hsla = gpui_kit::rgb(0xc586c0).into();
+    for (r, estilo) in saida.iter_mut() {
+        if &texto[r.clone()] != "type" {
+            continue;
+        }
+        let antes = texto[..r.start].trim_end().chars().last();
+        let depois = &texto[r.end..];
+        let segue_nome = depois.starts_with([' ', '\t']) && depois.trim_start().starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '$');
+        if matches!(antes, Some('{' | ',')) && segue_nome {
+            estilo.color = Some(cor_chave);
+        }
+    }
 }
 
 
@@ -93,5 +111,20 @@ mod testes {
         let c: Rgba = import.1.color.unwrap().into();
         assert_eq!(((c.r * 255.).round() as u8, (c.g * 255.).round() as u8, (c.b * 255.).round() as u8), (0xc5, 0x86, 0xc0));
         assert!(realcar("sem-extensao-conhecida.xyzq", "a").is_empty());
+    }
+
+    #[test]
+    fn modificador_type_como_no_shiki() {
+        let t = "import {\n  a, type B, type C as D,\n} from 'x';\nimport { type E } from 'y';\nconst type = 1;\n";
+        let cor = |k: usize| -> (u8, u8, u8) {
+            let (_, s) = realcar("a.tsx", t).into_iter().find(|(r, _)| r.start == k).unwrap();
+            let c: Rgba = s.color.unwrap().into();
+            ((c.r * 255.).round() as u8, (c.g * 255.).round() as u8, (c.b * 255.).round() as u8)
+        };
+        let todos: Vec<usize> = t.match_indices("type").map(|(i, _)| i).collect();
+        for &k in &todos[..3] {
+            assert_eq!(cor(k), (0xc5, 0x86, 0xc0), "type em {k}");
+        }
+        assert_ne!(cor(todos[3]), (0xc5, 0x86, 0xc0));
     }
 }

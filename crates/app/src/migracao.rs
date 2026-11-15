@@ -36,14 +36,32 @@ pub fn pasta_webview(local: &Path) -> PathBuf {
     local.join("dev.luansilvadb.orquestrador").join("EBWebView").join("Default").join("Local Storage").join("leveldb")
 }
 
+/// Arquivo-marcador: a verificação na abertura é um `metadata`, sem ler JSON nem varrer pastas.
+pub const MARCADOR: &str = "migracao-react.feita";
+
 /// Chamada na abertura: erro vira log, nunca impede o app.
 pub fn executar() {
     let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(PathBuf::from) else { return };
-    match migrar(&pasta_webview(&local), &local.join("orquestrador")) {
-        Ok(Some(r)) if !r.gravadas.is_empty() => eprintln!("migração do React: {:?}", r.gravadas),
-        Ok(_) => {}
-        Err(e) => eprintln!("migração do React falhou: {e}"),
+    executar_em(&pasta_webview(&local), &local.join("orquestrador"));
+}
+
+/// `true` quando migrou agora.
+pub fn executar_em(webview: &Path, destino: &Path) -> bool {
+    let marcador = destino.join(MARCADOR);
+    if marcador.exists() {
+        return false;
     }
+    let t = std::time::Instant::now();
+    let r = migrar(webview, destino);
+    let ms = t.elapsed().as_secs_f64() * 1000.0;
+    match &r {
+        Ok(Some(r)) => eprintln!("migração do React: {} chaves, {} gravadas, {ms:.1} ms", r.chaves.len(), r.gravadas.len()),
+        Ok(None) => {}
+        Err(e) => eprintln!("migração do React falhou ({ms:.1} ms): {e}"),
+    }
+    // Falha não se repete a cada abertura; o original fica intacto para nova tentativa manual.
+    let _ = std::fs::create_dir_all(destino).and_then(|_| std::fs::write(&marcador, b""));
+    true
 }
 
 /// Migra para `destino` (a pasta `orquestrador`). `None` quando já foi feita.
@@ -265,6 +283,18 @@ mod testes {
     }
 
     #[test]
+    fn marcador_evita_segunda_leitura() {
+        let web = tmp("web4");
+        let dest = tmp("dest4");
+        gerar(&web.0);
+        assert!(executar_em(&web.0, &dest.0));
+        assert!(dest.0.join(MARCADOR).exists());
+        let t = std::time::Instant::now();
+        assert!(!executar_em(&web.0, &dest.0));
+        assert!(t.elapsed().as_millis() < 2, "verificação lenta");
+    }
+
+    #[test]
     fn pesquisa_vira_arvore_sem_pasta_marca() {
         let web = tmp("web2");
         let dest = tmp("dest2");
@@ -284,8 +314,24 @@ mod testes {
     fn perfil_real() {
         let web = PathBuf::from(std::env::var("MIGRACAO_WEBVIEW").unwrap());
         let dest = tmp("real");
-        let r = migrar(&web, &dest.0).unwrap().unwrap();
-        println!("origem: {:?}\nchaves: {:#?}\ngravadas: {:#?}", r.origem, r.chaves, r.gravadas);
-        println!("interface.json: {}", std::fs::read_to_string(dest.0.join("interface.json")).unwrap());
+        let t = std::time::Instant::now();
+        assert!(executar_em(&web, &dest.0));
+        let pendente = t.elapsed().as_secs_f64() * 1000.0;
+        let t = std::time::Instant::now();
+        assert!(!executar_em(&web, &dest.0));
+        let feita = t.elapsed().as_secs_f64() * 1000.0;
+        println!("abertura: pendente {pendente:.1} ms; já migrada {feita:.3} ms");
+        let (origem, itens) = ler_local_storage(&web).unwrap();
+        println!("origem: {origem:?}; {} chaves", itens.len());
+        for (k, v) in &itens {
+            let nome = if k.starts_with(PREFIXO_EDITOR) { "orquestrador.editor:<projeto>" } else { k };
+            println!("  {nome}: {} bytes", v.len());
+        }
+        let p: Projetos = Estado::abrir(Some(dest.0.join("interface.json"))).ler();
+        let q: PreferenciaPesquisa = Estado::abrir(Some(dest.0.join("interface.json"))).ler();
+        println!("projetos: {} abertas, ativa {}, {} recentes; pesquisa: {} no histórico", p.abertas.len(), p.ativa.is_some(), p.recentes.len(), q.historico.len());
+        for a in ["interface.json", "editor-recuperacao.json"] {
+            println!("{a}: {} bytes", std::fs::metadata(dest.0.join(a)).map(|m| m.len()).unwrap_or(0));
+        }
     }
 }

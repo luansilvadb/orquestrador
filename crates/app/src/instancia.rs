@@ -30,14 +30,21 @@ impl Drop for Guarda {
     }
 }
 
-fn nome_com_usuario(prefixo: &str) -> String {
+/// Prefixo do mutex e do pipe; o build de teste de ponta a ponta (`ORQ_INSTANCIA`) não cede a vez ao app real aberto.
+const BASE: &str = match option_env!("ORQ_INSTANCIA") {
+    Some(b) => b,
+    None => "orquestrador-gpui",
+};
+
+fn nome_com_usuario(sufixo: &str) -> String {
+    let prefixo = format!("{BASE}{sufixo}");
     let usuario = std::env::var("USERNAME").unwrap_or_default();
     let limpo: String = usuario.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
     format!("{prefixo}-{limpo}")
 }
 
 fn caminho_pipe() -> String {
-    format!(r"\\.\pipe\{}", nome_com_usuario("orquestrador-gpui"))
+    format!(r"\\.\pipe\{}", nome_com_usuario(""))
 }
 
 fn largo(texto: &str) -> Vec<u16> {
@@ -48,7 +55,7 @@ fn largo(texto: &str) -> Vec<u16> {
 pub fn reivindicar(args: &[String], cwd: &Path) -> Instancia {
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows_sys::Win32::System::Threading::CreateMutexW;
-    let nome = largo(&format!("Local\\{}", nome_com_usuario("orquestrador-gpui-instancia")));
+    let nome = largo(&format!("Local\\{}", nome_com_usuario("-instancia")));
     let mutex = unsafe { CreateMutexW(std::ptr::null(), 0, nome.as_ptr()) };
     let existe = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
     if mutex.is_null() || !existe {

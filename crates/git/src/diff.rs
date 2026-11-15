@@ -421,6 +421,11 @@ impl VisaoDiff {
         self.bloco_ref(i).map(|(r, _, _)| r)
     }
 
+    #[cfg(test)]
+    pub(crate) fn tem_comparador(&self) -> bool {
+        self.mostrado.is_some()
+    }
+
     pub fn total_unidades(&self) -> usize {
         self.total()
     }
@@ -642,9 +647,10 @@ impl VisaoDiff {
                     .absolute()
                     .top_0()
                     .bottom_0()
-                    .left(px(if forte { 2. } else { 3.5 }))
-                    .w(px(if forte { 4. } else { 1. }))
-                    .bg(if forte { comparador_cor_atual() } else { rgb(0x6e6e6e).into() }),
+                    // A linha de 1 px em x = 3,5 sai no Chromium em 2 px a meia força; o GPUI arredonda para 1 px cheio.
+                    .left(px(if forte { 2. } else { 3. }))
+                    .w(px(if forte { 4. } else { 2. }))
+                    .bg(if forte { comparador_cor_atual() } else { gpui_kit::rgba(0x6e6e6e80).into() }),
             )
             .into_any_element()
     }
@@ -748,13 +754,14 @@ fn comparador_cor_atual() -> gpui_kit::Hsla {
     cores::atual()
 }
 
-/// O comparador para um patch. `None` se o patch não tem blocos. `anterior` é o da mesma aba antes da releitura: a
+/// O comparador para um patch. `None` se o patch não tem blocos nem cabeçalho de arquivo (o `parsePatchFiles` do React
+/// aceita renomeação pura, modo trocado e arquivo vazio: o comparador sai vazio). `anterior` é o da mesma aba antes da releitura: a
 /// rolagem, a proporção e a unidade passam para o novo, e a rolagem só muda se a unidade mudar.
 fn montar(
     patch: &str, blocos: Option<&[Intervalo]>, caminho: &str, anterior: Option<&Mostrado>, realce: Option<(Realce, Realce)>,
     cx: &mut Context<VisaoDiff>,
 ) -> Option<Mostrado> {
-    if comparar::intervalos(patch).is_empty() {
+    if !interpretavel(patch) {
         return None;
     }
     let comparacao = comparar::comparar(patch, blocos);
@@ -788,6 +795,10 @@ fn montar(
         let _ = this.update(cx, |_, cx| cx.notify());
     });
     Some(Mostrado { patch: patch.to_string(), comparacao, estado, _realce: realce })
+}
+
+pub(crate) fn interpretavel(patch: &str) -> bool {
+    !comparar::intervalos(patch).is_empty() || patch.lines().any(|l| l.starts_with("diff --git ") || l.starts_with("--- "))
 }
 
 /// Diálogo de confirmação com o texto em monoespaçado (o `ask` do workspace do React).
@@ -930,5 +941,142 @@ impl Render for VisaoDiff {
                 .children(sobre)
                 .child(self.regua(cx)),
         )
+    }
+}
+
+#[cfg(test)]
+mod testes_patch {
+    use super::interpretavel;
+    use crate::comparador::modelo;
+    use orquestrador_core::ide::git;
+    use std::path::Path;
+    use std::process::Command;
+
+    fn g(dir: &Path, args: &[&str]) {
+        let s = Command::new("git").current_dir(dir).args(args).output().expect("git");
+        assert!(s.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&s.stderr));
+    }
+
+    /// Commit com só a mudança pedida e o diff de `caminho` nele.
+    fn diff_de(nome: &str, antes: impl Fn(&Path), mudar: impl Fn(&Path), caminho: &str) -> git::Diff {
+        let dir = std::env::temp_dir().join(format!("orq-git-patch-{nome}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        g(&dir, &["init", "-q", "-b", "main"]);
+        g(&dir, &["config", "user.email", "t@t"]);
+        g(&dir, &["config", "user.name", "t"]);
+        g(&dir, &["config", "core.autocrlf", "false"]);
+        g(&dir, &["config", "protocol.file.allow", "always"]);
+        antes(&dir);
+        g(&dir, &["add", "-A"]);
+        g(&dir, &["commit", "-q", "--allow-empty", "-m", "a"]);
+        g(&dir, &["config", "core.filemode", "false"]);
+        mudar(&dir);
+        g(&dir, &["add", "-A"]);
+        // O Windows não guarda o bit de execução: o `chmod` vai direto ao índice, depois do `add`.
+        if nome == "modo" {
+            g(&dir, &["update-index", "--chmod=+x", caminho]);
+        }
+        g(&dir, &["commit", "-q", "-m", "b"]);
+        let h = Command::new("git").current_dir(&dir).args(["rev-parse", "HEAD"]).output().unwrap();
+        let d = git::commit_diff(&dir, String::from_utf8_lossy(&h.stdout).trim(), caminho).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        d
+    }
+
+    fn escrever(dir: &Path, p: &str, t: &[u8]) {
+        std::fs::write(dir.join(p), t).unwrap();
+    }
+
+    const TEXTO: &[u8] = b"um\ndois\ntres\nquatro\ncinco\nseis\nsete\noito\n";
+
+    #[test]
+    fn renomeacao_pura_mostra_comparador_vazio() {
+        let d = diff_de("ren", |d| escrever(d, "a.ts", TEXTO), |d| g(d, &["mv", "a.ts", "b.ts"]), "b.ts");
+        assert!(d.patch.contains("rename from a.ts"), "{}", d.patch);
+        assert!(interpretavel(&d.patch));
+        assert!(modelo::montar(&d.patch).linhas.is_empty());
+    }
+
+    #[test]
+    fn renomeacao_com_alteracao() {
+        let d = diff_de(
+            "ren-alt",
+            |d| escrever(d, "a.ts", TEXTO),
+            |d| {
+                g(d, &["mv", "a.ts", "b.ts"]);
+                escrever(d, "b.ts", &[TEXTO, b"nove\n"].concat());
+            },
+            "b.ts",
+        );
+        assert!(d.patch.contains("rename from a.ts"), "{}", d.patch);
+        assert!(interpretavel(&d.patch));
+        assert_eq!(modelo::montar(&d.patch).linhas.iter().filter(|l| l.tipo == modelo::Tipo::Incluida).count(), 1);
+    }
+
+    #[test]
+    fn copia() {
+        // `diff-tree -M` não detecta cópia: o arquivo copiado chega como novo, com as linhas.
+        let d = diff_de("copia", |d| escrever(d, "a.ts", TEXTO), |d| escrever(d, "c.ts", TEXTO), "c.ts");
+        assert!(interpretavel(&d.patch));
+        assert_eq!(modelo::montar(&d.patch).linhas.len(), 8);
+        assert!(modelo::montar(&d.patch).arquivo_novo);
+    }
+
+    #[test]
+    fn modo_alterado() {
+        let d = diff_de(
+            "modo",
+            |d| escrever(d, "x.sh", TEXTO),
+            |_| {},
+            "x.sh",
+        );
+        assert!(d.patch.contains("new mode 100755"), "{}", d.patch);
+        assert!(interpretavel(&d.patch));
+        assert!(modelo::montar(&d.patch).linhas.is_empty());
+    }
+
+    #[test]
+    fn binario() {
+        let d = diff_de("bin", |d| escrever(d, "i.bin", b"\0\x01"), |d| escrever(d, "i.bin", b"\0\x02"), "i.bin");
+        assert!(d.binary);
+    }
+
+    #[test]
+    fn submodulo() {
+        let sub = std::env::temp_dir().join(format!("orq-git-patch-subrepo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&sub);
+        std::fs::create_dir_all(&sub).unwrap();
+        g(&sub, &["init", "-q", "-b", "main"]);
+        g(&sub, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "1"]);
+        g(&sub, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "2"]);
+        let url = sub.to_string_lossy().replace('\\', "/");
+        let d = diff_de(
+            "sub",
+            |d| {
+                g(d, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", &url, "m"]);
+                g(&d.join("m"), &["checkout", "-q", "HEAD~1"]);
+            },
+            |d| g(&d.join("m"), &["checkout", "-q", "main"]),
+            "m",
+        );
+        let _ = std::fs::remove_dir_all(&sub);
+        assert!(d.patch.contains("Subproject commit"), "{}", d.patch);
+        assert!(interpretavel(&d.patch));
+        assert_eq!(modelo::montar(&d.patch).linhas.len(), 2);
+    }
+
+    #[test]
+    fn arquivo_vazio() {
+        let d = diff_de("vazio", |_| {}, |d| escrever(d, "v.txt", b""), "v.txt");
+        assert!(d.patch.contains("new file mode"), "{}", d.patch);
+        assert!(interpretavel(&d.patch));
+        let m = modelo::montar(&d.patch);
+        assert!(m.linhas.is_empty() && m.arquivo_novo);
+    }
+
+    #[test]
+    fn sem_cabecalho_nem_bloco_nao_interpreta() {
+        assert!(!interpretavel("lixo\n"));
     }
 }

@@ -12,4 +12,7 @@ Cada tela (editor, árvore, mídia, pesquisa, Git) é um crate próprio que:
 - guarda a própria preferência numa seção versionada: `impl estado::Secao` com `NOME` único e `VERSAO`, lida e gravada por
   `estado::ler::<S>(cx)` e `estado::gravar(&s, cx)`;
 - usa `tema::cor`, as medidas de `tema` e `tema::FONTE`; ícones novos entram em `assets/icons/` e em `recursos.rs`;
-- usa `FaixaAbas` e `ListaAbas` para abas.
+- usa `FaixaAbas` e `ListaAbas` para abas;
+- usa os menus do Kit (`PopupMenu`, com `widgets::item_menu` para rótulo e atalho), já nas medidas do React;
+- usa `TooltipTexto::tooltip_texto` para dicas e `widgets::mascara` sob os modais; menu ou camada própria que deve
+  esconder a dica visível chama `widgets::marcar_sobreposicao()` ao desenhar.

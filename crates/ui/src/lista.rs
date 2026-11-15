@@ -203,9 +203,9 @@ impl RenderOnce for ListaAbas {
             }
             cx.notify(vista);
         });
-        let base = self.base.child(gatilho.test_support());
+        let gatilho = gatilho.relative().test_support();
         if !estado.aberta() {
-            return base;
+            return self.base.child(gatilho);
         }
 
         let destacada = estado.0.destacada.get();
@@ -219,12 +219,14 @@ impl RenderOnce for ListaAbas {
             .flex()
             .flex_col()
             .min_w(px(220.))
-            .mt(px(4.))
+            // O `sideOffset` de 6 px do DropdownMenu do Lobe UI, a borda de 1 px e o anel claro por fora.
+            .mt(px(6.))
             .p(px(4.))
             .rounded(tema::RAIO_MD)
             .bg(cor::raised_black())
             .border_1()
-            .border_color(gpui_kit::rgba(0xffffff26))
+            .border_color(cor::hairline())
+.shadow(vec![gpui_kit::BoxShadow::new(px(0.), px(0.), gpui_kit::hsla(0., 0., 1., 0.18)).spread_radius(px(1.))])
             .on_key_down(move |ev: &KeyDownEvent, window, cx| {
                 let atual = e.0.destacada.get();
                 let novo = match ev.keystroke.key.as_str() {
@@ -341,7 +343,7 @@ impl RenderOnce for ListaAbas {
         }
         // Abre logo abaixo do gatilho, alinhado à direita dele (`bottomRight`) ou à esquerda (`bottomLeft`).
         let canto = if self.direita { gpui_kit::Anchor::TopRight } else { gpui_kit::Anchor::TopLeft };
-        base.child(
+        self.base.child(gatilho.child(
             div()
                 .absolute()
                 .bottom_0()
@@ -349,6 +351,6 @@ impl RenderOnce for ListaAbas {
                 .when(!self.direita, |d| d.left_0())
                 .size_0()
                 .child(deferred(anchored().anchor(canto).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(1)),
-        )
+        ))
     }
 }

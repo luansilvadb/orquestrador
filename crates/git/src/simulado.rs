@@ -455,7 +455,7 @@ impl FonteGit for Simulado {
                     let mine = i.ancestrais(&[i.ponta(ATUAL)]);
                     let theirs = i.ancestrais(&[i.ponta("origin/main")]);
                     let mut files = i.arquivos.clone();
-                    files.sort_by_key(|f| f.path.to_lowercase());
+                    files.sort_by(|a, b| crate::colagem::comparar(&a.path, &b.path));
                     Estado::Repo {
                         status: Status {
                             branch: ATUAL.into(),

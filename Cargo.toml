@@ -31,6 +31,10 @@ debug = false
 [profile.dev.package.gpui-pre-windows]
 debug = false
 
+[profile.dev.package.gpui-component]
+debug = false
+
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }
+gpui-component = { path = "vendor/gpui-component" }
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

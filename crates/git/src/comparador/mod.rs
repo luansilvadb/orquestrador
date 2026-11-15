@@ -304,8 +304,6 @@ impl Geometria {
 struct Medidas {
     ch: f32,
     sinal: f32,
-    ascent: f32,
-    descent: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -536,8 +534,6 @@ impl Comparador {
         let m = Medidas {
             ch,
             sinal: largura("−").max(largura("+")),
-            ascent: f32::from(ts.ascent(id, tam)),
-            descent: f32::from(ts.descent(id, tam)),
         };
         self.medidas = Some(m);
         m
@@ -1052,7 +1048,9 @@ fn pintar(e: &Comparador, g: &Geometria, visiveis: Range<usize>, bounds: Bounds<
     let f = fonte();
     let tam = px(TAMANHO);
     let ts = window.text_system().clone();
-    let altura_caixa = m.ascent + m.descent;
+    // O fundo do `<span>` no Chromium cobre a área de conteúdo do Consolas (winAscent + winDescent, 1,171 em): 18 px a
+    // 15,5 px, como na referência; ascent + descent do DirectWrite dá só 10.
+    let altura_caixa = (TAMANHO * 1.171).round().min(LINHA);
     let meio = (LINHA - altura_caixa) / 2.;
     let selecao = e.selecao.map(|s| (s.b, s.ordenada()));
     for r in visiveis.clone() {
@@ -1216,7 +1214,7 @@ mod testes {
 
     /// Fonte monoespaçada de 8 px e quebra por contagem de caracteres.
     fn medir(c: &mut Comparador, largura: f32, alto: f32) -> Rc<Geometria> {
-        let m = Medidas { ch: 8., sinal: 8., ascent: 11., descent: 3. };
+        let m = Medidas { ch: 8., sinal: 8. };
         let larguras: Vec<f32> = c.exibidos.iter().map(|e| e.texto.chars().count() as f32 * 8.).collect();
         c.caixa = Bounds::new(point(px(0.), px(0.)), size(px(largura), px(alto)));
         let mut quebrar = |t: &str, util: f32| quebrar_linha(t, util, &mut |_| 8.);

@@ -55,7 +55,7 @@ abrir, depois de gravar, a cada 2,5 s com a aba visível e logo depois de prepar
 ## Módulos puros
 
 `modelo` (workspace-model), `armazem` (workspace-store, conflitos, patch), `caminhos` (file-tab-actions), `linguagem`
-(detecção igual à do Shiki), `realce` (tema dark-plus, colchetes), `formatar` (Prettier via dprint/malva/markup_fmt/pretty_yaml;
+(detecção igual à do Shiki), `realce` (tema dark-plus, colchetes; bloco cercado do Markdown só colore com a linguagem já carregada na sessão, como o Shiki), `formatar` (Prettier via dprint/malva/markup_fmt/pretty_yaml;
 outros motores pelo core).
 
 ## Preview de Markdown

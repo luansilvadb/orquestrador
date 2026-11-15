@@ -160,7 +160,8 @@ fn estilo(cx: &App) -> TextViewStyle {
         .with_inline_code_style(
             gpui::StyleRefinement::default()
                 .font_family(tema::FONTE_MONO)
-                .text_size(px(blocos::FONTE * 0.875))
+                // 0,875 em no Lobe, mas o Chromium arredonda o avanço da Cascadia para 8 px: 13,5 px dá a mesma largura.
+                .text_size(px(13.5))
                 .bg(lobe::fill_secundario())
                 .border_1()
                 .border_color(lobe::fill_quaternario())

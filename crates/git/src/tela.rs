@@ -185,6 +185,8 @@ pub struct TelaGit {
     erro_branch: String,
     nome_branch: Entity<InputState>,
     iniciando: bool,
+    /// Largura do texto do estado vazio, medida no último quadro, para a quebra `pretty`.
+    largura_vazio: Rc<Cell<f32>>,
     // Grafo.
     pub(crate) grafo: Paginada,
     pub(crate) grafo_linhas: Vec<LinhaGrafo>,
@@ -276,6 +278,7 @@ impl TelaGit {
             erro_branch: String::new(),
             nome_branch,
             iniciando: false,
+            largura_vazio: Rc::default(),
             grafo: Paginada::default(),
             grafo_linhas: Vec::new(),
             grafo_carimbo: None,
@@ -417,7 +420,11 @@ impl TelaGit {
     /// Resposta do status: só notifica quando mudou (o poll igual não redesenha nada).
     fn receber(&mut self, r: Result<Estado, String>, cx: &mut Context<Self>) {
         match r {
-            Ok(e) => {
+            Ok(mut e) => {
+                // O React recebe a lista ordenada por `localeCompare` pt-BR; o core ordena por bytes.
+                if let Estado::Repo { status } = &mut e {
+                    status.files.sort_by(|a, b| crate::colagem::comparar(&a.path, &b.path));
+                }
                 let mudou = self.estado.as_ref() != Some(&e);
                 let tinha_erro = !self.erro.is_empty();
                 self.erro.clear();
@@ -768,20 +775,47 @@ impl TelaGit {
             .child(aba("aba-historico", Vista::Historico, "Histórico", None, cx))
     }
 
-    fn vazio(&self, estado: &Estado, cx: &mut Context<Self>) -> impl IntoElement {
+    fn vazio(&self, estado: &Estado, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let texto = match estado {
             Estado::NoRepo => "A pasta aberta não tem um repositório Git. Inicialize um para usar os recursos do Git aqui: alterações, commits, branches e histórico.".to_string(),
             Estado::NoGit => "O Git não foi encontrado neste computador. Instale o Git e abra o app de novo.".to_string(),
             Estado::RepoAbove { root } => format!("Esta pasta está dentro do repositório {root}, que não é a raiz do projeto. O painel Git só funciona com a raiz do repositório aberta como projeto."),
             Estado::Repo { .. } => String::new(),
         };
+        let largura = self.largura_vazio.get();
+        let texto = if largura > 0. {
+            let sistema = window.text_system().clone();
+            let fonte = gpui_kit::font(tema::FONTE);
+            let medir = |t: &str| {
+                let run = gpui_kit::TextRun { len: t.len(), font: fonte.clone(), color: Default::default(), background_color: None, underline: None, strikethrough: None };
+                f32::from(sistema.shape_line(t.to_string().into(), tema::TEXTO_LABEL, &[run], None).width)
+            };
+            crate::quebra::linhas(&texto, largura, medir).join("
+")
+        } else {
+            texto
+        };
+        let (celula, entidade) = (self.largura_vazio.clone(), cx.entity_id());
+        let medidor = canvas(
+            move |b, window, _| {
+                let l = f32::from(b.size.width);
+                if celula.get() != l {
+                    celula.set(l);
+                    // Notificar no meio do desenho se perde: o novo quadro vem depois deste.
+                    window.on_next_frame(move |_, cx| cx.notify(entidade));
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .px(px(12.))
             .py(px(8.))
-            .child(div().text_size(tema::TEXTO_LABEL).line_height(px(19.)).text_color(descricao()).child(texto))
+            .child(div().relative().text_size(tema::TEXTO_LABEL).line_height(px(19.)).text_color(descricao()).child(texto).child(medidor))
             .when(matches!(estado, Estado::NoRepo), |d| {
                 d.child(
                     div()
@@ -1003,10 +1037,10 @@ impl TelaGit {
                     .bg(cor::fill_muted())
                     .text_size(px(13.))
                     .line_height(px(18.))
-                    .min_h(px(26.))
+                    .min_h(px(28.))
                     .xsmall()
                     .px(px(2.))
-                    .py(px(4.)),
+                    .py(px(5.)),
             );
         let botao = div()
             .relative()
@@ -1444,7 +1478,7 @@ impl TelaGit {
                     }))
             });
         match self.estado.clone() {
-            Some(e) if !matches!(e, Estado::Repo { .. }) => return raiz.child(self.vazio(&e, cx)),
+            Some(e) if !matches!(e, Estado::Repo { .. }) => return raiz.child(self.vazio(&e, window, cx)),
             _ => {}
         }
         let contagem = self.status().map(|s| s.files.len());

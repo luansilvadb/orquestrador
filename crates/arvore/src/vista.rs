@@ -9,7 +9,7 @@ use orquestrador_core::ide::git::GitFile;
 use orquestrador_core::platform;
 use orquestrador_ui::avisos::{self, Aviso};
 use orquestrador_ui::tema::{self, cor};
-use orquestrador_ui::widgets::{icone, TooltipTexto};
+use orquestrador_ui::widgets::{self, icone, TooltipTexto};
 use orquestrador_ui::icone_arquivo;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::TestSupportExt;
@@ -274,7 +274,6 @@ pub struct Explorador {
     /// Onde o botão desceu na última linha clicada (o ponto em que a cópia do arraste fica presa).
     agarrado: Rc<std::cell::Cell<Point<Pixels>>>,
     largura_campo: Pixels,
-    tamanho_janela: gpui_kit::Size<Pixels>,
     _subs: Vec<Subscription>,
 }
 
@@ -341,7 +340,6 @@ impl Explorador {
             minimizada: false,
             agarrado: Rc::default(),
             largura_campo: px(200.),
-            tamanho_janela: window.viewport_size(),
             _subs: subs,
         };
         this.iniciar_relogio(window, cx);
@@ -685,7 +683,9 @@ impl Explorador {
             return;
         }
         self.garantir_linhas();
-        let (nova, ancora) = modelo::selecionar(&self.linhas, &self.selecao, self.ancora.as_deref(), linha, mods);
+        // Ctrl soma à marcação exibida, que sem seleção é o arquivo aberto (como o `selected` do explorer-tree.tsx).
+        let marcados = self.marcados();
+        let (nova, ancora) = modelo::selecionar(&self.linhas, &marcados, self.ancora.as_deref(), linha, mods);
         self.selecao = nova;
         self.ancora = ancora;
         self.cursor = Some(linha.chave.clone());
@@ -2050,6 +2050,7 @@ impl Explorador {
 
     fn menu_el(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.menu.as_ref()?;
+        widgets::marcar_sobreposicao();
         let mut caixa = div()
             .id("arvore-menu")
             .track_focus(&menu.foco)
@@ -2116,7 +2117,7 @@ impl Explorador {
         )
     }
 
-    fn dialogo_el(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn dialogo_el(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let e = self.excluindo.as_ref()?;
         let tem_pasta = e.caminhos.iter().any(|p| !self.arvore.eh_arquivo(p));
         let (pergunta, detalhe) = modelo::textos_excluir(&e.caminhos, tem_pasta);
@@ -2255,12 +2256,7 @@ impl Explorador {
         Some(
             deferred(
                 anchored().position(point(px(0.), px(0.))).child(
-                    div()
-                        .id("arvore-excluir-mascara")
-                        .occlude()
-                        .w(self.tamanho_janela.width)
-                        .h(self.tamanho_janela.height)
-                        .bg(rgba(0x000000a6))
+                    widgets::mascara("arvore-excluir-mascara", window)
                         .flex()
                         .items_start()
                         .justify_center()
@@ -2278,7 +2274,6 @@ impl Render for Explorador {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.garantir_linhas();
         self.limites_linhas.borrow_mut().clear();
-        self.tamanho_janela = window.viewport_size();
         if self.focar_painel {
             self.focar_painel = false;
             window.focus(&self.foco, cx);
@@ -2385,7 +2380,7 @@ impl Render for Explorador {
             .child(self.secao(cx))
             .child(painel)
             .children(self.menu_el(cx))
-            .children(self.dialogo_el(cx))
+            .children(self.dialogo_el(window, cx))
     }
 }
 

@@ -12,46 +12,46 @@ que a diferença era da bancada (`crates/app`) e foi resolvida nesta conferênci
 | Referência | Situação | Diferença | Crate |
 | --- | --- | --- | --- |
 | `inicial-sem-projeto.png` | igual | | |
-| `inicial-projeto.png` | diferença | Botões "dividir" e "mais" da área vazia do editor 7 px à direita. | editor |
+| `inicial-projeto.png` | corrigido | Botão "mais" do editor com 24 px e ícone de 14 px, como o "dividir": os dois no lugar. | editor |
 | `titlebar-abas-projeto.png` | igual | | |
 | `titlebar-tooltip.png` | corrigido | A dica herdava a margem de 12 px do Kit e ficava baixa e à esquerda. | app |
-| `menu-arquivo.png` | diferença | Itens do `PopupMenu` 1 px mais baixos e menos respiro no topo; "Projetos recentes" com seta e 8 px menos de recuo. | ui (Kit) |
+| `menu-arquivo.png` | corrigido | Menus do Kit (`vendor/gpui-component`) nas medidas do React: itens, folga, borda, anel, submenu sem seta encostado no menu e atalho a 70%. Fica 1 px acima porque o gatilho "Arquivo" da bancada está 1 px acima. | ui (Kit) |
 | `arquivos-editor.png` | igual | | |
-| `arvore-hover-selecao.png` | diferença | Ctrl+clique troca a seleção em vez de somar (App.tsx perde o destaque); a dica da linha aparece no hover. | arvore |
-| `arvore-menu-contexto.png` | diferença | A dica da linha fica por cima do menu de contexto. | arvore |
-| `arvore-menu-pasta.png` | diferença | Idem. | arvore |
-| `arvore-renomear.png` | diferença | Seleção do nome em azul; no React é amarela com texto escuro. | arvore |
-| `editor-varias-abas.png` | diferença | Ponto de "sujo" maior; abas 8 px mais largas. | editor |
-| `editor-menu-aba.png` | diferença | A dica da aba fica por cima do menu; menu 22 px mais estreito, itens 1 px mais baixos, desabilitados menos apagados. | editor, ui (Kit) |
-| `editor-lista-abas.png` | igual | Lista 6 px à direita e 3 px acima; minimapa mais largo. | editor |
+| `arvore-hover-selecao.png` | corrigido | Ctrl+clique soma ao destaque exibido (o arquivo aberto), como o `explorer-tree.tsx`. A dica da linha fica: o React mostra o `title` do nome, com o atraso de 500 ms do navegador. | arvore |
+| `arvore-menu-contexto.png` | corrigido | A dica some quando o menu abre (ponto comum no `Tooltip` do Kit). | arvore |
+| `arvore-menu-pasta.png` | corrigido | Idem (mesmo menu; não capturado à parte). | arvore |
+| `arvore-renomear.png` | diferença | Seleção amarela (`::selection` do Lobe, `#ffef5c`, também no WebView2), agora em todos os campos; o texto selecionado continua branco (o input do `gpui-base` não troca a cor do texto selecionado). | arvore, gpui-base |
+| `editor-varias-abas.png` | corrigido | Ponto de "sujo" desenhado com 6,5 px (o ● da Inter era maior); faixa no tamanho certo com o botão "mais" corrigido. | editor |
+| `editor-menu-aba.png` | corrigido | A dica some com o menu; largura (360 px), itens e desabilitados iguais ao React. | ui (Kit) |
+| `editor-lista-abas.png` | corrigido | Lista no lugar (±1 px) com o botão "mais" corrigido; o minimapa só desloca o texto 4 px com a faixa do Git (com base), como o React. | editor |
 | `editor-dividido.png` | igual | | |
-| `abrir-rapido.png` | diferença | Texto do campo em 14 px (React 16 px); linha de resultado 3 px mais alta. | editor |
-| `markdown-codigo.png` | diferença | O bloco ```` ```ts ```` ganha realce embutido (React deixa sem realce); o `>` da citação fica cinza (React verde). | editor |
-| `markdown-preview.png` | diferença | Código inline e bloco com fonte menor; tabela 3 px mais baixa. | editor |
+| `abrir-rapido.png` | corrigido | Campo em 16 px; linha de resultado com 28 px. | editor |
+| `markdown-codigo.png` | corrigido | Bloco cercado só ganha realce com a linguagem já carregada na sessão, como o Shiki (`langs: []`); o `>` já estava verde. | editor |
+| `markdown-preview.png` | diferença | Corrigidos: fonte do código inline (13,5 px) e do bloco (12,6 px), contorno da tabela e da imagem por fora. Restam: o parágrafo com código inline 2 px mais baixo (no CSS a linha cresce) e a margem de 0,25 em ao lado do código inline, que o `TextView` do Kit não tem. | editor, Kit |
 | `conflito-merge.png` | igual | O Git juntou os dois trechos do fixture num só. | |
 | `midia-imagem.png` | igual | | |
 | `midia-audio.png` | igual | | |
 | `midia-video.png` | igual | | |
 | `midia-erro.png` | igual | O texto da falha vem do sistema. | |
-| `arquivo-binario.png` | igual | Aviso 3 px mais abaixo. | editor |
+| `arquivo-binario.png` | corrigido | Aviso com 16 px de preenchimento e linha de 22 px, como o `Note`. | editor |
 | `pesquisar-resultados.png` | igual | | |
 | `pesquisar-substituir.png` | igual | | |
-| `pesquisar-confirmar.png` | diferença | A dica "Substituir Tudo" fica visível sobre o modal; máscara preta (o Lobe usa a cor do painel a 60%, que clareia o preto); corpo quebra uma palavra antes; botões 5 px mais largos. | pesquisa |
-| `git-alteracoes.png` | diferença | Ordem dos arquivos por bytes (README.md antes de `assets/`); o React ordena com `localeCompare` pt-BR, sem caixa. Botão Commit 2 px mais baixo. | git |
-| `git-diff-lado-a-lado.png` | diferença | Calha dos números 7 px mais estreita (a quebra das linhas muda); destaque de palavra mais fraco. | git |
-| `git-diff-unificado.png` | diferença | Idem. | git |
+| `pesquisar-confirmar.png` | corrigido | Sem dica sobre o modal; máscara do Lobe (`widgets::mascara`); caixa nas partes do `Modal` do Lobe (cabeçalho de 48 px, conteúdo, rodapé), fundo `#1a1a1a`, quebras e botões iguais. A máscara do editor (`modal` em `area.rs`, preto a 50%) ainda não usa a comum. | pesquisa |
+| `git-alteracoes.png` | igual | Corrigido: a lista usa a colagem do ICU pt-BR (`icu_collator`, como o `localeCompare` do Chromium); o campo da mensagem tinha 26 px (React 28) e subia o botão Commit. | git |
+| `git-diff-lado-a-lado.png` | diferença | Calha dos números 7 px mais estreita (a quebra das linhas muda). Corrigidos: destaque de palavra com 18 px de altura (a área de conteúdo do Consolas), `type` de `import { type X }` em #C586C0 e divisor em 2 px a meia força. | git |
+| `git-diff-unificado.png` | igual | Corrigidos o destaque de palavra e o `type`, como no lado a lado. | git |
 | `git-grafo.png` | igual | | |
 | `git-historico.png` | igual | | |
-| `git-commit-diff.png` | diferença | Layout igual; arquivo de commit só renomeado (100% de similaridade) mostra "Não foi possível interpretar o diff." em vez do arquivo sem mudanças. | git |
-| `git-sem-repositorio.png` | diferença | O texto quebra em pontos diferentes (linha ~4 px mais estreita). | git |
+| `git-commit-diff.png` | igual | Corrigido: patch com cabeçalho e sem blocos (renomeação pura, modo trocado, arquivo vazio) abre o comparador vazio, como o `parsePatchFiles`. | git |
+| `git-sem-repositorio.png` | igual | Corrigido: a quebra era o `text-wrap: pretty` global do Lobe (redistribui as últimas linhas quando a última fica com uma palavra), portado em `orquestrador_git::quebra`. Texto 1 px mais baixo. | git |
 | `git-ausente.png` | igual | | |
 | `orquestrador-escolha.png` | corrigido | Máscara, fundo do diálogo (`#1a1a1a`), borda do segmentado, respiro de topo e base, e o cursor do terminal que aparecia atrás antes do processo existir. | app |
 | `orquestrador-select-modelo.png` | igual | | |
 | `orquestrador-terminal.png` | igual | | |
 | `executores-abas.png` | igual | Sem aba "na fila": os três executores do CLI falso rodam juntos. | |
 | `executor-aguardando-escolha.png` | igual | | |
-| `terminal-shells.png` | diferença | A dica "Novo terminal" fica no lugar antigo do botão depois que a faixa cresce. | ui |
-| `terminal-lista-abas.png` | igual | Lista 4 px mais baixa. | ui |
+| `terminal-shells.png` | corrigido | A dica some ao clicar e não volta até um novo hover (como o Base UI). A dica "Painel Terminal" de `paineis.rs`, feita direto com `Tooltip::new`, ainda reaparece depois do clique. | ui |
+| `terminal-lista-abas.png` | corrigido | A lista ancora no gatilho, 6 px abaixo (`sideOffset` do Lobe), com borda e anel do menu do React; fica 1 px abaixo porque o botão da bancada está 1 px abaixo. | ui |
 | `fechar-confirmacao.png` | corrigido | Máscara e largura dos botões (preenchimento de 15 para 12 px). | app |
 | `toast-sincronizado.png` | igual | | |
 | `toast-subpasta.png` | corrigido | O aviso de pasta dentro de um repositório não existia. | app |

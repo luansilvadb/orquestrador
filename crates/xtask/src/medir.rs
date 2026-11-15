@@ -277,7 +277,9 @@ impl App {
     fn latencia(&self) -> Option<Value> {
         let t = std::fs::read_to_string(self.dir.join("temp/orq-latencia.txt")).ok()?;
         let l = t.lines().last()?;
-        let re = regex::Regex::new(r"n=(\d+) total\[p50=([\d.]+) p95=([\d.]+) max=([\d.]+)\] pty\[p50=([\d.]+) p95=([\d.]+) max=([\d.]+)\] janela\[p50=([\d.-]+) p95=([\d.-]+) max=([\d.-]+)\]").unwrap();
+        // Compilada uma vez: o xtask é de dev, e compilar a cada par de teclas atrasava o eco do pwsh em ~5,5 ms.
+        static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let re = RE.get_or_init(|| regex::Regex::new(r"n=(\d+) total\[p50=([\d.]+) p95=([\d.]+) max=([\d.]+)\] pty\[p50=([\d.]+) p95=([\d.]+) max=([\d.]+)\] janela\[p50=([\d.-]+) p95=([\d.-]+) max=([\d.-]+)\]").unwrap());
         let c = re.captures(l)?;
         let f = |i: usize| c[i].parse::<f64>().unwrap_or(f64::NAN);
         Some(json!({

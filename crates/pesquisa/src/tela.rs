@@ -13,7 +13,7 @@ use gpui_kit::{
 use orquestrador_core::ide::search::{self, ApplyRequest, Pick, Preview, Query, Results};
 use orquestrador_ui::estado::{self, Secao};
 use orquestrador_ui::tema::{self, cor};
-use orquestrador_ui::widgets::{icone, TooltipTexto};
+use orquestrador_ui::widgets::{self, icone, TooltipTexto};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -1546,7 +1546,7 @@ impl TelaPesquisa {
                 .items_center()
                 .justify_center()
                 .h(tema::CAMPO)
-                .px(px(15.))
+                .px(px(12.))
                 .rounded(tema::RAIO_SM)
                 .text_size(tema::TEXTO_BODY)
                 .font_weight(FontWeight::MEDIUM)
@@ -1554,6 +1554,8 @@ impl TelaPesquisa {
                 .when(!perigo, |d| d.bg(cor::pitch_black()).text_color(cor::text_primary()).hover(|s| s.bg(cor::raised_black())))
                 .child(rotulo)
         };
+        // As partes do `Modal` do Lobe UI: cabeçalho de 48 px com o título centrado, conteúdo com 16 px dos lados e embaixo,
+        // rodapé com 12 px em volta dos botões.
         let caixa = div()
             .id("confirmar")
             .occlude()
@@ -1561,48 +1563,56 @@ impl TelaPesquisa {
             .w(px(522.))
             .flex()
             .flex_col()
-            .gap(px(12.))
-            .p(px(16.))
             .rounded(tema::RAIO_LG)
-            .bg(rgba(0x1f1f1fff))
+            .bg(cor::raised_black())
             .border_1()
-            .border_color(rgba(0xffffff1a))
+            .border_color(rgba(0xffffff1f))
             .text_color(cor::text_primary())
             .font_family(tema::FONTE)
-            .child(div().text_size(tema::TEXTO_BODY).font_weight(FontWeight::SEMIBOLD).child(titulo))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .min_h(px(48.))
+                    .px(px(16.))
+                    .py(px(8.))
+                    .text_size(tema::TEXTO_BODY)
+                    .line_height(px(19.6))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(titulo),
+            )
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .child(div().text_size(tema::TEXTO_BODY).line_height(px(22.)).child(corpo))
+                    .px(px(16.))
+                    .pb(px(16.))
+                    // Os espaços do DirectWrite saem um pouco mais largos que os do Chromium: a folga de 4 px sobre o recuo
+                    // mantém as quebras de linha do React.
+                    .child(div().mr(px(-4.)).text_size(tema::TEXTO_BODY).line_height(px(22.)).child(corpo))
                     .child(lista),
             )
             .child(
                 div()
-                    .mt(px(12.))
                     .flex()
                     .justify_end()
                     .gap(px(8.))
+                    .px(px(16.))
+                    .py(px(12.))
                     .child(botao("confirmar-cancelar", "Cancelar", false).on_click(cx.listener(|this, _, _, cx| {
                         this.confirmando = None;
                         cx.notify();
                     })))
                     .child(botao("confirmar-substituir", "Substituir", true).on_click(cx.listener(|this, _, _, cx| this.confirmar(cx)))),
             );
-        let janela = window.viewport_size();
         Some(
             deferred(
                 anchored().position(point(px(0.), px(0.))).child(
-                    div()
-                        .id("confirmar-mascara")
-                        .occlude()
-                        .w(janela.width)
-                        .h(janela.height)
+                    widgets::mascara("confirmar-mascara", window)
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(rgba(0x00000073))
                         .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                             if !this.aplicando {
                                 this.confirmando = None;

@@ -31,12 +31,14 @@ $pub = (Get-Content -Raw (Join-Path $Raiz 'teste.pub')).Trim()
 if (-not $SemBuild) {
     $env:ORQ_ATUALIZACAO_URL = "$base/latest.json"
     $env:ORQ_ATUALIZACAO_CHAVE = $pub
+    # Mutex e pipe próprios: com o app real aberto, o de teste não cede a vez a ele.
+    $env:ORQ_INSTANCIA = 'orquestrador-teste'
     foreach ($v in $versoes) {
         $nome = "${produto}_${v}_x64-setup.exe"
         & pwsh (Join-Path $aqui 'empacotar.ps1') -Versao $v -Chave $chave -Produto $produto -Binario $binario `
             -Url "$base/$v/$nome" -Saida (Join-Path $Raiz $v)
     }
-    Remove-Item env:ORQ_ATUALIZACAO_URL, env:ORQ_ATUALIZACAO_CHAVE
+    Remove-Item env:ORQ_ATUALIZACAO_URL, env:ORQ_ATUALIZACAO_CHAVE, env:ORQ_INSTANCIA
 }
 foreach ($v in $versoes) {
     New-Item -ItemType Directory -Force "$Raiz\srv\$v" | Out-Null

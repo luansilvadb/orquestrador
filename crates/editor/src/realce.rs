@@ -121,6 +121,22 @@ fn hsla(c: Color) -> Hsla {
 
 /// A gramática do `syntect` para a linguagem Shiki.
 pub(crate) fn sintaxe(lang: &str, caminho: &str) -> Option<&'static SyntaxReference> {
+    let x = sintaxe_sem_registro(lang, caminho);
+    if x.is_some() {
+        CARREGADAS.lock().unwrap_or_else(|e| e.into_inner()).insert(lang.to_string());
+    }
+    x
+}
+
+/// Linguagens já pedidas nesta sessão. O Shiki do React nasce com `langs: []` e carrega a gramática de cada arquivo
+/// aberto; um bloco cercado do Markdown só ganha realce se a linguagem dele já estiver carregada.
+static CARREGADAS: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyLock::new(Default::default);
+
+fn embutida_carregada(lang: &str) -> bool {
+    CARREGADAS.lock().unwrap_or_else(|e| e.into_inner()).contains(lang)
+}
+
+fn sintaxe_sem_registro(lang: &str, caminho: &str) -> Option<&'static SyntaxReference> {
     let s = &*SINTAXES;
     if let Some(x) = s.find_syntax_by_name(&format!("shiki-{lang}")) {
         return Some(x);
@@ -199,7 +215,7 @@ struct Linha {
 
 /// Cores de uma linha (`linha` com o fim de linha), em deslocamentos relativos a ela, avançando o estado.
 fn colorir_linha(estado: &mut Estado, linha: &str) -> Trechos {
-    let (fora_str, fora_com, lista) = &*ESCOPOS;
+    let (fora_str, fora_com, lista, embutido) = &*ESCOPOS;
     let mut da_linha: Trechos = Vec::new();
     let ops = match estado.parse.as_mut().map(|p| p.parse_line(linha, &SINTAXES)) {
         Some(Ok(ops)) => Some(ops),
@@ -212,6 +228,7 @@ fn colorir_linha(estado: &mut Estado, linha: &str) -> Trechos {
     // Faixas de string/comentário da linha, onde os colchetes não contam.
     let mut fora: Vec<Range<usize>> = Vec::new();
     let mut listas: Vec<Range<usize>> = Vec::new();
+    let mut sem_realce: Vec<Range<usize>> = Vec::new();
     if let Some(ops) = &ops {
         let mut pilha = estado.tema.path.clone();
         let mut cursor = 0;
@@ -225,6 +242,12 @@ fn colorir_linha(estado: &mut Estado, linha: &str) -> Trechos {
             }
             if escopos.iter().any(|e| lista.is_prefix_of(*e)) {
                 listas.push(a..b);
+            }
+            if let Some(e) = escopos.iter().find(|e| embutido.is_prefix_of(**e)) {
+                let nome = e.build_string();
+                if !embutida_carregada(nome.trim_start_matches("meta.embedded.block.")) {
+                    sem_realce.push(a..b);
+                }
             }
         };
         for (i, op) in ops {
@@ -246,6 +269,14 @@ fn colorir_linha(estado: &mut Estado, linha: &str) -> Trechos {
                 }
             }
             pos = fim;
+        }
+    }
+    for r in sem_realce {
+        let util = linha.trim_end_matches(['\n', '\r']).len();
+        let r = r.start..r.end.min(util);
+        if !r.is_empty() {
+            cortar(&mut da_linha, r.clone());
+            sobrepor(&mut da_linha, r, cor_texto());
         }
     }
     // Colchetes, como o caminho "pares lidos do texto" de bracket-colors.ts.
@@ -566,9 +597,32 @@ pub fn colorir_caminho(caminho: &str, texto: &str) -> Trechos {
 }
 
 /// Escopos que contam nos colchetes e no marcador de lista.
-static ESCOPOS: LazyLock<(Scope, Scope, Scope)> = LazyLock::new(|| {
-    (Scope::new("string").unwrap(), Scope::new("comment").unwrap(), Scope::new("punctuation.definition.list").unwrap())
+static ESCOPOS: LazyLock<(Scope, Scope, Scope, Scope)> = LazyLock::new(|| {
+    (
+        Scope::new("string").unwrap(),
+        Scope::new("comment").unwrap(),
+        Scope::new("punctuation.definition.list").unwrap(),
+        Scope::new("meta.embedded.block").unwrap(),
+    )
 });
+
+/// Tira dos trechos o `alcance` (os pedaços de fora ficam).
+fn cortar(trechos: &mut Trechos, alcance: Range<usize>) {
+    let mut saida = Vec::with_capacity(trechos.len() + 1);
+    for (r, s) in trechos.drain(..) {
+        if r.end <= alcance.start || r.start >= alcance.end {
+            saida.push((r, s));
+            continue;
+        }
+        if r.start < alcance.start {
+            saida.push((r.start..alcance.start, s));
+        }
+        if r.end > alcance.end {
+            saida.push((alcance.end..r.end, s));
+        }
+    }
+    *trechos = saida;
+}
 
 /// Troca a cor de `alcance` mantendo o resto do estilo, partindo o trecho que o contém.
 fn sobrepor(trechos: &mut Trechos, alcance: Range<usize>, cor: Hsla) {
@@ -757,6 +811,20 @@ mod testes {
         let t = "a)";
         let tr = colorir(None, t);
         assert_eq!(cor_de(&tr, t, ")"), Some(cor_inesperado()));
+    }
+
+    #[test]
+    fn bloco_cercado_so_colore_com_a_linguagem_carregada() {
+        let md = "```ts\nconst x = 1;\n```\n";
+        let cor = |t: &Trechos| t.iter().filter(|(r, _)| r.start >= 6 && r.end <= 18).map(|(_, s)| s.color).collect::<Vec<_>>();
+        let antes = colorir(sintaxe("markdown", "a.md"), md);
+        // Outros testes podem carregar o TypeScript ao mesmo tempo.
+        if !embutida_carregada("typescript") {
+            assert!(cor(&antes).iter().all(|c| *c == Some(cor_texto())));
+        }
+        assert!(sintaxe("typescript", "a.ts").is_some());
+        let depois = colorir(sintaxe("markdown", "a.md"), md);
+        assert!(cor(&depois).iter().any(|c| *c != Some(cor_texto())));
     }
 
     #[test]

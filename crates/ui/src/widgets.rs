@@ -1,6 +1,6 @@
 //! Widgets genéricos no estilo do app: ícone, botões do Lobe UI, ícone de estado, botões da janela, dicas, item de menu e alça de divisor.
 use crate::tema::{self, cor};
-use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::tooltip::{registrar_clique, Tooltip};
 use gpui_kit::{div, prelude::*, px, svg, AnyElement, App, Div, Hsla, SharedString, Stateful, Svg, Window, WindowControlArea};
 
 pub fn icone(caminho: &'static str, tamanho: f32, cor: Hsla) -> Svg {
@@ -114,10 +114,10 @@ pub fn botao_janela(id: &'static str, caminho: &'static str, area: WindowControl
 
 /// Envolve o elemento numa caixa de altura total com a dica.
 pub fn com_dica(id: &'static str, dica: &'static str, elemento: impl IntoElement) -> impl IntoElement {
-    div().id(id).h_full().tooltip(move |window, cx| Tooltip::new(dica).build(window, cx)).child(elemento)
+    div().id(id).h_full().tooltip_texto(dica).child(elemento)
 }
 
-/// Item de menu como no lobehub: rótulo e atalho em cinza à direita. Para `PopupMenu::menu_element`.
+/// Item de menu como no lobehub: rótulo e atalho em cinza a 70% à direita. Para `PopupMenu::menu_element`.
 pub fn item_menu(rotulo: &'static str, atalho: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyElement {
     move |_, _| {
         div()
@@ -125,14 +125,23 @@ pub fn item_menu(rotulo: &'static str, atalho: &'static str) -> impl Fn(&mut Win
             .flex_1()
             .items_center()
             .justify_between()
-            .gap(px(16.))
-            .pl(px(8.))
-            .pr(px(19.))
+            .gap(px(26.))
             .text_size(tema::TEXTO_MENU)
             .child(rotulo)
-            .child(div().text_color(cor::text_tertiary()).child(atalho))
+            .child(div().text_color(cor::text_tertiary()).opacity(0.7).child(atalho))
             .into_any_element()
     }
+}
+
+/// Avisa que um menu ou modal próprio está sendo desenhado: a dica visível some, como no React. O `PopupMenu` do Kit e
+/// a [`mascara`] já chamam.
+pub use gpui_kit::component::tooltip::marcar_sobreposicao;
+
+/// Máscara dos modais (a do `Modal` do Lobe UI) cobrindo a janela; o diálogo vai como filho. Chamar durante o render.
+pub fn mascara(id: impl Into<gpui_kit::ElementId>, window: &Window) -> Stateful<Div> {
+    marcar_sobreposicao();
+    let janela = window.viewport_size();
+    div().id(id).occlude().w(janela.width).h(janela.height).bg(cor::mascara())
 }
 
 /// Tooltip de texto simples.
@@ -143,7 +152,9 @@ pub trait TooltipTexto {
 impl<E: StatefulInteractiveElement> TooltipTexto for E {
     fn tooltip_texto(self, texto: impl Into<SharedString>) -> Self {
         let texto: SharedString = texto.into();
-        self.tooltip(move |window, cx| Tooltip::new(texto.clone()).build(window, cx))
+        // Como no Base UI: depois do clique no dono, a dica só volta num novo hover.
+        self.capture_any_mouse_down(|ev, _, _| registrar_clique(ev.position))
+            .tooltip(move |window, cx| Tooltip::new(texto.clone()).build(window, cx))
     }
 }
 

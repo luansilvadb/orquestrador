@@ -24,7 +24,6 @@ use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use orquestrador_core::ide::files;
 use orquestrador_ui::avisos::{self, Aviso};
-use orquestrador_ui::faixa::fechar_ou_modificado;
 use orquestrador_ui::tema::{self, cor};
 use orquestrador_ui::widgets::{icone, item_menu, TooltipTexto};
 use orquestrador_ui::{icone_arquivo, Aba, EstadoFaixa, EstadoLista, FaixaAbas, ItemLista, ListaAbas, MoverAba};
@@ -258,6 +257,53 @@ pub fn titulo(a: &Alvo) -> String {
         Alvo::Commit { hash, path } => format!("{} · {}", &hash[..hash.len().min(7)], nome_arquivo(path)),
         Alvo::Conflict { path } => format!("{} · conflito", nome_arquivo(path)),
     }
+}
+
+/// X de 20 px à direita da aba, visível na ativa e com o ponteiro sobre a aba (`grupo`); com alteração não salva, o ponto
+/// fica no lugar dele até o ponteiro chegar. O ● do React sai da fonte do sistema com ~6 px; o da Inter é maior, então
+/// o ponto é desenhado.
+fn fechar_ou_modificado(
+    id: impl Into<gpui::ElementId>, grupo: impl Into<SharedString>, ativa: bool, modificado: bool,
+    ao_fechar: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let grupo: SharedString = grupo.into();
+    div().absolute().right(px(4.)).top_0().bottom_0().flex().items_center().child(
+        div()
+            .relative()
+            .size(px(20.))
+            .when(modificado, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .group_hover(grupo.clone(), |s| s.opacity(0.))
+                        .child(div().mt(px(2.)).size(px(6.5)).rounded_full().bg(cor::text_primary())),
+                )
+            })
+            .child(
+                div()
+                    .id(id)
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(tema::RAIO_MENU)
+                    .hover(|s| s.bg(cor::fill_hover()))
+                    .when(!(ativa && !modificado), |d| d.opacity(0.))
+                    .group_hover(grupo, |s| s.opacity(1.))
+                    .tooltip_texto("Fechar (Ctrl+F4)")
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |e, w, cx| {
+                        cx.stop_propagation();
+                        ao_fechar(e, w, cx);
+                    })
+                    .child(icone(orquestrador_ui::recursos::icone::FECHAR, 16., cor::text_secondary())),
+            ),
+    )
 }
 
 fn icone_alvo(a: &Alvo, tamanho: f32) -> AnyElement {
@@ -1973,8 +2019,9 @@ impl AreaEditor {
                 div().child(
                     gpui_kit::component::button::Button::new(SharedString::from(format!("mais-{g:?}")))
                         .ghost()
-                        .icon(gpui_kit::component::IconName::Ellipsis)
                         .xsmall()
+                        .size(px(24.))
+                        .child(icone("icons/ellipsis.svg", 14., cor::text_secondary()))
                         .tooltip("Mais Ações...")
                         .dropdown_menu(move |menu, window, cx| {
                             let Some(e) = e_menu.upgrade() else { return menu };
@@ -2274,7 +2321,14 @@ impl AreaEditor {
                 let Some(e) = ent_k.upgrade() else { return menu };
                 e.update(cx, |a, cx| a.menu_editor(menu, &id_doc, window, cx))
             })
-            .child(minimapa::Minimapa::new(editor.clone()).com_git(self.git.get(&doc_id).map(|e| crate::gutter_git::faixa_minimapa(&e.blocos)).unwrap_or_default()))
+            .child({
+                // Sem base do Git o React não configura a faixa no minimapa, e o texto começa na borda.
+                let mini = minimapa::Minimapa::new(editor.clone());
+                match self.git.get(&doc_id).filter(|e| e.base.is_some()) {
+                    Some(e) => mini.com_git(crate::gutter_git::faixa_minimapa(&e.blocos)),
+                    None => mini,
+                }
+            })
             // Depois do minimapa: a régua fica por cima dele, como o `zIndex` do React.
             .children(camada_git);
         col.child(editor_el).into_any_element()
@@ -2555,10 +2609,10 @@ fn nota(texto: &str, perigo: bool) -> gpui::Div {
         .flex_col()
         .flex_1()
         .gap(px(8.))
-        .px(px(16.))
-        .py(px(18.))
+        .p(px(16.))
         .bg(cor::pitch_black())
         .text_size(tema::TEXTO_BODY)
+        .line_height(px(22.))
         .text_color(if perigo { cor::signal_error() } else { cor::text_tertiary() })
         .child(texto.to_string())
 }

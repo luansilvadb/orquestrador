@@ -26,6 +26,22 @@ Alterações:
 Os testes do próprio crate não fazem parte do workspace; os do editor (`crates/editor/tests/git_gutter.rs`) cobrem as
 alterações.
 
+## gpui-component 0.9.1
+
+Origem: o pacote `gpui-component` 0.9.1 do crates.io (repositório `longbridge/gpui-kit`), parte do GPUI Kit 0.9.1.
+Licença Apache-2.0 (`gpui-component/LICENSE-APACHE`). Trechos alterados levam `Orquestrador:`.
+
+Alterações:
+
+- Menus (`menu/popup_menu.rs`, `menu/menu_item.rs`, `menu/dropdown_menu.rs`) nas medidas do menu do React
+  (`src/index.css` sobre o DropdownMenu do Lobe UI): itens de 26 px, texto de 13 px a 26 px da borda, raio de 4 px, sem
+  espaço entre itens; menu com 4 px de folga, borda de 1 px, anel claro por fora, raio de 5 px e 220 px de largura
+  mínima; separador de 1 px com 5 px de margem; ícone absoluto a 6 px da borda; submenu sem seta, encostado no menu e
+  4 px acima; desabilitado em branco a 25% com opacidade de 50%; dropdown 6 px abaixo do gatilho.
+- Dica (`tooltip.rs`): some quando o mouse aperta e quando um menu ou modal desenha no mesmo quadro
+  (`marcar_sobreposicao`, chamado pelo `PopupMenu` e pela máscara de `orquestrador-ui`); a dica pendente do dono clicado
+  nasce escondida (`registrar_clique`). Escondida, só volta num novo hover.
+
 ## gpui-pre-windows 0.3.12
 
 Origem: o pacote `gpui-pre-windows` 0.3.12 do crates.io (a plataforma Windows do `gpui-pre`). Licença Apache-2.0
