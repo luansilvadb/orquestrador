@@ -1,5 +1,5 @@
-//! O estado do app: o orquestrador, os lotes delegados, a fila e os executores. Não conhece o
-//! Tauri: os eventos saem por `Emit`, que os testes trocam por um canal.
+//! O estado do app: o orquestrador, os lotes delegados, a fila e os executores. Não conhece a
+//! interface: os eventos saem por `Emit`, que os testes trocam por um canal.
 pub mod capacity;
 pub mod frame;
 pub mod projects;
@@ -755,8 +755,8 @@ impl Core {
         for i in 0..inner.nodes.len() {
             let is_new = announce && i >= new_from;
             let before = inner.nodes[i].info.state;
-            if matches!(before, NodeState::AwaitingChoice | NodeState::Queued) {
-                if inner.choice.is_some() {
+            if matches!(before, NodeState::AwaitingChoice | NodeState::Queued)
+                && inner.choice.is_some() {
                     inner.nodes[i].info.state = NodeState::Queued;
                     let id = inner.nodes[i].info.id.clone();
                     if is_new || before != NodeState::Queued {
@@ -765,7 +765,6 @@ impl Core {
                     self.request_start(&id);
                     continue;
                 }
-            }
             if is_new || inner.nodes[i].info.state != before {
                 self.announce(&inner.nodes[i].info, is_new);
             }
@@ -1064,7 +1063,7 @@ mod tests {
         let root = &Tmp::new("orq-core", "pasta-solta").0;
         let pasta = root.join("solta");
         std::fs::create_dir_all(&pasta).unwrap();
-        let core = core_vazio(&root, Arc::new(|_: &str, _: Value| {}));
+        let core = core_vazio(root, Arc::new(|_: &str, _: Value| {}));
         let opened = core.set_project(&pasta).unwrap();
         assert_eq!(opened, Opened { project: pasta.display().to_string(), subfolder: false });
         assert_eq!(core.repo().unwrap(), pasta);
@@ -1075,7 +1074,7 @@ mod tests {
         let root = &Tmp::new("orq-core", "inexistente").0;
         let arquivo = root.join("arquivo.txt");
         std::fs::write(&arquivo, "x").unwrap();
-        let core = core_vazio(&root, Arc::new(|_: &str, _: Value| {}));
+        let core = core_vazio(root, Arc::new(|_: &str, _: Value| {}));
         let sumida = root.join("nao-existe");
         assert_eq!(core.set_project(&sumida).unwrap_err(), format!("A pasta {} não existe.", sumida.display()));
         assert!(core.set_project(&arquivo).unwrap_err().ends_with("não é uma pasta."));
@@ -1196,8 +1195,10 @@ mod tests {
         true
     }
 
+    type Eventos = Arc<Mutex<Vec<(String, Value)>>>;
+
     /// Um emissor que guarda os eventos, e o acesso a eles.
-    fn gravador() -> (Emit, Arc<Mutex<Vec<(String, Value)>>>) {
+    fn gravador() -> (Emit, Eventos) {
         let eventos = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
         let sink = eventos.clone();
         let emit: Emit = Arc::new(move |ev: &str, p: Value| sink.lock().unwrap().push((ev.to_string(), p)));

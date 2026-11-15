@@ -668,6 +668,17 @@ mod testes {
     }
 
     #[test]
+    fn medidas_e_cores_do_editor() {
+        // Porte de tests/check-editor-style.mjs (Antigravity Dark Modern): Consolas em linhas de 19 px.
+        assert_eq!(FONTE_EDITOR, "Consolas");
+        assert_eq!(LINHA_EDITOR, px(19.));
+        assert_eq!(cor::fundo(), gpui::rgb(0x1f1f1f).into());
+        assert_eq!(cor::texto(), gpui::rgb(0xcccccc).into());
+        assert_eq!(cor::numero(), gpui::rgb(0x6e7681).into());
+        assert_eq!(cor::selecao(), gpui::rgb(0x264f78).into());
+    }
+
+    #[test]
     fn par() {
         assert_eq!(par_de("a(b[c])", 1), Some(7));
         assert_eq!(par_de("a(b[c])", 7), Some(1));

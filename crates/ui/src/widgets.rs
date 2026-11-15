@@ -170,7 +170,7 @@ pub fn linhas_pretty(texto: &str, largura: f32, tamanho: Pixels, peso: FontWeigh
         let run = gpui_kit::TextRun { len: t.len(), font: fonte.clone(), color: Default::default(), background_color: None, underline: None, strikethrough: None };
         f32::from(sistema.shape_line(t.to_string().into(), tamanho, &[run], None).width)
     };
-    texto.split('\n').map(|p| crate::quebra::linhas(p, largura, &medir).join("\n")).collect::<Vec<_>>().join("\n")
+    texto.split('\n').map(|p| crate::quebra::linhas(p, largura, medir).join("\n")).collect::<Vec<_>>().join("\n")
 }
 
 /// Bloco de texto corrido com o `text-wrap: pretty` do Lobe, na largura do próprio bloco (a do pai, medida no quadro

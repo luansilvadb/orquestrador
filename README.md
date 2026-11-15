@@ -2,7 +2,7 @@
 
 ![Orquestrador](docs/screenshot-v4.png)
 
-App para Windows (Tauri) que põe CLIs de IA para trabalhar sobre a pasta de um projeto, de preferência um repositório Git. Um **orquestrador** conversa com você, lê o projeto e delega tarefas. Os **executores** recebem essas tarefas, cada um numa aba do painel, e trabalham na mesma pasta, em paralelo. Os CLIs `claude` e `codex` podem ocupar qualquer um dos dois papéis.
+App nativo para Windows (Rust e GPUI) que põe CLIs de IA para trabalhar sobre a pasta de um projeto, de preferência um repositório Git. Um **orquestrador** conversa com você, lê o projeto e delega tarefas. Os **executores** recebem essas tarefas, cada um numa aba do painel, e trabalham na mesma pasta, em paralelo. Os CLIs `claude` e `codex` podem ocupar qualquer um dos dois papéis.
 
 ## Instalar
 
@@ -12,7 +12,7 @@ App para Windows (Tauri) que põe CLIs de IA para trabalhar sobre a pasta de um 
 
 Requisitos:
 
-- Windows com WebView2.
+- Windows 10 ou 11, 64 bits.
 - Internet na abertura, para conferir o app e os CLIs.
 - Conta no Claude e no ChatGPT para autenticar os CLIs. O app instala e atualiza os dois; a autenticação fica com você.
 - Git (recomendado). Sem ele, o app abre a pasta, mas sem os recursos de Git.
@@ -30,20 +30,11 @@ O passo a passo está em [uso](docs/uso.md), a tela em [interface](docs/interfac
 ## Desenvolvimento
 
 ```powershell
-npm install
-npm run tauri dev
-```
-
-Pré-requisitos: Node.js, Rust com a toolchain MSVC (exige o Microsoft C++ Build Tools) e WebView2. `npm run tauri dev` abre o app sem consultar atualizações. Para gerar o instalador, veja [desenvolvimento](docs/desenvolvimento.md).
-
-## Testes
-
-```powershell
-npm run check
+cargo run -p orquestrador-app
 cargo test --workspace
 ```
 
-As checagens de interface (`npm run check:ui`) e os demais detalhes estão em [desenvolvimento](docs/desenvolvimento.md).
+Preparação da máquina, testes, lint e empacotamento em [desenvolvimento](docs/desenvolvimento.md).
 
 ## Contribuir
 
@@ -61,6 +52,6 @@ As checagens de interface (`npm run check:ui`) e os demais detalhes estão em [d
 | [limites de segurança](docs/seguranca.md) | Permissões dos agentes e o Git do painel |
 | [atualização e release](docs/atualizacao.md) | Atualização automática, chave de assinatura e publicação |
 | [arquitetura](docs/arquitetura.md) | Mapa dos arquivos do código |
-| [desenvolvimento](docs/desenvolvimento.md) | Build, testes e checagens |
+| [desenvolvimento](docs/desenvolvimento.md) | Preparar a máquina, build, testes e empacotamento |
 | [design system](docs/design-system.md) | Design system (Lobe UI) do app |
 | [notas de release](docs/releases/README.md) | Modelo das notas e checklist de release |

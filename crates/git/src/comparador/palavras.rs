@@ -263,6 +263,7 @@ mod testes {
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init, clippy::type_complexity)]
     fn word_alt_como_o_pierre() {
         let casos: [(&str, &str, &[Range<usize>], &[Range<usize>]); 6] = [
             ("foo.bar", "baz.qux", &[0..7], &[0..4, 4..7]),

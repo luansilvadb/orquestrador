@@ -1,4 +1,4 @@
-//! Regras de release sem rede (porte de `tests/check-release.mjs`).
+//! Regras de release sem rede (porte do antigo `check-release.mjs`).
 use super::*;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signer, SigningKey};
@@ -107,16 +107,14 @@ fn workflow_permissoes_e_gates_precedem_alteracoes_remotas_e_publicacao() {
     let wf: serde_yaml::Value = serde_yaml::from_str(&texto).unwrap();
     assert_eq!(wf["permissions"]["actions"].as_str(), Some("read"));
     let steps = wf["jobs"]["release"]["steps"].as_sequence().unwrap();
-    // O gate vale pelo comando Node enquanto o workflow usar o React, ou pelo `cargo xtask`.
-    let gates_cmd = ["node scripts/release.mjs wait-ci $sha", "cargo xtask release wait-ci $sha"];
     let run = |s: &serde_yaml::Value| s["run"].as_str().unwrap_or("").to_string();
-    let gate = |r: &str| gates_cmd.iter().filter_map(|g| r.rfind(g)).max();
+    let gate = |r: &str| r.rfind("cargo xtask release wait-ci $sha");
     let gates: Vec<usize> =
         (0..steps.len()).filter(|&i| run(&steps[i]).contains("git rev-parse HEAD") && gate(&run(&steps[i])).is_some()).collect();
     assert_eq!(gates.len(), 2);
     let escrita = regex::Regex::new(r"\bgh release (?:create|edit|upload|delete)\b").unwrap();
     let writes: Vec<usize> = (0..steps.len())
-        .filter(|&i| steps[i]["uses"].as_str().is_some_and(|u| u.starts_with("tauri-apps/tauri-action@")) || escrita.is_match(&run(&steps[i])))
+        .filter(|&i| escrita.is_match(&run(&steps[i])))
         .collect();
     assert!(!writes.is_empty());
     assert!(writes.iter().all(|&i| gates[0] < i));

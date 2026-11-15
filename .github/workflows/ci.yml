@@ -1,5 +1,4 @@
-# Checks a cada push em main e a cada pull request: build do frontend, checagens puras, testes Rust no Windows e compilação do backend em Linux e macOS. Sem segredos, sem assinatura, sem publicação.
-# Os checks de interface (npm run check:ui) não rodam aqui: sobem o Vite e um Chromium local.
+# Checks a cada push em main e a cada pull request: testes e clippy no Windows e compilação do backend (orquestrador-core) em Linux e macOS. Sem segredos, sem assinatura, sem publicação.
 name: ci
 
 on:
@@ -17,22 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version: lts/*
-          cache: npm
-
-      - run: npm ci
-        shell: bash
-
-      # O build vem antes dos testes Rust: o tauri-build pode exigir o dist/ do front-end.
-      - name: Build do front-end e checagens puras
-        shell: bash
-        run: |
-          npm run build
-          npm run check
-
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       # FFmpeg estático do orquestrador-midia: o cache guarda os pacotes binários do vcpkg e o libclang.
       - name: Cache do FFmpeg estático e do libclang
@@ -59,9 +45,10 @@ jobs:
         shell: bash
         run: |
           cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
           cargo build --locked --manifest-path crates/app/empacotamento/assinador/Cargo.toml
 
-  # Só compila o backend fora do Windows (macOS e Linux). O app ainda não tem os recursos lá, então não há teste.
+  # Só compila o backend fora do Windows (macOS e Linux). A interface é só para Windows.
   compilar:
     strategy:
       matrix:
@@ -70,27 +57,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version: lts/*
-          cache: npm
-
-      # Pacotes do Tauri 2 para Ubuntu, conforme a documentação de pré-requisitos (tauri.app/start/prerequisites).
-      - name: Dependências do Tauri no Linux
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-
-      - run: npm ci
-        shell: bash
-
-      - run: npm run build
-        shell: bash
-
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Compilação do backend fora do Windows
         shell: bash
-        run: cargo check --workspace --all-targets
+        run: cargo check -p orquestrador-core --all-targets

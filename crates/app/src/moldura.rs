@@ -412,6 +412,7 @@ impl Bancada {
             .h_full()
             .on_hover(cx.listener(move |this, dentro: &bool, window, cx| {
                 this.dica_janela = None;
+                this.dica_vista = None;
                 this.dica_tarefa = None;
                 if *dentro {
                     this.dica_tarefa = Some(cx.spawn_in(window, async move |this, cx| {
@@ -426,6 +427,7 @@ impl Bancada {
             }))
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                 this.dica_janela = None;
+                this.dica_vista = None;
                 this.dica_tarefa = None;
                 cx.notify();
             }))
@@ -433,11 +435,15 @@ impl Bancada {
     }
 
     /// A dica dos botões da janela: 4 px abaixo da titlebar e 4 px para dentro da borda direita do botão, como no React.
-    pub(crate) fn dica_el(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
-        let (texto, coluna) = self.dica_janela?;
+    /// Como a do `tooltip_texto`, some quando um menu ou modal abre e só volta num novo hover.
+    pub(crate) fn dica_el(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
+        let Some((texto, coluna)) = self.dica_janela else {
+            self.dica_vista = None;
+            return None;
+        };
         let direita = window.viewport_size().width - tema::BOTAO_JANELA * coluna as f32 - px(4.);
         // Sem a margem de 12 px que o Kit põe em volta da dica (ela deslocaria a caixa).
-        let dica = Tooltip::new(texto).m_0().build(window, cx);
+        let dica = self.dica_vista.get_or_insert_with(|| Tooltip::new(texto).m_0().build(window, cx)).clone();
         Some(
             gpui_kit::deferred(
                 gpui_kit::anchored()

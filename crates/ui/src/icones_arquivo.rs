@@ -1,7 +1,7 @@
 //! Ícones de arquivo e pasta do Material Icon Theme 5.40.0 (MIT, `assets/file-icons/LICENSE`), com a resolução de
 //! `src/shared/file-icons.ts`: nome do arquivo, extensão (da mais longa para a mais curta, "d.ts" antes de "ts"),
 //! linguagem pelo nome, linguagem pela extensão e o padrão; pasta pelo nome (aberta ou fechada) ou a padrão. Sem
-//! diferença de caixa. `assets/file-icons/theme.json` é o mapa gerado por `scripts/sync-file-icons.mjs`.
+//! diferença de caixa. `assets/file-icons/theme.json` é o mapa do `material-icon-theme`, versionado com os SVGs.
 //!
 //! Os SVGs são coloridos: desenhe-os com `img()`, porque `svg()` pinta uma cor só.
 use gpui_kit::SharedString;

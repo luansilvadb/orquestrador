@@ -117,7 +117,7 @@ mod tests {
     fn lote_sai_inteiro_e_renomeado_com_o_texto_exato() {
         let dir = &session("orq-delegar", "publica", true).0;
         let tasks = ["Tarefa A\nlinha 2 d'água", "Diga \"oi\" e \\\"tchau\\\" e a barra \\", "{\"a\":\"b\\\"c\"}"];
-        let id = publish(&dir, &tasks.map(String::from)).unwrap();
+        let id = publish(dir, &tasks.map(String::from)).unwrap();
         let batch = dir.join("requests").join(&id);
         let manifest: Vec<String> = serde_json::from_slice(&std::fs::read(batch.join(MANIFEST)).unwrap()).unwrap();
         assert_eq!(manifest, tasks, "o texto exato, na ordem, no manifesto");
@@ -131,8 +131,8 @@ mod tests {
     #[test]
     fn tarefa_invalida_nao_publica_nada() {
         let dir = &session("orq-delegar", "invalida", true).0;
-        assert!(publish(&dir, &[]).unwrap_err().contains("Nenhuma tarefa"));
-        assert!(publish(&dir, &["ok".into(), "  \n".into()]).unwrap_err().contains("Tarefa vazia"));
+        assert!(publish(dir, &[]).unwrap_err().contains("Nenhuma tarefa"));
+        assert!(publish(dir, &["ok".into(), "  \n".into()]).unwrap_err().contains("Tarefa vazia"));
         assert_eq!(std::fs::read_dir(dir.join("requests")).unwrap().count(), 0);
     }
 
@@ -143,18 +143,18 @@ mod tests {
             std::fs::create_dir_all(dir.join("requests").join(id)).unwrap();
         }
         std::fs::write(dir.join("results").join("00000000000000000003-cccccccc.delivered"), "").unwrap();
-        assert_eq!(resume(&dir).unwrap(), "00000000000000000002-bbbbbbbb");
+        assert_eq!(resume(dir).unwrap(), "00000000000000000002-bbbbbbbb");
         for id in ["00000000000000000001-aaaaaaaa", "00000000000000000002-bbbbbbbb"] {
             std::fs::write(dir.join("results").join(format!("{id}.delivered")), "").unwrap();
         }
-        assert_eq!(resume(&dir).unwrap_err(), "Nenhum lote aguardando entrega.");
+        assert_eq!(resume(dir).unwrap_err(), "Nenhum lote aguardando entrega.");
     }
 
     #[test]
     fn espera_devolve_o_resultado_inteiro_e_a_marca() {
         let dir = &session("orq-delegar", "espera", true).0;
         std::fs::write(dir.join("results").join("x.txt"), "--- EXECUTOR 1/1 ---\nok\n").unwrap();
-        let Waited::Result { text, marker } = wait(&dir, "x", WINDOW).unwrap() else { panic!("o resultado devia sair") };
+        let Waited::Result { text, marker } = wait(dir, "x", WINDOW).unwrap() else { panic!("o resultado devia sair") };
         assert_eq!(text, "--- EXECUTOR 1/1 ---\nok\n");
         assert!(marker.ends_with("x.delivered"));
     }
@@ -162,13 +162,13 @@ mod tests {
     #[test]
     fn sessao_morta_com_lote_pendente_falha_em_vez_de_esperar() {
         let dir = &session("orq-delegar", "morta", false).0;
-        assert_eq!(wait(&dir, "nunca", WINDOW).unwrap_err(), DEAD);
+        assert_eq!(wait(dir, "nunca", WINDOW).unwrap_err(), DEAD);
     }
 
     #[test]
     fn pasta_sem_dono_nao_e_sessao_ativa() {
         let dir = &session("orq-delegar", "ativa", true).0;
-        assert!(check_session(&dir).is_ok());
+        assert!(check_session(dir).is_ok());
         let nowhere = std::env::temp_dir().join(format!("orq-delegar-{}-inexistente", std::process::id()));
         assert_eq!(check_session(&nowhere).unwrap_err(), NOT_ACTIVE);
     }

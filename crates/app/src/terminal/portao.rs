@@ -295,49 +295,6 @@ fn pintar_marca(b: Bounds<Pixels>, inicio: Instant, parada: bool, window: &mut W
     }
 }
 
-#[cfg(test)]
-mod testes {
-    // Porte de tests/check-update-clis-ui.mjs (o texto) e da forma da fase `clis`.
-    use super::*;
-
-    #[test]
-    fn fase_clis_uma_linha_por_cli_com_versao_e_passo() {
-        let p = Portao::Clis {
-            claude: Andamento { step: Passo::Updating, version: Some("2.1.325".into()) },
-            codex: Andamento { step: Passo::Installing, version: None },
-        };
-        let (status, linhas) = textos(&p);
-        assert_eq!(status, "Preparando os CLIs…");
-        assert_eq!(linhas, vec!["Claude Code 2.1.325: atualizando…", "Codex: instalando…"]);
-    }
-
-    #[test]
-    fn fases_da_atualizacao_como_o_react() {
-        let t = |f| textos(&Portao::Atualizacao(f)).0;
-        assert_eq!(t(Fase::Verificando), "Verificando se há uma versão nova…");
-        assert_eq!(t(Fase::Baixando { versao: "0.2.0".into(), baixado: 50, total: Some(200) }), "Baixando a versão 0.2.0… 25%");
-        assert_eq!(t(Fase::Baixando { versao: "0.2.0".into(), baixado: 1572864, total: None }), "Baixando a versão 0.2.0… 1,5 MB");
-        assert_eq!(t(Fase::Instalando { versao: "0.2.0".into() }), "Instalando a versão 0.2.0. O app reabre sozinho.");
-        assert_eq!(progresso(&Portao::Atualizacao(Fase::Baixando { versao: "x".into(), baixado: 1, total: Some(4) })), Some(0.25));
-        assert_eq!(progresso(&Portao::Atualizacao(Fase::Baixando { versao: "x".into(), baixado: 1, total: None })), Some(1.));
-        assert_eq!(progresso(&Portao::Atualizacao(Fase::Verificando)), None);
-    }
-
-    #[test]
-    fn falha_bloqueia_com_o_motivo_e_desenvolvimento_libera() {
-        assert!(textos(&Portao::Falhou("x".into())).0.starts_with("Não foi possível atualizar"));
-        assert_eq!(Portao::inicial(), Portao::Pronto, "o teste roda no build de desenvolvimento");
-    }
-
-    #[test]
-    fn quadros_chave_interpolam_e_seguram() {
-        let k = [(0., 0.), (0.22, 1.), (0.70, 1.), (0.90, 0.), (1., 0.)];
-        assert_eq!(quadros(0., &k), 0.);
-        assert_eq!(quadros(0.5, &k), 1.);
-        assert_eq!(quadros(0.95, &k), 0.);
-    }
-}
-
 /// O portão como vista: segue o andamento da rodada e desenha a tela enquanto o uso não foi liberado.
 pub struct Abertura {
     pub estado: Portao,
@@ -404,5 +361,48 @@ impl Render for Abertura {
             let _ = eu.update(cx, |a, cx| a.tentar(cx));
         })
         .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    // Porte de tests/check-update-clis-ui.mjs (o texto) e da forma da fase `clis`.
+    use super::*;
+
+    #[test]
+    fn fase_clis_uma_linha_por_cli_com_versao_e_passo() {
+        let p = Portao::Clis {
+            claude: Andamento { step: Passo::Updating, version: Some("2.1.325".into()) },
+            codex: Andamento { step: Passo::Installing, version: None },
+        };
+        let (status, linhas) = textos(&p);
+        assert_eq!(status, "Preparando os CLIs…");
+        assert_eq!(linhas, vec!["Claude Code 2.1.325: atualizando…", "Codex: instalando…"]);
+    }
+
+    #[test]
+    fn fases_da_atualizacao_como_o_react() {
+        let t = |f| textos(&Portao::Atualizacao(f)).0;
+        assert_eq!(t(Fase::Verificando), "Verificando se há uma versão nova…");
+        assert_eq!(t(Fase::Baixando { versao: "0.2.0".into(), baixado: 50, total: Some(200) }), "Baixando a versão 0.2.0… 25%");
+        assert_eq!(t(Fase::Baixando { versao: "0.2.0".into(), baixado: 1572864, total: None }), "Baixando a versão 0.2.0… 1,5 MB");
+        assert_eq!(t(Fase::Instalando { versao: "0.2.0".into() }), "Instalando a versão 0.2.0. O app reabre sozinho.");
+        assert_eq!(progresso(&Portao::Atualizacao(Fase::Baixando { versao: "x".into(), baixado: 1, total: Some(4) })), Some(0.25));
+        assert_eq!(progresso(&Portao::Atualizacao(Fase::Baixando { versao: "x".into(), baixado: 1, total: None })), Some(1.));
+        assert_eq!(progresso(&Portao::Atualizacao(Fase::Verificando)), None);
+    }
+
+    #[test]
+    fn falha_bloqueia_com_o_motivo_e_desenvolvimento_libera() {
+        assert!(textos(&Portao::Falhou("x".into())).0.starts_with("Não foi possível atualizar"));
+        assert_eq!(Portao::inicial(), Portao::Pronto, "o teste roda no build de desenvolvimento");
+    }
+
+    #[test]
+    fn quadros_chave_interpolam_e_seguram() {
+        let k = [(0., 0.), (0.22, 1.), (0.70, 1.), (0.90, 0.), (1., 0.)];
+        assert_eq!(quadros(0., &k), 0.);
+        assert_eq!(quadros(0.5, &k), 1.);
+        assert_eq!(quadros(0.95, &k), 0.);
     }
 }

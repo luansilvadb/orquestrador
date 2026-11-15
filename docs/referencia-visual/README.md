@@ -2,13 +2,7 @@
 
 Aparência da interface React, capturada contra o app simulado (`src/backend/mock.ts`), viewport 1400x900, escala 1.
 
-Recapturar:
-
-```
-node scripts/capturar-referencia.mjs
-```
-
-Porta do Vite: 1431 (`REF_PORT` muda). Toda captura parte de uma página nova com a pasta simulada aberta (Arquivo > Abrir pasta), salvo indicação.
+As imagens foram geradas pelo `scripts/capturar-referencia.mjs` da versão React (Playwright, Vite na porta 1431), removido com ela; não há recaptura. Toda captura parte de uma página nova com a pasta simulada aberta (Arquivo > Abrir pasta), salvo indicação.
 
 | Arquivo | Tela/estado | Como |
 | --- | --- | --- |

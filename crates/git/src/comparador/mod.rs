@@ -193,10 +193,10 @@ fn quebrar_linha(texto: &str, util: f32, largura: &mut dyn FnMut(char) -> f32) -
         if w == 0. && lw > util {
             // `break-word`: a palavra é cortada onde a linha enche (ao menos um caractere por linha).
             forcada = true;
-            for k in ini..vis {
-                let c = largura(cs[k].1);
+            for &(b, ch) in &cs[ini..vis] {
+                let c = largura(ch);
                 if w > 0. && w + c > util {
-                    out.push(cs[k].0);
+                    out.push(b);
                     w = 0.;
                 }
                 w += c;
@@ -498,8 +498,8 @@ impl Comparador {
         }
         let fileiras = self.modelo.fileiras(self.lado);
         let mut partes = Vec::new();
-        for f in a.fileira..=b.fileira {
-            let celula = if s.b { fileiras[f].b } else { fileiras[f].a };
+        for (f, fila) in fileiras.iter().enumerate().take(b.fileira + 1).skip(a.fileira) {
+            let celula = if s.b { fila.b } else { fila.a };
             let Celula::Linha(i) = celula else { continue };
             let e = &self.exibidos[i];
             let ini = if f == a.fileira { a.byte } else { 0 };
@@ -792,9 +792,12 @@ fn corridas(ini: usize, fim: usize, faixas: Option<&Vec<(Range<usize>, Highlight
 pub struct Corpo {
     estado: Rc<RefCell<Comparador>>,
     vista: EntityId,
-    ao_escolher: Rc<dyn Fn(usize, &mut Window, &mut App)>,
-    ao_focar: Rc<dyn Fn(&mut Window, &mut App)>,
+    ao_escolher: AoEscolher,
+    ao_focar: AoFocar,
 }
+
+type AoEscolher = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+type AoFocar = Rc<dyn Fn(&mut Window, &mut App)>;
 
 impl Corpo {
     pub fn new(
@@ -889,7 +892,7 @@ impl Element for Corpo {
             let e = self.estado.borrow();
             if e.arrastando_divisor() {
                 window.set_window_cursor_style(CursorStyle::ResizeLeftRight);
-            } else if let Some(pos) = Some(window.mouse_position()).filter(|_| p.hitbox.is_hovered(window)) {
+            } else if let Some(pos) = p.hitbox.is_hovered(window).then(|| window.mouse_position()) {
                 let (x, y) = (f32::from(pos.x - bounds.origin.x), f32::from(pos.y - bounds.origin.y) + e.rolagem);
                 let c = g.colunas;
                 let em_texto = (x >= c.txt_a.0 && x < c.txt_a.1) || (e.lado && x >= c.txt_b.0 && x < c.txt_b.1);
@@ -1038,6 +1041,9 @@ fn palavra_em(t: &str, byte: usize) -> Range<usize> {
     t.len()..t.len()
 }
 
+/// Lado (b), número (x, largura) e texto (x, largura) de uma coluna.
+type Coluna = (bool, (f32, f32), (f32, f32));
+
 fn pintar(e: &Comparador, g: &Geometria, visiveis: Range<usize>, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
     let Some(m) = e.medidas else { return };
     let ox = f32::from(bounds.origin.x);
@@ -1045,7 +1051,7 @@ fn pintar(e: &Comparador, g: &Geometria, visiveis: Range<usize>, bounds: Bounds<
     let caixa = |x0: f32, x1: f32, y0: f32, y1: f32| Bounds::new(point(px(ox + x0), px(oy + y0)), size(px(x1 - x0), px(y1 - y0)));
     let fileiras = e.modelo.fileiras(e.lado);
     let c = g.colunas;
-    let colunas: &[(bool, (f32, f32), (f32, f32))] =
+    let colunas: &[Coluna] =
         if e.lado { &[(false, c.num_a, c.txt_a), (true, c.num_b, c.txt_b)] } else { &[(false, c.num_a, c.txt_a)] };
     let f = fonte();
     let tam = px(TAMANHO);

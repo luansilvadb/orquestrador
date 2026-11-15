@@ -33,7 +33,7 @@ impl Drop for Guarda {
 /// Prefixo do mutex e do pipe; o build de teste de ponta a ponta (`ORQ_INSTANCIA`) não cede a vez ao app real aberto.
 const BASE: &str = match option_env!("ORQ_INSTANCIA") {
     Some(b) => b,
-    None => "orquestrador-gpui",
+    None => "orquestrador",
 };
 
 fn nome_com_usuario(sufixo: &str) -> String {

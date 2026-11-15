@@ -29,7 +29,7 @@ impl Drop for Tmp {
 
 fn montar(cx: &mut TestAppContext, tmp: &Tmp) -> (WindowHandle<Root>, Entity<Bancada>) {
     let places = session::Places { temp: tmp.0.join("temp"), codex_rules: tmp.0.join("rules") };
-    let exes = cli::Exes::new("claude.exe", "codex.exe", "orquestrador-gpui.exe");
+    let exes = cli::Exes::new("claude.exe", "codex.exe", "orquestrador.exe");
     let (backend, _tx, eventos) =
         Backend::com(exes, places, tmp.0.join("config.json"), Some(tmp.0.join("interface.json")));
     let backend = Rc::new(backend);
@@ -256,7 +256,7 @@ fn estado_tolera_arquivo_corrompido_e_valores_invalidos() {
 /// Bancada sem janela: com o Terminal aberto e desenhado, shells de verdade rodariam fora do executor de teste.
 fn bancada_sem_janela(cx: &mut TestAppContext, tmp: &Tmp) -> Entity<Bancada> {
     let places = session::Places { temp: tmp.0.join("temp"), codex_rules: tmp.0.join("rules") };
-    let exes = cli::Exes::new("claude.exe", "codex.exe", "orquestrador-gpui.exe");
+    let exes = cli::Exes::new("claude.exe", "codex.exe", "orquestrador.exe");
     let (backend, _tx, eventos) =
         Backend::com(exes, places, tmp.0.join("config.json"), Some(tmp.0.join("interface.json")));
     let backend = Rc::new(backend);
@@ -608,6 +608,29 @@ fn dica_do_fechar_alinha_a_direita(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn dica_da_janela_some_com_menu_ou_modal(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("dica-menu");
+    let (janela, bancada) = montar(cx, &tmp);
+    cx.update_window(janela.into(), |_, window, cx| {
+        bancada.update(cx, |b, cx| {
+            b.dica_janela = Some(("Fechar", 0));
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.find("dica-janela").bounds().size.height > gpui_kit::px(0.), "dica à vista");
+        orquestrador_ui::widgets::marcar_sobreposicao();
+        bancada.update(cx, |_, cx| cx.notify());
+        window.render_frame(cx);
+        assert_eq!(window.find("dica-janela").bounds().size.height, gpui_kit::px(0.), "some com o menu aberto");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        bancada.update(cx, |_, cx| cx.notify());
+        window.render_frame(cx);
+        assert_eq!(window.find("dica-janela").bounds().size.height, gpui_kit::px(0.), "só volta num novo hover");
+    })
+    .expect("janela");
+}
+
+#[gpui_kit::test]
 fn tab_percorre_os_botoes_do_fechamento(cx: &mut TestAppContext) {
     use crate::fechamento::Resposta;
     let tmp = Tmp::new("fechar-tab");
@@ -843,4 +866,108 @@ fn subpasta_de_repositorio_avisa_que_abriu_a_raiz(cx: &mut TestAppContext) {
         "{:?}",
         avisos.iter().map(|a| a.titulo.clone()).collect::<Vec<_>>()
     );
+}
+
+// Porte de tests/check-titlebar-ui.mjs e check-project-tabs-ui.mjs (o que não depende do navegador).
+
+#[gpui_kit::test]
+fn controles_da_janela_colados_a_direita(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("controles");
+    let (janela, _) = montar(cx, &tmp);
+    cx.update_window(janela.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let largura = window.viewport_size().width;
+        let b = ["janela-minimizar", "janela-maximizar", "janela-fechar"].map(|id| window.find(id).bounds());
+        for x in &b {
+            assert_eq!(x.size.width, crate::tema::BOTAO_JANELA, "46 px de largura");
+            assert_eq!(x.size.height, crate::tema::TITLEBAR - px(1.), "altura útil sem a borda");
+            assert_eq!(x.top(), px(0.));
+        }
+        assert_eq!(b[2].right(), largura, "Fechar colado à direita");
+        assert_eq!(b[1].right(), b[2].left());
+        assert_eq!(b[0].right(), b[1].left());
+    })
+    .expect("janela");
+}
+
+#[gpui_kit::test]
+fn titulo_acompanha_o_projeto(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("titulo");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "exemplo");
+    assert_eq!(cx.update(|cx| bancada.read(cx).titulo()), "exemplo - Orquestrador");
+    cx.update_window(janela.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click(gpui_kit::SharedString::from(format!("fechar-aba-{id}")), cx);
+    })
+    .expect("janela");
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| bancada.read(cx).titulo()), "Orquestrador");
+}
+
+#[gpui_kit::test]
+fn trocar_de_projeto_preserva_o_texto_digitado(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("troca-texto");
+    let (janela, bancada, a) = com_projeto(cx, &tmp, "a");
+    sujar_readme(cx, janela, &bancada, &a);
+    abrir_pastas(cx, &bancada, &tmp, &["b"]);
+    desenhar(cx, janela);
+    assert_ne!(cx.update(|cx| bancada.read(cx).ativa.clone()), Some(a.clone()), "abrir a segunda pasta ativa a aba nova");
+    cx.update(|cx| bancada.update(cx, |b, cx| b.selecionar(&a, cx)));
+    desenhar(cx, janela);
+    let texto = cx.update(|cx| {
+        let ed = bancada.read(cx).telas[&a].editor.clone();
+        let doc = ed.read(cx).editor_de("README.md").expect("documento aberto");
+        doc.read(cx).text().to_string()
+    });
+    assert!(texto.contains('x'), "{texto:?}");
+}
+
+#[gpui_kit::test]
+fn caminho_externo_de_pasta_vira_aba_ativa(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("externo-pasta");
+    let (janela, bancada, a) = com_projeto(cx, &tmp, "a");
+    let fora = tmp.0.join("fora");
+    std::fs::create_dir_all(&fora).expect("pasta");
+    cx.update(|cx| bancada.update(cx, |b, cx| b.abrir_caminhos(vec![fora], cx)));
+    cx.run_until_parked();
+    desenhar(cx, janela);
+    assert_eq!(nomes(cx, &bancada), ["a", "fora"]);
+    let ativa = cx.update(|cx| bancada.read(cx).ativa.clone()).expect("ativa");
+    assert_ne!(ativa, a);
+    assert_eq!(cx.update(|cx| crate::backend::nome_da_pasta(&bancada.read(cx).aba_ativa().unwrap().caminho)), "fora");
+}
+
+#[gpui_kit::test]
+fn fechar_a_ultima_aba_fecha_a_lateral(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("ultima");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "a");
+    cx.update(|cx| bancada.update(cx, |b, _| b.lateral_aberta = true));
+    cx.update(|cx| bancada.update(cx, |b, cx| b.fechar_confirmado(&id, cx)));
+    cx.run_until_parked();
+    desenhar(cx, janela);
+    assert!(cx.update(|cx| !bancada.read(cx).lateral_aberta), "sem projeto, tela limpa");
+    cx.update_window(janela.into(), |_, window, _| assert!(window.try_find("tela-arquivos").is_none())).expect("janela");
+}
+
+#[gpui_kit::test]
+fn reabrir_restaura_ordem_e_aba_ativa(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("reabrir");
+    let (_, bancada) = montar(cx, &tmp);
+    abrir_pastas(cx, &bancada, &tmp, &["a", "b", "c"]);
+    let b_id = cx.update(|cx| bancada.read(cx).abas[1].id.clone());
+    cx.update(|cx| bancada.update(cx, |b, cx| b.selecionar(&b_id, cx)));
+    cx.update(|cx| bancada.update(cx, |b, _| b.mover_aba(0, 2)));
+    assert_eq!(nomes(cx, &bancada), ["b", "c", "a"]);
+    let (_, outra) = montar(cx, &tmp);
+    cx.run_until_parked();
+    assert_eq!(nomes(cx, &outra), ["b", "c", "a"]);
+    assert_eq!(cx.update(|cx| crate::backend::nome_da_pasta(&outra.read(cx).aba_ativa().expect("ativa").caminho)), "b");
+}
+
+#[test]
+fn cores_dos_controles_da_janela() {
+    use crate::tema::cor;
+    assert_eq!(cor::titlebar_text(), gpui_kit::rgb(0xcccccc).into(), "ícone #CCCCCC");
+    assert_eq!(cor::fill_hover(), gpui_kit::rgba(0xffffff1a).into(), "hover branco a 10%");
+    assert_eq!(cor::close_red(), gpui_kit::rgba(0xe81123e6).into(), "Fechar #E81123 a 90%");
 }

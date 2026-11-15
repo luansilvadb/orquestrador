@@ -55,7 +55,7 @@ pub mod medir {
         let mut a = A.lock().unwrap_or_else(|e| e.into_inner());
         let ms = |d: Duration| d.as_secs_f64() * 1000.;
         a.push((ms(d), saida.map_or(0., ms)));
-        if a.len() % 50 == 0 {
+        if a.len().is_multiple_of(50) {
             let est = |f: &dyn Fn(&(f64, f64)) -> f64| {
                 let mut o: Vec<f64> = a.iter().map(f).collect();
                 o.sort_by(|x, y| x.total_cmp(y));
@@ -81,19 +81,25 @@ pub enum Alvo {
 /// Ponto de extensão para a fase de Arquivos: quem abre arquivo no editor (na linha) e revela pasta na árvore. Sem
 /// ele, Ctrl+clique em caminho não faz nada; URL abre sempre.
 #[derive(Default)]
-pub struct AbrirLinks(pub Option<Rc<dyn Fn(&Alvo, &mut Window, &mut App)>>);
+pub struct AbrirLinks(pub Option<AoAbrir>);
+
+pub type AoAbrir = Rc<dyn Fn(&Alvo, &mut Window, &mut App)>;
 
 impl gpui_kit::Global for AbrirLinks {}
 
 /// Troca quem abre URL (os testes); sem ela, o navegador padrão pelo core.
 #[derive(Default)]
-pub struct AbrirUrl(pub Option<Rc<dyn Fn(&str)>>);
+pub struct AbrirUrl(pub Option<AoAbrirUrl>);
+
+pub type AoAbrirUrl = Rc<dyn Fn(&str)>;
 
 impl gpui_kit::Global for AbrirUrl {}
 
 /// Erros dos terminais (colagem impossível, falha do core) para o aviso da janela.
 #[derive(Default)]
-pub struct AvisarErro(pub Option<Rc<dyn Fn(String, &mut Window, &mut App)>>);
+pub struct AvisarErro(pub Option<AoAvisar>);
+
+pub type AoAvisar = Rc<dyn Fn(String, &mut Window, &mut App)>;
 
 impl gpui_kit::Global for AvisarErro {}
 
@@ -113,7 +119,8 @@ pub enum Tipo {
 
 /// Existência por caminho absoluto, guardada por pouco tempo.
 fn tipo_do_caminho(abs: &str) -> Option<Tipo> {
-    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, Option<Tipo>)>>> = OnceLock::new();
+    type Cache = Mutex<HashMap<String, (Instant, Option<Tipo>)>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let chave = abs.to_lowercase();
     let agora = Instant::now();
@@ -834,11 +841,14 @@ impl IntoElement for GradeTerminal {
     }
 }
 
+/// Caixa, forma, foco e o caractere sob o cursor (posição e linha moldada).
+type Cursor = (Bounds<Pixels>, CursorShape, bool, Option<(gpui_kit::Point<Pixels>, ShapedLine)>);
+
 pub struct Pintura {
     hitbox: Hitbox,
     fundos: Vec<(Bounds<Pixels>, Hsla)>,
     linhas: Vec<(gpui_kit::Point<Pixels>, ShapedLine)>,
-    cursor: Option<(Bounds<Pixels>, CursorShape, bool, Option<(gpui_kit::Point<Pixels>, ShapedLine)>)>,
+    cursor: Option<Cursor>,
     marcado: Option<(Bounds<Pixels>, gpui_kit::Point<Pixels>, ShapedLine)>,
     altura: Pixels,
     mouse_relatado: bool,

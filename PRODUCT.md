@@ -4,9 +4,9 @@
 
 ## Platform
 
-web
+desktop
 
-App de desktop para Windows em Tauri: a interface é web (React no WebView2), sem linguagem visual nativa do sistema.
+App de desktop nativo para Windows em Rust e GPUI, sem WebView; terminais em `alacritty_terminal`. Sem linguagem visual nativa do sistema: o tema reproduz o Lobe UI.
 
 ## Users
 
@@ -28,10 +28,10 @@ Orquestração local de CLIs de IA reais (`claude` e `codex`, cada um podendo se
 
 ## Capabilities and Constraints
 
-- Telas: Arquivos (árvore e editor CodeMirror), Pesquisar, Git (controle de versão e comparador); painel do Orquestrador à direita e painel Terminal embaixo.
+- Telas: Arquivos (árvore e editor), Pesquisar, Git (controle de versão e comparador); painel do Orquestrador à direita e painel Terminal embaixo.
 - A concorrência dos executores é automática (CPU e RAM), sem ajuste manual.
 - Os executores têm permissão total na pasta do projeto; os limites estão em `docs/seguranca.md`.
-- Terminais xterm ficam sempre montados: trocar de tela não pode desmontar a coluna central nem o painel do Orquestrador.
+- Terminais ficam sempre montados: trocar de tela não pode desmontar a coluna central nem o painel do Orquestrador.
 - Atualização automática pelo próprio app; instalação por usuário, sem administrador.
 - Termos do produto: orquestrador, executor, delegação, fila, ferramenta, modelo, esforço.
 

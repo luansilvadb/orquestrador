@@ -823,11 +823,7 @@ fn parse_refs(decorations: &str) -> Vec<GitRef> {
             Some((name, RefKind::Branch))
         } else if let Some(name) = reference.strip_prefix("refs/remotes/") {
             (!name.ends_with("/HEAD")).then_some((name, RefKind::Remote))
-        } else if let Some(name) = reference.strip_prefix("tag: refs/tags/") {
-            Some((name, RefKind::Tag))
-        } else {
-            None
-        };
+        } else { reference.strip_prefix("tag: refs/tags/").map(|name| (name, RefKind::Tag)) };
         if let Some((name, kind)) = found {
             refs.push(GitRef { name: name.to_string(), kind, current });
         }
@@ -2144,9 +2140,9 @@ mod tests {
     fn comparador_recebe_o_arquivo_inteiro_e_os_blocos_seguem_o_contexto_de_tres() {
         let tmp = Tmp::new("orq-git", "display");
         let dir = repo(&tmp, "r");
-        write(&dir, "f.txt", &texto(30));
+        write(&dir, "f.txt", texto(30));
         commit_all(&dir, "base");
-        write(&dir, "f.txt", &texto(30).replace("linha 2
+        write(&dir, "f.txt", texto(30).replace("linha 2
 ", "dois
 ").replace("linha 28
 ", "vinte e oito
@@ -2535,7 +2531,7 @@ mod tests {
     #[test]
     fn base_ilegivel_nao_recusa_o_conflito() {
         let tmp = Tmp::new("orq-git", "base-ilegivel");
-        let dir = conflito(&tmp, "r", b"\xff base\n".to_vec(), b"main\n".to_vec(), b"outra\n".to_vec());
+        let dir = conflito(&tmp, "r", b"\xff base\n", b"main\n", b"outra\n");
         let c = conflict(&dir, "x.txt").unwrap();
         assert_eq!((c.ours.as_deref(), c.theirs.as_deref()), (Some("main\n"), Some("outra\n")));
         write_resolution(&dir, "x.txt", "fim\n", &c.revision, true).unwrap();
@@ -3023,7 +3019,7 @@ mod tests {
         assert_eq!(git(&dir, &["ls-files", "-s"]), antes, "o índice fica igual");
 
         let tmp = Tmp::new("orq-git", "conflito-misto");
-        let dir = conflito(&tmp, "r", b"base\n".to_vec(), b"main\r\nx\n".to_vec(), b"outra\n".to_vec());
+        let dir = conflito(&tmp, "r", b"base\n", b"main\r\nx\n", b"outra\n");
         let c = conflict(&dir, "x.txt").unwrap();
         let antes = fs::read(dir.join("x.txt")).unwrap();
         let why = write_resolution(&dir, "x.txt", "um\ndois\n", &c.revision, true).unwrap_err();

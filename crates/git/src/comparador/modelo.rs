@@ -230,6 +230,7 @@ mod testes {
     const PATCH: &str = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,6 +1,7 @@\n a\n-b\n+B\n+B2\n c\n d\n-e\n f\n";
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)]
     fn pareia_remocoes_e_inclusoes() {
         let m = montar(PATCH);
         assert_eq!(m.linhas.len(), 8);

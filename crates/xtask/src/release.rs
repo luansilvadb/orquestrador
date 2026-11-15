@@ -341,32 +341,14 @@ pub fn cargo_lock_versions(text: &str, name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Versões por arquivo. O `[workspace.package]` e o Cargo.lock valem sempre; `package.json`, `package-lock.json` e
-/// `tauri.conf.json` entram enquanto existirem.
+/// Versões por arquivo: o `[workspace.package]` e os pacotes do app no Cargo.lock.
 pub fn manifest_versions(root: &Path) -> R<BTreeMap<String, Option<String>>> {
     let read = |p: &str| std::fs::read_to_string(root.join(p)).map_err(|e| format!("{p}: {e}"));
-    let json = |p: &str| -> R<Value> { serde_json::from_str(&read(p)?).map_err(|e| format!("{p}: {e}")) };
-    let s = |v: &Value| v.as_str().map(String::from);
     let mut out = BTreeMap::new();
-    if root.join("package.json").exists() {
-        out.insert("package.json".into(), s(&json("package.json")?["version"]));
-    }
-    if root.join("package-lock.json").exists() {
-        let lock = json("package-lock.json")?;
-        out.insert("package-lock.json".into(), s(&lock["version"]));
-        out.insert("package-lock.json (packages[\"\"])".into(), s(&lock["packages"][""]["version"]));
-    }
-    if root.join("src-tauri/tauri.conf.json").exists() {
-        out.insert("src-tauri/tauri.conf.json".into(), s(&json("src-tauri/tauri.conf.json")?["version"]));
-    }
     out.insert("Cargo.toml ([workspace.package])".into(), cargo_package_version(&read("Cargo.toml")?, "[workspace.package]"));
     let lock = read("Cargo.lock")?;
     let one = |e: Vec<String>| if e.len() == 1 { e[0].clone() } else { format!("{} entradas", e.len()) };
-    let mut pacotes = vec!["orquestrador-core", "orquestrador-app"];
-    if root.join("src-tauri/Cargo.toml").exists() {
-        pacotes.insert(0, "orquestrador");
-    }
-    for p in pacotes {
+    for p in ["orquestrador-core", "orquestrador-app"] {
         out.insert(format!("Cargo.lock ({p})"), Some(one(cargo_lock_versions(&lock, p))));
     }
     Ok(out)
@@ -517,7 +499,7 @@ pub fn verify_manifest(text: &str, version: &str, sig_text: &str, notes: Option<
 }
 
 // ---------------------------------------------------------------- Minisign
-// Assinatura Minisign, como o Tauri grava (https://jedisct1.github.io/minisign/). Só verificação.
+// Assinatura Minisign, como o tauri-plugin-updater grava (https://jedisct1.github.io/minisign/). Só verificação.
 // Chave pública (pubkey do updater) = base64 de "untrusted comment: …\n" + base64(alg "Ed" + key id 8 + chave 32).
 // .sig = base64 de: "untrusted comment: …", base64(alg + key id + assinatura 64), "trusted comment: …" e base64(global 64).
 // Alg "ED" assina o BLAKE2b-512 do arquivo (o modo do Tauri); "Ed" assina o arquivo direto. A global cobre a
@@ -659,15 +641,15 @@ pub fn verify_body(body: &str, notes: &str) -> R<String> {
 
 const USO: &str = "comandos: wait-ci <SHA>, check-versions [X.Y.Z], check-notes X.Y.Z [anterior], prepare-manifest X.Y.Z latest.json notas.md, verify-manifest X.Y.Z latest.json arquivo.sig [notas.md], verify-installer X.Y.Z instalador.exe arquivo.sig [pubkey], release-body X.Y.Z corpo.md, verify-body corpo.md notas.md";
 
-/// Pubkey do updater: o arquivo dado ou a do `tauri.conf.json` enquanto ele existir.
+/// Pubkey do updater: o arquivo dado ou a `PUBKEY_OFICIAL` embutida no app.
 fn pubkey(root: &Path, arquivo: Option<&String>) -> R<String> {
     if let Some(a) = arquivo {
         return std::fs::read_to_string(a).map(|s| s.trim().to_string()).map_err(|e| format!("{a}: {e}"));
     }
-    let conf = root.join("src-tauri/tauri.conf.json");
-    let texto = std::fs::read_to_string(&conf).map_err(|_| "sem src-tauri/tauri.conf.json: passe o arquivo da pubkey.".to_string())?;
-    let v: Value = serde_json::from_str(&texto).map_err(|e| e.to_string())?;
-    v["plugins"]["updater"]["pubkey"].as_str().map(String::from).ok_or("tauri.conf.json sem plugins.updater.pubkey.".into())
+    let fonte = "crates/app/src/atualizacao/mod.rs";
+    let texto = std::fs::read_to_string(root.join(fonte)).map_err(|e| format!("{fonte}: {e}"))?;
+    let re = regex::Regex::new(r#"PUBKEY_OFICIAL: &str = "([A-Za-z0-9+/=]+)""#).unwrap();
+    re.captures(&texto).map(|c| c[1].to_string()).ok_or(format!("{fonte} sem PUBKEY_OFICIAL."))
 }
 
 pub fn run(root: &Path, args: &[String]) -> R<String> {
@@ -686,8 +668,7 @@ pub fn run(root: &Path, args: &[String]) -> R<String> {
             let expected = match arg(1) {
                 Some(e) => e.to_string(),
                 None => v
-                    .get("package.json")
-                    .or_else(|| v.get("Cargo.toml ([workspace.package])"))
+                    .get("Cargo.toml ([workspace.package])")
                     .cloned()
                     .flatten()
                     .unwrap_or_default(),

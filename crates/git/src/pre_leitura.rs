@@ -206,7 +206,7 @@ impl PreLeiturasGit {
         let resto = (desde + PRAZO_ABERTURA).saturating_duration_since(agora);
         let timer = cx.background_executor().timer(resto);
         cx.spawn(async move |_| {
-            futures_lite::future::or(async { timer.await }, async { let _ = rx.recv().await; }).await;
+            futures_lite::future::or(timer, async { let _ = rx.recv().await; }).await;
         })
     }
 

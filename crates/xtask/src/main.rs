@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 const AJUDA: &str = "uso: cargo xtask <comando>
   release <subcomando> ...  regras do fluxo de release (sem argumentos lista os subcomandos)
   limpar-target             cargo clean se target passar do teto (ORQUESTRADOR_TARGET_MAX_GB, padrão 30)
-  medir [opções]            medição de desempenho do orquestrador-gpui (docs/desempenho-gpui.md)
+  medir [opções]            medição de desempenho do orquestrador (docs/desempenho-gpui.md)
   despejar <linhas> <tag> [linhas/s] [--esperar <arquivo>]   gerador de saída para as medições";
 
 fn raiz() -> PathBuf {

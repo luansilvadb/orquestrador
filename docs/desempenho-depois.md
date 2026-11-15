@@ -1,5 +1,7 @@
 # Desempenho: depois das otimizações
 
+> Histórico da versão React. Os comandos citados (`node`, `npm`, `npx tauri`, `src-tauri`) saíram do projeto; a medição atual é `cargo xtask medir` ([desempenho do GPUI](desempenho-gpui.md)).
+
 Remedição com as mudanças não commitadas do working tree (xterm com `@xterm/addon-webgl` no terminal visível, saída dos terminais por `tauri::ipc::Channel` binário com coalescência de 4 ms, `term_write` fora do lock do Core, correções de updates retidos em hooks React) contra a base de `docs/desempenho-base.md`. Duas rodadas completas, `node scripts/medir-desempenho.mjs`, mesmo cenário, mesma carga (4 terminais, 6000 linhas/s cada), mesmos momentos, 250 amostras de latência por condição. Resultados brutos: `%TEMP%\orq-medir-depois1\` e `%TEMP%\orq-medir-depois2\` (`resultado.json`, `renderer.heapsnapshot`, `heap-analise.json`).
 
 ## Mudança de método (script)

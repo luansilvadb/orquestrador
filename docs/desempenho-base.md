@@ -1,6 +1,8 @@
 # Desempenho: medição de base
 
-Medição antes de qualquer otimização. Reexecutar: `node scripts/medir-desempenho.mjs` (cerca de 6 min, sem intervenção; `--build` recompila o exe). O script grava `resultado.json`, `renderer.heapsnapshot` e `heap-analise.json` em `%TEMP%\orq-medir-<data>\` (ou em `--out`). Os números abaixo são da rodada `C:\Users\Luan\AppData\Local\Temp\orq-medir-base\`; o heap snapshot (79,8 MB) está lá, fora do repositório.
+> Histórico da versão React. Os comandos citados (`node`, `npm`, `npx tauri`, `src-tauri`) saíram do projeto; a medição atual é `cargo xtask medir` ([desempenho do GPUI](desempenho-gpui.md)).
+
+Medição antes de qualquer otimização. Medido com o `scripts/medir-desempenho.mjs` da versão React, removido com ela (a medição atual é `cargo xtask medir`, em [desempenho do GPUI](desempenho-gpui.md)). O script gravava `resultado.json`, `renderer.heapsnapshot` e `heap-analise.json` em `%TEMP%\orq-medir-<data>\` (ou em `--out`). Os números abaixo são da rodada `C:\Users\Luan\AppData\Local\Temp\orq-medir-base\`; o heap snapshot (79,8 MB) está lá, fora do repositório.
 
 ## Ambiente e método
 

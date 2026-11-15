@@ -191,7 +191,7 @@ mod tests {
         let s = &session("orq-mcp", "init", true).0;
         let got = talk(
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"initialize\",\"params\":{}}\n",
-            &s,
+            s,
         );
         assert_eq!(got[0]["result"]["protocolVersion"], "2024-11-05");
         assert_eq!(got[1]["result"]["protocolVersion"], "2025-06-18");
@@ -203,14 +203,14 @@ mod tests {
     #[test]
     fn ping_devolve_resultado_vazio() {
         let s = &session("orq-mcp", "ping", true).0;
-        let got = talk("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}\n", &s);
+        let got = talk("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}\n", s);
         assert_eq!(got, [json!({ "jsonrpc": "2.0", "id": 3, "result": {} })]);
     }
 
     #[test]
     fn tools_list_traz_as_duas_ferramentas_com_esquema() {
         let s = &session("orq-mcp", "list", true).0;
-        let got = talk("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\"}\n", &s);
+        let got = talk("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\"}\n", s);
         let tools = got[0]["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["delegar", "aguardar"]);
@@ -224,7 +224,7 @@ mod tests {
         let s = &session("orq-mcp", "notif", true).0;
         let got = talk(
             "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":7}}\n",
-            &s,
+            s,
         );
         assert!(got.is_empty(), "{got:?}");
     }
@@ -233,7 +233,7 @@ mod tests {
     fn metodo_desconhecido_com_id_e_erro_32601() {
         // O Claude manda `server/discover` antes do `initialize`: o erro é a resposta certa.
         let s = &session("orq-mcp", "metodo", true).0;
-        let got = talk("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"server/discover\"}\n", &s);
+        let got = talk("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"server/discover\"}\n", s);
         assert_eq!(got[0]["id"], 5);
         assert_eq!(got[0]["error"]["code"], -32601);
     }
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn json_ilegivel_e_erro_32700_com_id_nulo() {
         let s = &session("orq-mcp", "ilegivel", true).0;
-        let got = talk("{\"jsonrpc\":\"2.0\",\"id\":6,\n", &s);
+        let got = talk("{\"jsonrpc\":\"2.0\",\"id\":6,\n", s);
         assert_eq!(got[0]["id"], Value::Null);
         assert_eq!(got[0]["error"]["code"], -32700);
     }
@@ -250,7 +250,7 @@ mod tests {
     fn delegar_com_lista_vazia_ou_tarefa_em_branco_nao_publica_nada() {
         let s = &session("orq-mcp", "invalido", true).0;
         let input = [call(7, "delegar", json!({ "tarefas": [] })), call(8, "delegar", json!({ "tarefas": ["ok", "  "] })), call(9, "delegar", json!({}))].join("\n");
-        let got = talk(&input, &s);
+        let got = talk(&input, s);
         let by_id = |id: u64| got.iter().find(|r| r["id"] == id).unwrap();
         let (text, is_error) = text_of(by_id(7));
         assert!(is_error && text.contains("Nenhuma tarefa"), "{text}");
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn aguardar_sem_lote_e_erro_sem_prefixo_nem_fim() {
         let s = &session("orq-mcp", "sem-lote", true).0;
-        let got = talk(&call(10, "aguardar", json!({})), &s);
+        let got = talk(&call(10, "aguardar", json!({})), s);
         let (text, is_error) = text_of(&got[0]);
         assert!(is_error);
         assert_eq!(text, "Nenhum lote aguardando entrega.");
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn janela_curta_devolve_em_andamento_sem_marca_e_aguardar_pega_o_resultado() {
         let s = &session("orq-mcp", "janela", true).0;
-        let got = talk(&call(16, "delegar", json!({ "tarefas": ["Tarefa A"] })), &s);
+        let got = talk(&call(16, "delegar", json!({ "tarefas": ["Tarefa A"] })), s);
         let (text, is_error) = text_of(&got[0]);
         assert!(!is_error);
         assert_eq!(text, RUNNING);
@@ -282,7 +282,7 @@ mod tests {
         assert!(!s.join("results").join(format!("{id}.delivered")).exists(), "em andamento não entrega nada");
         // O app grava o resultado; `aguardar` o pega, e só então o lote fica entregue.
         std::fs::write(s.join("results").join(format!("{id}.txt")), "--- EXECUTOR 1/1 ---\nTarefa A\nfeito\nexecutor_exit: 0\n--- FIM ---\n").unwrap();
-        let got = talk(&call(17, "aguardar", json!({})), &s);
+        let got = talk(&call(17, "aguardar", json!({})), s);
         let (text, is_error) = text_of(&got[0]);
         assert!(!is_error);
         assert_eq!(text, "--- EXECUTOR 1/1 ---\nTarefa A\nfeito\nexecutor_exit: 0\n--- FIM ---\n");
@@ -295,10 +295,10 @@ mod tests {
         std::fs::create_dir_all(s.join("requests").join("B1")).unwrap();
         std::fs::write(s.join("results").join("B1.txt"), "--- EXECUTOR 1/1 ---\nok\n--- FIM ---\n").unwrap();
         // O resultado devolvido traz a marca, que quem chama grava; a função em si não grava nada.
-        let Ok(Waited::Result { marker, .. }) = dispatch(&s, "aguardar", &json!({}), SHORT) else { panic!("o resultado traz a marca") };
+        let Ok(Waited::Result { marker, .. }) = dispatch(s, "aguardar", &json!({}), SHORT) else { panic!("o resultado traz a marca") };
         assert!(!marker.exists(), "devolver o resultado não grava a marca");
         // Pelo laço, a marca entra depois da resposta escrita.
-        let _ = talk(&call(18, "aguardar", json!({})), &s);
+        let _ = talk(&call(18, "aguardar", json!({})), s);
         assert!(marker.exists());
     }
 
@@ -311,7 +311,7 @@ mod tests {
             call(21, "aguardar", json!({})),
         ]
         .join("\n");
-        let got = talk(&input, &s);
+        let got = talk(&input, s);
         for reply in &got {
             let (text, is_error) = text_of(reply);
             assert!(is_error && text == "A pasta não é uma sessão ativa do orquestrador.", "{text}");
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn ferramenta_desconhecida_e_erro() {
         let s = &session("orq-mcp", "desconhecida", true).0;
-        let got = talk(&call(23, "apagar", json!({})), &s);
+        let got = talk(&call(23, "apagar", json!({})), s);
         let (text, is_error) = text_of(&got[0]);
         assert!(is_error && text.contains("Ferramenta desconhecida"), "{text}");
     }

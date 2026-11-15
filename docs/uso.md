@@ -2,7 +2,7 @@
 
 ## Visão geral
 
-Um app para Windows (Tauri) que põe CLIs de IA para trabalhar em papéis separados sobre a pasta de um projeto, de preferência um repositório Git. Cada CLI tem uma aba no painel do Orquestrador, à direita da tela principal, com o terminal dele ao vivo. O orquestrador alinha o objetivo com o usuário, lê o projeto, delega, faz stage e commit do trabalho da sessão e consulta o usuário antes de push; os executores recebem as tarefas, cada um na sua aba, e trabalham na pasta do projeto em paralelo. As ferramentas `claude` e `codex` podem ocupar qualquer um dos dois papéis.
+Um app nativo para Windows (Rust e GPUI) que põe CLIs de IA para trabalhar em papéis separados sobre a pasta de um projeto, de preferência um repositório Git. Cada CLI tem uma aba no painel do Orquestrador, à direita da tela principal, com o terminal dele ao vivo. O orquestrador alinha o objetivo com o usuário, lê o projeto, delega, faz stage e commit do trabalho da sessão e consulta o usuário antes de push; os executores recebem as tarefas, cada um na sua aba, e trabalham na pasta do projeto em paralelo. As ferramentas `claude` e `codex` podem ocupar qualquer um dos dois papéis.
 
 ## Como se usa
 
@@ -19,7 +19,7 @@ No Explorer, `Abrir com Orquestrador` abre qualquer arquivo; `Abrir pasta no Orq
 
 ## Configuração
 
-A última escolha de cada papel fica em `%LOCALAPPDATA%\orquestrador\config.json`. As abas abertas, a aba ativa e até 10 projetos recentes ficam no `localStorage` do app; fechar a última aba limpa a lista aberta e mantém os recentes.
+A última escolha de cada papel fica em `%LOCALAPPDATA%\orquestrador\config.json`. As abas abertas, a aba ativa e até 10 projetos recentes ficam em `%LOCALAPPDATA%\orquestrador\interface.json`; fechar a última aba limpa a lista aberta e mantém os recentes.
 
 ```json
 {

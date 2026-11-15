@@ -1,6 +1,6 @@
 //! Testes dos painéis de terminal numa janela sem tela, com PTY real: porte de check-shell-tabs-ui, check-term-links-ui,
 //! check-terminal-webgl-ui (no que vale sem WebGL), check-update-clis-ui e do fluxo do orquestrador com o CLI falso
-//! (src-tauri/examples/fake_cli.rs).
+//! (crates/app/examples/fake_cli.rs).
 use super::motor::chave;
 use super::painel::Terminais;
 use super::vista::{AbrirLinks, AbrirUrl, Alvo, VistaTerminal};
@@ -39,13 +39,13 @@ impl Drop for Tmp {
     }
 }
 
-/// O CLI falso e o executável do app que atende `--hook` e `--mcp` (o do Tauri tem o mesmo despacho), compilados pelo
+/// O CLI falso e o executável do app que atende `--hook` e `--mcp` compilados pelo
 /// `cargo test --workspace`.
 fn falsos() -> Option<(PathBuf, PathBuf)> {
     let exe = std::env::current_exe().ok()?;
     let fake = exe.ancestors().map(|d| d.join("examples").join("fake_cli.exe")).find(|p| p.is_file())?;
     let pasta = fake.parent()?.parent()?.to_path_buf();
-    let app = ["orquestrador-gpui.exe", "orquestrador.exe"].iter().map(|n| pasta.join(n)).find(|p| p.is_file())?;
+    let app = Some(pasta.join("orquestrador.exe")).filter(|p| p.is_file())?;
     Some((fake, app))
 }
 
@@ -77,7 +77,7 @@ fn montar(cx: &mut TestAppContext, tmp: &Tmp, exes: cli::Exes) -> (WindowHandle<
 }
 
 fn exes_padrao() -> cli::Exes {
-    cli::Exes::new("claude.exe", "codex.exe", "orquestrador-gpui.exe")
+    cli::Exes::new("claude.exe", "codex.exe", "orquestrador.exe")
 }
 
 fn desenhar(cx: &mut TestAppContext, janela: WindowHandle<Root>) {

@@ -31,7 +31,7 @@ impl Exes {
         if !cfg!(debug_assertions) {
             return Exes::new("claude.exe", "codex.exe", me);
         }
-        // Só no debug: scripts/medir-desempenho.mjs troca o CLI pelo falso, já que o portable-pty refaz o Path do filho pelo registro.
+        // Só no debug: o `cargo xtask medir` troca o CLI pelo falso, já que o portable-pty refaz o Path do filho pelo registro.
         let var = |k: &str| std::env::var(k).ok();
         let c = clis::localizar_sem_rodar(&clis::Real, var("ORQ_CLAUDE_EXE"), var("ORQ_CODEX_EXE"));
         Exes::new(c.claude, c.codex, me)

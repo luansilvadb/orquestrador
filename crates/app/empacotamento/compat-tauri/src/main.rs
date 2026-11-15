@@ -1,4 +1,4 @@
-//! O updater do 0.1.48 (tauri-plugin-updater 2.14.1, com a configuração do `src-tauri/tauri.conf.json`) diante dos
+//! O updater do 0.1.48 (tauri-plugin-updater 2.14.1, com a configuração do updater do 0.1.48 em `updater-0.1.48.json`) diante dos
 //! artefatos novos. Uso:
 //!   compat verificar <pubkey> <latest.json> <instalador>   restore_update + verify, como o app faria após a consulta
 //!   compat instalar <pubkey> <url do latest.json> [args…]  check + download + install de verdade (sai ao instalar)
@@ -7,8 +7,8 @@ use tauri_plugin_updater::UpdaterExt;
 fn app(pubkey: &str, endpoint: &str) -> tauri::App<tauri::test::MockRuntime> {
     let mut ctx = tauri::test::mock_context(tauri::test::noop_assets());
     ctx.package_info_mut().version = "0.1.48".parse().unwrap();
-    let conf: serde_json::Value = serde_json::from_str(include_str!("../../../../../src-tauri/tauri.conf.json")).unwrap();
-    let mut updater = conf["plugins"]["updater"].clone();
+    let conf: serde_json::Value = serde_json::from_str(include_str!("../updater-0.1.48.json")).unwrap();
+    let mut updater = conf["updater"].clone();
     updater["pubkey"] = pubkey.into();
     updater["endpoints"] = serde_json::json!([endpoint]);
     // Só o teste local usa http.

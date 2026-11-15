@@ -34,7 +34,7 @@ pub struct Backend {
 }
 
 impl Backend {
-    /// O backend do app instalado: os mesmos caminhos e executáveis que o Tauri usa.
+    /// O backend do app instalado: os mesmos caminhos e executáveis da versão 0.1.48.
     pub fn real() -> (Backend, Remetente, Receptor) {
         let cfg_path = config::config_path().unwrap_or_default();
         let interface = cfg_path.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.join("interface.json"));
@@ -60,7 +60,7 @@ impl Backend {
 
 /// Último segmento do caminho, com `\` ou `/`.
 pub fn nome_da_pasta(caminho: &str) -> String {
-    caminho.split(['\\', '/']).filter(|s| !s.is_empty()).next_back().unwrap_or(caminho).to_string()
+    caminho.split(['\\', '/']).rfind(|s| !s.is_empty()).unwrap_or(caminho).to_string()
 }
 
 pub fn eh_pasta(caminho: &Path) -> bool {

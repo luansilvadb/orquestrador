@@ -1,4 +1,4 @@
-//! Latência de eco de um PTY puro (sem Tauri nem WebView): escreve 1 caractere no PTY e mede até o eco chegar à leitura.
+//! Latência de eco de um PTY puro (sem o app): escreve 1 caractere no PTY e mede até o eco chegar à leitura.
 //! Piso do caminho ConPTY + shell, para comparar com o eco do app (keydown -> letra no DOM do xterm: p50 23,2 ms em docs/desempenho-base.md).
 //!
 //! Rodar: cargo run --release --example eco_pty -p orquestrador-core [-- <amostras> [--v=psrl,sempsrl,laco,cmd] [cenário ...]]
@@ -14,7 +14,7 @@
 //!
 //! Replica `core/pty.rs` e `agents/cli.rs::shell`: portable-pty 0.9, ConPTY, 62x24 por padrão, `pwsh.exe -NoLogo`, ambiente herdado,
 //! resposta imediata `ESC[1;1R` ao pedido de posição do cursor, leitura em blocos de 16 KiB, escrita com `write_all` + `flush`.
-//! Desvio: o PSReadLine (predição e histórico desligados como em scripts/medir-desempenho.mjs) é configurado por `-NoExit -Command`,
+//! Desvio: o PSReadLine (predição e histórico desligados como no `cargo xtask medir`) é configurado por `-NoExit -Command`,
 //! para a linha de configuração não entrar no histórico do usuário. Nenhuma amostra aperta Enter, então nada é gravado.
 //! Variantes: pwsh com PSReadLine (o shell do app), pwsh sem PSReadLine, pwsh com laço ReadKey/Write e cmd.exe (para separar ConPTY, shell e editor de linha).
 //! Cada amostra: espera a saída silenciar 100 ms, escreve uma letra (a-z em rodízio), espera a letra na saída (sem sequências de
@@ -333,7 +333,7 @@ mod medida {
                     eco = Some(t);
                 }
             }
-            if debug && i < AQUECE + 3 && i >= AQUECE - 2 {
+            if debug && (AQUECE - 2..AQUECE + 3).contains(&i) {
                 eprintln!("  [{programa}] amostra {i}: texto lido = {:?}", String::from_utf8_lossy(&limpo));
             }
             let conta = i >= AQUECE;

@@ -131,6 +131,7 @@ fn na_janela(janela: AnyWindowHandle, cx: &mut App, f: impl FnOnce(&mut Window, 
 }
 
 /// A fábrica das abas que não são texto: diff, commit, conflito e mídia.
+#[allow(clippy::too_many_arguments)]
 fn fabrica(
     raiz: String, fonte: Fonte, guarda: GuardaGit, editor: WeakEntity<AreaEditor>, git: WeakEntity<TelaGit>,
     conteudos: Rc<RefCell<Vec<(Alvo, Conteudo)>>>, travado: Rc<std::cell::Cell<bool>>, bancada: WeakEntity<Bancada>,

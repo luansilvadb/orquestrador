@@ -167,7 +167,7 @@ impl AreaEditor {
         let d = self.docs.get(doc_id)?;
         let ent = cx.entity().downgrade();
         let id = doc_id.to_string();
-        let acao = |f: fn(&mut AreaEditor, &str, &mut Window, &mut Context<AreaEditor>)| -> Rc<dyn Fn(&mut Window, &mut App)> {
+        let acao = |f: fn(&mut AreaEditor, &str, &mut Window, &mut Context<AreaEditor>)| -> crate::gutter_git::Acao {
             let (ent, id) = (ent.clone(), id.clone());
             Rc::new(move |window: &mut Window, cx: &mut App| {
                 let _ = ent.update(cx, |a, cx| f(a, &id, window, cx));

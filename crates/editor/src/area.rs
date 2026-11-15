@@ -136,6 +136,11 @@ struct IrPara {
     _sub: Subscription,
 }
 
+/// Ação de atalho, consumida uma vez.
+type AcaoUnica = Box<dyn FnOnce(&mut AreaEditor, &mut Window, &mut Context<AreaEditor>)>;
+/// Ação de item de menu.
+type AcaoMenu = Box<dyn Fn(&mut AreaEditor, &mut Window, &mut Context<AreaEditor>)>;
+
 /// A coluna central do editor.
 pub struct AreaEditor {
     projeto: String,
@@ -1163,7 +1168,7 @@ impl AreaEditor {
 
     /// Relê do disco os arquivos abertos que estão limpos.
     pub fn atualizar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ids: Vec<String> = self.ws.abas().filter_map(|t| matches!(t.alvo, Alvo::File { .. }).then(|| t.alvo.doc_id().unwrap().to_string())).collect();
+        let ids: Vec<String> = self.ws.abas().filter(|&t| matches!(t.alvo, Alvo::File { .. })).map(|t| t.alvo.doc_id().unwrap().to_string()).collect();
         for d in ids {
             self.recarregar_doc(&d, window, cx);
         }
@@ -1537,7 +1542,7 @@ impl AreaEditor {
         if let Some(c) = &carregado {
             notas.extend(c.notas.clone());
         }
-        let rascunhos: HashSet<String> = ws.abas().filter_map(|t| matches!(t.alvo, Alvo::Draft { .. }).then(|| t.alvo.doc_id().unwrap().to_string())).collect();
+        let rascunhos: HashSet<String> = ws.abas().filter(|&t| matches!(t.alvo, Alvo::Draft { .. })).map(|t| t.alvo.doc_id().unwrap().to_string()).collect();
         self.ws = ws;
         for d in &rascunhos {
             self.instalar_documento(Buffer::vazio(d), window, cx);
@@ -1674,7 +1679,7 @@ impl AreaEditor {
                 return;
             }
         }
-        let acao: Option<Box<dyn FnOnce(&mut Self, &mut Window, &mut Context<Self>)>> = if ctrl && !shift && !alt && tecla == "k" {
+        let acao: Option<AcaoUnica> = if ctrl && !shift && !alt && tecla == "k" {
             Some(Box::new(|a, _, _| a.acorde = Some(std::time::Instant::now())))
         } else if ctrl && !shift && !alt && tecla == "n" {
             Some(Box::new(|a, w, cx| a.novo_arquivo(w, cx)))
@@ -2037,7 +2042,7 @@ impl AreaEditor {
         let sujos = self.sujos();
         let livres: Vec<&m::Aba> = self.ws.grupo(g).map(|x| x.tabs.iter().filter(|t| !t.pinned).collect()).unwrap_or_default();
         let salvas = livres.iter().any(|t| !m::esta_sujo(&t.alvo, &sujos));
-        let item = |rotulo: &'static str, atalho: &'static str, ok: bool, f: Box<dyn Fn(&mut AreaEditor, &mut Window, &mut Context<AreaEditor>)>| {
+        let item = |rotulo: &'static str, atalho: &'static str, ok: bool, f: AcaoMenu| {
             let e = ent.clone();
             let f = Rc::new(f);
             PopupMenuItem::element(item_menu(rotulo, if ok { atalho } else { "" })).disabled(!ok).on_click(move |_, window, cx| {
@@ -2076,7 +2081,7 @@ impl AreaEditor {
         let fora = matches!(&alvo, Alvo::File { path, .. } if eh_absoluto(path) && relativo_a(&self.projeto, path).is_none());
         let tem_cursor = matches!(&alvo, Alvo::File { doc_id, .. } if self.cursores.contains_key(doc_id) || self.docs.contains_key(doc_id));
         let id = aba.id.clone();
-        let item = |rotulo: &'static str, atalho: &'static str, ok: bool, f: Box<dyn Fn(&mut AreaEditor, &mut Window, &mut Context<AreaEditor>)>| {
+        let item = |rotulo: &'static str, atalho: &'static str, ok: bool, f: AcaoMenu| {
             let e = ent.clone();
             let f = Rc::new(f);
             PopupMenuItem::element(item_menu(rotulo, if ok { atalho } else { "" })).disabled(!ok).on_click(move |_, window, cx| {

@@ -373,15 +373,15 @@ mod tests {
     #[test]
     fn branch_le_o_nome_e_em_head_destacado_o_hash() {
         let dir = &Tmp::new("orq-proc", "branch").0;
-        git_saida(&dir, &["init", "-q"]).unwrap();
+        git_saida(dir, &["init", "-q"]).unwrap();
         // Sem commit ainda: a branch já tem nome, mesmo sem nascer.
-        git_saida(&dir, &["symbolic-ref", "HEAD", "refs/heads/trabalho"]).unwrap();
-        assert_eq!(branch(&dir).unwrap(), "trabalho");
-        git_saida(&dir, &["-c", "user.name=teste", "-c", "user.email=teste@teste", "commit", "--allow-empty", "-q", "-m", "x"]).unwrap();
-        assert_eq!(branch(&dir).unwrap(), "trabalho");
-        git_saida(&dir, &["checkout", "--detach", "-q"]).unwrap();
-        let hash = git_saida(&dir, &["rev-parse", "--short", "HEAD"]).unwrap();
-        assert_eq!(branch(&dir).unwrap(), hash.trim());
+        git_saida(dir, &["symbolic-ref", "HEAD", "refs/heads/trabalho"]).unwrap();
+        assert_eq!(branch(dir).unwrap(), "trabalho");
+        git_saida(dir, &["-c", "user.name=teste", "-c", "user.email=teste@teste", "commit", "--allow-empty", "-q", "-m", "x"]).unwrap();
+        assert_eq!(branch(dir).unwrap(), "trabalho");
+        git_saida(dir, &["checkout", "--detach", "-q"]).unwrap();
+        let hash = git_saida(dir, &["rev-parse", "--short", "HEAD"]).unwrap();
+        assert_eq!(branch(dir).unwrap(), hash.trim());
     }
 
     #[test]
@@ -412,7 +412,7 @@ mod tests {
     #[test]
     fn mesma_pasta_ignora_maiusculas_e_pasta_inexistente_nao_e() {
         let dir = &Tmp::new("orq-proc", "mesma").0;
-        assert!(mesma_pasta(&dir, Path::new(&dir.to_string_lossy().to_uppercase())));
-        assert!(!mesma_pasta(&dir, &dir.join("nao-existe")));
+        assert!(mesma_pasta(dir, Path::new(&dir.to_string_lossy().to_uppercase())));
+        assert!(!mesma_pasta(dir, &dir.join("nao-existe")));
     }
 }

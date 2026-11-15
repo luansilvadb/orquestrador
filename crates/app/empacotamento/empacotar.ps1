@@ -11,7 +11,7 @@ param(
     # Nome do exe instalado; o 0.1.48 instalou `orquestrador.exe`.
     [string]$Binario = 'orquestrador',
     # Bin do crate orquestrador-app a empacotar.
-    [string]$Origem = 'orquestrador-gpui',
+    [string]$Origem = 'orquestrador',
     [string]$Saida,
     # Só monta o pacote com um exe já compilado.
     [switch]$SemBuild

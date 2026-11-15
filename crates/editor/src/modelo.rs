@@ -1235,7 +1235,7 @@ mod testes {
         let t = tabs(&s, A)[0].clone();
         assert!(esta_sujo(&t.alvo, &sujos(&["x1"])));
         assert!(!esta_sujo(&t.alvo, &nenhum()));
-        assert_eq!(planejar_fechamento(&s, &Escopo::Uma(t.id.clone()), &sujos(&["x1"])).nao_salvas, [t.id.clone()]);
+        assert_eq!(planejar_fechamento(&s, &Escopo::Uma(t.id.clone()), &sujos(&["x1"])).nao_salvas, std::slice::from_ref(&t.id));
         assert!(planejar_fechamento(&s, &Escopo::Uma(t.id), &nenhum()).nao_salvas.is_empty());
     }
 

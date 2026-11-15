@@ -46,7 +46,7 @@ mod tests {
         let d = dir.to_string_lossy().to_string();
         assert_eq!(run(&[d.clone(), r#"{"a":"ação"}"#.into()]), 0);
         assert_eq!(run(&[d.clone(), r#"{"b":2}"#.into()]), 0);
-        let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).collect();
+        let mut files: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
         files.sort();
         assert_eq!(files.len(), 2);
         assert_eq!(std::fs::read_to_string(&files[0]).unwrap(), r#"{"a":"ação"}"#);

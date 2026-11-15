@@ -475,7 +475,7 @@ mod bancada {
                 }
             }
         });
-        let exes = cli::Exes::new("claude.exe", "codex.exe", "orquestrador-gpui.exe");
+        let exes = cli::Exes::new("claude.exe", "codex.exe", "orquestrador.exe");
         let projetos = Arc::new(Projects::new(exes, places, tmp.join("config.json"), Arc::new(|_, _| {})).with_term_sink(sink));
         registro.ligar(&projetos);
         let core = projetos.shell_core(None).unwrap();

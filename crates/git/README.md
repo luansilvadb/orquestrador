@@ -7,7 +7,7 @@ Tela Git da lateral e as vistas de comparação e de conflito do editor, porte d
 
 ```rust
 orquestrador_git::init(cx); // uma vez, depois de gpui_kit::init: F8/Shift+F8 e Ctrl+S, e aquece o syntect
-let fonte: Fonte = Arc::new(FonteCore(projetos.core(&id)?)); // os comandos do Tauri, pelo Core do projeto
+let fonte: Fonte = Arc::new(FonteCore(projetos.core(&id)?)); // os comandos pelo Core do projeto
 let guarda = GuardaGit::new();                               // uma por projeto, compartilhada entre as telas
 let tela = cx.new(|cx| TelaGit::new(fonte.clone(), guarda.clone(), window, cx));
 ```

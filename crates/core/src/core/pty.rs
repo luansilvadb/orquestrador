@@ -33,7 +33,7 @@ pub fn write_to(writer: &Writer, data: &[u8]) {
 /// uma tecla não espera nada); só o que chega logo depois de um envio é agrupado, até o intervalo fechar, para uma saída
 /// contínua não virar uma mensagem de IPC por leitura.
 pub const INTERACTIVE_GAP: Duration = Duration::from_millis(4);
-/// Executor: ninguém digita nele, então agrupa por ~2 quadros. Com N executores em paralelo, o webview recebe 30 mensagens/s
+/// Executor: ninguém digita nele, então agrupa por ~2 quadros. Com N executores em paralelo, a interface recebe 30 mensagens/s
 /// de cada um em vez de 250.
 pub const READ_ONLY_GAP: Duration = Duration::from_millis(32);
 /// Teto de um envio agrupado.

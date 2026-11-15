@@ -73,7 +73,7 @@ continua colorindo com dark-plus os `TextView` de fora do Preview.
 Ficam versionados; os pacotes Node de onde vieram saíram do projeto.
 
 - `assets/linguagens.json` (detecção de linguagem): `bundledLanguagesInfo` do Shiki, `linguist-languages` e
-  `@codemirror/language-data`, nas versões do `package.json` do React.
+  `@codemirror/language-data`, nas versões usadas pela versão React.
 - `assets/dark-plus.json`: `colors` e `tokenColors` de `shiki/themes/dark-plus`.
 - `assets/gramaticas/*.sublime-syntax`: gramáticas TextMate do `@shikijs/langs` 4.5.0 convertidas mecanicamente
   (`begin`/`end` viram `push` com `meta_scope`, `while` vira `pop` na linha que não casa, `repository` vira contextos,

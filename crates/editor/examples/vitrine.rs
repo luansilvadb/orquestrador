@@ -98,9 +98,7 @@ fn main() {
         gpui_kit::open_window(opcoes, cx, move |window, cx| {
             let projeto = raiz.to_string_lossy().to_string();
             let area = cx.new(|cx| AreaEditor::com_armazenamento(projeto, Rc::new(RefCell::new(Memoria(BTreeMap::new()))), window, cx));
-            let pasta = std::fs::read_to_string(raiz.join("src/editor-workspace.tsx")).unwrap_or_default().replace("
-", "
-");
+            let pasta = std::fs::read_to_string(raiz.join("src/editor-workspace.tsx")).unwrap_or_default().replace("\r\n", "\n");
             area.update(cx, |a, cx| a.definir_fonte_git(Arc::new(GitVitrine(pasta)), cx));
             let p = |permanente| Abertura { permanente, ..Default::default() };
             area.update(cx, |a, cx| match modo.as_str() {

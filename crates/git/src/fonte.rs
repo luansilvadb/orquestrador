@@ -1,5 +1,4 @@
-//! De onde a tela tira o Git: os mesmos comandos que o React chama (`src-tauri/src/lib.rs`), cada um a função do core
-//! correspondente. A bancada entrega um [`FonteCore`] com o `Core` do projeto; a vitrine e os testes, o simulado.
+//! De onde a tela tira o Git: cada comando é a função do core correspondente. A bancada entrega um [`FonteCore`] com o `Core` do projeto; a vitrine e os testes, o simulado.
 use orquestrador_core::core::Core;
 use orquestrador_core::ide::git;
 use std::sync::Arc;
@@ -41,8 +40,8 @@ pub trait FonteGit: Send + Sync + 'static {
 
 pub type Fonte = Arc<dyn FonteGit>;
 
-/// Os comandos do Tauri, pelo `Core` do projeto: mutações que mexem em branch ou índice de forma exclusiva passam por
-/// `git_idle`, como em `src-tauri/src/lib.rs`.
+/// Os comandos pelo `Core` do projeto: mutações que mexem em branch ou índice de forma exclusiva passam por
+/// `git_idle`.
 pub struct FonteCore(pub Core);
 
 impl FonteGit for FonteCore {

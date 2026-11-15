@@ -1,4 +1,4 @@
-//! Medição de desempenho do exe GPUI (`orquestrador-gpui`), sem intervenção. Ver docs/desempenho-gpui.md.
+//! Medição de desempenho do exe GPUI (`orquestrador`), sem intervenção. Ver docs/desempenho-gpui.md.
 //! Cenário isolado: LOCALAPPDATA, TEMP e repositório em pasta descartável; build de desenvolvimento otimizado
 //! (`debug_assertions` ligado: sem instância única e sem atualização de CLIs). O app grava os marcos pelo gancho
 //! `crates/app/src/medir.rs` (`ORQ_MEDIR_DIR`) e a latência por `ORQ_MEDIR` (`orq-latencia.txt` no TEMP do filho).
@@ -415,9 +415,9 @@ fn cenario(exe: &Path, repo: &Path, dir: &Path, opc: &Opcoes, com_carga: bool) -
 fn build(root: &Path) -> Result<PathBuf, String> {
     let base = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or(root.join("target"));
     let dir = base.join("medir");
-    println!("build: orquestrador-gpui (dev com opt-level 3, dependências sem debug_assertions) em {}", dir.display());
+    println!("build: orquestrador (dev com opt-level 3, dependências sem debug_assertions) em {}", dir.display());
     let s = Command::new(std::env::var("CARGO").unwrap_or("cargo".into()))
-        .args(["build", "-p", "orquestrador-app", "--bin", "orquestrador-gpui"])
+        .args(["build", "-p", "orquestrador-app", "--bin", "orquestrador"])
         // Dependências sem `debug_assertions`, como no release: o GPUI compilaria os shaders HLSL em tempo de execução
         // (~200 ms na abertura) e ligaria a camada de depuração do DXGI. O app continua com elas.
         .args(["--config", "profile.dev.package.\"*\".debug-assertions=false"])
@@ -429,7 +429,7 @@ fn build(root: &Path) -> Result<PathBuf, String> {
     if !s.success() {
         return Err(format!("build falhou ({s})"));
     }
-    Ok(dir.join("debug/orquestrador-gpui.exe"))
+    Ok(dir.join("debug/orquestrador.exe"))
 }
 
 fn mediana(v: &mut [f64]) -> f64 {

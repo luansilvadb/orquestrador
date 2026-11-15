@@ -104,6 +104,8 @@ pub struct Bancada {
     pub acorde_k: Option<std::time::Instant>,
     /// Dica dos botões da janela à vista (moldura.rs).
     pub dica_janela: Option<(&'static str, u8)>,
+    /// A vista da dica, mantida enquanto ela está à vista: escondida por um menu ou modal, só volta num novo hover.
+    pub dica_vista: Option<gpui_kit::AnyView>,
     pub dica_tarefa: Option<Task<()>>,
     _tarefas: Vec<Task<()>>,
 }
@@ -191,6 +193,7 @@ impl Bancada {
             fechando: None,
             acorde_k: None,
             dica_janela: None,
+            dica_vista: None,
             dica_tarefa: None,
             _tarefas: tarefas,
         };
@@ -455,7 +458,7 @@ impl Bancada {
         let tarefa = cx.background_spawn(async move { projetos.close_project(&id) });
         cx.spawn(async move |_, cx| {
             if let Err(e) = tarefa.await {
-                let _ = cx.update(|cx| orquestrador_ui::avisos::mostrar(orquestrador_ui::avisos::Aviso::erro(e, 7000), cx));
+                cx.update(|cx| orquestrador_ui::avisos::mostrar(orquestrador_ui::avisos::Aviso::erro(e, 7000), cx));
             }
         })
         .detach();

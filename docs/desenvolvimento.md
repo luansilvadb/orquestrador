@@ -1,53 +1,65 @@
 # Desenvolvimento
 
-## Pré-requisitos
+## Preparar a máquina
 
-- Windows com WebView2.
-- Node.js.
-- Rust com a toolchain MSVC (exige o Microsoft C++ Build Tools).
-- Git (recomendado).
+1. Visual Studio Build Tools com a carga "Desenvolvimento para desktop com C++" (MSVC e Windows SDK).
+2. Rust pelo [rustup](https://rustup.rs), toolchain `stable-x86_64-pc-windows-msvc`, com `clippy`.
+3. Git.
+4. FFmpeg estático e libclang, usados pelo `orquestrador-midia`:
 
-## Rodar e compilar
+   ```powershell
+   pwsh crates/midia/preparar-ffmpeg.ps1 [-Ferramentas D:\ferramentas]
+   ```
 
-```powershell
-npm install
-npm run tauri dev      # desenvolvimento: uso liberado direto, sem consultar atualizações
-npm run build          # tsc && vite build: checa os tipos e gera o front-end
-```
+   O script baixa o vcpkg (commit fixo), compila o FFmpeg LGPL em `x64-windows-static-md`, baixa o libclang e grava
+   `VCPKG_ROOT`, `VCPKGRS_TRIPLET` e `LIBCLANG_PATH` nas variáveis do usuário (HKCU\Environment). Rodar de novo só
+   confere. Abra um terminal novo depois.
 
-Instalador do app GPUI: `pwsh crates/app/empacotamento/empacotar.ps1 -Versao X.Y.Z -Chave <chave>` (cargo-packager, ver [atualização](atualizacao.md#empacotamento)).
-
-`cargo xtask limpar-target` (e `npm run tauri`, pelo `scripts/limpar-target.mjs`, enquanto o React existir) executa `cargo clean` quando `target` passa de 30 GB (ajustável por `ORQUESTRADOR_TARGET_MAX_GB`).
-
-`npm run dev` sobe só o front-end (Vite), com um backend simulado em `src/backend/mock.ts`, fora do Tauri. `?project=none` abre sem projeto mesmo se houver um último salvo; `?projects=2` abre dois projetos simulados. `?update=clis` deixa o portão parado na etapa dos CLIs. Os modos sem Git ficam nas URLs `?git=no-repo`, `no-git`, `repo-above` e `?subfolder=1`.
-
-Para acrescentar um comando: escreva a função `#[tauri::command]` em `lib.rs`, registre-a no `generate_handler!`, adicione a entrada em `Commands` (`types.ts`), o método em `backend.ts` e o handler no mock; `npm run check` aponta a divergência entre o Rust e `Commands`, e o `tsc` aponta o handler que falta no mock.
-
-## Testes
+## Rodar e testar
 
 ```powershell
-npm run check       # 10 checagens puras (Node, sem dependências)
-npm run check:ui    # 15 checks de interface, 4 em paralelo (Chrome headless)
+cargo run -p orquestrador-app                               # abre o app (orquestrador.exe), sem atualização nem instância única
+cargo test --workspace                                      # testes; os CLIs são simulados por crates/app/examples/fake_cli.rs
+cargo clippy --workspace --all-targets -- -D warnings       # lint
+cargo build --workspace --release
 ```
 
-`npm run check` roda os arquivos listados em `package.json`; `npm run check:ui` sobe um Vite só na porta 1421 (`SMOKE_PORT`) pelo setup global (`tests/ui-setup.mjs`) e roda 4 arquivos de cada vez, cada um com o próprio Chromium. Um arquivo rodado sozinho (`node --test tests/check-git-ui.mjs`) sobe o próprio Vite se a porta estiver livre. Os dois saem com código diferente de 0 se algum teste falhou, e mostram o resultado de todos os arquivos.
+No build de debug, o portão não instala nem atualiza os CLIs: só localiza `claude.exe` e `codex.exe` (`ORQ_CLAUDE_EXE` e
+`ORQ_CODEX_EXE` à frente; detalhes em [atualização](atualizacao.md)). A instância única vale só no release, então o build de
+desenvolvimento coexiste com o app instalado.
 
-No build de debug, o portão não instala nem atualiza os CLIs: só localiza `claude.exe` e `codex.exe` (`ORQ_CLAUDE_EXE` e `ORQ_CODEX_EXE` à frente; detalhes em [atualização](atualizacao.md)).
+Testes que chamam CLIs reais ficam ignorados:
 
-O plugin de instância única roda só em builds release. Builds debug usam o mesmo identificador do app instalado, mas não encaminham caminhos nem ativam outra instância; assim `npm run tauri dev` pode coexistir com o app instalado.
+- `crates/app/tests/lote.rs` fala com o servidor MCP real (`orquestrador.exe --mcp`) por JSON-RPC, com CLIs falsos.
+- `crates/app/tests/real.rs` faz o ciclo com os CLIs reais: defina `ORQ_REAL_REPO` e `ORQ_REAL=codex,claude` e rode
+  `cargo test -p orquestrador-app --test real -- --ignored --nocapture`.
+- `crates/core/tests/colagem.rs` sobe o Claude Code ou o Codex reais (`ORQ_PASTE=claude` ou `codex`):
+  `cargo test -p orquestrador-core --test colagem -- --ignored --nocapture --test-threads=1`. `colar_imagem` lê a imagem do
+  clipboard.
 
-Os checks de interface são em Chrome headless, contra o app simulado.
+Os crates de tela têm vitrines (`cargo run -p <crate> --example ...`, ver o README de cada um).
 
-Capturas e logs vão para `.playwright-mcp/`, que não vai para o Git.
+## Tarefas
 
-O workflow `.github/workflows/ci.yml` roda a cada push em `main` e em pull request. No Windows, faz o build do front-end, `npm run check` e `cargo test`. Em Ubuntu e macOS, só compila o backend (`cargo check --all-targets`), sem testes, porque os recursos específicos do sistema ainda não foram portados. Os checks de interface (`npm run check:ui`) ficam de fora do CI: sobem o Vite e um Chromium local.
+`cargo xtask ajuda` lista as tarefas:
 
-Os testes do backend:
+- `release <subcomando>`: regras do fluxo de release ([atualização e release](atualizacao.md)).
+- `limpar-target`: `cargo clean` quando `target` passa de 30 GB (`ORQUESTRADOR_TARGET_MAX_GB`).
+- `medir`: medição de desempenho ([desempenho do GPUI](desempenho-gpui.md)).
+- `despejar`: gerador de saída para as medições.
+
+## Empacotar
 
 ```powershell
-cargo test --workspace
+cargo install cargo-packager --version 0.11.8 --locked
+pwsh crates/app/empacotamento/empacotar.ps1 -Versao X.Y.Z -Chave <caminho ou conteúdo da chave privada>
 ```
 
-Os testes usam CLIs simulados e não chamam nenhum modelo. `src-tauri\tests\lote.rs` fala com o servidor MCP real (`orquestrador.exe --mcp`) por JSON-RPC, sem PowerShell no caminho. `src-tauri\tests\real.rs` faz o ciclo com os CLIs reais e fica ignorado por padrão: defina `ORQ_REAL_REPO` e `ORQ_REAL=codex,claude` e rode `cargo test --test real -- --ignored --nocapture`. `crates\core\tests\colagem.rs` sobe o Claude Code ou o Codex reais (`ORQ_PASTE=claude` ou `codex`) e mede a colagem sem enviar mensagem: `colar_caminho` (caminhos de imagem e de outro arquivo viram anexo e texto) e `cli_real` (o shell reconhece o CLI aberto nele e o esquece quando ele sai) não mexem no clipboard; `colar_imagem` lê a imagem que estiver no clipboard. Rode com `cargo test --test colagem -- --ignored --nocapture --test-threads=1`.
+Saída em `target\pacote\` (ver [atualização](atualizacao.md#empacotamento)). `pwsh crates/app/empacotamento/e2e.ps1`
+testa ponta a ponta, sem tocar na instalação real, a atualização a partir do updater da 0.1.48.
 
-O workflow de release (`.github/workflows/release.yml`) roda antes de publicar `cargo test --workspace`. As regras do fluxo de release estão em `crates/xtask/src/release.rs` (`cargo xtask release`); o processo de publicação, em [atualização e release](atualizacao.md).
+## CI
+
+`.github/workflows/ci.yml` roda a cada push em `main` e em pull request: no Windows, `cargo test --workspace` e o clippy; em
+Ubuntu e macOS, só `cargo check -p orquestrador-core --all-targets`. O workflow de release roda `cargo test --workspace` antes
+de publicar.

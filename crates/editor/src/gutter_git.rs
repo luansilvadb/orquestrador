@@ -267,15 +267,20 @@ pub fn altura_widget(antigas: usize, altura_linha: f32) -> f32 {
     BARRA + antigas.min(LIMITE_ANTIGAS + 1) as f32 * altura_linha + 2.
 }
 
+/// Ação de um botão do bloco.
+pub type Acao = Rc<dyn Fn(&mut Window, &mut App)>;
+/// Ação com um argumento (passo ou índice).
+pub type AcaoCom<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
+
 /// Ações do bloco aberto, ligadas pela área do editor.
 #[derive(Clone)]
 pub struct Acoes {
-    pub preparar: Rc<dyn Fn(&mut Window, &mut App)>,
-    pub restaurar: Rc<dyn Fn(&mut Window, &mut App)>,
-    pub ir: Rc<dyn Fn(i32, &mut Window, &mut App)>,
-    pub fechar: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub preparar: Acao,
+    pub restaurar: Acao,
+    pub ir: AcaoCom<i32>,
+    pub fechar: Acao,
     /// Clique num marcador: o índice do bloco.
-    pub alternar: Rc<dyn Fn(usize, &mut Window, &mut App)>,
+    pub alternar: AcaoCom<usize>,
 }
 
 /// O que o widget mostra.
@@ -293,7 +298,7 @@ pub struct InfoBloco {
 
 fn botao(
     id: &'static str, dica: SharedString, icone_svg: &'static str, texto: Option<&'static str>, bloqueado: bool,
-    ocupado: bool, acao: Rc<dyn Fn(&mut Window, &mut App)>,
+    ocupado: bool, acao: Acao,
 ) -> impl IntoElement {
     let apagado = bloqueado || ocupado;
     div()
@@ -463,7 +468,10 @@ const MARCA_MINIMA: f32 = 3.;
 
 /// Marcas da régua (`overview` de git-gutter.ts): posição do bloco na altura do documento, na escala da faixa. Sem
 /// rolagem vertical não há faixa. Devolve as marcas (y relativo à faixa), o topo e a altura da faixa.
-fn regua(s: &EditorState, blocos: &[Bloco]) -> Option<(Vec<(Tipo, Pixels, Pixels)>, Pixels, Pixels)> {
+/// Marcas (tipo, y, altura), o topo e a altura da faixa.
+type Regua = (Vec<(Tipo, Pixels, Pixels)>, Pixels, Pixels);
+
+fn regua(s: &EditorState, blocos: &[Bloco]) -> Option<Regua> {
     let lh = s.line_height()?;
     let mapa = s.display_map();
     let entrada = s.input_bounds();

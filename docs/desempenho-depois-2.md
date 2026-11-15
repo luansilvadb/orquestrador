@@ -1,5 +1,7 @@
 # Desempenho: terminais escondidos sem renderizar
 
+> Histórico da versão React. Os comandos citados (`node`, `npm`, `npx tauri`, `src-tauri`) saíram do projeto; a medição atual é `cargo xtask medir` ([desempenho do GPUI](desempenho-gpui.md)).
+
 Remedição com o working tree atual: o que `docs/desempenho-depois.md` mediu, mais `termPane` (`src/terminal/terminals.tsx`: invisible, deslocado para fora da viewport, inert) e `deferSelectionRedraw` (`src/terminal/term.ts`), que fazem os terminais escondidos pararem de renderizar. Comparação com a base (`docs/desempenho-base.md`) e com a rodada anterior (média das duas rodadas dela). Duas rodadas completas, `node scripts/medir-desempenho.mjs` sem argumentos (mesmo cenário, carga e momentos; 250 amostras por condição). `scripts/medir-desempenho.mjs` não foi alterado. Brutos: `%TEMP%\orq-medir-depois2-r1\` e `%TEMP%\orq-medir-depois2-r2\` (`resultado.json`, `renderer.heapsnapshot`, `heap-analise.json`); abertura extra em `%TEMP%\orq-medir-depois2-ab\`.
 
 ## Ambiente e proteções

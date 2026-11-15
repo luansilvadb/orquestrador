@@ -1,4 +1,4 @@
-//! Backend do Orquestrador sem Tauri: terminais em que um CLI orquestra e outros executam.
+//! Backend do Orquestrador, sem interface: terminais em que um CLI orquestra e outros executam.
 pub mod agents;
 pub mod clis;
 pub mod config;

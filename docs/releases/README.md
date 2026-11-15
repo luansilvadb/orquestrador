@@ -54,7 +54,7 @@ Dois formatos, da mesma fonte:
 
 ## Checklist de uma versão
 
-1. Suba a versão nos cinco arquivos: `package.json`, `package-lock.json` (duas entradas: a raiz e `packages[""]`), `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` (entrada `orquestrador`) e `src-tauri/tauri.conf.json`.
+1. Suba a versão em `Cargo.toml` (`[workspace.package]`) e no `Cargo.lock` (entradas `orquestrador-core` e `orquestrador-app`).
 2. Escreva `docs/releases/vX.Y.Z.md` a partir do modelo.
 3. Rode as checagens locais, sem publicar nada:
    - `cargo xtask release check-versions X.Y.Z`

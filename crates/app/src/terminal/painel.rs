@@ -976,7 +976,7 @@ impl Terminais {
                         .p(px(16.))
                         .bg(gpui_kit::rgba(0x000000f2))
                         .child(div().max_w(px(300.)).text_center().text_size(tema::TEXTO_BODY).text_color(cor::text_secondary()).child({
-                            let linhas = orquestrador_ui::widgets::linhas_pretty(&texto, 300., tema::TEXTO_BODY, gpui_kit::FontWeight::NORMAL, window);
+                            let linhas = orquestrador_ui::widgets::linhas_pretty(texto, 300., tema::TEXTO_BODY, gpui_kit::FontWeight::NORMAL, window);
                             // Quebrada, a capa ocupa os 300 px, como o `fit-content` do navegador.
                             let quebrou = linhas.contains('\n');
                             div().when(quebrou, |d| d.w(px(300.))).child(linhas)

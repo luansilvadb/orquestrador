@@ -151,7 +151,7 @@ jobs:
           & gh release download $env:TAG --repo $env:REPO --pattern latest.json --pattern "$exe.sig" --pattern $exe --dir $dir --clobber
           cargo xtask release verify-manifest $version (Join-Path $dir 'latest.json') (Join-Path $dir "$exe.sig") "docs/releases/v$version.md"
 
-          # Assinatura Minisign do instalador baixado, com a chave pública embutida no app (a mesma do tauri.conf.json).
+          # Assinatura Minisign do instalador baixado, com a chave pública embutida no app (a do updater do 0.1.48).
           $fonte = Get-Content -Raw crates/app/src/atualizacao/mod.rs
           if ($fonte -notmatch 'PUBKEY_OFICIAL: &str = "([A-Za-z0-9+/=]+)"') { throw 'PUBKEY_OFICIAL não encontrada.' }
           $pubkey = $Matches[1]

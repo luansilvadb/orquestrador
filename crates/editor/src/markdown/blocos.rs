@@ -71,7 +71,7 @@ pub struct Codigo {
 impl Codigo {
     /// O `CodeBlock` do Lobe: uma linha (o `\n` final do hast conta uma) e até 32 unidades UTF-16 vira `Snippet`.
     pub fn linha_unica(&self) -> bool {
-        !self.codigo.contains('\n') && self.codigo.encode_utf16().count() + 1 <= 32
+        !self.codigo.contains('\n') && self.codigo.encode_utf16().count() < 32
     }
 }
 

@@ -4,7 +4,7 @@
 
 Em toda abertura do app instalado (build de release), antes de liberar a escolha da pasta ou qualquer terminal, ele consulta a última release **estável** de `luansilvadb/orquestrador` no GitHub (`releases/latest/download/latest.json`). Rascunhos e pré-releases não chegam ao app. Se houver versão superior, o app mostra o andamento, baixa, valida a assinatura, instala em modo silencioso (NSIS por usuário, sem administrador) e reabre sozinho na versão nova. Se já estiver em dia, passa à etapa dos CLIs.
 
-No app GPUI isso fica em `crates/app/src/atualizacao/` (consulta com `ureq`, assinatura com `minisign-verify`, o mesmo verificador do `tauri-plugin-updater`) e a tela em `crates/app/src/terminal/portao.rs`: `Verificando se há uma versão nova…`, `Baixando a versão X… N%` com barra, `Instalando a versão X. O app reabre sozinho.` O instalador roda com `/S /UPDATE /R`, como o Tauri: silencioso, sem recriar atalhos e reabrindo o app.
+Isso fica em `crates/app/src/atualizacao/` (consulta com `ureq`, assinatura com `minisign-verify`, o mesmo verificador do `tauri-plugin-updater` da 0.1.48) e a tela em `crates/app/src/terminal/portao.rs`: `Verificando se há uma versão nova…`, `Baixando a versão X… N%` com barra, `Instalando a versão X. O app reabre sozinho.` O instalador roda com `/S /UPDATE /R`, como o updater da 0.1.48: silencioso, sem recriar atalhos e reabrindo o app.
 
 ### CLIs
 
@@ -33,7 +33,7 @@ Enquanto não houver release publicada, `releases/latest/download/latest.json` r
 
 ## Chave de assinatura
 
-- Chave privada: `%USERPROFILE%\.tauri\orquestrador-updater.key`, fora do repositório, com acesso só para o usuário. Não tem senha. A chave pública está em `PUBKEY_OFICIAL` de `crates/app/src/atualizacao/mod.rs`, igual à `plugins.updater.pubkey` de `src-tauri/tauri.conf.json` (um teste confere).
+- Chave privada: `%USERPROFILE%\.tauri\orquestrador-updater.key`, fora do repositório, com acesso só para o usuário. Não tem senha. A chave pública está em `PUBKEY_OFICIAL` de `crates/app/src/atualizacao/mod.rs`, igual à do updater da 0.1.48, guardada em `crates/app/empacotamento/compat-tauri/updater-0.1.48.json` (um teste confere).
 - Guarde um backup da chave privada. Sem ela não há como publicar atualizações que os apps instalados aceitem; trocar a chave exige nova instalação manual de todos.
 - Secret do workflow, uma vez (o conteúdo da chave vai pela entrada padrão e não aparece no terminal):
 
@@ -49,11 +49,11 @@ Get-Content -Raw "$env:USERPROFILE\.tauri\orquestrador-updater.key" | gh secret 
 pwsh crates/app/empacotamento/empacotar.ps1 -Versao 0.2.0 -Chave "$env:USERPROFILE\.tauri\orquestrador-updater.key" -Notas docs/releases/v0.2.0.md
 ```
 
-Saída em `target\pacote\`: `Orquestrador_<versão>_x64-setup.exe`, o `.sig` e o `latest.json`. `-Binario` é o nome do exe instalado (`orquestrador`, o do 0.1.48) e `-Origem` o bin compilado (`orquestrador-gpui`).
+Saída em `target\pacote\`: `Orquestrador_<versão>_x64-setup.exe`, o `.sig` e o `latest.json`. `-Binario` é o nome do exe instalado (`orquestrador`, o do 0.1.48) e `-Origem` o bin compilado (`orquestrador`).
 
 ### Compatibilidade com o 0.1.48 (Tauri)
 
-O instalador novo usa o mesmo produto (`Orquestrador`), identificador, publicador (`luansilvadb`), pasta (`%LOCALAPPDATA%\Orquestrador`), chave de desinstalação (`HKCU\...\Uninstall\Orquestrador`), ícone e exe (`orquestrador.exe`); os hooks geram as mesmas chaves do `src-tauri/windows/hooks.nsh`. O `.sig` leva `version:` no comentário confiável, que o 0.1.48 exige, e o `latest.json` traz `windows-x86_64` e `windows-x86_64-nsis`. `compat-tauri/` roda o `tauri-plugin-updater` 2.14.1 do 0.1.48 contra os artefatos:
+O instalador novo usa o mesmo produto (`Orquestrador`), identificador, publicador (`luansilvadb`), pasta (`%LOCALAPPDATA%\Orquestrador`), chave de desinstalação (`HKCU\...\Uninstall\Orquestrador`), ícone e exe (`orquestrador.exe`); os hooks geram as mesmas chaves do instalador Tauri da 0.1.48. O `.sig` leva `version:` no comentário confiável, que o 0.1.48 exige, e o `latest.json` traz `windows-x86_64` e `windows-x86_64-nsis`. `compat-tauri/` roda o `tauri-plugin-updater` 2.14.1 do 0.1.48 contra os artefatos:
 
 ```powershell
 cargo run --release --manifest-path crates/app/empacotamento/compat-tauri/Cargo.toml -- verificar <pubkey> target\pacote\latest.json target\pacote\Orquestrador_<versão>_x64-setup.exe
@@ -69,7 +69,7 @@ Com chave temporária e nomes de teste, para não tocar na instalação real: `O
 
 O processo completo, com o modelo das notas e a checklist, está em [notas de release](releases/README.md). Resumo:
 
-1. Suba a versão em `package.json`, `package-lock.json`, `Cargo.toml` (`[workspace.package]`), `Cargo.lock` (`orquestrador` e `orquestrador-core`) e `src-tauri/tauri.conf.json` (o `check-versions` ainda lê todos). Ela precisa ser maior que a última publicada.
+1. Suba a versão em `Cargo.toml` (`[workspace.package]`) e no `Cargo.lock` (`orquestrador-core` e `orquestrador-app`); `cargo xtask release check-versions X.Y.Z` confere. Ela precisa ser maior que a última publicada.
 2. Escreva as notas em `docs/releases/vX.Y.Z.md`. O workflow recusa notas ausentes, vazias ou genéricas.
 3. Faça o commit e crie a tag: `git tag vX.Y.Z` e depois `git push origin vX.Y.Z`.
 4. O workflow `.github/workflows/release.yml` confere as versões e as notas, prepara o FFmpeg estático (com cache), roda os checks, gera pelo `empacotar.ps1` o instalador NSIS assinado e o `latest.json` com as notas completas, sobe tudo num rascunho e confere com o assinador e com o `compat-tauri`. Só então publica a release como a `latest` que os apps consultam.

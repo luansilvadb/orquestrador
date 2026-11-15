@@ -107,7 +107,7 @@ components:
 
 O Orquestrador é uma bancada de trabalho, não uma vitrine. O fundo é preto puro, os painéis são um preto um tom acima, e o único "acento" é o branco do texto e do botão principal. A cor existe só onde carrega sinal: estado de executor, diff, letra de status do Git, erro. Tudo o mais é neutro, para que os terminais e o código sejam o que se vê.
 
-A densidade é a de um IDE: linhas de 24 px, faixas de 36 px, menus de 26 px, sempre com as medidas do VS Code / Antigravity quando há referência. Quem vem do VS Code deve reconhecer cada painel sem aprender nada. Os componentes vêm do Lobe UI (tema escuro fixo), e os tokens do Tailwind são ligados às variáveis `--ant-*` do tema, sem copiar valores; quando o tema muda, tudo acompanha.
+A densidade é a de um IDE: linhas de 24 px, faixas de 36 px, menus de 26 px, sempre com as medidas do VS Code / Antigravity quando há referência. Quem vem do VS Code deve reconhecer cada painel sem aprender nada. A interface é GPUI com o gpui-kit; o tema reproduz o Lobe UI (escuro fixo), e cores e medidas vêm dos tokens de `crates/ui/src/tema.rs`.
 
 A fonte detalhada das regras, com o porquê de cada medida, é `docs/design-system.md`. Este arquivo é o resumo para agentes; em caso de conflito, o código e `docs/design-system.md` vencem.
 
@@ -115,7 +115,7 @@ A fonte detalhada das regras, com o porquê de cada medida, é `docs/design-syst
 - Preto puro com painéis em tons de preto; profundidade por tom, não por sombra.
 - Branco como acento único; cor reservada a sinal.
 - Densidade de IDE, com medidas herdadas do VS Code / Antigravity.
-- Lobe UI como autoridade de componentes; Tailwind só para o que ele não cobre.
+- Componentes do gpui-kit com o visual do Lobe UI; peças comuns em `crates/ui`.
 - Inter na interface; monoespaçado só em valor técnico.
 
 ## Colors
@@ -123,19 +123,19 @@ A fonte detalhada das regras, com o porquê de cada medida, é `docs/design-syst
 Uma paleta de neutros quase sem matiz, onde o branco faz o papel de cor primária e as cores saturadas só aparecem como sinal.
 
 ### Primary
-- **Branco de Tinta** (ink-white): botão principal (`type="primary"`), filete de 2 px da navegação ativa e da seleção no Git, indicador da aba ativa no grupo com foco. Fica mais branco no hover e acinzentado no clique.
+- **Branco de Tinta** (ink-white): botão principal, filete de 2 px da navegação ativa e da seleção no Git, indicador da aba ativa no grupo com foco. Fica mais branco no hover e acinzentado no clique.
 
 ### Neutral
-- **Preto Absoluto** (pitch-black): fundo da janela (`bg-background`), atrás de tudo.
-- **Preto de Painel** (panel-black): barras, faixas, cards e a navegação (`bg-card`).
+- **Preto Absoluto** (pitch-black): fundo da janela , atrás de tudo.
+- **Preto de Painel** (panel-black): barras, faixas, cards e a navegação .
 - **Preto Elevado** (raised-black): menus, popovers e modais.
-- **Preto de Terminal** (terminal-black): fundo dos terminais xterm (`bg-terminal`), o único token próprio do app.
+- **Preto de Terminal** (terminal-black): fundo dos terminais (`cor::terminal_black`), o único token próprio do app.
 - **Texto** (text-primary / text-secondary / text-tertiary): conteúdo, detalhe (pasta, contagem, dica) e texto apagado.
 - **Filete** (hairline / hairline-soft): bordas de 1 px e guias de recuo da árvore.
 - **Preenchimento** (fill-muted / fill-hover): seleção de linha, contadores, hover de botão.
 
 ### Sinal
-- **Erro** (signal-error), **sucesso** (signal-success), **alerta** (signal-warning) e **informação** (signal-info), do tema; estados de executor usam as cores predefinidas do Lobe UI no `Tag`.
+- **Erro** (signal-error), **sucesso** (signal-success), **alerta** (signal-warning) e **informação** (signal-info), do tema; estados de executor usam as cores predefinidas do Lobe UI na etiqueta.
 - **Azul de Foco** (focus-blue): unidade atual, hover e arraste do divisor no comparador, como no VS Code.
 - **Vermelho de Fechar** (close-red, a 90%): hover do botão Fechar da janela, como no Windows.
 
@@ -164,25 +164,25 @@ Uma paleta de neutros quase sem matiz, onde o branco faz o papel de cor primári
 
 ## Layout
 
-Layout de IDE em colunas fixas, nada rola na janela (`html body { overflow: hidden }`): titlebar de 36 px no topo; navegação de 44 px à esquerda (Arquivos, Pesquisar, Git); faixa lateral redimensionável (mínimo 200 px); área central com editor em cima e painel Terminal embaixo; painel do Orquestrador à direita. Os painéis são `DraggablePanel` redimensionáveis e lembram o tamanho.
+Layout de IDE em colunas fixas, nada rola na janela: titlebar de 36 px no topo; navegação de 44 px à esquerda (Arquivos, Pesquisar, Git); faixa lateral redimensionável (mínimo 200 px); área central com editor em cima e painel Terminal embaixo; painel do Orquestrador à direita. Os painéis são redimensionáveis pelas alças e lembram o tamanho.
 
-O ritmo é dado pelas alturas fixas: linha de lista de 24 px, faixa de abas e cabeçalho de 36 px (as abas dos arquivos no editor têm 30 px, nas medidas do Antigravity), campo de 32 px, item de menu de 26 px. As faixas de abas rolam só na horizontal, com a barra escondida. Barras estreitas usam container queries (`@container`) para encolher rótulos abaixo de ~448–460 px, mantendo o texto completo no `title` e no `aria-label`.
+O ritmo é dado pelas alturas fixas: linha de lista de 24 px, faixa de abas e cabeçalho de 36 px (as abas dos arquivos no editor têm 30 px, nas medidas do Antigravity), campo de 32 px, item de menu de 26 px. As faixas de abas rolam só na horizontal, com a barra escondida. Barras estreitas encolhem rótulos abaixo de ~448–460 px, com o texto completo na dica.
 
-Telas e terminais ficam montados o tempo todo; a troca usa `invisible`, nunca `display: none`, porque o xterm erra o tamanho ao sair do layout.
+Telas e terminais ficam montados o tempo todo; a troca só esconde.
 
 ## Elevation & Depth
 
 Plano por padrão. A profundidade vem do tom (preto → preto de painel → preto elevado) e de filetes de 1 px. Sombras só nas camadas que flutuam: menus, popovers e modais, com a sombra neutra do tema.
 
 ### Shadow Vocabulary
-- **Flutuante** (`--ant-box-shadow-secondary`): modais e popovers.
+- **Flutuante** (sombra neutra do tema): modais e popovers.
 
 ### Named Rules
 **The Flat-Bench Rule.** Superfícies de trabalho (painéis, faixas, listas) não têm sombra. Sem glow, sem gradiente decorativo, sem acento colorido na borda de cards.
 
 ## Shapes
 
-Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px nos itens de menu e badges. Os controles da janela não têm raio. Bordas de 1 px no tom do filete delimitam regiões; a aba ativa é marcada por uma linha de 2 px embaixo (`variant="square"`), não por fundo. Exceção: nas abas dos arquivos do editor, nas medidas do Antigravity, a ativa é marcada pelo fundo do editor e um filete de 1 px em cima.
+Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px nos itens de menu e badges. Os controles da janela não têm raio. Bordas de 1 px no tom do filete delimitam regiões; a aba ativa é marcada por uma linha de 2 px embaixo , não por fundo. Exceção: nas abas dos arquivos do editor, nas medidas do Antigravity, a ativa é marcada pelo fundo do editor e um filete de 1 px em cima.
 
 ## Components
 
@@ -191,7 +191,7 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 - **Fill:** branco de tinta com texto preto, para a ação principal (Salvar, Commit, Escolher pasta).
 - **Default:** preenchimento neutro, para Cancelar e ações secundárias.
 - **Danger:** só na ação destrutiva, que também diz o que faz no texto ("Descartar e encerrar todos").
-- **ActionIcon:** ações pequenas de ícone (24–36 px); sem contorno de foco.
+- **Ícone:** ações pequenas de ícone (24–36 px); sem contorno de foco.
 
 ### Cards / Containers
 - **Corner Style:** 8px.
@@ -200,27 +200,27 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 - **Border:** filete de 1px.
 
 ### Inputs / Fields
-- **Style:** `Input` e `TextArea` do Lobe UI, 32 px na pesquisa; opções em `ActionIcon` no `suffix` com `aria-pressed`.
-- **Focus:** sem contorno de foco (regra global em `src/index.css`).
+- **Style:** `Input` do Kit, 32 px na pesquisa; opções em botões de ícone dentro do campo.
+- **Focus:** sem contorno de foco.
 
 ### Navigation
-- **Rail:** 44 px, `bg-card`, quatro `ActionIcon` de 36 px com ícone de 20 px. O ativo tem o fundo ativo do Lobe UI e um filete de 2 px na cor primária à esquerda. Contador do Git em `Badge` pequeno no canto do botão.
-- **Tabs:** `TabsRoot variant="square"`, faixa de 36 px, linha de 2 px na aba ativa, divisor de 1 px em toda a largura. As abas dos arquivos no editor são a exceção, nas medidas do Antigravity: 30 px, divisor à direita de cada aba, e a ativa com o fundo do editor e um filete de 1 px em cima.
+- **Rail:** 44 px, preto de painel, botões de 36 px com ícone de 20 px. O ativo tem o fundo ativo e um filete de 2 px na cor primária à esquerda. Contador do Git pequeno no canto do botão.
+- **Tabs:** faixa de 36 px, linha de 2 px na aba ativa, divisor de 1 px em toda a largura. As abas dos arquivos no editor são a exceção, nas medidas do Antigravity: 30 px, divisor à direita de cada aba, e a ativa com o fundo do editor e um filete de 1 px em cima.
 
 ### List Rows
 - 24 px, ícone `File`, nome com prioridade (até 70%) e pasta em texto secundário que corta primeiro; ações num slot de largura fixa que aparece no hover ou no foco, sem deslocar o nome. Seleção em `bg-muted` com filete primário à esquerda.
 
 ### Execution State
-- `Tag` com rótulo e ícone, cor predefinida do Lobe UI. Estado nunca só por cor.
+- Etiqueta com rótulo e ícone, nas cores predefinidas do Lobe UI. Estado nunca só por cor.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** usar componentes do Lobe UI e as props deles (`Text`, `Flexbox`, `Center`) antes de qualquer classe do Tailwind.
-- **Do** usar os tokens do tema (`bg-card`, `text-muted-foreground`, `border`) para cor.
+- **Do** usar componentes do Kit e as peças de `crates/ui` antes de desenho próprio.
+- **Do** usar os tokens de `tema.rs` para cor e medida.
 - **Do** seguir as medidas do VS Code / Antigravity quando houver referência (linha de 24 px, menu de 26 px, faixa de 36 px).
 - **Do** mostrar estado com texto e ícone, além da cor.
-- **Do** manter telas e terminais montados e trocar com `invisible`.
+- **Do** manter telas e terminais montados e só escondê-los.
 - **Do** atualizar `docs/design-system.md` ao trocar ou adicionar componente.
 
 ### Don't:
@@ -228,4 +228,4 @@ Cantos discretos: 8 px nos cards, 6 px em botões e campos, 5 px em menus e 4 px
 - **Don't** usar cor fixa num componente fora das exceções documentadas (titlebar, comparador, pesquisa).
 - **Don't** usar monoespaçado fora de terminal e valores técnicos.
 - **Don't** pôr sombra em superfícies de trabalho.
-- **Don't** trocar a Inter pela fonte padrão do Lobe UI (HarmonyOS Sans, que viria da CDN).
+- **Don't** trocar a Inter embutida por outra fonte.

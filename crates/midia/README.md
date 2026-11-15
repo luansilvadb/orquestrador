@@ -21,7 +21,7 @@ Aba de mídia do editor central (porte de `src/editor/media-view.tsx`): imagem, 
 - Eventos (`EventEmitter<EventoMidia>`): `Falhou(String)`, `Reproducao { tocando }` e `VoltarParaAba` (a bancada ativa a aba).
 - `player::Player` e `imagem::decodificar` ficam públicos para testes e reuso.
 
-Imagens leem por `files::read_media_at` e áudio/vídeo passam por `files::stream_path_at` (as regras do Tauri); o arquivo é lido
+Imagens leem por `files::read_media_at` e áudio/vídeo passam por `files::stream_path_at` (as mesmas regras da versão 0.1.48); o arquivo é lido
 do disco pelo FFmpeg, sem o protocolo `orq-media`. Ícones `icons/midia-*.svg` estão em `orquestrador-ui`.
 
 ## FFmpeg estático (LGPL)

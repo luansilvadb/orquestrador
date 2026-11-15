@@ -1,10 +1,10 @@
 # Conferência visual do GPUI
 
-Comparação do `orquestrador-gpui` (release, janela 1400x900, escala 1) com as 45 referências de
+Comparação do `orquestrador` (release, janela 1400x900, escala 1) com as 45 referências de
 [`referencia-visual/`](referencia-visual/README.md). O app rodou sobre um repositório Git real em `%TEMP%` que reproduz o
 cenário de `src/backend/mock.ts` (mesma árvore, preparadas, alterações, conflitos, grafo com `main`, `feat/painel-git`,
 `origin/main` e a tag `v0.1.7`), com `LOCALAPPDATA` isolado. Executores e o portão dos CLIs usaram o build de debug com o
-CLI falso (`src-tauri/examples/fake_cli.rs`, `ORQ_CLAUDE_EXE`, `ORQ_FAKE_DELEGAR`) e `ORQ_PORTAO=clis`.
+CLI falso (`crates/app/examples/fake_cli.rs`, `ORQ_CLAUDE_EXE`, `ORQ_FAKE_DELEGAR`) e `ORQ_PORTAO=clis`.
 
 Diferenças só de fixture (hashes, datas, um commit a mais no grafo, nomes reais do Git) não contam. "Corrigido" quer dizer
 que a diferença era da bancada (`crates/app`) e foi resolvida nesta conferência.

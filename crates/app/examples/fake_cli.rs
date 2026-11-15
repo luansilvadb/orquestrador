@@ -3,7 +3,7 @@
 // `orquestrador.exe --hook`) e fica aberto, como um CLI interativo. O comportamento vem do texto
 // da tarefa: FALHAR sai com 3 sem sinal; DORMIR nunca termina; PERGUNTA pede confirmação de um comando
 // ao hook `PermissionRequest` da configuração, como o Claude Code faz, e termina a rodada com a decisão.
-// Para scripts/medir-desempenho.mjs, opcionais e desligados sem as variáveis: ORQ_FAKE_DELEGAR=<n> faz o orquestrador delegar n
+// Para o `cargo xtask medir`, opcionais e desligados sem as variáveis: ORQ_FAKE_DELEGAR=<n> faz o orquestrador delegar n
 // tarefas pelo servidor MCP do `--mcp-config`; ORQ_FAKE_SEGUNDOS=<s> faz o executor desenhar uma TUI por s segundos antes do fim de rodada.
 use std::io::{BufRead, Write};
 use std::process::{Command, Stdio};
@@ -146,7 +146,7 @@ fn tui(secs: u64, prompt: &str) {
     while start.elapsed().as_secs() < secs {
         let mut buf = String::new();
         buf.push_str("\x1b[2A\r");
-        if frame % 3 == 0 {
+        if frame.is_multiple_of(3) {
             let lines = 2 + rnd() % 5;
             for _ in 0..lines {
                 buf.push_str("\x1b[2K\x1b[38;5;245m● \x1b[0m");

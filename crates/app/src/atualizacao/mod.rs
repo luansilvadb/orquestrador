@@ -1,4 +1,4 @@
-//! Atualização na abertura (porte de src-tauri/src/update.rs sem o `tauri-plugin-updater`): consulta o `latest.json`
+//! Atualização na abertura (porte do updater do 0.1.48 sem o `tauri-plugin-updater`): consulta o `latest.json`
 //! da última release estável, baixa a versão superior, valida a assinatura, instala em silêncio e o instalador reabre
 //! o app. Em dia, o portão segue para os CLIs. O canal, a chave e a versão podem ser trocados na compilação
 //! (`ORQ_ATUALIZACAO_URL`, `ORQ_ATUALIZACAO_CHAVE`, `ORQ_VERSAO`), só para o teste de ponta a ponta.
@@ -8,7 +8,7 @@ use std::io::Read;
 use std::time::Duration;
 
 pub const URL_OFICIAL: &str = "https://github.com/luansilvadb/orquestrador/releases/latest/download/latest.json";
-/// A mesma `plugins.updater.pubkey` do `src-tauri/tauri.conf.json`.
+/// A chave do updater do 0.1.48 (`empacotamento/compat-tauri/updater-0.1.48.json`).
 pub const PUBKEY_OFICIAL: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJCQkRCMUY4N0Q1NUIzNTUKUldSVnMxVjkrTEc5SzFhUU1pR004UE8yUVI3VTAwQnBLaHkrNVVVUDYyVGovZGNaT0cvTmVHSkgK";
 
 pub const URL: &str = match option_env!("ORQ_ATUALIZACAO_URL") {
@@ -103,7 +103,7 @@ fn instalar(versao: &str, dados: &[u8]) -> Result<(), String> {
     std::process::Command::new(&exe).args(["/S", "/UPDATE", "/R"]).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
-/// O motivo em português, como o `explain` do update.rs.
+/// O motivo em português, como o updater do 0.1.48.
 fn explicar_rede(e: ureq::Error, consulta: bool) -> String {
     match e {
         ureq::Error::Timeout(_) => "o GitHub não respondeu a tempo".into(),
@@ -129,15 +129,21 @@ mod testes {
 
     #[test]
     fn canal_e_chave_sao_os_do_tauri() {
+        use base64::Engine;
         assert_eq!(URL, URL_OFICIAL, "o build de teste não troca o canal");
         assert_eq!(PUBKEY, PUBKEY_OFICIAL);
-        // Enquanto a referência existir, o mesmo canal e a mesma chave do 0.1.48.
-        if let Ok(t) = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../src-tauri/tauri.conf.json")) {
-            let c: serde_json::Value = serde_json::from_str(&t).unwrap();
-            assert_eq!(c["plugins"]["updater"]["endpoints"][0], URL_OFICIAL);
-            assert_eq!(c["plugins"]["updater"]["pubkey"], PUBKEY_OFICIAL);
-            assert_eq!(c["identifier"], "dev.luansilvadb.orquestrador");
-        }
+        // O mesmo canal, a mesma chave e as regras do updater do 0.1.48.
+        let c: serde_json::Value =
+            serde_json::from_str(include_str!("../../empacotamento/compat-tauri/updater-0.1.48.json")).unwrap();
+        let u = &c["updater"];
+        assert_eq!(u["endpoints"], serde_json::json!([URL_OFICIAL]), "só a última release publicada");
+        assert_eq!(u["pubkey"], PUBKEY_OFICIAL);
+        assert_eq!(c["identifier"], "dev.luansilvadb.orquestrador");
+        assert_eq!(u["requireSignedVersion"], true);
+        assert_eq!(u["allowDowngrades"], false);
+        assert_eq!(u["windows"]["installMode"], "quiet");
+        let chave = base64::engine::general_purpose::STANDARD.decode(PUBKEY_OFICIAL).unwrap();
+        assert!(String::from_utf8(chave).unwrap().starts_with("untrusted comment: minisign public key: "));
     }
 
     #[test]

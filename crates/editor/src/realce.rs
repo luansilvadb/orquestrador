@@ -237,7 +237,10 @@ fn colorir_linha(estado: &mut Estado, linha: &str) -> Trechos {
                 return;
             }
             let escopos = pilha.as_slice();
-            if escopos.iter().any(|e| fora_str.is_prefix_of(*e) || fora_com.is_prefix_of(*e)) {
+            // Dentro de `${…}` da template string os colchetes voltam a contar, como no React.
+            let texto = escopos.iter().rposition(|e| fora_str.is_prefix_of(*e) || fora_com.is_prefix_of(*e));
+            let expressao = escopos.iter().rposition(|e| TEMPLATE.with(|t| t.is_prefix_of(*e)));
+            if texto.is_some_and(|t| expressao.is_none_or(|x| x < t)) {
                 fora.push(a..b);
             }
             if escopos.iter().any(|e| lista.is_prefix_of(*e)) {
@@ -441,7 +444,7 @@ impl Motor {
                         continue;
                     }
                 }
-                if i % PASSO == 0 || self.estados[i].is_some() {
+                if i.is_multiple_of(PASSO) || self.estados[i].is_some() {
                     self.estados[i] = Some(Box::new(e.clone()));
                 }
             }
@@ -594,6 +597,10 @@ pub fn colorir(sintaxe: Option<&'static SyntaxReference>, texto: &str) -> Trecho
 pub fn colorir_caminho(caminho: &str, texto: &str) -> Trechos {
     let sintaxe = linguagem::linguagem(caminho).as_deref().and_then(|l| sintaxe(l, caminho));
     colorir(sintaxe, texto)
+}
+
+thread_local! {
+    static TEMPLATE: Scope = Scope::new("meta.template.expression").unwrap();
 }
 
 /// Escopos que contam nos colchetes e no marcador de lista.
@@ -988,6 +995,137 @@ mod testes {
         m.editar(&edicao(&antes, &rope, 0, 0, 1), rope.clone());
         terminar(&mut m);
         assert_eq!(com_estilo(estilos_de(&mut m)), colorir(s, &rope.to_string()));
+    }
+
+    // Porte de tests/check-editor-style.mjs: um código por ( ) [ ] { } na ordem do documento (g, o, b pelo nível, u sem
+    // par, - sem cor de par, como em string e comentário).
+    fn pares(caminho: &str, t: &str) -> String {
+        let tr = colorir_caminho(caminho, t);
+        pares_de(&tr, t)
+    }
+
+    fn pares_de(tr: &Trechos, t: &str) -> String {
+        let nivel = |c: Option<Hsla>| match c {
+            Some(c) if c == gpui::rgb(NIVEIS[0]).into() => 'g',
+            Some(c) if c == gpui::rgb(NIVEIS[1]).into() => 'o',
+            Some(c) if c == gpui::rgb(NIVEIS[2]).into() => 'b',
+            Some(c) if c == cor_inesperado() => 'u',
+            _ => '-',
+        };
+        t.char_indices()
+            .filter(|(_, c)| "()[]{}".contains(*c))
+            .map(|(i, _)| nivel(tr.iter().find(|(r, _)| r.contains(&i)).and_then(|(_, s)| s.color)))
+            .collect()
+    }
+
+    fn cor_em(caminho: &str, t: &str, trecho: &str) -> Option<Hsla> {
+        cor_de(&colorir_caminho(caminho, t), t, trecho)
+    }
+
+    const TSX: &str = "const config = { list: [1, (2 + f({ a: \"(\" })) ], nome: `${(x)}` }; // ( comentário {\nif (a) { g(`${b}`, [c]); }\nx = 1); // ok";
+    const EXPECTED_TSX: &str = "gobgo-ogboobbog--gggobbbbogu";
+
+    #[test]
+    fn pares_por_nivel_em_tsx_json_texto_e_markdown() {
+        assert_eq!(pares("estilo-editor.tsx", TSX), EXPECTED_TSX, "TSX: fora de string e comentário, `${{` como par");
+        assert_eq!(pares("estilo-editor.json", "{\"a\": [1, {\"b\": [true]}], \"c\": {}}\n"), "gobggbooog");
+        assert_eq!(pares("estilo-pares.txt", "pares (a [b {c}]) e ) solto\n"), "gobbogu");
+        assert_eq!(pares("estilo-pares.md", "# Título (x)\n\nTexto (a [b] c) e {d}.\n"), "gggooggg");
+        let digitado = format!("{TSX}\nif (q) {{}}");
+        assert_eq!(pares("estilo-editor.tsx", &digitado), format!("{EXPECTED_TSX}gggg"), "digitar recolore");
+    }
+
+    #[test]
+    #[ignore = "lacuna: a gramática DotENV não marca o valor como texto, e os pares dele ganham cor"]
+    fn dotenv_como_properties() {
+        let t = "# comentário (a [b])\n[secao]\nCHAVE=valor (x)\n";
+        assert_eq!(pares(".env.example", t), "----gg--");
+        assert_eq!(cor_em(".env.example", t, "# comentário"), Some(gpui::rgb(0x6a9955).into()));
+        assert_eq!(cor_em(".env.example", t, "CHAVE"), Some(gpui::rgb(0x9cdcfe).into()));
+        assert_eq!(cor_em(".env.example", t, "valor"), Some(gpui::rgb(0xd4d4d4).into()));
+    }
+
+    #[test]
+    #[ignore = "lacuna: o rótulo do Batch File sai #C8C8C8, não #569CD6"]
+    fn batch_rem_rotulo_set_variavel_string_e_operador() {
+        let t = "@echo off\nREM nota (a)\nset NOME=1\n:inicio\necho \"olá %NOME%\" && goto inicio\nif exist x.txt (\n  del x.txt\n)\n";
+        assert_eq!(pares("script.bat", t), "--gg");
+        let azul = Some(gpui::rgb(0x569cd6).into());
+        assert_eq!(cor_em("script.bat", t, "REM nota"), azul);
+        assert_eq!(cor_em("script.bat", t, "nota (a)"), Some(gpui::rgb(0x6a9955).into()));
+        assert_eq!(cor_em("script.bat", t, "set"), azul);
+        assert_eq!(cor_em("script.bat", t, "inicio"), azul);
+        assert_eq!(cor_em("script.bat", t, "%NOME%"), Some(gpui::rgb(0x9cdcfe).into()));
+        assert_eq!(cor_em("script.bat", t, "\"olá"), Some(gpui::rgb(0xce9178).into()));
+        assert_eq!(cor_em("script.bat", t, "&&"), Some(gpui::rgb(0xd4d4d4).into()));
+        assert_eq!(cor_em("SCRIPT.CMD", "REM x\n", "REM x"), azul, "REM em .CMD");
+    }
+
+    #[test]
+    #[ignore = "lacuna: sem gramática GDScript embutida"]
+    fn gdscript_dark_plus() {
+        let t = "func mover():\n  var velocidade = 1\nvar energia = 2";
+        assert_eq!(cor_em("player.gd", t, "func"), Some(gpui::rgb(0x569cd6).into()));
+        assert_eq!(cor_em("player.gd", t, "mover"), Some(gpui::rgb(0xdcdcaa).into()));
+        assert_eq!(cor_em("player.gd", t, "velocidade"), Some(gpui::rgb(0x9cdcfe).into()));
+        assert_eq!(cor_em("player.gd", t, "energia"), Some(gpui::rgb(0x9cdcfe).into()));
+        assert_eq!(cor_em("player.gd", t, "2"), Some(gpui::rgb(0xb5cea8).into()));
+    }
+
+    #[test]
+    fn linguagem_desconhecida_e_arquivo_grande_ficam_sem_cor() {
+        let t = "texto simples\n";
+        assert!(colorir_caminho("sem-gramatica.xyzdesconhecida", t).iter().all(|(_, s)| s.color.is_none()));
+        let grande = format!("var energia = 1\n{}\n", "x".repeat(200_001));
+        let mut m = Motor::novo(sintaxe("gdscript", "grande.gd"), Rope::from(grande.as_str()));
+        m.preparar(0, 2);
+        assert!(m.estilos(&(0..15)).iter().all(|(_, s)| s.color.is_none()), "acima de 200 mil caracteres, sem cor");
+    }
+
+    #[test]
+    fn documento_longo_colore_o_fim_sem_passar_pelo_meio() {
+        let mut t = String::from("const obj = {\n  alvo: (\n");
+        for i in 0..200 {
+            t.push_str(&format!("    {i} +\n"));
+        }
+        t.push_str("    0\n  ),\n};\n");
+        let s = sintaxe("tsx", "estilo-longo.tsx");
+        let mut m = Motor::novo(s, Rope::from(t.as_str()));
+        m.preparar(0, 30);
+        let topo = m.estilos(&(0..m.texto.line_start_offset(30)));
+        assert_eq!(pares_de(&topo, &t[..m.texto.line_start_offset(30)]).trim_end_matches('-'), "go");
+        let n = m.texto.lines_len();
+        m.preparar(n - 5, n);
+        terminar(&mut m);
+        let fim = m.estilos(&(0..t.len()));
+        assert_eq!(&pares_de(&fim, &t)[2..], "og", "`)` no nível 1 e `}}` no 0 depois do Ctrl+End");
+    }
+
+    #[test]
+    fn markdown_titulo_negrito_codigo_e_marcador() {
+        let t = "# Design system
+
+A interface usa **Lobe UI** com `npm run build` e `Consolas`.
+
+- item com `código`
+- outro item
+";
+        let tr = colorir_caminho("estilo-editor.md", t);
+        let em = |trecho: &str| {
+            let i = t.find(trecho).unwrap();
+            tr.iter().find(|(r, _)| r.contains(&i)).map(|(_, s)| *s).unwrap_or_default()
+        };
+        let azul = Some(gpui::rgb(0x569cd6).into());
+        assert_eq!(em("Design system").color, azul);
+        assert_eq!(em("Design system").font_weight, Some(FontWeight::BOLD));
+        assert_eq!(em("Lobe UI").color, azul);
+        assert_eq!(em("Lobe UI").font_weight, Some(FontWeight::BOLD));
+        assert_eq!(em("npm run build").color, Some(gpui::rgb(0xce9178).into()));
+        assert_eq!(em("A interface usa").color, Some(cor_texto()));
+        assert_eq!(em("- item").color, Some(cor_lista()), "só o marcador ganha a cor");
+        assert_eq!(em("item com").color, Some(cor_texto()));
+        assert_eq!(em("outro item").color, Some(cor_texto()));
+        assert_eq!(em("código").color, Some(gpui::rgb(0xce9178).into()));
     }
 
     #[test]
