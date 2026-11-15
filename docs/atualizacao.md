@@ -46,13 +46,13 @@ $env:TAURI_SIGNING_PRIVATE_KEY = "$env:USERPROFILE\.tauri\orquestrador-updater.k
 npm run tauri build
 ```
 
-Saída: `src-tauri\target\release\bundle\nsis\Orquestrador_<versão>_x64-setup.exe` e o `.sig` ao lado.
+Saída: `target\release\bundle\nsis\Orquestrador_<versão>_x64-setup.exe` e o `.sig` ao lado.
 
 ## Publicar uma versão
 
 O processo completo, com o modelo das notas e a checklist, está em [notas de release](releases/README.md). Resumo:
 
-1. Suba a versão em `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` e `src-tauri/tauri.conf.json`. Ela precisa ser maior que a última publicada.
+1. Suba a versão em `package.json`, `package-lock.json`, `Cargo.toml` (`[workspace.package]`), `Cargo.lock` (`orquestrador` e `orquestrador-core`) e `src-tauri/tauri.conf.json`. Ela precisa ser maior que a última publicada.
 2. Escreva as notas em `docs/releases/vX.Y.Z.md`. O workflow recusa notas ausentes, vazias ou genéricas.
 3. Faça o commit e crie a tag: `git tag vX.Y.Z` e depois `git push origin vX.Y.Z`.
 4. O workflow `.github/workflows/release.yml` confere as versões e as notas, roda os checks, gera o instalador NSIS assinado e o `latest.json`, põe as notas completas na release e confere tudo. Só então publica a release como a `latest` que os apps consultam.

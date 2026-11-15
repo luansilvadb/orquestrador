@@ -232,6 +232,7 @@ check('Cargo: lê a versão do [package] e as entradas do orquestrador no Cargo.
   const toml = '[package]\nname = "orquestrador"\nversion = "0.1.7"\n\n[dependencies]\nserde = { version = "1" }\n';
   assert.equal(cargoPackageVersion(toml), '0.1.7');
   assert.equal(cargoPackageVersion('[dependencies]\nversion = "9.9.9"\n'), undefined);
+  assert.equal(cargoPackageVersion('[workspace]\nmembers = []\n\n[workspace.package]\nversion = "0.1.8"\n', '[workspace.package]'), '0.1.8');
   const lock = '[[package]]\nname = "serde"\nversion = "1.0.0"\n\n[[package]]\nname = "orquestrador"\nversion = "0.1.7"\ndependencies = []\n';
   assert.deepEqual(cargoLockVersions(lock, 'orquestrador'), ['0.1.7']);
   assert.deepEqual(cargoLockVersions('name = "x"\n', 'orquestrador'), []);

@@ -91,7 +91,7 @@ jobs:
           npm run build
           node tests/check-file-tabs.mjs
           node tests/check-release.mjs
-          cargo test --manifest-path src-tauri/Cargo.toml
+          cargo test --workspace
 
       # Instalador NSIS assinado com TAURI_SIGNING_PRIVATE_KEY (conteúdo da chave privada, secret do repositório; sem senha). Sai em rascunho.
       - name: Gerar o instalador assinado e a release em rascunho

@@ -119,10 +119,10 @@ export function checkSemver(version) {
   return version;
 }
 
-// Estado de uma versão: `version` do Cargo.toml é a do pacote `[package]`, não a de dependências.
-export function cargoPackageVersion(text) {
+// Estado de uma versão: `version` da seção pedida do Cargo.toml (padrão `[package]`), não a de dependências.
+export function cargoPackageVersion(text, section = '[package]') {
   const lines = text.split(/\r?\n/);
-  const start = lines.indexOf('[package]');
+  const start = lines.indexOf(section);
   if (start < 0) return undefined;
   for (const line of lines.slice(start + 1)) {
     if (line.startsWith('[')) break;
@@ -147,14 +147,17 @@ export function manifestVersions(root) {
   const pkg = JSON.parse(read('package.json'));
   const lock = JSON.parse(read('package-lock.json'));
   const conf = JSON.parse(read('src-tauri/tauri.conf.json'));
-  const lockEntries = cargoLockVersions(read('src-tauri/Cargo.lock'), 'orquestrador');
+  const lockEntries = cargoLockVersions(read('Cargo.lock'), 'orquestrador');
+  const coreEntries = cargoLockVersions(read('Cargo.lock'), 'orquestrador-core');
+  const one = (entries) => (entries.length === 1 ? entries[0] : `${entries.length} entradas`);
   return {
     'package.json': pkg.version,
     'package-lock.json': lock.version,
     'package-lock.json (packages[""])': lock.packages?.['']?.version,
     'src-tauri/tauri.conf.json': conf.version,
-    'src-tauri/Cargo.toml': cargoPackageVersion(read('src-tauri/Cargo.toml')),
-    'src-tauri/Cargo.lock': lockEntries.length === 1 ? lockEntries[0] : `${lockEntries.length} entradas`,
+    'Cargo.toml ([workspace.package])': cargoPackageVersion(read('Cargo.toml'), '[workspace.package]'),
+    'Cargo.lock (orquestrador)': one(lockEntries),
+    'Cargo.lock (orquestrador-core)': one(coreEntries),
   };
 }
 

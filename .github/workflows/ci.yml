@@ -36,7 +36,7 @@ jobs:
 
       - name: Testes Rust
         shell: bash
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --workspace
 
   # Só compila o backend fora do Windows (macOS e Linux). O app ainda não tem os recursos lá, então não há teste.
   compilar:
@@ -70,4 +70,4 @@ jobs:
 
       - name: Compilação do backend fora do Windows
         shell: bash
-        run: cargo check --all-targets --manifest-path src-tauri/Cargo.toml
+        run: cargo check --workspace --all-targets

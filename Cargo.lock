@@ -2562,9 +2562,7 @@ name = "orquestrador"
 version = "0.1.48"
 dependencies = [
  "base64 0.22.1",
- "ignore",
- "portable-pty",
- "regex",
+ "orquestrador-core",
  "serde",
  "serde_json",
  "tauri",
@@ -2572,6 +2570,19 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+]
+
+[[package]]
+name = "orquestrador-core"
+version = "0.1.48"
+dependencies = [
+ "base64 0.22.1",
+ "http",
+ "ignore",
+ "portable-pty",
+ "regex",
+ "serde",
+ "serde_json",
  "windows-sys 0.59.0",
 ]
 

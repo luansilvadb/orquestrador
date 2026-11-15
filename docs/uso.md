@@ -28,7 +28,7 @@ A última escolha de cada papel fica em `%LOCALAPPDATA%\orquestrador\config.json
 }
 ```
 
-Não há mais ajuste de simultâneos. O teto é automático e vem de duas medidas do computador, calculadas ao abrir o app (`src-tauri/src/core/capacity.rs`):
+Não há mais ajuste de simultâneos. O teto é automático e vem de duas medidas do computador, calculadas ao abrir o app (`crates/core/src/core/capacity.rs`):
 
 - **CPU:** metade das CPUs lógicas, de 1 a 16. Lida uma vez, ao abrir o app.
 - **Memória física:** a RAM total, menos 2 GiB reservados ao sistema e ao app, dá um executor por GiB. A memória livre agora dá as vagas: o que sobra depois da mesma reserva de 2 GiB, um executor por GiB. O commit disponível também limita: cada executor novo pede 2 GiB, depois de 2 GiB reservados; se não puder ser lido, vale só a RAM. Executor aberto há menos de 15 s ainda não alocou, então desconta 1 GiB da RAM livre e 2 GiB do commit. O teto de cada passe é o menor entre o da CPU, o da RAM total e os executores já vivos mais as vagas da RAM livre e do commit. Se nada está vivo, um executor pode começar mesmo sem vaga, para a fila não parar.

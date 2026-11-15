@@ -264,8 +264,8 @@ fn stream_range(range: Option<&str>, total: u64) -> Option<(u64, u64)> {
 }
 
 /// Resposta de erro em texto.
-pub fn text_response(status: u16, message: String) -> tauri::http::Response<Vec<u8>> {
-    tauri::http::Response::builder()
+pub fn text_response(status: u16, message: String) -> http::Response<Vec<u8>> {
+    http::Response::builder()
         .status(status)
         .header("Content-Type", "text/plain; charset=utf-8")
         .body(message.into_bytes())
@@ -274,19 +274,19 @@ pub fn text_response(status: u16, message: String) -> tauri::http::Response<Vec<
 
 /// O pedaço do vídeo ou áudio `file` (já validado) pedido no cabeçalho `range`: 206 com `Content-Range`, 416 se o intervalo não cabe,
 /// 200 vazio se o arquivo é vazio, 404 se sumiu, 500 em outro erro de leitura. Lê num handle só, só os bytes do intervalo.
-pub fn serve_stream(file: &Path, range: Option<&str>) -> tauri::http::Response<Vec<u8>> {
+pub fn serve_stream(file: &Path, range: Option<&str>) -> http::Response<Vec<u8>> {
     let erro = |e: std::io::Error| match e.kind() {
         std::io::ErrorKind::NotFound => text_response(404, format!("Arquivo não encontrado: {}", file.display())),
         _ => text_response(500, format!("Não foi possível ler o arquivo: {e}")),
     };
-    let read = || -> std::io::Result<tauri::http::Response<Vec<u8>>> {
+    let read = || -> std::io::Result<http::Response<Vec<u8>>> {
         let mut handle = File::open(file)?;
         let total = handle.metadata()?.len();
-        let response = tauri::http::Response::builder().header("Accept-Ranges", "bytes").header("Content-Type", stream_type(file));
+        let response = http::Response::builder().header("Accept-Ranges", "bytes").header("Content-Type", stream_type(file));
         if total == 0 {
             return Ok(response.status(200).header("Content-Length", "0").body(Vec::new()).expect("resposta válida"));
         }
-        let unsatisfiable = |response: tauri::http::response::Builder| {
+        let unsatisfiable = |response: http::response::Builder| {
             Ok(response.status(416).header("Content-Range", format!("bytes */{total}")).body(Vec::new()).expect("resposta válida"))
         };
         let Some((start, end)) = stream_range(range, total) else {

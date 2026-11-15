@@ -1,12 +1,12 @@
 //! O ciclo inteiro sem modelo: o app de verdade (Core), o servidor MCP dele (`orquestrador --mcp <pasta da sessão>`)
 //! falado por um cliente de teste em JSON-RPC pela entrada e saída padrão, e CLIs falsos (examples/fake_cli.rs) no
 //! lugar do claude e do codex.
-use orquestrador_lib::agents::cli::Exes;
-use orquestrador_lib::agents::delegate;
-use orquestrador_lib::agents::session::Places;
-use orquestrador_lib::config::{self, Choice};
-use orquestrador_lib::core::capacity::{Memory, Resources};
-use orquestrador_lib::core::{title, Core, Emit, ORCHESTRATOR};
+use orquestrador_core::agents::cli::Exes;
+use orquestrador_core::agents::delegate;
+use orquestrador_core::agents::session::Places;
+use orquestrador_core::config::{self, Choice};
+use orquestrador_core::core::capacity::{Memory, Resources};
+use orquestrador_core::core::{title, Core, Emit, ORCHESTRATOR};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};

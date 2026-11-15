@@ -2,6 +2,7 @@ node_modules/
 dist/
 src/assets/material-icons/
 public/material-icons-LICENSE.txt
+/target/
 src-tauri/target/
 src-tauri/gen/
 # Chave privada de assinatura do updater: fica fora do repositório (ver docs/atualizacao.md).

@@ -1,4 +1,4 @@
-// Quadro binário da saída dos terminais (formato em `src-tauri/src/core/frame.rs`):
+// Quadro binário da saída dos terminais (formato em `crates/core/src/core/frame.rs`):
 // [u8 n][projeto n bytes][u8 m][id m bytes][u64 seq LE][bytes]; n = 0 é o terminal sem projeto.
 // Um envio do canal leva vários, cada um com o tamanho na frente ([u32 LE][quadro]); o retrato é um quadro só, sem o tamanho.
 import type { TermData } from './types';

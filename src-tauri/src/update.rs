@@ -2,9 +2,9 @@
 //! a última versão estável no GitHub. Se houver uma superior, baixa, valida a assinatura, instala e
 //! reabre sozinho. Em dia, garante os dois CLIs (`clis.rs`) antes de liberar. Qualquer falha mantém o uso bloqueado, com o motivo e uma nova tentativa. O build
 //! de desenvolvimento libera o uso direto e não consulta nada.
-use crate::agents::cli::Exes;
-use crate::clis::{self, Andamento};
-use crate::core::Emit;
+use orquestrador_core::agents::cli::Exes;
+use orquestrador_core::clis::{self, Andamento};
+use orquestrador_core::core::Emit;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::{Arc, Mutex};

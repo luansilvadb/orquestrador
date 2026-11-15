@@ -1,6 +1,6 @@
 # Arquitetura
 
-O front-end (React) fica em `src/` e o backend (Rust, Tauri) em `src-tauri/src/`. O mesmo `orquestrador.exe` atende também os modos `--mcp`, `--hook` e `--allow`, que os CLIs chamam. Os caminhos são relativos à raiz do repositório.
+O front-end (React) fica em `src/` e o backend em Rust: a lógica sem Tauri no crate `orquestrador-core` (`crates/core/src/`) e a camada Tauri em `src-tauri/src/`, num workspace Cargo na raiz. O mesmo `orquestrador.exe` atende também os modos `--mcp`, `--hook` e `--allow`, que os CLIs chamam. Os caminhos são relativos à raiz do repositório.
 
 ## Front-end (`src/`)
 
@@ -65,38 +65,38 @@ Regras do layout:
 - Uma pasta pode importar de outra.
 - `shared/` só recebe o que serve a três ou mais áreas.
 
-## Backend (`src-tauri/src/`)
+## Backend (`crates/core/src/` e `src-tauri/src/`)
 
 A raiz guarda a infraestrutura (comandos Tauri, configuração, processos, atualização e caminhos de abertura); `agents/`, `core/`, `ide/` e `platform/` agrupam os subsistemas, e `ide/` não depende de `agents/` nem de `core/`.
 
 | Caminho | Papel |
 | --- | --- |
 | `src-tauri/src/lib.rs` | Registra os comandos Tauri. `open_project`/`close_project`/`project_snapshot`, `pick_file`/`pick_save_path` e `read_file_at`/`read_media_at`/`write_file_at_checked` abrem projetos, escolhem caminhos e atendem arquivos absolutos do editor. Registra também o protocolo `orq-media`, que serve áudio e vídeo à aba de mídia em pedaços (HTTP Range). |
-| `src-tauri/src/ide/files.rs` | Comandos de arquivos do projeto e absolutos: `read_file_at`, `read_media_at` e `write_file_at_checked` atendem arquivos escolhidos pelo usuário, com limites, BOM e checagem de revisão. `MEDIA_EXTS` (imagem, `read_media`), `AUDIO_EXTS` e `VIDEO_EXTS` (protocolo `orq-media`) listam as extensões de mídia aceitas. |
-| `src-tauri/src/ide/search.rs` | O comando da pesquisa, `search`: os candidatos vêm de `git ls-files` (rastreados e não ignorados, sem `.git`) quando há repositório; sem repositório, vêm da pasta percorrida com a crate `ignore` (respeita `.gitignore` e `.ignore` da pasta e das subpastas, não os de pastas acima; inclui ocultos; não segue links; pula `.git` e `node_modules`), e o texto é casado em Rust pelo motor `regex`, o mesmo da prévia e da substituição. |
-| `src-tauri/src/ide/git.rs` | Os comandos do painel Git: status, diff, preparar, commit, fetch, pull, push e branches. Também `git_commit_hover`, que lê os detalhes de um commit sob demanda, e os do editor: `git_file_base`, o texto do arquivo no HEAD e no índice para os marcadores de mudança, e `git_write_index`, que grava no índice o texto de um arquivo para preparar ou tirar do preparo um bloco. E o modo do projeto (com repositório, sem Git, sem repositório ou repositório acima) e o `git init` do botão Inicializar repositório. |
-| `src-tauri/src/core/mod.rs` | Um núcleo por projeto, com sua sessão, PTYs, lotes, executores, fila e trava Git. O Core sem projeto mantém os shells da pasta pessoal. Ver [delegação](delegacao.md). |
-| `src-tauri/src/core/projects.rs` | Registro dos Cores, ids estáveis durante a abertura, configuração compartilhada e eventos identificados pelo projeto. |
-| `src-tauri/src/platform/` | O único lugar das chamadas ao sistema operacional: Job Objects, consulta de processo, COM e a Lixeira, o Explorer, a abertura de URLs do GitHub, o clipboard de arquivos, a memória física, as pastas do usuário, os nomes dos shells, as pastas do `PATH` registrado, o Windows PowerShell do sistema e o local padrão de cada CLI. `windows.rs` implementa; `other.rs` (macOS e Linux) responde "Ainda não suportado neste sistema." ou devolve `None`, conforme o chamador já trata a ausência. Fora daqui não há `windows_sys` nem `std::os::windows`. |
-| `src-tauri/src/core/capacity.rs` | Política compartilhada de simultâneos: teto pela CPU e memória física (`platform::memoria`), com reserva de 2 GiB e 1 GiB por executor, e fila global FIFO. |
-| `src-tauri/src/agents/delegate.rs` | A lógica de delegação: publica o lote na pasta da sessão, espera o resultado, imprime o lote e grava as respostas às perguntas de executor. |
-| `src-tauri/src/agents/mcp.rs` | O servidor MCP da sessão, `orquestrador.exe --mcp <pasta da sessão>`: fala JSON-RPC pela entrada e saída padrão e expõe `delegar` e `aguardar`. |
-| `src-tauri/src/agents/hook.rs` | O modo `--hook` do executável, chamado pelos CLIs dos executores no fim de cada rodada. O `--allow` imprime `cli::ALLOW` direto do `main.rs`; o `--mcp`, do orquestrador, está em `mcp.rs`. |
-| `src-tauri/src/agents/session.rs` | A sessão do orquestrador: a pasta do funcionamento interno (o orquestrador trabalha na pasta do projeto), `AGENTS.md` com o papel, `mcp.json` e `claude-settings.json` do Claude, e a limpeza das sobras, inclusive das regras do Codex que versões antigas deixavam em `CODEX_HOME` (até 2027-02-01). |
-| `src-tauri/src/agents/roles.rs` | Os textos enviados ao orquestrador (no Claude, pelo `AGENTS.md` da sessão com `--append-system-prompt-file`; no Codex, por `developer_instructions`) e a cada executor, antes da tarefa: a única fonte da regra de cada papel, sem trava no app. O texto do orquestrador é o mesmo para Claude Code e Codex; o protocolo das ferramentas (marcadores e próxima chamada) fica nas saídas delas, em `mcp.rs`, `delegate.rs` e `core.rs`. |
+| `crates/core/src/ide/files.rs` | Comandos de arquivos do projeto e absolutos: `read_file_at`, `read_media_at` e `write_file_at_checked` atendem arquivos escolhidos pelo usuário, com limites, BOM e checagem de revisão. `MEDIA_EXTS` (imagem, `read_media`), `AUDIO_EXTS` e `VIDEO_EXTS` (protocolo `orq-media`) listam as extensões de mídia aceitas. |
+| `crates/core/src/ide/search.rs` | O comando da pesquisa, `search`: os candidatos vêm de `git ls-files` (rastreados e não ignorados, sem `.git`) quando há repositório; sem repositório, vêm da pasta percorrida com a crate `ignore` (respeita `.gitignore` e `.ignore` da pasta e das subpastas, não os de pastas acima; inclui ocultos; não segue links; pula `.git` e `node_modules`), e o texto é casado em Rust pelo motor `regex`, o mesmo da prévia e da substituição. |
+| `crates/core/src/ide/git.rs` | Os comandos do painel Git: status, diff, preparar, commit, fetch, pull, push e branches. Também `git_commit_hover`, que lê os detalhes de um commit sob demanda, e os do editor: `git_file_base`, o texto do arquivo no HEAD e no índice para os marcadores de mudança, e `git_write_index`, que grava no índice o texto de um arquivo para preparar ou tirar do preparo um bloco. E o modo do projeto (com repositório, sem Git, sem repositório ou repositório acima) e o `git init` do botão Inicializar repositório. |
+| `crates/core/src/core/mod.rs` | Um núcleo por projeto, com sua sessão, PTYs, lotes, executores, fila e trava Git. O Core sem projeto mantém os shells da pasta pessoal. Ver [delegação](delegacao.md). |
+| `crates/core/src/core/projects.rs` | Registro dos Cores, ids estáveis durante a abertura, configuração compartilhada e eventos identificados pelo projeto. |
+| `crates/core/src/platform/` | O único lugar das chamadas ao sistema operacional: Job Objects, consulta de processo, COM e a Lixeira, o Explorer, a abertura de URLs do GitHub, o clipboard de arquivos, a memória física, as pastas do usuário, os nomes dos shells, as pastas do `PATH` registrado, o Windows PowerShell do sistema e o local padrão de cada CLI. `windows.rs` implementa; `other.rs` (macOS e Linux) responde "Ainda não suportado neste sistema." ou devolve `None`, conforme o chamador já trata a ausência. Fora daqui não há `windows_sys` nem `std::os::windows`. |
+| `crates/core/src/core/capacity.rs` | Política compartilhada de simultâneos: teto pela CPU e memória física (`platform::memoria`), com reserva de 2 GiB e 1 GiB por executor, e fila global FIFO. |
+| `crates/core/src/agents/delegate.rs` | A lógica de delegação: publica o lote na pasta da sessão, espera o resultado, imprime o lote e grava as respostas às perguntas de executor. |
+| `crates/core/src/agents/mcp.rs` | O servidor MCP da sessão, `orquestrador.exe --mcp <pasta da sessão>`: fala JSON-RPC pela entrada e saída padrão e expõe `delegar` e `aguardar`. |
+| `crates/core/src/agents/hook.rs` | O modo `--hook` do executável, chamado pelos CLIs dos executores no fim de cada rodada. O `--allow` imprime `cli::ALLOW` direto do `main.rs`; o `--mcp`, do orquestrador, está em `mcp.rs`. |
+| `crates/core/src/agents/session.rs` | A sessão do orquestrador: a pasta do funcionamento interno (o orquestrador trabalha na pasta do projeto), `AGENTS.md` com o papel, `mcp.json` e `claude-settings.json` do Claude, e a limpeza das sobras, inclusive das regras do Codex que versões antigas deixavam em `CODEX_HOME` (até 2027-02-01). |
+| `crates/core/src/agents/roles.rs` | Os textos enviados ao orquestrador (no Claude, pelo `AGENTS.md` da sessão com `--append-system-prompt-file`; no Codex, por `developer_instructions`) e a cada executor, antes da tarefa: a única fonte da regra de cada papel, sem trava no app. O texto do orquestrador é o mesmo para Claude Code e Codex; o protocolo das ferramentas (marcadores e próxima chamada) fica nas saídas delas, em `mcp.rs`, `delegate.rs` e `core.rs`. |
 | `src-tauri/src/update.rs` | Atualização na abertura: o portão do uso, a rodada pelo plugin oficial do Tauri, a etapa dos CLIs e os testes do portão. |
-| `src-tauri/src/clis.rs` | A etapa dos CLIs no portão: localiza `claude.exe` e `codex.exe`, instala pelo script oficial, confere `--version`, roda `update` e devolve os caminhos absolutos; no debug, só localiza. |
-| `src-tauri/src/open_paths.rs` | Extrai caminhos dos argumentos e mantém a fila até o front pedir; `src-tauri/windows/hooks.nsh` registra e remove menus e extensões no HKCU. |
+| `crates/core/src/clis.rs` | A etapa dos CLIs no portão: localiza `claude.exe` e `codex.exe`, instala pelo script oficial, confere `--version`, roda `update` e devolve os caminhos absolutos; no debug, só localiza. |
+| `crates/core/src/open_paths.rs` | Extrai caminhos dos argumentos e mantém a fila até o front pedir; `src-tauri/windows/hooks.nsh` registra e remove menus e extensões no HKCU. |
 
-O módulo src-tauri/src/ide/format.rs escolhe o motor pela extensão, procura as configurações pelo caminho absoluto e executa os formatadores externos com timeout. Os comandos formatter_info e format_cli são registrados em lib.rs e tipados em src/backend/types.ts.
+O módulo crates/core/src/ide/format.rs escolhe o motor pela extensão, procura as configurações pelo caminho absoluto e executa os formatadores externos com timeout. Os comandos formatter_info e format_cli são registrados em lib.rs e tipados em src/backend/types.ts.
 
-`src-tauri/src/proc.rs` é o único lugar que roda comando externo com prazo (`saida_com_prazo`), e o prazo cobre execução, escrita na entrada e leitura dos dois pipes. No Windows o processo nasce suspenso, entra no Job Object antes de qualquer descendente rodar e só então é liberado; no macOS e no Linux, o comando abre um grupo de processos próprio. No estouro, a árvore inteira é encerrada e o que saiu até ali volta com `estourou`. `src-tauri/tests/prazo.rs` cobre pai que sai e deixa descendente segurando os pipes, pai vivo, entrada de 16 MiB sem destino e saída grande nos dois pipes.
+`crates/core/src/proc.rs` é o único lugar que roda comando externo com prazo (`saida_com_prazo`), e o prazo cobre execução, escrita na entrada e leitura dos dois pipes. No Windows o processo nasce suspenso, entra no Job Object antes de qualquer descendente rodar e só então é liberado; no macOS e no Linux, o comando abre um grupo de processos próprio. No estouro, a árvore inteira é encerrada e o que saiu até ali volta com `estourou`. `src-tauri/tests/prazo.rs` cobre pai que sai e deixa descendente segurando os pipes, pai vivo, entrada de 16 MiB sem destino e saída grande nos dois pipes.
 
 Cada comando dependente de projeto recebe o id devolvido por `open_project` (ou `choose_project`); reabrir a mesma raiz normalizada devolve o id existente. Os eventos do Core também carregam `project`; ids de terminal são locais ao Core e o front deve chavear por `(project, id)`. O limite de executores é global, com fila FIFO entre projetos. Opções e escolhas padrão ficam na configuração global; a escolha dos executores, cada sessão em execução, seus shells e sua trava Git pertencem ao Core do projeto. O Core sem projeto é separado e sobrevive à abertura e ao fechamento de projetos.
 
 ## Testes (`tests/`)
 
-Os testes do front-end, agrupados por tipo. Os do backend ficam em `src-tauri/tests/` e nos módulos do Rust.
+Os testes do front-end, agrupados por tipo. Os do backend ficam em `crates/core/tests/`, `src-tauri/tests/` (os que usam o `orquestrador.exe`) e nos módulos do Rust.
 
 **Checagens puras** (`npm run check`): Node, sem dependências, com `node:test`. Os arquivos rodam um de cada vez.
 
@@ -106,7 +106,7 @@ Os testes do front-end, agrupados por tipo. Os do backend ficam em `src-tauri/te
 - `tests/check-file-tabs.mjs`: caminhos copiados, nomes recusados e “dentro de pasta”.
 - `tests/check-explorer.mjs`: a escolha de ícones (os casos do Explorer do Antigravity) e as decorações do Git na árvore.
 - `tests/check-git-graph.mjs`: o layout do gráfico de commits.
-- `tests/check-paste.mjs`: a colagem de arquivo e imagem no terminal. O efeito real nos CLIs fica no teste ignorado `src-tauri/tests/colagem.rs`.
+- `tests/check-paste.mjs`: a colagem de arquivo e imagem no terminal. O efeito real nos CLIs fica no teste ignorado `crates/core/tests/colagem.rs`.
 - `tests/check-release.mjs`: as regras do fluxo de release.
 - `tests/check-commands.mjs`: o contrato dos comandos, com as chaves de `Commands` (`types.ts`) iguais às de `generate_handler!` (`lib.rs`).
 - `tests/check-shiki-language.mjs`: a linguagem de cada tipo de arquivo pelos metadados do Linguist e pelas gramáticas do Shiki (`src/editor/shiki-colors.ts`): GoDot, `.env`, Dockerfile, extensões desconhecidas e nomes sem extensão.

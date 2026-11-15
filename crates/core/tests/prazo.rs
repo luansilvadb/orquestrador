@@ -1,6 +1,6 @@
 #![cfg(windows)]
 
-use orquestrador_lib::{platform, proc};
+use orquestrador_core::{platform, proc};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;

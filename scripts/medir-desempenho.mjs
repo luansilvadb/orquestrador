@@ -11,7 +11,7 @@
 //        Roda do zero, sem intervenção (~6 min). Sem argumentos usa os valores acima como padrão: é o cenário de base para comparar depois.
 //
 // Como mede (detalhes e limites em docs/desempenho-base.md):
-// - Executável: src-tauri/target/debug/orquestrador.exe, compilado por `npx tauri build --debug --no-bundle --config <patch>` com
+// - Executável: target/debug/orquestrador.exe, compilado por `npx tauri build --debug --no-bundle --config <patch>` com
 //   CARGO_PROFILE_DEV_OPT_LEVEL=3 (Rust otimizado como o release, mas com debug_assertions: sem o plugin single-instance e sem a verificação de
 //   atualização, que atuariam sobre a instância instalada). O frontend é o `dist` de produção (React em modo produção).
 //   O WebView2 157 ignora WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: a porta CDP entra no build por um patch (JSON Merge Patch sobre o
@@ -47,9 +47,9 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const EXE = join(ROOT, 'src-tauri', 'target', 'debug', 'orquestrador.exe');
+const EXE = join(ROOT, 'target', 'debug', 'orquestrador.exe');
 const MARCADOR = `${EXE}.medir.json`;
-const FAKE_EXE = join(ROOT, 'src-tauri', 'target', 'debug', 'examples', 'fake_cli.exe');
+const FAKE_EXE = join(ROOT, 'target', 'debug', 'examples', 'fake_cli.exe');
 
 // ---------------------------------------------------------------- argumentos
 const argv = process.argv.slice(2);

@@ -1,7 +1,7 @@
 //! Latência de eco de um PTY puro (sem Tauri nem WebView): escreve 1 caractere no PTY e mede até o eco chegar à leitura.
 //! Piso do caminho ConPTY + shell, para comparar com o eco do app (keydown -> letra no DOM do xterm: p50 23,2 ms em docs/desempenho-base.md).
 //!
-//! Rodar: cargo run --release --example eco_pty --manifest-path src-tauri/Cargo.toml [-- <amostras> [--v=psrl,sempsrl,laco,cmd] [cenário ...]]
+//! Rodar: cargo run --release --example eco_pty -p orquestrador-core [-- <amostras> [--v=psrl,sempsrl,laco,cmd] [cenário ...]]
 //! (amostras: padrão 250; ECO_DEBUG=1 mostra o texto lido; sem cenário roda só 62x24).
 //! Cenário: COLSxROWS[>RxL | >>RxL][+job][+thr][+cwd][+env][+below][+eco]
 //!   `>RxL`   resize logo depois do spawn (antes do primeiro prompt); `>>RxL` resize depois do prompt desenhado.
@@ -186,7 +186,7 @@ mod medida {
         }
         let mut filho = spawn.map_err(|e| format!("{e}"))?;
         drop(pair.slave);
-        let _job = if cfg.job { filho.process_id().and_then(orquestrador_lib::platform::Job::adopt) } else { None };
+        let _job = if cfg.job { filho.process_id().and_then(orquestrador_core::platform::Job::adopt) } else { None };
         if cfg.job && _job.is_none() {
             let _ = filho.kill();
             return Err("Job::adopt falhou".into());
@@ -278,8 +278,8 @@ mod medida {
     /// escrita pelo lock do `Writer`), com `agents::cli::Spawn` igual ao de `cli::shell` (cwd do projeto, sem env), mais os
     /// argumentos da variante.
     pub fn medir_app(programa: &str, args: &[&str], amostras: usize, cfg: &Cfg) -> Result<Resultado, String> {
-        use orquestrador_lib::agents::cli::Spawn;
-        use orquestrador_lib::core::pty::{Buffer, Term, INTERACTIVE_GAP};
+        use orquestrador_core::agents::cli::Spawn;
+        use orquestrador_core::core::pty::{Buffer, Term, INTERACTIVE_GAP};
         let (tx, rx) = mpsc::channel::<Chunk>();
         let spawn = Spawn {
             program: programa.to_string(),

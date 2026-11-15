@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "src-tauri"]
+
+# Versão única do app: `agents/mcp.rs` anuncia a do pacote core.
+[workspace.package]
+version = "0.1.48"
+edition = "2021"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

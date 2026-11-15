@@ -1,20 +1,13 @@
 //! Backend do app Orquestrador: terminais em que um CLI orquestra e outros executam.
-pub mod agents;
-pub mod clis;
-pub mod config;
-pub mod core;
-pub mod ide;
-pub mod open_paths;
-pub mod platform;
-pub mod proc;
 pub mod update;
-#[cfg(test)]
-mod testutil;
 
-use crate::agents::{cli, session};
-use crate::config::{Choice, Options};
-use crate::core::projects::{Opened, ProjectSnapshot, Projects, TermSink};
-use crate::ide::{files, format, git, search};
+
+
+use orquestrador_core::agents::{cli, session};
+use orquestrador_core::{config, core, open_paths, platform};
+use orquestrador_core::config::{Choice, Options};
+use orquestrador_core::core::projects::{Opened, ProjectSnapshot, Projects, TermSink};
+use orquestrador_core::ide::{files, format, git, search};
 use crate::update::Gate;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
