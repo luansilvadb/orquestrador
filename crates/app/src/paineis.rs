@@ -1,34 +1,13 @@
 //! Navegação (nav.tsx), faixa lateral, coluna central, painéis Terminal e Orquestrador e barra de status (status-bar.tsx).
 use crate::bancada::{Bancada, Divisor, Rota};
 use crate::moldura::icone;
+use orquestrador_ui::widgets::Borda;
 use crate::recursos::icone as ic;
 use crate::tema::{self, cor};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::Sizable;
 use gpui_kit::TestSupportExt;
-use gpui_kit::{div, prelude::*, px, Context, FontWeight, MouseButton, WindowControlArea};
-
-/// Controle da janela: 46 px, hover branco a 10% (Fechar vermelho com o ícone branco), sem estado ativo. A área nativa
-/// (`WindowControlArea`) dá ao Windows o clique, o snap do Maximizar e o duplo clique.
-pub fn botao_janela(id: &'static str, caminho: &'static str, area: WindowControlArea, perigo: bool) -> impl IntoElement {
-    div()
-        .id(id)
-        .group(id)
-        .window_control_area(area)
-        .flex()
-        .items_center()
-        .justify_center()
-        .flex_none()
-        .w(tema::BOTAO_JANELA)
-        .h_full()
-        .when(perigo, |d| d.hover(|s| s.bg(cor::close_red())))
-        .when(!perigo, |d| d.hover(|s| s.bg(cor::fill_hover())))
-        .child(
-            icone(caminho, 16., cor::titlebar_text())
-                .when(perigo, |s| s.group_hover(id, |s| s.text_color(cor::text_primary()))),
-        )
-        .test_support()
-}
+use gpui_kit::{div, prelude::*, px, Context, FontWeight, MouseButton};
 
 /// Título de seção da faixa lateral: 36 px, 12 px a 500 em texto secundário (explorer.tsx).
 fn cabecalho(titulo: &'static str) -> impl IntoElement {
@@ -48,13 +27,12 @@ fn cabecalho(titulo: &'static str) -> impl IntoElement {
 
 /// Alça de arrasto de 4 px sobre a borda do painel.
 fn alca(id: &'static str, divisor: Divisor, cx: &mut Context<Bancada>) -> impl IntoElement {
-    let base = div().id(id).absolute().occlude();
-    let base = match divisor {
-        Divisor::Lateral => base.top_0().bottom_0().right(px(-2.)).w(px(4.)).cursor_col_resize(),
-        Divisor::Painel => base.top_0().bottom_0().left(px(-2.)).w(px(4.)).cursor_col_resize(),
-        Divisor::Terminal => base.left_0().right_0().top(px(-2.)).h(px(4.)).cursor_row_resize(),
+    let borda = match divisor {
+        Divisor::Lateral => Borda::Direita,
+        Divisor::Painel => Borda::Esquerda,
+        Divisor::Terminal => Borda::Topo,
     };
-    base.on_mouse_down(
+    orquestrador_ui::widgets::alca(id, borda).on_mouse_down(
         MouseButton::Left,
         cx.listener(move |this, e: &gpui_kit::MouseDownEvent, _, cx| {
             cx.stop_propagation();

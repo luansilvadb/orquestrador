@@ -182,7 +182,7 @@ pub struct VistaTerminal {
     medido: bool,
     /// Quantas vezes a grade foi preparada para desenho (os testes conferem que o escondido não desenha).
     pub pinturas: u64,
-    /// Medição (`ORQ_MEDIR`): quando a última tecla saiu e a geração do motor naquela hora.
+    /// Medição (`ORQ_MEDIR`): quando a última tecla saiu e a assinatura da linha do cursor naquela hora.
     tecla_em: Option<(Instant, u64)>,
     _piscar: Task<()>,
 }
@@ -300,7 +300,7 @@ impl VistaTerminal {
             return;
         }
         if medir::ligado() {
-            self.tecla_em = Some((Instant::now(), self.motor.geracao.load(std::sync::atomic::Ordering::Acquire)));
+            self.tecla_em = Some((Instant::now(), self.motor.assinatura_cursor()));
         }
         {
             let mut e = self.motor.travar();
@@ -968,7 +968,7 @@ impl Element for GradeTerminal {
         motor.limpar();
         // Tecla → eco no quadro: a primeira preparação de desenho com saída nova depois da tecla.
         if let Some((t0, g0)) = tecla_em {
-            if motor.geracao.load(std::sync::atomic::Ordering::Acquire) > g0 {
+            if motor.assinatura_cursor() != g0 {
                 let p = *motor.processado_em.lock().unwrap_or_else(|e| e.into_inner());
                 medir::amostra(t0.elapsed(), p.map(|p| p.saturating_duration_since(t0)));
                 self.vista.update(cx, |v, _| v.tecla_em = None);

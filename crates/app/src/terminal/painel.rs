@@ -7,11 +7,13 @@ use super::ui::{self, Variante};
 use super::vista::{EventoVista, VistaTerminal};
 use super::colar::Cli;
 use crate::backend::Backend;
+use orquestrador_ui::widgets::TooltipTexto;
+use orquestrador_ui::{Aba, EstadoFaixa, EstadoLista, FaixaAbas, ItemLista, ListaAbas, MoverAba};
 use crate::tema::{self, cor};
 use gpui_kit::TestSupportExt;
 use gpui_kit::{
-    anchored, canvas, deferred, div, point, prelude::*, px, AnyElement, App, Context, Entity, EventEmitter,
-    FontWeight, Hsla, MouseButton, ScrollHandle, SharedString, Subscription, Task, WeakEntity, Window,
+    canvas, div, point, prelude::*, px, AnyElement, App, Context, Entity, EventEmitter,
+    FontWeight, Hsla, MouseButton, SharedString, Subscription, Task, WeakEntity, Window,
 };
 use orquestrador_core::config::{Choice, Options};
 use orquestrador_core::core::ORCHESTRATOR;
@@ -124,12 +126,6 @@ impl Projeto {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Lista {
-    Orquestrador,
-    Shells,
-}
-
 pub enum EventoTerminais {
     /// A última aba de shell fechou: o painel Terminal se esconde.
     FecharPainel,
@@ -140,9 +136,10 @@ pub struct Terminais {
     pub projetos: HashMap<Option<String>, Projeto>,
     pub vistas: HashMap<Chave, Entity<VistaTerminal>>,
     form: Option<(Option<String>, Entity<FormEscolha>, Subscription)>,
-    lista: Option<Lista>,
-    faixa_shells: ScrollHandle,
-    faixa_orq: ScrollHandle,
+    lista_orq: EstadoLista,
+    pub(crate) lista_shells: EstadoLista,
+    pub(crate) faixa_shells: EstadoFaixa,
+    faixa_orq: EstadoFaixa,
     largura_cabecalho: Rc<Cell<f32>>,
     seq_shell: u64,
     ultimo_programa: String,
@@ -196,9 +193,10 @@ impl Terminais {
             projetos: HashMap::new(),
             vistas: HashMap::new(),
             form: None,
-            lista: None,
-            faixa_shells: ScrollHandle::new(),
-            faixa_orq: ScrollHandle::new(),
+            lista_orq: EstadoLista::new(cx),
+            lista_shells: EstadoLista::new(cx),
+            faixa_shells: EstadoFaixa::new(),
+            faixa_orq: EstadoFaixa::new(),
             largura_cabecalho: Rc::new(Cell::new(f32::MAX)),
             seq_shell: 0,
             ultimo_programa: String::new(),
@@ -532,7 +530,7 @@ impl Terminais {
         if id == ORCHESTRATOR {
             self.focar(&chave(projeto.as_deref(), ORCHESTRATOR), window, cx);
         }
-        self.lista = None;
+        self.lista_orq.fechar();
         cx.notify();
     }
 
@@ -573,7 +571,7 @@ impl Terminais {
         p.shell_ativa = id.clone();
         // A aba nova entra na área visível da faixa.
         let ultima = p.shells.len() - 1;
-        self.faixa_shells.scroll_to_item(ultima);
+        self.faixa_shells.rolagem().scroll_to_item(ultima);
         let k = chave(projeto.as_deref(), &id);
         self.backend.terminais.recriar(&k, 80, 24);
         let v = self.vista(&k, true, raiz, cx);
@@ -681,9 +679,9 @@ impl Terminais {
             v.update(cx, |v, _| v.pedir_foco = true);
         }
         if let Some(i) = self.projeto(projeto).shells.iter().position(|s| s.id == id) {
-            self.faixa_shells.scroll_to_item(i);
+            self.faixa_shells.rolagem().scroll_to_item(i);
         }
-        self.lista = None;
+        self.lista_shells.fechar();
         cx.notify();
     }
 
@@ -768,129 +766,13 @@ fn faixa() -> gpui_kit::Div {
         .child(div().absolute().left_0().right_0().bottom_0().h(px(1.)).bg(cor::hairline()))
 }
 
-/// O gatilho da lista de abas: o ícone de lista com a contagem.
-fn botao_lista(id: &'static str, n: usize) -> gpui_kit::Stateful<gpui_kit::Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .flex_none()
-        .self_center()
-        .h(px(24.))
-        .px(px(7.))
-        .rounded(tema::RAIO_SM)
-        .text_size(tema::TEXTO_BODY)
-        .font_weight(FontWeight::MEDIUM)
-        .hover(|s| s.bg(cor::fill_hover()))
-        .child(ui::icone("icons/list.svg", 14., cor::text_primary()))
-        .child(n.to_string())
-}
-
-struct ItemLista {
-    chave: String,
-    icone: AnyElement,
-    rotulo: AnyElement,
-    estado: Option<&'static str>,
-    fechavel: bool,
-}
-
 impl Terminais {
-    /// O menu "Todas as abas": uma linha de 26 px por aba, ícone, rótulo cortado, estado à direita e o check da ativa (ou o X na
-    /// linha sob o ponteiro, quando a aba fecha).
-    fn menu_lista(
-        &self, qual: Lista, projeto: &Option<String>, itens: Vec<ItemLista>, ativa: &str, direita: bool, cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let mut menu = div()
-            .id("lista-de-abas")
-            .occlude()
-            .flex()
-            .flex_col()
-            .min_w(px(220.))
-            .mt(px(4.))
-            .p(px(4.))
-            .rounded(tema::RAIO_MD)
-            .bg(cor::raised_black())
-            .border_1()
-            .border_color(gpui_kit::rgba(0xffffff26))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.lista = None;
-                cx.notify();
-            }));
-        for item in itens {
-            let marcado = item.chave == ativa;
-            let grupo: SharedString = format!("item-lista-{}", item.chave).into();
-            let (p1, p2, k1, k2) = (projeto.clone(), projeto.clone(), item.chave.clone(), item.chave.clone());
-            menu = menu.child(
-                div()
-                    .id(SharedString::from(format!("lista-{}", item.chave)))
-                    .group(grupo.clone())
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .h(tema::ITEM_MENU)
-                    .pl(px(8.))
-                    .pr(px(30.))
-                    .rounded(tema::RAIO_MENU)
-                    .text_size(tema::TEXTO_MENU)
-                    .hover(|s| s.bg(cor::fill_hover()))
-                    .on_click(cx.listener(move |this, _, window, cx| match qual {
-                        Lista::Orquestrador => this.escolher_aba(&p1, k1.clone(), window, cx),
-                        Lista::Shells => this.selecionar_shell(&p1, k1.clone(), cx),
-                    }))
-                    .child(item.icone)
-                    .child(div().max_w(px(288.)).truncate().child(item.rotulo))
-                    .when_some(item.estado, |d, e| d.child(div().ml_auto().pl(px(12.)).text_color(cor::text_secondary()).child(e)))
-                    .child(
-                        div()
-                            .absolute()
-                            .right(px(5.))
-                            .top(px(5.))
-                            .size(px(16.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when(marcado, |d| {
-                                d.child(
-                                    div()
-                                        .when(item.fechavel, |d| d.group_hover(grupo.clone(), |s| s.invisible()))
-                                        .child(ui::icone("icons/check.svg", 14., cor::text_secondary())),
-                                )
-                            })
-                            .when(item.fechavel, |d| {
-                                d.child(
-                                    div()
-                                        .id(SharedString::from(format!("lista-fechar-{}", item.chave)))
-                                        .absolute()
-                                        .inset_0()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(2.))
-                                        .invisible()
-                                        .group_hover(grupo.clone(), |s| s.visible())
-                                        .hover(|s| s.bg(cor::fill_hover()))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            cx.stop_propagation();
-                                            this.fechar_shell(p2.clone(), k2.clone(), window, cx);
-                                        }))
-                                        .child(ui::icone("icons/x.svg", 14., cor::text_secondary())),
-                                )
-                            }),
-                    ),
-            );
+    /// Ação de menu que volta a esta entidade.
+    fn acao(cx: &mut Context<Self>, f: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static) -> impl Fn(&mut Window, &mut App) + 'static {
+        let this = cx.entity().downgrade();
+        move |window, cx| {
+            let _ = this.update(cx, |t, cx| f(t, window, cx));
         }
-        let _ = qual;
-        // Abre logo abaixo do gatilho, alinhado à direita dele (`bottomRight`) ou à esquerda (`bottomLeft`, no modo compacto).
-        let canto = if direita { gpui_kit::Anchor::TopRight } else { gpui_kit::Anchor::TopLeft };
-        div()
-            .absolute()
-            .bottom_0()
-            .when(direita, |d| d.right_0())
-            .when(!direita, |d| d.left_0())
-            .size_0()
-            .child(deferred(anchored().anchor(canto).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(1))
     }
 
     /// O painel do Orquestrador (sem o contêiner nem a alça, que ficam em paineis.rs).
@@ -918,22 +800,23 @@ impl Terminais {
         let icone_orq = orq.as_ref().and_then(|o| o.escolha.as_ref()).map(|c| icone_da_ferramenta(&c.tool)).unwrap_or(crate::recursos::icone::TERMINAL);
 
         // Faixa de abas.
-        let mut abas = div().id("faixa-orquestrador").flex().flex_1().min_w_0().h_full().overflow_x_scroll().track_scroll(&self.faixa_orq);
         let p1 = projeto.clone();
-        abas = abas.child(
+        let mut abas = vec![Aba::new(
+            ORCHESTRATOR,
             aba("aba-orquestrador", ativa == ORCHESTRATOR)
                 .px(px(12.))
                 .on_click(cx.listener(move |this, _, window, cx| this.escolher_aba(&p1, ORCHESTRATOR.into(), window, cx)))
                 .child(ui::icone(icone_orq, 14., cor::text_primary()))
                 .child("Orquestrador")
                 .test_support(),
-        );
+        )];
         if orq.is_some() {
             for e in &executores {
                 let (rotulo, icone, cor_estado) = estado_info(&e.estado);
                 let pe = projeto.clone();
                 let id = e.id.clone();
-                abas = abas.child(
+                abas.push(Aba::new(
+                    e.id.clone(),
                     aba(SharedString::from(format!("aba-{}", e.id)), ativa == e.id)
                         .px(px(12.))
                         .tooltip_texto(format!("Executor #{}, {}: {}", e.n, rotulo, e.titulo))
@@ -941,46 +824,41 @@ impl Terminais {
                         .child(ui::icone_estado(&e.estado, icone, 14., cor_estado))
                         .child(format!("#{}", e.n))
                         .test_support(),
-                );
+                ));
             }
         }
+        let abas = FaixaAbas::new("faixa-orquestrador", &self.faixa_orq)
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .abas(abas)
+            .ativa(Some(ativa.clone()));
         let mostrar_lista = orq.is_some() && !executores.is_empty();
-        let total = executores.len() + 1;
-        let lista_aberta = self.lista == Some(Lista::Orquestrador);
-        let itens = || {
-            let mut v = vec![ItemLista {
-                chave: ORCHESTRATOR.into(),
-                icone: ui::icone(icone_orq, 14., cor::text_primary()).into_any_element(),
-                rotulo: "Orquestrador".into_any_element(),
-                estado: None,
-                fechavel: false,
-            }];
-            for e in &executores {
-                let (rotulo, icone, cor_estado) = estado_info(&e.estado);
-                v.push(ItemLista {
-                    chave: e.id.clone(),
-                    icone: ui::icone_estado(&e.estado, icone, 14., cor_estado).into_any_element(),
-                    rotulo: format!("#{}\u{2002}{}", e.n, e.titulo).into_any_element(),
-                    estado: Some(rotulo),
-                    fechavel: false,
-                });
-            }
-            v
-        };
-        let faixa_el = faixa().child(abas).when(mostrar_lista, |d| {
-            d.child(
-                div()
-                    .relative()
-                    .flex()
-                    .flex_none()
-                    .child(
-                        botao_lista("lista-orquestrador", total).on_click(cx.listener(|this, _, _, cx| {
-                            this.lista = if this.lista == Some(Lista::Orquestrador) { None } else { Some(Lista::Orquestrador) };
-                            cx.notify();
-                        })),
-                    )
-                    .when(lista_aberta, |d| d.child(self.menu_lista(Lista::Orquestrador, &projeto, itens(), &ativa, true, cx))),
+        let mut itens = vec![{
+            let p = projeto.clone();
+            ItemLista::new(
+                ORCHESTRATOR,
+                ui::icone(icone_orq, 14., cor::text_primary()),
+                "Orquestrador",
+                Self::acao(cx, move |t, w, cx| t.escolher_aba(&p, ORCHESTRATOR.into(), w, cx)),
             )
+        }];
+        for e in &executores {
+            let (rotulo, icone, cor_estado) = estado_info(&e.estado);
+            let (p, id) = (projeto.clone(), e.id.clone());
+            itens.push(
+                ItemLista::new(
+                    e.id.clone(),
+                    ui::icone_estado(&e.estado, icone, 14., cor_estado),
+                    format!("#{}\u{2002}{}", e.n, e.titulo),
+                    Self::acao(cx, move |t, w, cx| t.escolher_aba(&p, id.clone(), w, cx)),
+                )
+                .estado(rotulo),
+            );
+        }
+        let faixa_el = faixa().child(abas).when(mostrar_lista, |d| {
+            d.child(ListaAbas::new("lista-orquestrador", &self.lista_orq, itens).ativa(ativa.clone()))
         });
 
         // Cabeçalho da aba ativa.
@@ -1159,17 +1037,21 @@ impl Terminais {
             }
         };
         let compacto = self.largura_cabecalho.get() < LARGURA_COMPACTA;
-        let lista_aberta = self.lista == Some(Lista::Shells);
-        let itens: Vec<ItemLista> = shells
-            .iter()
-            .map(|s| ItemLista {
-                chave: s.id.clone(),
-                icone: ui::icone(crate::recursos::icone::TERMINAL, 14., cor::text_primary()).into_any_element(),
-                rotulo: rotulo(s).into_any_element(),
-                estado: None,
-                fechavel: true,
-            })
-            .collect();
+        let itens: Vec<ItemLista> = {
+            shells
+                .iter()
+                .map(|s| {
+                    let (p1, p2, k1, k2) = (projeto.clone(), projeto.clone(), s.id.clone(), s.id.clone());
+                    ItemLista::new(
+                        s.id.clone(),
+                        ui::icone(crate::recursos::icone::TERMINAL, 14., cor::text_primary()),
+                        rotulo(s),
+                        Self::acao(cx, move |t, _, cx| t.selecionar_shell(&p1, k1.clone(), cx)),
+                    )
+                    .ao_fechar(Self::acao(cx, move |t, w, cx| t.fechar_shell(p2.clone(), k2.clone(), w, cx)))
+                })
+                .collect()
+        };
         let pa = projeto.clone();
         let ra = raiz.clone();
         let mais = ui::acao("novo-terminal", crate::recursos::icone::MAIS, true)
@@ -1198,12 +1080,12 @@ impl Terminais {
             let idf = atual.as_ref().map(|s| s.id.clone());
             cabecalho = cabecalho
                 .child(
-                    div()
-                        .relative()
-                        .flex()
+                    ListaAbas::new("lista-shells", &self.lista_shells, itens)
+                        .ativa(ativa.clone())
+                        .a_esquerda()
                         .flex_1()
                         .min_w_0()
-                        .child(
+                        .gatilho(
                             div()
                                 .id("terminal-ativo")
                                 .flex()
@@ -1217,10 +1099,6 @@ impl Terminais {
                                 .rounded(tema::RAIO_SM)
                                 .text_size(tema::TEXTO_MENU)
                                 .hover(|s| s.bg(cor::fill_hover()))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.lista = if this.lista == Some(Lista::Shells) { None } else { Some(Lista::Shells) };
-                                    cx.notify();
-                                }))
                                 .child(ui::icone(crate::recursos::icone::TERMINAL, 14., cor::text_primary()))
                                 .when_some(atual.clone(), |d, s| {
                                     d.child(div().flex_none().child(format!("Terminal {}", s.n))).when(!s.programa.is_empty(), |d| {
@@ -1228,8 +1106,7 @@ impl Terminais {
                                     })
                                 })
                                 .child(div().ml_auto().child(ui::icone("icons/chevrons-up-down.svg", 14., cor::text_secondary()))),
-                        )
-                        .when(lista_aberta, |d| d.child(self.menu_lista(Lista::Shells, &projeto, itens, &ativa, false, cx))),
+                        ),
                 )
                 .child(
                     ui::acao("fechar-terminal-ativo", crate::recursos::icone::FECHAR, atual.is_some()).self_center().on_click(
@@ -1242,27 +1119,17 @@ impl Terminais {
                 )
                 .child(mais);
         } else {
-            let mut faixa_abas = div()
-                .id("faixa-shells")
-                .flex()
-                .flex_initial()
-                .min_w_0()
-                .h_full()
-                .overflow_x_scroll()
-                .track_scroll(&self.faixa_shells);
-            for (i, s) in shells.iter().enumerate() {
-                let (ps, pc, pm) = (projeto.clone(), projeto.clone(), projeto.clone());
+            let mut abas = Vec::with_capacity(shells.len());
+            for s in shells.iter() {
+                let (ps, pc) = (projeto.clone(), projeto.clone());
                 let (ids, idc) = (s.id.clone(), s.id.clone());
-                let arrastado = ArrastoShell { id: s.id.clone(), rotulo: rotulo(s) };
-                faixa_abas = faixa_abas.child(
+                abas.push(Aba::new(
+                    s.id.clone(),
                     aba(SharedString::from(format!("shell-{}", s.id)), s.id == ativa)
                         .pl(px(12.))
                         .pr(px(28.))
                         .tooltip_texto(titulo(s))
                         .on_click(cx.listener(move |this, _, _, cx| this.selecionar_shell(&ps, ids.clone(), cx)))
-                        .on_drag(arrastado, |a, _, _, cx| cx.new(|_| a.clone()))
-                        .drag_over::<ArrastoShell>(|s, _, _, _| s.bg(cor::fill_muted()))
-                        .on_drop(cx.listener(move |this, a: &ArrastoShell, _, cx| this.mover_shell(&pm, &a.id, i, cx)))
                         .child(ui::icone(crate::recursos::icone::TERMINAL, 14., cor::text_secondary()))
                         .child(div().flex_none().child(format!("Terminal {}", s.n)))
                         .when(!s.programa.is_empty(), |d| {
@@ -1280,15 +1147,37 @@ impl Terminais {
                                     .test_support(),
                             ),
                         ),
-                );
+                ));
             }
-            let max = self.faixa_shells.max_offset();
-            let off = self.faixa_shells.offset();
+            let ids: Vec<String> = shells.iter().map(|s| s.id.clone()).collect();
+            let (pm, pi) = (projeto.clone(), projeto.clone());
+            let ids_i = ids.clone();
+            let faixa_abas = FaixaAbas::new("faixa-shells", &self.faixa_shells)
+                .flex()
+                .flex_initial()
+                .min_w_0()
+                .h_full()
+                .abas(abas)
+                .ativa(Some(ativa.clone()).filter(|a| !a.is_empty()))
+                // Como no React (`z-20 bg-card`): a arrastada cobre as vizinhas com o fundo do painel.
+                .estilo_arrastada(|s| s.bg(cor::painel_arrastavel()))
+                .ao_iniciar(cx.listener(move |this, de: &usize, _, cx| {
+                    if let Some(id) = ids_i.get(*de) {
+                        this.selecionar_shell(&pi, id.clone(), cx);
+                    }
+                }))
+                .ao_mover(cx.listener(move |this, m: &MoverAba, _, cx| {
+                    if let Some(id) = ids.get(m.de) {
+                        this.mover_shell(&pm, id, m.para, cx);
+                    }
+                }));
+            let max = self.faixa_shells.rolagem().max_offset();
+            let off = self.faixa_shells.rolagem().offset();
             let transborda = max.x > px(0.5);
             let antes = off.x < px(-0.5);
             let depois = off.x > -max.x + px(0.5);
             let pagina = |this: &mut Self, dir: f32| {
-                let h = &this.faixa_shells;
+                let h = this.faixa_shells.rolagem();
                 let largura = h.bounds().size.width * 0.8;
                 let x = (h.offset().x - largura * dir).clamp(-h.max_offset().x, px(0.));
                 h.set_offset(point(x, h.offset().y));
@@ -1317,19 +1206,7 @@ impl Terminais {
                             })),
                     )
                 })
-                .when(!shells.is_empty(), |d| {
-                    d.child(
-                        div()
-                            .relative()
-                            .flex()
-                            .flex_none()
-                            .child(botao_lista("lista-shells", shells.len()).on_click(cx.listener(|this, _, _, cx| {
-                                this.lista = if this.lista == Some(Lista::Shells) { None } else { Some(Lista::Shells) };
-                                cx.notify();
-                            })))
-                            .when(lista_aberta, |d| d.child(self.menu_lista(Lista::Shells, &projeto, itens, &ativa, true, cx))),
-                    )
-                });
+                .when(!shells.is_empty(), |d| d.child(ListaAbas::new("lista-shells", &self.lista_shells, itens).ativa(ativa.clone())));
         }
         cabecalho = cabecalho.child(
             ui::acao("esconder-terminal", "icons/chevron-down.svg", true)
@@ -1345,33 +1222,6 @@ impl Terminais {
             area = area.child(div().absolute().inset_0().child(v));
         }
         div().flex().flex_col().flex_1().min_h_0().overflow_hidden().child(cabecalho).child(area).into_any_element()
-    }
-}
-
-/// A aba de shell sendo arrastada; o fantasma segue o ponteiro.
-#[derive(Clone)]
-pub struct ArrastoShell {
-    pub id: String,
-    rotulo: String,
-}
-
-impl Render for ArrastoShell {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .h(tema::FAIXA)
-            .px(px(12.))
-            .bg(cor::painel_arrastavel())
-            .border_b_2()
-            .border_color(cor::ink_white())
-            .text_size(tema::TEXTO_MENU)
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(cor::text_primary())
-            .font_family(tema::FONTE)
-            .child(ui::icone(crate::recursos::icone::TERMINAL, 14., cor::text_secondary()))
-            .child(self.rotulo.clone())
     }
 }
 
@@ -1395,18 +1245,6 @@ fn texto_da_escolha(c: &Choice, compacto: bool) -> impl IntoElement {
         .when(!c.effort.is_empty(), |d| {
             d.child(div().flex_none().font_family(super::vista::FONTE).text_color(cor::text_secondary()).child(c.effort.clone()))
         })
-}
-
-/// Tooltip de texto simples.
-trait TooltipTexto {
-    fn tooltip_texto(self, texto: impl Into<SharedString>) -> Self;
-}
-
-impl TooltipTexto for gpui_kit::Stateful<gpui_kit::Div> {
-    fn tooltip_texto(self, texto: impl Into<SharedString>) -> Self {
-        let texto: SharedString = texto.into();
-        self.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(texto.clone()).build(window, cx))
-    }
 }
 
 #[cfg(test)]

@@ -8,8 +8,7 @@ mod estado;
 mod instancia;
 mod moldura;
 mod paineis;
-mod recursos;
-mod tema;
+use orquestrador_ui::{recursos, tema};
 mod terminal;
 #[cfg(test)]
 mod testes;

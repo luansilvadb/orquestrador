@@ -1,0 +1,167 @@
+//! Widgets genéricos no estilo do app: ícone, botões do Lobe UI, ícone de estado, botões da janela, dicas, item de menu e alça de divisor.
+use crate::tema::{self, cor};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::{div, prelude::*, px, svg, AnyElement, App, Div, Hsla, SharedString, Stateful, Svg, Window, WindowControlArea};
+
+pub fn icone(caminho: &'static str, tamanho: f32, cor: Hsla) -> Svg {
+    svg().path(caminho).size(px(tamanho)).flex_none().text_color(cor)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Variante {
+    Primario,
+    Padrao,
+}
+
+/// Botão de 32 px do Lobe UI. `ocupado` desabilita e mostra o giro.
+pub fn botao(id: &'static str, rotulo: impl Into<SharedString>, variante: Variante, ocupado: bool) -> Stateful<Div> {
+    let base = div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(6.))
+        .flex_none()
+        .h(tema::CAMPO)
+        .px(px(12.))
+        .rounded(tema::RAIO_SM)
+        .text_size(tema::TEXTO_BODY)
+        .when(ocupado, |d| d.opacity(0.6).child(icone("icons/loader-circle.svg", 14., cor::text_secondary())));
+    let base = match variante {
+        Variante::Primario => base
+            .bg(cor::ink_white())
+            .text_color(cor::pitch_black())
+            .when(!ocupado, |d| d.hover(|s| s.bg(cor::ink_white_hover())).active(|s| s.bg(cor::ink_white_active()))),
+        Variante::Padrao => base
+            .bg(cor::pitch_black())
+            .border_1()
+            .border_color(gpui_kit::rgba(0xffffff26))
+            .text_color(cor::text_primary())
+            .when(!ocupado, |d| d.hover(|s| s.border_color(gpui_kit::rgba(0xffffff4d)))),
+    };
+    base.child(rotulo.into())
+}
+
+/// Botão pequeno (24 px) com borda, como o `size="small"` padrão.
+pub fn botao_pequeno(id: impl Into<gpui_kit::ElementId>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .flex_none()
+        .h(px(24.))
+        .px(px(7.))
+        .rounded(tema::RAIO_XS)
+        .bg(cor::pitch_black())
+        .border_1()
+        .border_color(gpui_kit::rgba(0xffffff26))
+        .text_size(tema::TEXTO_LABEL)
+        .hover(|s| s.border_color(gpui_kit::rgba(0xffffff4d)))
+}
+
+/// Passo do giro: 30 passos por volta de 1,5 s (o `--animate-spin` do src/index.css), 20 quadros/s.
+pub const PASSO_GIRO: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Ícone do estado do executor; o de "executando" gira em passos, pelo relógio comum (quem redesenha é o painel, a 20 Hz).
+pub fn icone_estado(estado: &str, caminho: &'static str, tamanho: f32, cor: Hsla) -> Svg {
+    static INICIO: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let svg = icone(caminho, tamanho, cor);
+    if estado != "running" {
+        return svg;
+    }
+    let passo = (INICIO.get_or_init(std::time::Instant::now).elapsed().as_millis() / PASSO_GIRO.as_millis()) % 30;
+    svg.with_transformation(gpui_kit::Transformation::rotate(gpui_kit::percentage(passo as f32 / 30.)))
+}
+
+/// Ícone sem borda de 24 px (`ActionIcon size="small" variant="borderless"`).
+pub fn acao(id: impl Into<gpui_kit::ElementId>, caminho: &'static str, habilitada: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_none()
+        .size(px(24.))
+        .rounded(tema::RAIO_SM)
+        .when(habilitada, |d| d.hover(|s| s.bg(cor::fill_hover())))
+        .when(!habilitada, |d| d.opacity(0.35))
+        .child(icone(caminho, 14., cor::text_secondary()))
+}
+
+/// Controle da janela: 46 px, hover branco a 10% (Fechar vermelho com o ícone branco), sem estado ativo. A área nativa
+/// (`WindowControlArea`) dá ao Windows o clique, o snap do Maximizar e o duplo clique.
+pub fn botao_janela(id: &'static str, caminho: &'static str, area: WindowControlArea, perigo: bool) -> impl IntoElement {
+    use gpui_kit::TestSupportExt;
+    div()
+        .id(id)
+        .group(id)
+        .window_control_area(area)
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_none()
+        .w(tema::BOTAO_JANELA)
+        .h_full()
+        .when(perigo, |d| d.hover(|s| s.bg(cor::close_red())))
+        .when(!perigo, |d| d.hover(|s| s.bg(cor::fill_hover())))
+        .child(
+            icone(caminho, 16., cor::titlebar_text())
+                .when(perigo, |s| s.group_hover(id, |s| s.text_color(cor::text_primary()))),
+        )
+        .test_support()
+}
+
+/// Envolve o elemento numa caixa de altura total com a dica.
+pub fn com_dica(id: &'static str, dica: &'static str, elemento: impl IntoElement) -> impl IntoElement {
+    div().id(id).h_full().tooltip(move |window, cx| Tooltip::new(dica).build(window, cx)).child(elemento)
+}
+
+/// Item de menu como no lobehub: rótulo e atalho em cinza à direita. Para `PopupMenu::menu_element`.
+pub fn item_menu(rotulo: &'static str, atalho: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyElement {
+    move |_, _| {
+        div()
+            .flex()
+            .flex_1()
+            .items_center()
+            .justify_between()
+            .gap(px(16.))
+            .pl(px(8.))
+            .pr(px(19.))
+            .text_size(tema::TEXTO_MENU)
+            .child(rotulo)
+            .child(div().text_color(cor::text_tertiary()).child(atalho))
+            .into_any_element()
+    }
+}
+
+/// Tooltip de texto simples.
+pub trait TooltipTexto {
+    fn tooltip_texto(self, texto: impl Into<SharedString>) -> Self;
+}
+
+impl<E: StatefulInteractiveElement> TooltipTexto for E {
+    fn tooltip_texto(self, texto: impl Into<SharedString>) -> Self {
+        let texto: SharedString = texto.into();
+        self.tooltip(move |window, cx| Tooltip::new(texto.clone()).build(window, cx))
+    }
+}
+
+/// Borda do painel onde fica a alça de redimensionar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Borda {
+    Direita,
+    Esquerda,
+    Topo,
+}
+
+/// Alça de arrasto de 4 px sobre a borda do painel (o pai é `relative`). Quem chama liga o `on_mouse_down` e acompanha o
+/// ponteiro; o cursor de redimensionar fica na alça.
+pub fn alca(id: impl Into<gpui_kit::ElementId>, borda: Borda) -> Stateful<Div> {
+    let base = div().id(id).absolute().occlude();
+    match borda {
+        Borda::Direita => base.top_0().bottom_0().right(px(-2.)).w(px(4.)).cursor_col_resize(),
+        Borda::Esquerda => base.top_0().bottom_0().left(px(-2.)).w(px(4.)).cursor_col_resize(),
+        Borda::Topo => base.left_0().right_0().top(px(-2.)).h(px(4.)).cursor_row_resize(),
+    }
+}

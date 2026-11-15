@@ -63,7 +63,7 @@ pub struct Bancada {
     pub arrasto: Option<Arrasto>,
     pub foco: FocusHandle,
     /// Arrasto e rolagem da faixa de abas de projeto (moldura.rs).
-    pub abas_ui: crate::moldura::AbasUi,
+    pub abas_ui: orquestrador_ui::EstadoFaixa,
     /// Orquestrador, executores e shells de cada projeto (terminal/painel.rs).
     pub terminais: gpui_kit::Entity<Terminais>,
     _tarefas: Vec<Task<()>>,
@@ -78,6 +78,7 @@ impl Focusable for Bancada {
 impl Bancada {
     /// `iniciais` são os caminhos da linha de comando; as abas salvas abrem antes deles.
     pub fn new(backend: Rc<Backend>, eventos: Receptor, iniciais: Vec<PathBuf>, cx: &mut Context<Self>) -> Self {
+        orquestrador_ui::estado::instalar(backend.estado.clone(), cx);
         let salvas: Projetos = backend.estado.borrow().ler();
         let paineis: Paineis = backend.estado.borrow().ler();
         let mut tarefas = vec![cx.spawn(async move |this: WeakEntity<Self>, cx| {

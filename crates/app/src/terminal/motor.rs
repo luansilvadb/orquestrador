@@ -66,8 +66,6 @@ pub struct Motor {
     ouvinte: Ouvinte,
     /// Há saída nova desde o último desenho; só o primeiro pedaço depois de um desenho avisa a janela.
     sujo: AtomicBool,
-    /// Quantos pedaços de saída já foram processados (a medição de latência compara antes e depois da tecla).
-    pub geracao: std::sync::atomic::AtomicU64,
     /// Quando o último pedaço terminou de ser processado (só para a medição).
     pub processado_em: Mutex<Option<std::time::Instant>>,
     pub chave: Chave,
@@ -79,7 +77,7 @@ impl Motor {
         let config = Config { scrolling_history: HISTORICO, ..Config::default() };
         let tamanho = Tamanho { colunas: colunas.max(2) as usize, linhas: linhas.max(1) as usize };
         let term = Term::new(config, &tamanho, ouvinte.clone());
-        Motor { estado: Mutex::new(Estado { term, processador: Processor::new() }), ouvinte, sujo: AtomicBool::new(false), geracao: Default::default(), processado_em: Mutex::new(None), chave }
+        Motor { estado: Mutex::new(Estado { term, processador: Processor::new() }), ouvinte, sujo: AtomicBool::new(false), processado_em: Mutex::new(None), chave }
     }
 
     pub fn travar(&self) -> MutexGuard<'_, Estado> {
@@ -96,9 +94,24 @@ impl Motor {
         if super::vista::medir::ligado() {
             *self.processado_em.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
         }
-        self.geracao.fetch_add(1, Ordering::AcqRel);
         let respostas = std::mem::take(&mut *self.ouvinte.respostas.lock().unwrap_or_else(|e| e.into_inner()));
         (respostas, !self.sujo.swap(true, Ordering::AcqRel))
+    }
+
+    /// Medição: resumo da linha do cursor e da posição dele. O pwsh manda `ESC[?25l` logo após a tecla e o caractere
+    /// 10 ms ou mais depois, então "chegou saída" não serve de eco; mudar a linha do cursor serve.
+    pub fn assinatura_cursor(&self) -> u64 {
+        use alacritty_terminal::index::{Column, Point};
+        use std::hash::{Hash, Hasher};
+        let e = self.travar();
+        let g = e.term.grid();
+        let p = g.cursor.point;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (p.line.0, p.column.0).hash(&mut h);
+        for c in 0..g.columns() {
+            g[Point::new(p.line, Column(c))].c.hash(&mut h);
+        }
+        h.finish()
     }
 
     /// Chamado ao desenhar: a próxima saída volta a avisar.
@@ -134,8 +147,24 @@ pub struct Registro {
     escritor: Mutex<std::sync::mpsc::Sender<(Chave, String)>>,
 }
 
+/// Medido (docs/desempenho-gpui.md): o PowerShell só ecoa a tecla no tique seguinte do timer do Windows, de 15,6 ms por
+/// padrão, o que põe 0 a 25 ms em cada eco; com 1 ms o eco fica em ~12 ms constantes. Vale para o processo todo.
+#[cfg(windows)]
+fn timer_de_1ms() {
+    #[link(name = "winmm")]
+    extern "system" {
+        fn timeBeginPeriod(ms: u32) -> u32;
+    }
+    static FEITO: std::sync::Once = std::sync::Once::new();
+    FEITO.call_once(|| unsafe {
+        timeBeginPeriod(1);
+    });
+}
+
 impl Registro {
     pub fn novo() -> (Arc<Registro>, Avisos) {
+        #[cfg(windows)]
+        timer_de_1ms();
         let (aviso, avisos) = async_channel::unbounded();
         let projetos: Arc<OnceLock<Weak<Projects>>> = Arc::default();
         let (escritor, entradas) = std::sync::mpsc::channel::<(Chave, String)>();
@@ -263,5 +292,165 @@ mod testes {
         }
         motor.processar(&saida);
         assert_eq!(motor.travar().term.grid().history_size(), HISTORICO);
+    }
+}
+
+/// Bancada de latência sem janela: o core de verdade, 4 pwsh despejando e um quinto recebendo teclas pelo mesmo caminho
+/// da vista (`Registro::escrever`). Mede tecla → eco no `Term`. Uso (cerca de 1 min, Windows com pwsh e node):
+/// `cargo test --release -p orquestrador-app bancada_latencia -- --ignored --nocapture`.
+#[cfg(all(test, windows))]
+mod bancada {
+    use super::*;
+    use orquestrador_core::agents::{cli, session};
+    use orquestrador_core::core::projects::{Projects, TermSink};
+    use std::time::{Duration, Instant};
+
+    const FLOOD: &str = r#"const n = Number(process.argv[2]), tag = process.argv[3], rate = Number(process.argv[4]);
+const E = String.fromCharCode(27), ab = 'abcdefghijklmnopqrstuvwxyz0123456789 _-./:=+', cs = [31,32,33,34,35,36,91,92,93,94,95,96];
+let seed = 12345 + tag.charCodeAt(0); const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+function line(i) { let b = '[' + tag + '] ' + String(i).padStart(7, '0') + ' '; while (b.length < 118) b += ab[(rnd() * ab.length) | 0];
+  return E + '[' + cs[i % cs.length] + 'm' + b.slice(0, 118) + E + '[0m' + E + '[1;3' + ((i % 7) + 1) + 'mOK' + E + '[0m\r\n'; }
+const t0 = Date.now();
+for (let i = 0; i < n; i += 100) { const w = t0 + (i / rate) * 1000 - Date.now(); if (w > 0) await new Promise((r) => setTimeout(r, w));
+  let c = ''; for (let j = i; j < Math.min(n, i + 100); j++) c += line(j); await new Promise((r) => process.stdout.write(c, r)); }
+"#;
+    const SEM_HISTORICO: &str = "Set-PSReadLineOption -HistorySaveStyle SaveNothing -PredictionSource None\r";
+
+    fn texto_cursor(m: &Motor) -> String {
+        use alacritty_terminal::index::{Column, Point};
+        let e = m.travar();
+        let g = e.term.grid();
+        let l = g.cursor.point.line;
+        (0..g.columns()).map(|c| g[Point::new(l, Column(c))].c).collect::<String>().trim_end().to_string()
+    }
+
+    fn esperar(limite: Duration, mut f: impl FnMut() -> bool) -> bool {
+        let t = Instant::now();
+        while t.elapsed() < limite {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_micros(200));
+        }
+        false
+    }
+
+    fn estat(nome: &str, v: &mut [f64]) -> String {
+        v.sort_by(|a, b| a.total_cmp(b));
+        let p = |q: f64| v[((v.len() as f64 - 1.) * q).round() as usize];
+        format!("{nome}: n={} p50={:.2} p95={:.2} p99={:.2} max={:.2}", v.len(), p(0.5), p(0.95), p(0.99), v[v.len() - 1])
+    }
+
+    fn ram_mb() -> String {
+        let cmd = format!("$p=Get-Process -Id {}; '{{0:N0}} / {{1:N0}}' -f ($p.PrivateMemorySize64/1MB),($p.WorkingSet64/1MB)", std::process::id());
+        let s = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &cmd]).output();
+        s.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+    }
+
+    /// A letra esperada no terminal alvo e, quando ela chega na saída, os instantes antes e depois de o `Term` processá-la.
+    #[derive(Default)]
+    struct Espera {
+        letra: Option<u8>,
+        t0: Option<Instant>,
+        entregue: Option<Instant>,
+        processado: Option<Instant>,
+    }
+
+    /// Devolve, em ms desde a tecla: a letra entregue pelo core e a letra processada no `Term`.
+    fn amostras(registro: &Registro, alvo: &Chave, n: usize, espera: &Mutex<Espera>) -> (Vec<f64>, Vec<f64>) {
+        let motor = registro.obter(alvo).unwrap();
+        let (mut entregue, mut processado) = (Vec::new(), Vec::new());
+        let mut seed = 7u32;
+        let ms = |d: Duration| d.as_secs_f64() * 1000.;
+        for i in 0..n {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            std::thread::sleep(Duration::from_millis(20 + (seed >> 26) as u64));
+            let letra = b'a' + (i % 26) as u8;
+            let t0 = Instant::now();
+            *espera.lock().unwrap() = Espera { letra: Some(letra), t0: Some(t0), ..Espera::default() };
+            registro.escrever(alvo, (letra as char).to_string());
+            esperar(Duration::from_secs(5), || espera.lock().unwrap().processado.is_some());
+            let e = std::mem::take(&mut *espera.lock().unwrap());
+            let d = |t: Option<Instant>| t.map_or(5000., |t| ms(t.saturating_duration_since(t0)));
+            entregue.push(d(e.entregue));
+            processado.push(d(e.processado));
+            registro.escrever(alvo, "".into());
+            esperar(Duration::from_secs(5), || !texto_cursor(&motor).ends_with(letra as char));
+        }
+        (entregue, processado)
+    }
+
+    #[test]
+    #[ignore]
+    fn bancada_latencia() {
+        let tmp = std::env::temp_dir().join(format!("orq-bancada-{}", std::process::id()));
+        let places = session::Places { temp: tmp.join("temp"), codex_rules: tmp.join("rules") };
+        std::fs::create_dir_all(&places.temp).unwrap();
+        std::fs::write(tmp.join("flood.mjs"), FLOOD).unwrap();
+        // O PSReadLine grava no histórico real do usuário; o que esta bancada acrescentar é desfeito no fim.
+        let historico = std::env::var_os("APPDATA")
+            .map(|a| std::path::PathBuf::from(a).join(r"Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"));
+        let antes = historico.as_ref().and_then(|h| std::fs::read(h).ok());
+
+        let (registro, _avisos) = Registro::novo();
+        let alvo = chave(None, "shell-9");
+        let espera: Arc<Mutex<Espera>> = Arc::default();
+        let (destino, marca, id_alvo) = (registro.clone(), espera.clone(), alvo.1.clone());
+        let sink: TermSink = Arc::new(move |p, id, _seq, bytes| {
+            let tem = id == id_alvo && marca.lock().unwrap().letra.is_some_and(|l| bytes.contains(&l));
+            let t = Instant::now();
+            if id == id_alvo && std::env::var_os("ORQ_DEPURAR").is_some() {
+                let t0 = marca.lock().unwrap().t0;
+                eprintln!("+{:.2} {:?}", t0.map_or(0., |t0| (t - t0).as_secs_f64() * 1000.), String::from_utf8_lossy(bytes));
+            }
+            destino.receber(p, id, bytes);
+            if tem {
+                let mut e = marca.lock().unwrap();
+                if e.processado.is_none() {
+                    (e.entregue, e.processado) = (Some(t), Some(Instant::now()));
+                }
+            }
+        });
+        let exes = cli::Exes::new("claude.exe", "codex.exe", "orquestrador-gpui.exe");
+        let projetos = Arc::new(Projects::new(exes, places, tmp.join("config.json"), Arc::new(|_, _| {})).with_term_sink(sink));
+        registro.ligar(&projetos);
+        let core = projetos.shell_core(None).unwrap();
+        let ids = ["shell-1", "shell-2", "shell-3", "shell-4", "shell-9"];
+        for id in ids {
+            registro.motor(&chave(None, id), 62, 30);
+            core.start_shell_in(id, 62, 30, None).unwrap();
+        }
+        for id in ids {
+            let m = registro.obter(&chave(None, id)).unwrap();
+            assert!(esperar(Duration::from_secs(30), || texto_cursor(&m).ends_with('>')), "prompt de {id}");
+            registro.escrever(&chave(None, id), SEM_HISTORICO.into());
+        }
+        std::thread::sleep(Duration::from_secs(3));
+        eprintln!("RAM ociosa (MB privada / working set): {}", ram_mb());
+        let n = std::env::var("ORQ_AMOSTRAS").ok().and_then(|v| v.parse().ok()).unwrap_or(250);
+        let (mut c, mut eco) = amostras(&registro, &alvo, n, &espera);
+        eprintln!("sem carga    {}", estat("core entregou", &mut c));
+        eprintln!("sem carga    {}", estat("eco no Term", &mut eco));
+        let flood = tmp.join("flood.mjs");
+        for id in &ids[..4] {
+            registro.escrever(&chave(None, id), format!("node '{}' 900000 {} 6000\r", flood.display(), &id[6..]));
+        }
+        std::thread::sleep(Duration::from_secs(3));
+        let (mut c, mut eco) = amostras(&registro, &alvo, n, &espera);
+        eprintln!("4 despejando {}", estat("core entregou", &mut c));
+        eprintln!("4 despejando {}", estat("eco no Term", &mut eco));
+        eprintln!("RAM com carga: {}", ram_mb());
+        for id in &ids[..4] {
+            registro.escrever(&chave(None, id), "\x03".into());
+        }
+        std::thread::sleep(Duration::from_secs(10));
+        eprintln!("RAM 10 s depois: {}", ram_mb());
+        projetos.shutdown();
+        if let (Some(h), Some(antes)) = (historico, antes) {
+            if std::fs::read(&h).is_ok_and(|d| d != antes && d.starts_with(&antes)) {
+                std::fs::write(&h, &antes).unwrap();
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

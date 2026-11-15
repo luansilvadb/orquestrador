@@ -30,7 +30,7 @@ pub struct Backend {
     /// Avisos de saída nova por terminal, lidos pela janela.
     pub avisos: crate::terminal::motor::Avisos,
     /// O `interface.json`; `RefCell` porque o backend é compartilhado por `Rc`.
-    pub estado: RefCell<Estado>,
+    pub estado: orquestrador_ui::estado::Compartilhado,
     /// Liga o poll do Git; os testes desligam para o executor ficar ocioso.
     pub poll_git: bool,
 }
@@ -56,7 +56,7 @@ impl Backend {
         let sink: TermSink = Arc::new(move |projeto, id, _seq, bytes| destino.receber(projeto, id, bytes));
         let projetos = Arc::new(Projects::new(exes, places, cfg_path, emit).with_term_sink(sink));
         terminais.ligar(&projetos);
-        (Backend { projetos, terminais, avisos, estado: RefCell::new(Estado::abrir(arquivo_interface)), poll_git }, tx, rx)
+        (Backend { projetos, terminais, avisos, estado: std::rc::Rc::new(RefCell::new(Estado::abrir(arquivo_interface))), poll_git }, tx, rx)
     }
 }
 

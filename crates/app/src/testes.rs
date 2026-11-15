@@ -1,7 +1,6 @@
 //! Testes da moldura numa janela sem tela: navegação, painel Terminal e abas de projeto com o core em pastas temporárias.
 use crate::backend::Backend;
 use crate::estado::{Estado, Paineis, Projetos};
-use crate::moldura::ArrastoAba;
 use crate::bancada::{Bancada, Rota};
 use gpui_kit::base::Root;
 use gpui_kit::test::TestWindowExt;
@@ -151,32 +150,6 @@ fn nomes(cx: &mut TestAppContext, bancada: &Entity<Bancada>) -> Vec<String> {
     cx.update(|cx| bancada.read(cx).abas.iter().map(|a| crate::backend::nome_da_pasta(&a.caminho)).collect())
 }
 
-#[test]
-fn arrasto_de_aba_calcula_destino_e_deslocamentos() {
-    // Três abas de 100 px com 4 px de vão.
-    let slots = vec![(4., 100.), (108., 100.), (212., 100.)];
-    let mut a = ArrastoAba::new(0, slots.clone(), 50., 0.);
-    a.x = 50. + 60.;
-    a.atualizar(0.);
-    assert_eq!(a.alvo, 1, "a borda da frente passou do meio da segunda");
-    assert_eq!(a.deslocamento(1), -100.);
-    assert_eq!(a.deslocamento(2), 0.);
-    a.x = 50. + 1000.;
-    a.atualizar(0.);
-    assert_eq!(a.dx, 208., "travada no fim da faixa");
-    assert_eq!(a.alvo, 2);
-
-    let mut b = ArrastoAba::new(2, slots, 300., 0.);
-    b.x = 300. - 1000.;
-    b.atualizar(0.);
-    assert_eq!(b.alvo, 0);
-    assert_eq!(b.deslocamento(0), 100.);
-    // A rolagem da faixa conta como deslocamento.
-    let mut c = ArrastoAba::new(0, vec![(4., 100.), (108., 100.)], 50., 0.);
-    c.atualizar(60.);
-    assert_eq!(c.alvo, 1);
-}
-
 #[gpui_kit::test]
 fn reordena_abas_e_grava_a_ordem(cx: &mut TestAppContext) {
     let tmp = Tmp::new("reordenar");
@@ -194,16 +167,20 @@ fn reordena_abas_e_grava_a_ordem(cx: &mut TestAppContext) {
     cx.update_window(janela.into(), |_, window, cx| {
         window.render_frame(cx);
         bancada.update(cx, |b, cx| {
+            let n = b.abas.len();
             let (x, larg) = {
-                let r = &b.abas_ui.rolagem;
+                let r = b.abas_ui.rolagem();
                 let caixa = r.bounds_for_item(0).expect("aba desenhada");
                 (f32::from(caixa.origin.x) + 10., f32::from(caixa.size.width))
             };
-            b.pressionar_aba(0, x);
-            b.mover_ponteiro_aba(x + 2., cx);
-            assert!(!b.abas_ui.arrasto.as_ref().expect("segurada").movendo, "abaixo de 4 px ainda é clique");
-            b.mover_ponteiro_aba(x + larg + 20., cx);
-            b.soltar_aba(true, cx);
+            b.abas_ui.pressionar(0, n, 0, x);
+            b.abas_ui.mover(x + 2.);
+            assert!(!b.abas_ui.arrasto().expect("segurada").movendo, "abaixo de 4 px ainda é clique");
+            b.abas_ui.mover(x + larg + 20.);
+            if let (_, Some(m)) = b.abas_ui.soltar(true) {
+                b.mover_aba(m.de, m.para);
+            }
+            cx.notify();
         });
     })
     .expect("janela");
@@ -213,10 +190,12 @@ fn reordena_abas_e_grava_a_ordem(cx: &mut TestAppContext) {
     cx.update_window(janela.into(), |_, window, cx| {
         window.render_frame(cx);
         bancada.update(cx, |b, cx| {
-            let x = f32::from(b.abas_ui.rolagem.bounds_for_item(0).expect("aba").origin.x) + 10.;
-            b.pressionar_aba(0, x);
-            b.mover_ponteiro_aba(x + 500., cx);
-            b.soltar_aba(false, cx);
+            let n = b.abas.len();
+            let x = f32::from(b.abas_ui.rolagem().bounds_for_item(0).expect("aba").origin.x) + 10.;
+            b.abas_ui.pressionar(0, n, 0, x);
+            b.abas_ui.mover(x + 500.);
+            assert_eq!(b.abas_ui.soltar(false), (true, None));
+            let _ = cx;
         });
     })
     .expect("janela");

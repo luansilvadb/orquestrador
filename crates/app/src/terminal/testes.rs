@@ -148,6 +148,87 @@ fn abrir_shells(cx: &mut TestAppContext, janela: WindowHandle<Root>, b: &Entity<
     shells(cx, &t)
 }
 
+/// Manda um evento de ponteiro à janela, como o sistema.
+fn evento(cx: &mut TestAppContext, janela: WindowHandle<Root>, e: gpui_kit::PlatformInput) {
+    cx.update_window(janela.into(), |_, window, cx| {
+        window.dispatch_event(e, cx);
+    })
+    .expect("janela");
+    cx.run_until_parked();
+    desenhar(cx, janela);
+}
+
+#[gpui_kit::test]
+fn arrastar_aba_de_shell_como_a_de_projeto(cx: &mut TestAppContext) {
+    use gpui_kit::{MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput};
+    let tmp = Tmp::new("arrasto-shell");
+    let (janela, b) = montar(cx, &tmp, exes_padrao());
+    let ids = abrir_shells(cx, janela, &b, 3);
+    let t = terminais(cx, &b);
+    desenhar(cx, janela);
+    let caixa = |cx: &mut TestAppContext, i: usize| {
+        cx.update(|cx| t.read(cx).faixa_shells.rolagem().bounds_for_item(i).expect("aba desenhada"))
+    };
+    // Janela inativa cancela o arrasto, como no React (`blur`).
+    cx.update_window(janela.into(), |_, window, _| window.activate_window()).expect("janela");
+    cx.run_until_parked();
+    let primeira = caixa(cx, 0);
+    let y = primeira.center().y;
+    let x0 = primeira.origin.x + px(20.);
+    let mover = |x| PlatformInput::MouseMove(MouseMoveEvent { position: point(x, y), pressed_button: Some(MouseButton::Left), ..Default::default() });
+    evento(cx, janela, PlatformInput::MouseMove(MouseMoveEvent { position: point(x0, y), ..Default::default() }));
+    evento(cx, janela, PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: point(x0, y), click_count: 1, ..Default::default() }));
+    evento(cx, janela, mover(x0 + px(2.)));
+    assert!(cx.update(|cx| !t.read(cx).faixa_shells.arrasto().expect("segurada").movendo), "abaixo de 4 px ainda é clique");
+    // Passou dos 4 px: a segurada vira a ativa e as vizinhas abrem espaço.
+    let fim = caixa(cx, 2).right();
+    evento(cx, janela, mover(fim));
+    assert_eq!(ativa(cx, &t), ids[0]);
+    let a = cx.update(|cx| t.read(cx).faixa_shells.arrasto()).expect("em arrasto");
+    assert!(a.movendo && a.alvo == 2 && a.deslocamento(1) < 0.);
+    evento(cx, janela, PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: point(fim, y), click_count: 1, ..Default::default() }));
+    assert_eq!(shells(cx, &t), vec![ids[1].clone(), ids[2].clone(), ids[0].clone()]);
+
+    // Esc no meio do arrasto devolve tudo, e não chega ao terminal.
+    let x0 = caixa(cx, 0).origin.x + px(20.);
+    evento(cx, janela, PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: point(x0, y), click_count: 1, ..Default::default() }));
+    evento(cx, janela, mover(fim));
+    cx.simulate_keystrokes(janela.into(), "escape");
+    cx.run_until_parked();
+    assert!(cx.update(|cx| t.read(cx).faixa_shells.arrasto().is_none()), "Esc cancelou");
+    evento(cx, janela, PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: point(fim, y), click_count: 1, ..Default::default() }));
+    assert_eq!(shells(cx, &t), vec![ids[1].clone(), ids[2].clone(), ids[0].clone()]);
+}
+
+#[gpui_kit::test]
+fn lista_de_abas_pelo_teclado(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("lista-teclado");
+    let (janela, b) = montar(cx, &tmp, exes_padrao());
+    let ids = abrir_shells(cx, janela, &b, 3);
+    let t = terminais(cx, &b);
+    desenhar(cx, janela);
+    let aberta = |cx: &mut TestAppContext| cx.update(|cx| t.read(cx).lista_shells.aberta());
+    cx.update_window(janela.into(), |_, window, cx| window.click("lista-shells", cx)).expect("janela");
+    cx.run_until_parked();
+    desenhar(cx, janela);
+    assert!(aberta(cx));
+    // Seta para baixo destaca a primeira; Delete a fecha e o menu fica.
+    cx.simulate_keystrokes(janela.into(), "down delete");
+    esperar(cx, janela, Duration::from_secs(10), |cx| shells(cx, &t).len() == 2);
+    assert_eq!(shells(cx, &t), vec![ids[1].clone(), ids[2].clone()]);
+    assert!(aberta(cx), "fechar uma aba não fecha o menu");
+    // End destaca a última e Enter a escolhe, fechando o menu.
+    cx.simulate_keystrokes(janela.into(), "home enter");
+    cx.run_until_parked();
+    assert!(!aberta(cx));
+    assert_eq!(ativa(cx, &t), ids[1]);
+    cx.update_window(janela.into(), |_, window, cx| window.click("lista-shells", cx)).expect("janela");
+    cx.run_until_parked();
+    cx.simulate_keystrokes(janela.into(), "escape");
+    cx.run_until_parked();
+    assert!(!aberta(cx), "Esc fecha");
+}
+
 #[gpui_kit::test]
 fn abas_de_shell_ordem_selecao_e_vizinha_ao_fechar(cx: &mut TestAppContext) {
     let tmp = Tmp::new("abas");
