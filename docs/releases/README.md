@@ -41,7 +41,7 @@ Tabela: área, versão anterior, versão nova. Cite a versão anterior pelo nome
 Dois formatos, da mesma fonte:
 
 - **Fonte** (`docs/releases/vX.Y.Z.md`, com o H1): é o que `check-notes` confere e o que vai inteiro no `notes` do `latest.json`.
-- **Corpo da release** (no GitHub, sem o H1): `node scripts/release.mjs release-body X.Y.Z <arquivo temporário>` grava esse texto, em UTF-8, a partir da linha `## Resumo`. O workflow usa o mesmo formato, e `verify-body` confere o corpo publicado contra ele. Um H1 repetido, uma seção faltando ou um texto alterado são recusados.
+- **Corpo da release** (no GitHub, sem o H1): `cargo xtask release release-body X.Y.Z <arquivo temporário>` grava esse texto, em UTF-8, a partir da linha `## Resumo`. O workflow usa o mesmo formato, e `verify-body` confere o corpo publicado contra ele. Um H1 repetido, uma seção faltando ou um texto alterado são recusados.
 
 ## Como escrever
 
@@ -57,19 +57,17 @@ Dois formatos, da mesma fonte:
 1. Suba a versão nos cinco arquivos: `package.json`, `package-lock.json` (duas entradas: a raiz e `packages[""]`), `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` (entrada `orquestrador`) e `src-tauri/tauri.conf.json`.
 2. Escreva `docs/releases/vX.Y.Z.md` a partir do modelo.
 3. Rode as checagens locais, sem publicar nada:
-   - `node scripts/release.mjs check-versions X.Y.Z`
-   - `node scripts/release.mjs check-notes X.Y.Z <versão anterior>`
-   - `node tests/check-release.mjs` (regras de versão, notas, `latest.json` e a verificação Minisign, com assinaturas de teste geradas na hora)
-   - `node tests/check-file-tabs.mjs`
-   - `npm run build` e `cargo test --manifest-path src-tauri/Cargo.toml`
+   - `cargo xtask release check-versions X.Y.Z`
+   - `cargo xtask release check-notes X.Y.Z <versão anterior>`
+   - `cargo test -p xtask` (regras de versão, notas, `latest.json` e a verificação Minisign, com assinaturas de teste geradas na hora)
+   - `cargo test --workspace`
 4. Faça o commit, crie a tag `vX.Y.Z` e envie a tag. O commit e a tag são do mantenedor; o workflow não cria nem move tag.
 5. O workflow `.github/workflows/release.yml` faz o resto, nesta ordem:
    - confere tag e manifests; recusa release já publicada; verifica a ordem em relação à última publicada e as notas;
    - exige CI verde de `push` em `main` para o SHA de `git rev-parse HEAD` (o commit checkout da tag), esperando até 30 minutos; PR, SHA diferente, falha, cancelamento, erro de consulta ou timeout bloqueiam a release;
-   - roda `npm run build`, `check-file-tabs`, `check-release` e `cargo test`;
-   - gera o instalador NSIS assinado e o `latest.json` em rascunho (`tauri-action`);
-   - põe o texto das notas sem o título no corpo da release, põe o texto completo (com o H1) no `notes` do `latest.json`, e aponta a URL do instalador para a URL pública da tag;
-   - confere o rascunho: baixa o instalador, o `.sig` e o `latest.json`; verifica a assinatura Minisign do instalador com a pubkey de `tauri.conf.json` (key id, assinatura do arquivo e comentário confiável); confere versão, URL, assinatura e notas do `latest.json`; e confere que o corpo da release é o texto das notas sem o título (só diferença de CRLF/LF e espaço final é ignorada; título repetido, seção faltando ou qualquer mudança de conteúdo é recusada; o campo `notes` do `latest.json` segue a regra de conteúdo, com o H1);
+   - prepara o FFmpeg estático e o libclang (com cache) e roda `cargo test --workspace`;
+   - gera por `crates/app/empacotamento/empacotar.ps1` (cargo-packager) o instalador NSIS assinado e o `latest.json` com as notas completas (com o H1) e a URL pública da tag, e sobe tudo num rascunho com o texto das notas sem o título no corpo;
+   - confere o rascunho: baixa o instalador, o `.sig` e o `latest.json`; verifica a assinatura Minisign do instalador com a pubkey embutida no app, pelo assinador e pelo `tauri-plugin-updater` 2.14.1 do 0.1.48 (`compat-tauri`); confere versão, URL, assinatura e notas do `latest.json`; e confere que o corpo da release é o texto das notas sem o título (só diferença de CRLF/LF e espaço final é ignorada; título repetido, seção faltando ou qualquer mudança de conteúdo é recusada; o campo `notes` do `latest.json` segue a regra de conteúdo, com o H1);
    - reconfere o mesmo SHA da CI, com espera de até 30 minutos, imediatamente antes de publicar como a última release estável.
 
 ## Conferências fora do workflow
@@ -79,7 +77,7 @@ Dois formatos, da mesma fonte:
 
 ```powershell
 gh release download v0.1.6 --repo luansilvadb/orquestrador --pattern "Orquestrador_0.1.6_x64-setup.exe*" --dir <pasta-temporária>
-node scripts/release.mjs verify-installer 0.1.6 <pasta-temporária>\Orquestrador_0.1.6_x64-setup.exe <pasta-temporária>\Orquestrador_0.1.6_x64-setup.exe.sig
+cargo xtask release verify-installer 0.1.6 <pasta-temporária>\Orquestrador_0.1.6_x64-setup.exe <pasta-temporária>\Orquestrador_0.1.6_x64-setup.exe.sig
 ```
 
   A saída é a linha de confirmação com código 0. Instalador ou `.sig` alterados, ou assinados com outra chave, saem com código 1 e a mensagem do motivo.
@@ -89,9 +87,9 @@ node scripts/release.mjs verify-installer 0.1.6 <pasta-temporária>\Orquestrador
 Se o texto do corpo de uma release já publicada estiver errado ou fora do formato (por exemplo, um H1 repetido), o corpo pode ser corrigido sem versão nova. Só o corpo muda:
 
 ```powershell
-node scripts/release.mjs release-body X.Y.Z <pasta-temporária>\corpo.md
+cargo xtask release release-body X.Y.Z <pasta-temporária>\corpo.md
 gh release edit vX.Y.Z --repo luansilvadb/orquestrador --notes-file <pasta-temporária>\corpo.md
-node scripts/release.mjs verify-body <pasta-temporária>\corpo.md docs/releases/vX.Y.Z.md
+cargo xtask release verify-body <pasta-temporária>\corpo.md docs/releases/vX.Y.Z.md
 ```
 
 Não mexe em tag, instalador, `.sig`, `latest.json`, versão nem nos flags de publicação (rascunho, pré-release, latest). Se o conteúdo das notas estiver errado, a fonte é corrigida; a release só recebe o corpo novo. Confira depois, pela API, que o nome, a tag e os assets continuam os mesmos.

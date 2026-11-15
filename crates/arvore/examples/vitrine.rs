@@ -2,7 +2,7 @@
 //! lugar que ela ocupa na bancada (x 44..324, abaixo da titlebar de 36 px). O projeto é criado em
 //! `%TEMP%\orq-arvore-vitrine\exemplo`, com `git init` e o `.gitignore` do mock (dist e *.log).
 //!
-//! `cargo run -p orquestrador-arvore --example vitrine -- <cenário>`, com o cenário:
+//! `cargo run -p orquestrador-arvore --example vitrine-arvore -- <cenário>`, com o cenário:
 //! `inicial` (padrão), `editor` (src e docs abertos, App.tsx aberto), `selecao` (App.tsx e main.tsx), `menu-arquivo`,
 //! `menu-pasta`, `renomear`, `toast`, `toast-info`, `excluir`, `criar`, `grande` (5000 arquivos).
 extern crate gpui_kit as gpui;

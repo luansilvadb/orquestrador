@@ -28,14 +28,29 @@ texto do GPUI Kit com realce `syntect`/dark-plus, Markdown com Preview, abrir r�
 | `caminhos_abertos()`, `texto_selecionado(cx)`, `atualizar(w, cx)`, `gravar_recuperacao(cx)` | `openPaths`, `selectedText`, `refresh`, `flushRecovery`. |
 | `definir_projeto`, `definir_ativo`, `definir_layout` | Projeto ativo, tela visível (liga a consulta ao disco de 2,5 s), layout opaco da bancada. |
 | `definir_fabrica_conteudo(FabricaConteudo)` | Vista das abas de diff, commit, conflito e mídia (`Fn(&Alvo, &mut Window, &mut App) -> Option<AnyView>`). |
-| `ao_abrir_documento(AoAbrirDocumento, w, cx)`, `decoracoes(caminho)`, `editor_de(caminho)` | Para o gutter do Git: `InfoDocumento` traz `doc_id`, caminho e as coleções `gutter` (16 px), `regua` e `trechos` do Kit. |
-| `definir_widgets(doc_id, Vec<WidgetInline>, cx)` | Widgets sob uma linha (bloco do Git aberto). |
-| `definir_tem_alteracoes(doc_id, bool, cx)` | Liga Próxima/Anterior Alteração (Alt+F5) no menu. |
+| `ao_abrir_documento(AoAbrirDocumento, w, cx)`, `decoracoes(caminho)`, `editor_de(caminho)` | Decorações extras: `InfoDocumento` traz `doc_id`, caminho e as coleções `gutter`, `regua` e `trechos` do Kit (o git gutter usa `trechos`). |
+| `definir_fonte_git(Arc<dyn FonteGutter>, cx)` | De onde vêm a base do Git e a gravação do índice do git gutter (padrão: `gutter_git::FonteCore`, os comandos do core no projeto). A bancada passa a sua para serializar com a `GuardaGit`. |
+| `alteracoes_git(doc_id)`, `alteracao_aberta(doc_id)` | Blocos do Git do documento e o aberto. |
+| `pre_carregar(caminho, w, cx)`, `pre_carregado(caminho)` | Pré-leitura (`prefetch`): árvore, pesquisa e Git chamam ao passar o mouse ou apertar o botão num arquivo (`EventoGit::PreCarregar` com alvo de arquivo). Lê o texto e carrega a gramática; abrir usa o resultado. Vence 5 s depois de pedida ou 3 s depois de pronta, como no React, com teto de 16 entradas; mídia e arquivo aberto ficam de fora. |
+| `definir_rascunho_conflito(caminho, origem, texto, revisao, cx)`, `rascunho_conflito(caminho)` | Rascunho da aba de conflito: a bancada repassa cada `EventoConflito::Rascunho` (campo a campo) e a fábrica de conteúdo devolve o guardado (`armazem::RascunhoConflito`, convertido) ao criar a `VisaoConflito`. Sujo marca a aba, entra na recuperação e no "fechar com não salvos". |
+| `ao_descartar_conflito(AoDescartarConflito)` | Chamado com o caminho quando o editor descarta o rascunho de um conflito: a bancada chama `VisaoConflito::carregar(true, ..)`. |
 
 ### Eventos (`EventoEditor`)
 
-`AbaAtiva(Option<Alvo>)`, `Salvo`, `AtualizarGit`, `RevelarNoExplorer(caminho)`, `Grupos(n)`, `RestaurarLayout(texto)`,
-`IrParaAlteracao { doc_id, passo }`.
+`AbaAtiva(Option<Alvo>)`, `Salvo`, `AtualizarGit` (também depois de preparar um bloco), `RevelarNoExplorer(caminho)`,
+`Grupos(n)`, `RestaurarLayout(texto)`, `IrParaAlteracao { doc_id, passo }` (aviso: o editor já navegou).
+
+## Git gutter (`gutter_git`)
+
+Porte de `git-gutter.ts`, `git-hunk.ts` e `git-stage.ts`, com o cálculo do `orquestrador-hunks`. Buffer × HEAD dá os
+blocos; buffer × índice diz se estão preparados. Na calha, entre os números e a dobra, barra de 3 px (cheia; só o
+contorno no preparado) e triângulo 5×8 no apagado, nas cores do Dark Modern; na faixa da barra de rolagem (14 px à
+direita, por cima do minimapa), as marcas a 60%; no minimapa, a faixa de 2 px. Clicar no marcador (ou Alt+F5,
+Shift+Alt+F5, "Próxima/Anterior Alteração" do menu) abre o bloco: um widget entre as linhas, com altura reservada no
+editor, as linhas antigas do HEAD em vermelho com a sintaxe do arquivo, as novas em verde e as ações Preparar/Tirar do
+preparo, Restaurar (edição normal, Ctrl+Z desfaz), anterior/próxima (dando a volta) e fechar (também Esc). A base é lida ao
+abrir, depois de gravar, a cada 2,5 s com a aba visível e logo depois de preparar; digitar recalcula na hora. Sem base
+(rascunho, arquivo fora do projeto, não rastreado) ou acima de 200 000 caracteres, nada aparece.
 
 ## Módulos puros
 
@@ -68,8 +83,9 @@ Ficam versionados; os pacotes Node de onde vieram saíram do projeto.
   gerar_sintaxes -- --ignored` (o teste `packdump_em_dia_com_as_gramaticas` acusa o esquecimento).
 - `examples/dados/*`: textos do mock do React (`src/backend/mock.ts`, `mock-fixtures.ts`) para a vitrine.
 
-Vitrine: `cargo run -p orquestrador-editor --example vitrine --
-arquivos|varias|menu|lista|dividido|rapido|md-preview|md-codigo|binario|vazio`.
+Vitrine: `cargo run -p orquestrador-editor --example vitrine-editor --
+arquivos|varias|menu|lista|dividido|rapido|md-preview|md-codigo|binario|vazio|git-bloco`
+(`git-bloco`: a base do mock do React em `src/editor-workspace.tsx`, com o bloco da linha 28 aberto).
 
 ## Cores comparadas com o Shiki
 

@@ -9,7 +9,7 @@ use orquestrador_git::fonte::Estado;
 use orquestrador_git::{
     EventoConflito, EventoDiff, EventoGit, Fonte, FonteCore, GuardaGit, TelaGit, VisaoConflito, VisaoDiff,
 };
-use orquestrador_midia::VisaoMidia;
+use orquestrador_midia::{EventoMidia, VisaoMidia};
 use orquestrador_pesquisa::{EventoPesquisa, TelaPesquisa};
 use orquestrador_ui::avisos::{self, Aviso};
 use std::cell::RefCell;
@@ -113,6 +113,16 @@ pub fn absoluto(raiz: &str, caminho: &str) -> PathBuf {
     }
 }
 
+/// A aba de conflito até a vista existir (ver a fábrica).
+struct CascaConflito(Option<Entity<VisaoConflito>>);
+
+impl gpui_kit::Render for CascaConflito {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{ParentElement, Styled};
+        gpui_kit::div().size_full().children(self.0.clone())
+    }
+}
+
 /// Executa `f` na janela, fora do evento que o pediu.
 fn na_janela(janela: AnyWindowHandle, cx: &mut App, f: impl FnOnce(&mut Window, &mut App) + 'static) {
     cx.defer(move |cx| {
@@ -148,6 +158,16 @@ fn fabrica(
                 let abs = absoluto(&raiz, path);
                 orquestrador_midia::midia_de(&abs)?;
                 let v = cx.new(|cx| VisaoMidia::new(abs, window, cx));
+                let (b, p, ed, a) = (bancada.clone(), projeto.clone(), editor.clone(), alvo.clone());
+                cx.subscribe(&v, move |_, e: &EventoMidia, cx| {
+                    if let EventoMidia::VoltarParaAba = e {
+                        let (b, p, ed, a) = (b.clone(), p.clone(), ed.clone(), a.clone());
+                        na_janela(janela, cx, move |window, cx| {
+                            let _ = b.update(cx, |b, cx| b.voltar_para_aba(&p, &ed, &a, window, cx));
+                        });
+                    }
+                })
+                .detach();
                 conteudos.borrow_mut().push((alvo.clone(), Conteudo::Midia(v.downgrade())));
                 Some(v.into())
             }
@@ -172,32 +192,70 @@ fn fabrica(
                 Some(v.into())
             }
             Alvo::Conflict { path } => {
-                let v = cx.new(|cx| VisaoConflito::new(fonte.clone(), guarda.clone(), path.clone(), None, window, cx));
-                let trav = travado.get();
-                v.update(cx, |v, cx| v.definir_travado(trav, window, cx));
-                let (editor, caminho) = (editor.clone(), path.clone());
-                cx.subscribe(&v, move |_, e: &EventoConflito, cx| match e {
-                    EventoConflito::AtualizarGit => cutucar(cx),
-                    EventoConflito::Rascunho(_) => {}
-                    EventoConflito::Fechar => {
-                        let (editor, caminho) = (editor.clone(), caminho.clone());
-                        na_janela(janela, cx, move |window, cx| {
-                            let _ = editor.update(cx, |ed, cx| {
-                                let id = ed
-                                    .workspace()
-                                    .abas()
-                                    .find(|t| matches!(&t.alvo, Alvo::Conflict { path } if *path == caminho))
-                                    .map(|t| t.id.clone());
-                                if let Some(id) = id {
-                                    ed.fechar(Escopo::Uma(id), window, cx);
-                                }
+                // A fábrica roda dentro do `update` do editor, que guarda o rascunho (da recuperação ou da sessão): a vista
+                // nasce logo depois, numa casca, já com ele.
+                let casca = cx.new(|_| CascaConflito(None));
+                let (fonte, guarda, editor, git, conteudos, travado, bancada, projeto, alvo, caminho) = (
+                    fonte.clone(),
+                    guarda.clone(),
+                    editor.clone(),
+                    git.clone(),
+                    conteudos.clone(),
+                    travado.clone(),
+                    bancada.clone(),
+                    projeto.clone(),
+                    alvo.clone(),
+                    path.clone(),
+                );
+                let c = casca.downgrade();
+                na_janela(janela, cx, move |window, cx| {
+                    let Some(casca) = c.upgrade() else { return };
+                    let guardado = editor.upgrade().and_then(|ed| ed.read(cx).rascunho_conflito(&caminho)).map(|r| {
+                        orquestrador_git::RascunhoConflito { caminho: r.path, origem: r.origin, texto: r.draft, revisao: r.revision }
+                    });
+                    let v = cx.new(|cx| VisaoConflito::new(fonte, guarda, caminho.clone(), guardado, window, cx));
+                    let trav = travado.get();
+                    v.update(cx, |v, cx| v.definir_travado(trav, window, cx));
+                    let cutucar = move |cx: &mut App| {
+                        if let Some(g) = git.upgrade() {
+                            g.read(cx).cutucar();
+                        }
+                    };
+                    cx.subscribe(&v, move |_, e: &EventoConflito, cx| match e {
+                        EventoConflito::AtualizarGit => cutucar(cx),
+                        EventoConflito::Rascunho(r) => {
+                            let (editor, r) = (editor.clone(), r.clone());
+                            na_janela(janela, cx, move |_, cx| {
+                                let _ = editor.update(cx, |ed, cx| {
+                                    ed.definir_rascunho_conflito(&r.caminho, &r.origem, &r.texto, &r.revisao, cx)
+                                });
                             });
-                        });
-                    }
-                })
-                .detach();
-                conteudos.borrow_mut().push((alvo.clone(), Conteudo::Conflito(v.downgrade())));
-                Some(v.into())
+                        }
+                        EventoConflito::Fechar => {
+                            let (editor, caminho) = (editor.clone(), caminho.clone());
+                            na_janela(janela, cx, move |window, cx| {
+                                let _ = editor.update(cx, |ed, cx| {
+                                    let id = ed
+                                        .workspace()
+                                        .abas()
+                                        .find(|t| matches!(&t.alvo, Alvo::Conflict { path } if *path == caminho))
+                                        .map(|t| t.id.clone());
+                                    if let Some(id) = id {
+                                        ed.fechar(Escopo::Uma(id), window, cx);
+                                    }
+                                });
+                            });
+                        }
+                    })
+                    .detach();
+                    conteudos.borrow_mut().push((alvo, Conteudo::Conflito(v.downgrade())));
+                    casca.update(cx, |c, cx| {
+                        c.0 = Some(v);
+                        cx.notify();
+                    });
+                    let _ = bancada.update(cx, |b, cx| b.atualizar_visiveis(Some(&projeto), window, cx));
+                });
+                Some(casca.into())
             }
             Alvo::Draft { .. } => None,
         }
@@ -245,6 +303,19 @@ impl Bancada {
                 eu,
                 id.clone(),
             ))
+        });
+        // Descartar o rascunho de um conflito relê a vista do zero.
+        let cs = conteudos.clone();
+        editor.update(cx, |ed, _| {
+            ed.ao_descartar_conflito(Rc::new(move |caminho: &str, window: &mut Window, cx: &mut App| {
+                let vista = cs.borrow().iter().find_map(|(a, c)| match (a, c) {
+                    (Alvo::Conflict { path }, Conteudo::Conflito(v)) if path == caminho => v.upgrade(),
+                    _ => None,
+                });
+                if let Some(v) = vista {
+                    v.update(cx, |v, cx| v.carregar(true, window, cx));
+                }
+            }))
         });
         let mut subs = Vec::new();
         let p = id.clone();
@@ -309,6 +380,20 @@ impl Bancada {
         self.editor_de(self.ativa.as_deref())
     }
 
+    /// "Voltar para a guia" da picture-in-picture: traz o projeto e a aba de mídia de volta à frente.
+    pub(crate) fn voltar_para_aba(
+        &mut self, projeto: &str, editor: &WeakEntity<AreaEditor>, alvo: &Alvo, window: &mut Window, cx: &mut Context<Self>,
+    ) {
+        self.selecionar(projeto, cx);
+        let _ = editor.update(cx, |ed, cx| {
+            let id = ed.workspace().abas().find(|t| t.alvo == *alvo).map(|t| t.id.clone());
+            if let Some(id) = id {
+                ed.ativar(&id, window, cx);
+            }
+        });
+        self.aplicar_telas(window, cx);
+    }
+
     pub fn telas_ativas(&self) -> Option<&Telas> {
         self.ativa.as_ref().and_then(|id| self.telas.get(id))
     }
@@ -335,8 +420,7 @@ impl Bancada {
                     }
                 });
             }
-            // O editor não tem leitura antecipada exposta; o clique abre normalmente.
-            EventoArvore::PreCarregar(_) => {}
+            EventoArvore::PreCarregar(caminho) => editor.update(cx, |ed, cx| ed.pre_carregar(&caminho, window, cx)),
             EventoArvore::AbrirNoTerminal(dir) => {
                 let projeto = Some(p.to_string());
                 self.terminais.update(cx, |t, cx| t.adicionar_shell_em(projeto, Some(raiz), Some(dir), cx));
@@ -387,7 +471,7 @@ impl Bancada {
                 };
                 t.editor.update(cx, |ed, cx| ed.abrir_arquivo(caminho, op, window, cx));
             }
-            EventoPesquisa::PreLer { .. } => {}
+            EventoPesquisa::PreLer { caminho } => t.editor.update(cx, |ed, cx| ed.pre_carregar(caminho, window, cx)),
             EventoPesquisa::ArquivosAlterados { .. } => {
                 t.git.read(cx).cutucar();
                 t.editor.update(cx, |ed, cx| ed.atualizar(window, cx));
@@ -404,6 +488,7 @@ impl Bancada {
                 let alvo = do_git(alvo);
                 t.editor.update(cx, |ed, cx| ed.abrir_alvo(alvo, op, window, cx));
             }
+            // Os alvos do Git são diff, commit e conflito; a pré-leitura do editor só cobre arquivos de texto.
             EventoGit::PreCarregar { .. } => {}
             EventoGit::AbrirArquivo { caminho, permanente } => {
                 let op = Abertura { permanente: *permanente, ..Default::default() };

@@ -559,6 +559,12 @@ pub fn colorir(sintaxe: Option<&'static SyntaxReference>, texto: &str) -> Trecho
     m.trechos()
 }
 
+/// Colore um trecho solto com a linguagem do arquivo (as linhas antigas do bloco do Git).
+pub fn colorir_caminho(caminho: &str, texto: &str) -> Trechos {
+    let sintaxe = linguagem::linguagem(caminho).as_deref().and_then(|l| sintaxe(l, caminho));
+    colorir(sintaxe, texto)
+}
+
 /// Escopos que contam nos colchetes e no marcador de lista.
 static ESCOPOS: LazyLock<(Scope, Scope, Scope)> = LazyLock::new(|| {
     (Scope::new("string").unwrap(), Scope::new("comment").unwrap(), Scope::new("punctuation.definition.list").unwrap())

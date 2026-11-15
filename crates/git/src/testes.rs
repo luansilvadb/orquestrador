@@ -550,3 +550,63 @@ fn conflito_remocao_aceita_apaga(cx: &mut TestAppContext) {
     assert_eq!(s.contar("git_accept_deletion"), 1);
     assert!(s.texto("docs/apagado.md").is_none());
 }
+
+#[gpui_kit::test]
+fn pre_leitura_abre_a_aba_sem_ler_de_novo(cx: &mut TestAppContext) {
+    use crate::pre_leitura::PreLeiturasGit;
+    iniciar(cx);
+    let s = Arc::new(Simulado::default());
+    let fonte: Fonte = s.clone();
+    let pre = PreLeiturasGit::new();
+    let alvo = Alvo::Diff { lado: Lado::Alteracoes, caminho: "src/editor-workspace.tsx".into() };
+    cx.update(|cx| {
+        pre.pre_carregar(&fonte, &alvo, false, cx);
+        // Pedido repetido (hover e botão) não lê de novo.
+        pre.pre_carregar(&fonte, &alvo, true, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(s.contar("git_review_diff"), 1);
+    assert!(cx.read(|cx| pre.pronto(&alvo, cx)));
+    let (p2, a2, f2) = (pre.clone(), alvo.clone(), fonte.clone());
+    let (_, v) = montar_vista(cx, move |w, cx| VisaoDiff::com_pre_leitura(f2, GuardaGit::new(), a2, &p2, w, cx));
+    assert_eq!(cx.read(|cx| v.read(cx).total_unidades()), 2, "a aba abre com o diff pré-lido");
+    assert_eq!(s.contar("git_review_diff"), 1, "a primeira rodada usa a pré-leitura");
+    assert!(!cx.read(|cx| pre.pre_carregado(&alvo, cx)), "abrir consome a entrada");
+}
+
+#[gpui_kit::test]
+fn pre_leitura_pendente_e_esperada_e_vence(cx: &mut TestAppContext) {
+    use crate::pre_leitura::PreLeiturasGit;
+    iniciar(cx);
+    let s = Arc::new(Simulado::default());
+    let fonte: Fonte = s.clone();
+    let pre = PreLeiturasGit::new();
+    let alvo = Alvo::Commit { hash: "4b2e8d0a1c3f5e7b9d2a4c6e8f0b1d3a5c7e9f11".into(), caminho: "src/lib/utils.ts".into() };
+    // Pendente quando a aba abre: a vista espera a mesma leitura.
+    cx.update(|cx| pre.pre_carregar(&fonte, &alvo, true, cx));
+    let (p2, a2, f2) = (pre.clone(), alvo.clone(), fonte.clone());
+    let (_, v) = montar_vista(cx, move |w, cx| VisaoDiff::com_pre_leitura(f2, GuardaGit::new(), a2, &p2, w, cx));
+    cx.run_until_parked();
+    assert_eq!(s.contar("git_commit_diff"), 1);
+    assert!(cx.read(|cx| v.read(cx).total_unidades()) > 0);
+    // Pronta e não usada: vence 3 s depois.
+    cx.update(|cx| pre.pre_carregar(&fonte, &alvo, true, cx));
+    cx.run_until_parked();
+    assert!(cx.read(|cx| pre.pre_carregado(&alvo, cx)));
+    cx.executor().advance_clock(Duration::from_millis(3100));
+    assert!(!cx.read(|cx| pre.pre_carregado(&alvo, cx)));
+    // A espera da abertura termina quando a leitura chega.
+    let feito = Rc::new(std::cell::Cell::new(false));
+    let f3 = feito.clone();
+    cx.update(|cx| {
+        let t = pre.aguardar(&fonte, &alvo, cx);
+        cx.spawn(async move |_| {
+            t.await;
+            f3.set(true);
+        })
+        .detach();
+    });
+    cx.run_until_parked();
+    assert!(feito.get());
+    assert_eq!(s.contar("git_commit_diff"), 3);
+}

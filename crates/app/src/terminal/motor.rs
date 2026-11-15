@@ -6,7 +6,7 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
 use orquestrador_core::core::projects::Projects;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
 /// Linhas de histórico, as mesmas do xterm (`scrollback: 10000` em term.ts).
@@ -19,6 +19,37 @@ pub const TAMANHO_EXECUTOR: (u16, u16) = (110, 30);
 /// Projeto (`None` é o terminal sem projeto) e id do terminal: o mesmo id existe em projetos diferentes.
 pub type Chave = (Option<String>, String);
 pub type Avisos = async_channel::Receiver<Chave>;
+
+/// Janela que se redesenha na hora quando chega o eco de uma tecla (HWND; 0 sem janela).
+static JANELA: AtomicIsize = AtomicIsize::new(0);
+/// Por quanto tempo depois de uma tecla a saída do terminal redesenha na hora: o eco do pwsh chega em ~12 ms.
+const JANELA_ECO_US: u64 = 50_000;
+
+pub fn ligar_janela(hwnd: isize) {
+    JANELA.store(hwnd, Ordering::Release);
+}
+
+fn agora_us() -> u64 {
+    static INICIO: OnceLock<std::time::Instant> = OnceLock::new();
+    INICIO.get_or_init(std::time::Instant::now).elapsed().as_micros() as u64 + 1
+}
+
+/// Pede `WM_PAINT` já, sem esperar o próximo vsync. O aviso postado antes chega primeiro à thread da janela (mensagens
+/// postadas vêm antes do `WM_PAINT`), então o quadro já sai com a vista suja.
+#[cfg(windows)]
+fn redesenhar_ja() {
+    #[link(name = "user32")]
+    extern "system" {
+        fn InvalidateRect(hwnd: isize, rect: *const std::ffi::c_void, apagar: i32) -> i32;
+    }
+    let h = JANELA.load(Ordering::Acquire);
+    if h != 0 {
+        unsafe { InvalidateRect(h, std::ptr::null(), 0) };
+    }
+}
+
+#[cfg(not(windows))]
+fn redesenhar_ja() {}
 
 pub fn chave(projeto: Option<&str>, id: &str) -> Chave {
     (projeto.map(str::to_string), id.to_string())
@@ -66,6 +97,8 @@ pub struct Motor {
     ouvinte: Ouvinte,
     /// Há saída nova desde o último desenho; só o primeiro pedaço depois de um desenho avisa a janela.
     sujo: AtomicBool,
+    /// Até quando (`agora_us`) a saída redesenha na hora: o eco da última tecla.
+    eco_ate: AtomicU64,
     /// Quando o último pedaço terminou de ser processado (só para a medição).
     pub processado_em: Mutex<Option<std::time::Instant>>,
     pub chave: Chave,
@@ -77,7 +110,7 @@ impl Motor {
         let config = Config { scrolling_history: HISTORICO, ..Config::default() };
         let tamanho = Tamanho { colunas: colunas.max(2) as usize, linhas: linhas.max(1) as usize };
         let term = Term::new(config, &tamanho, ouvinte.clone());
-        Motor { estado: Mutex::new(Estado { term, processador: Processor::new() }), ouvinte, sujo: AtomicBool::new(false), processado_em: Mutex::new(None), chave }
+        Motor { estado: Mutex::new(Estado { term, processador: Processor::new() }), ouvinte, sujo: AtomicBool::new(false), eco_ate: AtomicU64::new(0), processado_em: Mutex::new(None), chave }
     }
 
     pub fn travar(&self) -> MutexGuard<'_, Estado> {
@@ -112,6 +145,16 @@ impl Motor {
             g[Point::new(p.line, Column(c))].c.hash(&mut h);
         }
         h.finish()
+    }
+
+    /// Tecla enviada: a saída dos próximos `JANELA_ECO_US` é o eco e vai à tela sem esperar o vsync.
+    pub fn esperar_eco(&self) {
+        self.eco_ate.store(agora_us() + JANELA_ECO_US, Ordering::Release);
+    }
+
+    fn em_eco(&self) -> bool {
+        let ate = self.eco_ate.load(Ordering::Acquire);
+        ate != 0 && agora_us() < ate
     }
 
     /// Chamado ao desenhar: a próxima saída volta a avisar.
@@ -155,8 +198,23 @@ fn timer_de_1ms() {
     extern "system" {
         fn timeBeginPeriod(ms: u32) -> u32;
     }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentProcess() -> isize;
+        fn SetProcessInformation(processo: isize, classe: i32, info: *const std::ffi::c_void, tamanho: u32) -> i32;
+    }
+    /// `PROCESS_POWER_THROTTLING_STATE` com `PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION` no controle e estado
+    /// zerado: o Windows 11 deixa de ignorar o pedido quando a janela fica encoberta ou minimizada.
+    #[repr(C)]
+    struct Estrangulamento {
+        versao: u32,
+        controle: u32,
+        estado: u32,
+    }
     static FEITO: std::sync::Once = std::sync::Once::new();
     FEITO.call_once(|| unsafe {
+        let e = Estrangulamento { versao: 1, controle: 0x4, estado: 0 };
+        SetProcessInformation(GetCurrentProcess(), 4, &e as *const _ as _, std::mem::size_of::<Estrangulamento>() as u32);
         timeBeginPeriod(1);
     });
 }
@@ -243,6 +301,9 @@ impl Registro {
         if avisar {
             let _ = self.aviso.try_send(chave);
         }
+        if motor.em_eco() {
+            redesenhar_ja();
+        }
     }
 }
 
@@ -296,7 +357,7 @@ mod testes {
 }
 
 /// Bancada de latência sem janela: o core de verdade, 4 pwsh despejando e um quinto recebendo teclas pelo mesmo caminho
-/// da vista (`Registro::escrever`). Mede tecla → eco no `Term`. Uso (cerca de 1 min, Windows com pwsh e node):
+/// da vista (`Registro::escrever`). Mede tecla → eco no `Term`. Uso (cerca de 1 min, Windows com pwsh):
 /// `cargo test --release -p orquestrador-app bancada_latencia -- --ignored --nocapture`.
 #[cfg(all(test, windows))]
 mod bancada {
@@ -305,15 +366,18 @@ mod bancada {
     use orquestrador_core::core::projects::{Projects, TermSink};
     use std::time::{Duration, Instant};
 
-    const FLOOD: &str = r#"const n = Number(process.argv[2]), tag = process.argv[3], rate = Number(process.argv[4]);
-const E = String.fromCharCode(27), ab = 'abcdefghijklmnopqrstuvwxyz0123456789 _-./:=+', cs = [31,32,33,34,35,36,91,92,93,94,95,96];
-let seed = 12345 + tag.charCodeAt(0); const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
-function line(i) { let b = '[' + tag + '] ' + String(i).padStart(7, '0') + ' '; while (b.length < 118) b += ab[(rnd() * ab.length) | 0];
-  return E + '[' + cs[i % cs.length] + 'm' + b.slice(0, 118) + E + '[0m' + E + '[1;3' + ((i % 7) + 1) + 'mOK' + E + '[0m\r\n'; }
-const t0 = Date.now();
-for (let i = 0; i < n; i += 100) { const w = t0 + (i / rate) * 1000 - Date.now(); if (w > 0) await new Promise((r) => setTimeout(r, w));
-  let c = ''; for (let j = i; j < Math.min(n, i + 100); j++) c += line(j); await new Promise((r) => process.stdout.write(c, r)); }
-"#;
+    /// Compila `xtask` (o gerador `despejar`) no mesmo diretório de alvo deste teste e devolve o exe.
+    fn xtask() -> std::path::PathBuf {
+        let alvo = std::env::current_exe().unwrap().ancestors().nth(3).unwrap().to_path_buf();
+        let ok = std::process::Command::new(env!("CARGO"))
+            .args(["build", "-q", "-p", "xtask"])
+            .env("CARGO_TARGET_DIR", &alvo)
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(ok, "cargo build -p xtask");
+        alvo.join("debug").join("xtask.exe")
+    }
+
     const SEM_HISTORICO: &str = "Set-PSReadLineOption -HistorySaveStyle SaveNothing -PredictionSource None\r";
 
     fn texto_cursor(m: &Motor) -> String {
@@ -386,7 +450,7 @@ for (let i = 0; i < n; i += 100) { const w = t0 + (i / rate) * 1000 - Date.now()
         let tmp = std::env::temp_dir().join(format!("orq-bancada-{}", std::process::id()));
         let places = session::Places { temp: tmp.join("temp"), codex_rules: tmp.join("rules") };
         std::fs::create_dir_all(&places.temp).unwrap();
-        std::fs::write(tmp.join("flood.mjs"), FLOOD).unwrap();
+        let despejar = xtask();
         // O PSReadLine grava no histórico real do usuário; o que esta bancada acrescentar é desfeito no fim.
         let historico = std::env::var_os("APPDATA")
             .map(|a| std::path::PathBuf::from(a).join(r"Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"));
@@ -431,9 +495,8 @@ for (let i = 0; i < n; i += 100) { const w = t0 + (i / rate) * 1000 - Date.now()
         let (mut c, mut eco) = amostras(&registro, &alvo, n, &espera);
         eprintln!("sem carga    {}", estat("core entregou", &mut c));
         eprintln!("sem carga    {}", estat("eco no Term", &mut eco));
-        let flood = tmp.join("flood.mjs");
         for id in &ids[..4] {
-            registro.escrever(&chave(None, id), format!("node '{}' 900000 {} 6000\r", flood.display(), &id[6..]));
+            registro.escrever(&chave(None, id), format!("& '{}' despejar 900000 {} 6000\r", despejar.display(), &id[6..]));
         }
         std::thread::sleep(Duration::from_secs(3));
         let (mut c, mut eco) = amostras(&registro, &alvo, n, &espera);

@@ -39,8 +39,8 @@ pwsh crates/midia/preparar-ffmpeg.ps1 -Ferramentas D:\ferramentas
 
 O script fixa o commit do vcpkg, instala `ffmpeg[core,avcodec,avformat,avfilter,swscale,swresample]:x64-windows-static-md`,
 baixa o `libclang` (pip `libclang==18.1.1`) para o bindgen e grava no ambiente do usuário `VCPKG_ROOT`,
-`VCPKGRS_TRIPLET=x64-windows-static-md`, `LIBCLANG_PATH` e `CARGO_PROFILE_DEV_BUILD_OVERRIDE_OPT_LEVEL=3` (sem ela, o bindgen do
-build script estoura a pilha no perfil dev). Requer Git, Python e o Visual Studio com C++. O `build.rs` liga as bibliotecas do
+`VCPKGRS_TRIPLET=x64-windows-static-md` e `LIBCLANG_PATH`. O `Cargo.toml` da raiz compila o bindgen otimizado (em opt-level 0 o
+build script estoura a pilha). Requer Git, Python e o Visual Studio com C++. O `build.rs` liga as bibliotecas do
 sistema que o Media Foundation e o DXVA do FFmpeg pedem (`mfuuid`, `strmiids`, `mfplat` e outras).
 
 ## Testes e vitrine

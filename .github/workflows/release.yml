@@ -1,4 +1,4 @@
-# Release de uma tag vX.Y.Z: gera o instalador NSIS assinado e o latest.json, confere tudo e só então publica como a última release estável.
+# Release de uma tag vX.Y.Z: gera o instalador NSIS (cargo-packager) assinado e o latest.json, confere tudo e só então publica como a última release estável.
 # Ordem: tag, versões e notas -> checks -> instalador em rascunho -> notas e latest.json -> conferência -> publicação.
 # Falha em qualquer passo deixa a release em rascunho (ou nem a cria). Rerun para uma tag já publicada para antes de alterar qualquer coisa.
 name: release
@@ -23,13 +23,14 @@ jobs:
       TAG: ${{ github.ref_name }}
       REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
+      # O app, o assinador e o compat-tauri compilam no mesmo target.
+      CARGO_TARGET_DIR: ${{ github.workspace }}\target
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          node-version: lts/*
-          cache: npm
+          toolchain: stable
 
       # Antes de qualquer build: tag, manifests, notas e ordem de versão. Native do PowerShell não para sozinho: cada código de saída é conferido.
       - name: Conferir a tag, as versões, as notas e a release existente
@@ -39,7 +40,7 @@ jobs:
           if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw "A tag $($env:TAG) não é vX.Y.Z." }
           $version = $Matches[1]
 
-          node scripts/release.mjs check-versions $version
+          cargo xtask release check-versions $version
           if ($LASTEXITCODE -ne 0) { throw "As versões dos manifests não batem com $version." }
 
           # Release já publicada para a tag não é tocada. Rascunho de tentativa anterior pode ser refeito.
@@ -65,7 +66,7 @@ jobs:
             throw "gh api releases/latest falhou (código $LASTEXITCODE): $latest"
           }
 
-          node scripts/release.mjs check-notes $version $previous
+          cargo xtask release check-notes $version $previous
           if ($LASTEXITCODE -ne 0) { throw "As notas de docs/releases/v$version.md não servem para publicar." }
 
       - name: Aguardar CI verde para o commit da tag
@@ -74,59 +75,65 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $sha = (& git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') { throw "Não foi possível obter o SHA do commit checkout: $sha" }
-          node scripts/release.mjs wait-ci $sha
+          cargo xtask release wait-ci $sha
           if ($LASTEXITCODE -ne 0) { throw "A CI de push em main não aprovou o commit $sha." }
 
-      - run: npm ci
-        shell: bash
-
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # FFmpeg estático do orquestrador-midia: o cache guarda os pacotes binários do vcpkg e o libclang.
+      - name: Cache do FFmpeg estático e do libclang
+        uses: actions/cache@v4
         with:
-          toolchain: stable
+          path: |
+            C:\vcpkg-cache
+            C:\ferramentas\libclang
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('crates/midia/preparar-ffmpeg.ps1') }}
 
-      # Checks do projeto: build do frontend, pontos de tabs e de release, e os testes Rust.
+      - name: Preparar o FFmpeg estático e o libclang
+        shell: pwsh
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: C:\vcpkg-cache
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          New-Item -ItemType Directory -Force C:\vcpkg-cache | Out-Null
+          & pwsh crates/midia/preparar-ffmpeg.ps1 -Ferramentas C:\ferramentas
+          foreach ($n in 'VCPKG_ROOT', 'VCPKGRS_TRIPLET', 'LIBCLANG_PATH') {
+            "$n=$([Environment]::GetEnvironmentVariable($n, 'User'))" >> $env:GITHUB_ENV
+          }
+
+      # Testes Rust do workspace, inclusive os do fluxo de release (xtask) e do updater (orquestrador-app).
       - name: Rodar os checks
         shell: bash
-        run: |
-          npm run build
-          node tests/check-file-tabs.mjs
-          node tests/check-release.mjs
-          cargo test --workspace
+        run: cargo test --workspace
 
-      # Instalador NSIS assinado com TAURI_SIGNING_PRIVATE_KEY (conteúdo da chave privada, secret do repositório; sem senha). Sai em rascunho.
+      - name: Instalar o cargo-packager
+        shell: bash
+        run: cargo install cargo-packager --version 0.11.8 --locked
+
+      # Instalador NSIS por usuário (cargo-packager), .sig com a versão assinada e latest.json com as notas completas (com o H1),
+      # pela chave TAURI_SIGNING_PRIVATE_KEY (conteúdo da chave privada, secret do repositório; sem senha). Sobe tudo num rascunho.
       - name: Gerar o instalador assinado e a release em rascunho
-        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Orquestrador ${{ github.ref_name }}
-          releaseDraft: true
-          prerelease: false
-          uploadUpdaterJson: true
-
-      # Notas completas (docs/releases/vX.Y.Z.md) no latest.json (com o H1) e, sem o título, no corpo da release (o GitHub já mostra o nome).
-      # Na URL do instalador, o tauri-action grava a URL da API do asset; o app precisa da URL pública da tag.
-      # Daqui em diante, comando nativo que sai com código diferente de 0 lança: o runner já põe $ErrorActionPreference = 'stop'.
-      - name: Pôr as notas completas e a URL pública no latest.json
         shell: pwsh
+        env:
+          ORQ_CHAVE_ASSINATURA: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           $version = $env:TAG.Substring(1)
-          $notes = "docs/releases/v$version.md"
-          $dir = Join-Path $env:RUNNER_TEMP 'release-manifest'
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $manifest = Join-Path $dir 'latest.json'
-          $body = Join-Path $dir 'body.md'
+          $saida = Join-Path $env:RUNNER_TEMP 'pacote'
+          & pwsh crates/app/empacotamento/empacotar.ps1 -Versao $version -Notas "docs/releases/v$version.md" -Saida $saida
+          $exe = Join-Path $saida "Orquestrador_${version}_x64-setup.exe"
+          $body = Join-Path $saida 'body.md'
+          cargo xtask release release-body $version $body
 
-          node scripts/release.mjs release-body $version $body
-          & gh release edit $env:TAG --repo $env:REPO --notes-file $body
-          & gh release download $env:TAG --repo $env:REPO --pattern latest.json --dir $dir --clobber
-          node scripts/release.mjs prepare-manifest $version $manifest $notes
-          & gh release upload $env:TAG $manifest --repo $env:REPO --clobber
+          # Rascunho de tentativa anterior: troca os assets; senão, cria.
+          $null = gh release view $env:TAG --repo $env:REPO --json isDraft 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            & gh release edit $env:TAG --repo $env:REPO --notes-file $body --title "Orquestrador $($env:TAG)"
+            & gh release upload $env:TAG $exe "$exe.sig" (Join-Path $saida 'latest.json') --repo $env:REPO --clobber
+          } else {
+            & gh release create $env:TAG $exe "$exe.sig" (Join-Path $saida 'latest.json') --repo $env:REPO --draft --title "Orquestrador $($env:TAG)" --notes-file $body --verify-tag
+          }
 
-      # Antes de publicar: rascunho, instalador (baixado e verificado com a chave pública do tauri.conf.json), .sig, manifesto e corpo da release.
+      # Antes de publicar: rascunho, instalador (baixado e verificado com a chave pública do app), .sig, manifesto e corpo da release.
+      # O instalador passa pelo assinador e pelo tauri-plugin-updater 2.14.1 do 0.1.48 (compat-tauri), que precisa aceitá-lo.
       # Asset ausente faz o download falhar; .exe vazio não passa na assinatura.
       - name: Conferir o rascunho antes de publicar
         shell: pwsh
@@ -142,15 +149,21 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP 'release-check'
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           & gh release download $env:TAG --repo $env:REPO --pattern latest.json --pattern "$exe.sig" --pattern $exe --dir $dir --clobber
-          node scripts/release.mjs verify-manifest $version (Join-Path $dir 'latest.json') (Join-Path $dir "$exe.sig") "docs/releases/v$version.md"
+          cargo xtask release verify-manifest $version (Join-Path $dir 'latest.json') (Join-Path $dir "$exe.sig") "docs/releases/v$version.md"
 
-          # Assinatura Minisign do instalador baixado, com a pubkey do tauri.conf.json: key id, payload e comentário confiável.
-          node scripts/release.mjs verify-installer $version (Join-Path $dir $exe) (Join-Path $dir "$exe.sig")
+          # Assinatura Minisign do instalador baixado, com a chave pública embutida no app (a mesma do tauri.conf.json).
+          $fonte = Get-Content -Raw crates/app/src/atualizacao/mod.rs
+          if ($fonte -notmatch 'PUBKEY_OFICIAL: &str = "([A-Za-z0-9+/=]+)"') { throw 'PUBKEY_OFICIAL não encontrada.' }
+          $pubkey = $Matches[1]
+          cargo build --release --locked --manifest-path crates/app/empacotamento/assinador/Cargo.toml
+          & target/release/orquestrador-assinador.exe verificar $pubkey $version (Join-Path $dir 'latest.json') (Join-Path $dir $exe)
+          cargo build --release --locked --manifest-path crates/app/empacotamento/compat-tauri/Cargo.toml
+          & target/release/orquestrador-compat-tauri.exe verificar $pubkey (Join-Path $dir 'latest.json') (Join-Path $dir $exe)
 
           # O corpo da release tem de ser o texto das notas sem o título (começa em ## Resumo; só CRLF/LF e espaço final podem diferir).
           $bodyFile = Join-Path $dir 'body.md'
           [System.IO.File]::WriteAllText($bodyFile, [string]$release.body)
-          node scripts/release.mjs verify-body $bodyFile "docs/releases/v$version.md"
+          cargo xtask release verify-body $bodyFile "docs/releases/v$version.md"
 
       # Último passo: a release vira a latest estável, que é o endereço que os apps consultam. Só chega aqui se a conferência passou.
       - name: Publicar como a última release estável
@@ -159,7 +172,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $sha = (& git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') { throw "Não foi possível obter o SHA do commit checkout: $sha" }
-          node scripts/release.mjs wait-ci $sha
+          cargo xtask release wait-ci $sha
           if ($LASTEXITCODE -ne 0) { throw "A CI de push em main não aprovou o commit $sha." }
 
           & gh release edit $env:TAG --repo $env:REPO --draft=false --latest

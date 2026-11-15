@@ -9,6 +9,7 @@ name = "orquestrador_editor"
 [dependencies]
 orquestrador-core = { path = "../core" }
 orquestrador-ui = { path = "../ui" }
+orquestrador-hunks = { path = "../hunks" }
 gpui-kit = "=0.9.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -31,7 +32,7 @@ syntect = { version = "5.3", default-features = false, features = ["yaml-load", 
 markdown = "1"
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }
 
-[lints.rust]
-# O Oniguruma do `syntect` exporta os símbolos no MSVC (`ONIG_EXTERN` vira `dllexport`), e o link avisa que criou a
-# `.lib`/`.exp` dos executáveis. Some de vez com `CFLAGS=/DONIG_STATIC` no build do `onig_sys`.
-linker_messages = "allow"
+[[example]]
+# Nome por crate: exemplos homônimos colidem no diretório de saída e o `cargo test` paralelo falha com LNK1104.
+name = "vitrine-editor"
+path = "examples/vitrine.rs"

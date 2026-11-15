@@ -34,6 +34,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
+mod git;
+mod pre;
+
 /// Intervalo da consulta ao disco das abas ativas (o `POLL_MS` do React).
 pub const CONSULTA: Duration = Duration::from_millis(2500);
 const PROPORCAO_PADRAO: f32 = 0.5;
@@ -71,6 +74,10 @@ pub struct Abertura {
 /// `None` quando não é dela. Chamada uma vez por aba; a vista fica guardada enquanto a aba existir.
 pub type FabricaConteudo = Rc<dyn Fn(&Alvo, &mut Window, &mut App) -> Option<AnyView>>;
 
+/// Chamado quando o editor descarta o rascunho de um conflito (descartar no "fechar com não salvos" ou tudo): a vista
+/// do conflito relê o arquivo (`VisaoConflito::carregar(true, ..)`).
+pub type AoDescartarConflito = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+
 /// Chamado quando um documento ganha editor: o lugar para o Git ligar decorações de gutter, régua e widgets.
 pub type AoAbrirDocumento = Rc<dyn Fn(&InfoDocumento, &Entity<EditorState>, &mut Window, &mut App)>;
 
@@ -83,14 +90,6 @@ pub struct InfoDocumento {
     pub gutter: gpui_kit::component::input::GutterDecorationCollection,
     pub regua: gpui_kit::component::input::OverviewRulerDecorationCollection,
     pub trechos: gpui_kit::component::input::RangeDecorationCollection,
-}
-
-/// Widget inline sob uma linha do documento (o bloco do Git aberto).
-#[derive(Clone)]
-pub struct WidgetInline {
-    /// Linha (0-based) depois da qual o widget aparece.
-    pub linha: usize,
-    pub vista: AnyView,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -152,7 +151,10 @@ pub struct AreaEditor {
     conteudos: HashMap<String, AnyView>,
     fabrica: Option<FabricaConteudo>,
     ao_abrir: Vec<AoAbrirDocumento>,
-    widgets: HashMap<String, Vec<WidgetInline>>,
+    git: HashMap<String, crate::gutter_git::EstadoGit>,
+    fonte_git: Option<std::sync::Arc<dyn crate::gutter_git::FonteGutter>>,
+    pre_leituras: HashMap<String, pre::PreLeitura>,
+    ao_descartar_conflito: Option<AoDescartarConflito>,
     proporcao: f32,
     aviso: Option<String>,
     layout: Option<String>,
@@ -297,7 +299,10 @@ impl AreaEditor {
             conteudos: HashMap::new(),
             fabrica: None,
             ao_abrir: Vec::new(),
-            widgets: HashMap::new(),
+            git: HashMap::new(),
+            fonte_git: None,
+            pre_leituras: HashMap::new(),
+            ao_descartar_conflito: None,
             proporcao: PROPORCAO_PADRAO,
             aviso: None,
             layout: None,
@@ -386,26 +391,6 @@ impl AreaEditor {
     pub fn decoracoes(&self, caminho: &str) -> Option<InfoDocumento> {
         let c = caminho.to_lowercase();
         self.docs.values().find(|d| d.buffer.path.to_lowercase() == c).map(info_de)
-    }
-
-    /// Diz se o documento tem alterações em relação ao Git (habilita Próxima/Anterior Alteração no menu).
-    pub fn definir_tem_alteracoes(&mut self, doc_id: &str, tem: bool, cx: &mut Context<Self>) {
-        if tem {
-            self.com_alteracoes.insert(doc_id.to_string());
-        } else {
-            self.com_alteracoes.remove(doc_id);
-        }
-        cx.notify();
-    }
-
-    /// Widgets inline do documento (troca todos de uma vez; vazio tira).
-    pub fn definir_widgets(&mut self, doc_id: &str, widgets: Vec<WidgetInline>, cx: &mut Context<Self>) {
-        if widgets.is_empty() {
-            self.widgets.remove(doc_id);
-        } else {
-            self.widgets.insert(doc_id.to_string(), widgets);
-        }
-        cx.notify();
     }
 
     // ---- Abrir ----
@@ -521,37 +506,46 @@ impl AreaEditor {
     }
 
     fn ler_arquivo(&mut self, doc_id: &str, caminho: &str, revelar: Option<(u64, u64)>, window: &mut Window, cx: &mut Context<Self>) {
+        // A pré-leitura (passar o mouse, apertar o botão) já pode ter o texto, ou estar a caminho.
+        if self.usar_pre_leitura(doc_id, caminho, revelar, window, cx) {
+            return;
+        }
         let raiz = PathBuf::from(&self.projeto);
         let rel = caminho.to_string();
         let leitura = cx.background_spawn(async move { ler_conteudo(&raiz, &rel) });
         let (doc_id, caminho) = (doc_id.to_string(), caminho.to_string());
         cx.spawn_in(window, async move |this, cx| {
             let r = leitura.await;
-            let _ = this.update_in(cx, |a, window, cx| {
-                // A aba pode ter fechado durante a leitura.
-                if !a.ws.abas().any(|t| t.alvo.doc_id() == Some(doc_id.as_str())) || a.docs.contains_key(&doc_id) {
-                    return;
-                }
-                match r {
-                    Err(e) => {
-                        a.situacao.insert(doc_id.clone(), Situacao { erro: Some(e), ..Default::default() });
-                    }
-                    Ok(c) if c.binary || c.too_large => {
-                        a.situacao.insert(doc_id.clone(), Situacao { binario: c.binary, grande: !c.binary, ..Default::default() });
-                    }
-                    Ok(c) => {
-                        a.situacao.remove(&doc_id);
-                        let b = Buffer::do_disco(&doc_id, &caminho, c.text, c.bom, c.read_only);
-                        a.instalar_documento(b, window, cx);
-                        if let (Some((l, col)), Some(d)) = (revelar, a.docs.get(&doc_id)) {
-                            d.revelar(l, col, window, cx);
-                        }
-                    }
-                }
-                cx.notify();
-            });
+            let _ = this.update_in(cx, |a, window, cx| a.aplicar_leitura_inicial(&doc_id, &caminho, revelar, r, window, cx));
         })
         .detach();
+    }
+
+    fn aplicar_leitura_inicial(
+        &mut self, doc_id: &str, caminho: &str, revelar: Option<(u64, u64)>, r: Result<files::Content, String>, window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A aba pode ter fechado durante a leitura.
+        if !self.ws.abas().any(|t| t.alvo.doc_id() == Some(doc_id)) || self.docs.contains_key(doc_id) {
+            return;
+        }
+        match r {
+            Err(e) => {
+                self.situacao.insert(doc_id.to_string(), Situacao { erro: Some(e), ..Default::default() });
+            }
+            Ok(c) if c.binary || c.too_large => {
+                self.situacao.insert(doc_id.to_string(), Situacao { binario: c.binary, grande: !c.binary, ..Default::default() });
+            }
+            Ok(c) => {
+                self.situacao.remove(doc_id);
+                let b = Buffer::do_disco(doc_id, caminho, c.text, c.bom, c.read_only);
+                self.instalar_documento(b, window, cx);
+                if let (Some((l, col)), Some(d)) = (revelar, self.docs.get(doc_id)) {
+                    d.revelar(l, col, window, cx);
+                }
+            }
+        }
+        cx.notify();
     }
 
     fn instalar_documento(&mut self, b: Buffer, window: &mut Window, cx: &mut Context<Self>) {
@@ -579,9 +573,11 @@ impl AreaEditor {
         for f in self.ao_abrir.clone() {
             f(&info, &editor, window, cx);
         }
+        self.git_carregar(&doc_id, cx);
     }
 
     fn ao_editar(&mut self, doc_id: &str, cx: &mut Context<Self>) {
+        self.git_ao_editar(doc_id, cx);
         let Some(d) = self.docs.get_mut(doc_id) else { return };
         d.sincronizar(cx);
         let (l, c) = d.cursor(cx);
@@ -722,6 +718,9 @@ impl AreaEditor {
                 if let Some(c) = self.conflitos.get_mut(&chave_conflito(path)) {
                     c.draft = c.origin.clone();
                 }
+                if let Some(f) = self.ao_descartar_conflito.clone() {
+                    f(path, window, cx);
+                }
             }
             _ => {}
         }
@@ -741,7 +740,7 @@ impl AreaEditor {
         self.disco.retain(|k, _| vivos.contains(k));
         self.cursores.retain(|k, _| vivos.contains(k));
         self.rolagens.retain(|k, _| vivos.contains(k));
-        self.widgets.retain(|k, _| vivos.contains(k));
+        self.git.retain(|k, _| vivos.contains(k));
         self.conteudos.retain(|k, _| ids.contains(k));
         self.conflitos.retain(|k, _| conflitos.contains(k));
         let _ = cx;
@@ -857,6 +856,7 @@ impl AreaEditor {
                             d.buffer.raw = enviado;
                             d.sincronizar(cx);
                         }
+                        a.git_carregar(&doc_id, cx);
                         a.disco.remove(&doc_id);
                         a.situacao.remove(&doc_id);
                         cx.emit(EventoEditor::AtualizarGit);
@@ -996,6 +996,7 @@ impl AreaEditor {
             self.disco.remove(doc_id);
             self.situacao.remove(doc_id);
             self.definir_ws(ws, cx);
+            self.git_carregar(doc_id, cx);
         }
         cx.emit(EventoEditor::AtualizarGit);
         cx.emit(EventoEditor::Salvo);
@@ -1082,6 +1083,7 @@ impl AreaEditor {
             d.definir_somente_leitura(f.read_only, cx);
             let limpo = normalizar_quebras(&f.text);
             d.trocar_texto(&limpo, window, cx);
+            self.git_carregar(doc_id, cx);
             cx.notify();
             return;
         }
@@ -1109,6 +1111,7 @@ impl AreaEditor {
             .collect();
         for d in ativos {
             self.recarregar_doc(&d, window, cx);
+            self.git_carregar(&d, cx);
         }
     }
 
@@ -1147,6 +1150,7 @@ impl AreaEditor {
             d.definir_somente_leitura(c.disco.somente_leitura, cx);
             d.trocar_texto(&normalizar_quebras(&c.disco.texto), window, cx);
             self.disco.remove(&c.doc_id);
+            self.git_carregar(&c.doc_id, cx);
             return;
         }
         if self.salvando.contains(&c.doc_id) {
@@ -1161,6 +1165,7 @@ impl AreaEditor {
                 d.sincronizar(cx);
                 self.disco.remove(&c.doc_id);
                 self.situacao.remove(&c.doc_id);
+                self.git_carregar(&c.doc_id, cx);
                 cx.emit(EventoEditor::AtualizarGit);
                 cx.emit(EventoEditor::Salvo);
             }
@@ -1305,6 +1310,10 @@ impl AreaEditor {
         self.conflitos = dados.conflicts;
         self.situacao.clear();
         self.definir_ws(ws, cx);
+        let ids: Vec<String> = self.docs.keys().cloned().collect();
+        for d in ids {
+            self.git_carregar(&d, cx);
+        }
     }
 
     /// Depois de excluir: fecha as abas e descarta os buffers (quem chama já decidiu).
@@ -1347,8 +1356,17 @@ impl AreaEditor {
                 d.trocar_texto(&t, window, cx);
             }
         }
+        let mut descartados = Vec::new();
         for c in self.conflitos.values_mut() {
+            if c.sujo() {
+                descartados.push(c.path.clone());
+            }
             c.draft = c.origin.clone();
+        }
+        if let Some(f) = self.ao_descartar_conflito.clone() {
+            for p in descartados {
+                f(&p, window, cx);
+            }
         }
         self.agendar_recuperacao(cx);
         cx.notify();
@@ -2051,9 +2069,10 @@ impl AreaEditor {
             })))
     }
 
-    fn ir_para_alteracao(&mut self, passo: i32, cx: &mut Context<Self>) {
+    fn ir_para_alteracao(&mut self, passo: i32, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(d) = self.ws.aba_focada().and_then(|t| t.alvo.doc_id()).filter(|d| self.com_alteracoes.contains(*d)) {
-            cx.emit(EventoEditor::IrParaAlteracao { doc_id: d.to_string(), passo });
+            let d = d.to_string();
+            self.git_ir(&d, passo, window, cx);
         }
     }
 
@@ -2194,7 +2213,7 @@ impl AreaEditor {
             let caminho = d.buffer.path.clone();
             return col.child(crate::markdown::previa(&aba.id, texto, caminho, ent.clone(), window, cx)).into_any_element();
         }
-        let widgets = self.widgets.get(&doc_id).cloned().unwrap_or_default();
+        let camada_git = self.git_camada(&doc_id, &editor, cx);
         let id_doc = doc_id.clone();
         let ent_k = ent.clone();
         let editor_el = div()
@@ -2216,8 +2235,17 @@ impl AreaEditor {
             .on_action(cx.listener(|a, _: &documento::SelecionarLinha, w, cx| a.comando(Comando::SelecionarLinha, w, cx)))
             .on_action(cx.listener(|a, _: &documento::InserirLinhaAbaixo, w, cx| a.comando(Comando::InserirLinhaAbaixo, w, cx)))
             .on_action(cx.listener(|a, _: &documento::IrParaPar, w, cx| a.comando(Comando::IrParaPar, w, cx)))
-            .on_action(cx.listener(|a, _: &documento::ProximaAlteracao, _, cx| a.ir_para_alteracao(1, cx)))
-            .on_action(cx.listener(|a, _: &documento::AlteracaoAnterior, _, cx| a.ir_para_alteracao(-1, cx)))
+            .on_action(cx.listener(|a, _: &documento::ProximaAlteracao, w, cx| a.ir_para_alteracao(1, w, cx)))
+            .on_action(cx.listener(|a, _: &documento::AlteracaoAnterior, w, cx| a.ir_para_alteracao(-1, w, cx)))
+            // O Esc fecha o bloco do Git antes de qualquer atalho do editor (o `Prec.high` do React).
+            .capture_key_down(cx.listener({
+                let id = doc_id.clone();
+                move |a, ev: &KeyDownEvent, _, cx| {
+                    if ev.keystroke.key == "escape" && a.git_fechar(&id, cx) {
+                        cx.stop_propagation();
+                    }
+                }
+            }))
             .relative()
             .flex()
             .flex_1()
@@ -2225,9 +2253,9 @@ impl AreaEditor {
             .min_w_0()
             .bg(documento::cor::fundo())
             .child(
-                // Medido nas capturas do React: a quebra do CodeMirror cabe 8 px a mais que a do Kit (que reserva 10 px à
-                // direita); o editor passa por baixo da borda do minimapa, desenhado por cima.
-                div().flex_1().min_w_0().h_full().mr(px(-8.)).child(ComTemaDoEditor(Some(
+                // Medido nas capturas do React: o texto do CodeMirror quebra na borda do minimapa e o Kit reserva 10 px à
+                // direita; o editor passa por baixo do minimapa, desenhado por cima (`gutter_git::SOB_MINIMAPA`).
+                div().flex_1().min_w_0().h_full().mr(-px(crate::gutter_git::SOB_MINIMAPA)).child(ComTemaDoEditor(Some(
                     Editor::new(&editor)
                         .appearance(false)
                         .bordered(false)
@@ -2246,8 +2274,9 @@ impl AreaEditor {
                 let Some(e) = ent_k.upgrade() else { return menu };
                 e.update(cx, |a, cx| a.menu_editor(menu, &id_doc, window, cx))
             })
-            .child(minimapa::Minimapa::new(editor.clone()))
-            .children(widgets.into_iter().map(|w| widget_inline(&editor, w, cx)));
+            .child(minimapa::Minimapa::new(editor.clone()).com_git(self.git.get(&doc_id).map(|e| crate::gutter_git::faixa_minimapa(&e.blocos)).unwrap_or_default()))
+            // Depois do minimapa: a régua fica por cima dele, como o `zIndex` do React.
+            .children(camada_git);
         col.child(editor_el).into_any_element()
     }
 
@@ -2403,11 +2432,18 @@ linha nova", window, cx);
                     v.update(cx, |r, cx| r.definir_termo("app", window, cx));
                 }
             }
+            "git-bloco" => {
+                if let Some(d) = focada.as_ref().and_then(|t| t.alvo.doc_id()).map(str::to_string) {
+                    self.git_ir(&d, 1, window, cx);
+                }
+            }
             "arquivos" => {
                 if let Some(e) = doc {
+                    // A captura do React tem a linha 26 no topo.
                     e.update(cx, |s, cx| {
                         if let Some(lh) = s.line_height() {
-                            s.set_scroll_offset(gpui::point(px(0.), -(lh * 25.)), cx);
+                            let topo = s.display_map().buffer_line_box_top(25, lh);
+                            s.set_scroll_offset(gpui::point(px(0.), -topo), cx);
                         }
                     });
                 }
@@ -2505,16 +2541,6 @@ linha nova", window, cx);
                 .into_any_element(),
         )
     }
-}
-
-fn widget_inline(editor: &Entity<EditorState>, w: WidgetInline, cx: &App) -> AnyElement {
-    let s = editor.read(cx);
-    let t = s.text();
-    let linha = w.linha.min(t.lines_len().saturating_sub(1));
-    let fim = t.line_end_offset(linha);
-    let Some(b) = s.range_to_bounds(&(fim..fim)) else { return div().into_any_element() };
-    let topo = b.bottom() - s.input_bounds().top();
-    div().absolute().left_0().right(px(14.)).top(topo).child(w.vista).into_any_element()
 }
 
 /// Marca d'água do grupo vazio: a marca do app a 6%.

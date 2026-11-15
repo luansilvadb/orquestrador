@@ -49,6 +49,11 @@ impl Estado {
         valor
     }
 
+    /// A seção existe no arquivo, em qualquer versão.
+    pub fn tem<S: Secao>(&self) -> bool {
+        self.secoes.contains_key(S::NOME)
+    }
+
     /// Troca a seção e grava o arquivo. Falha de gravação só perde a preferência; o app segue.
     pub fn gravar<S: Secao>(&mut self, valor: &S) {
         let Ok(dados) = serde_json::to_value(valor) else { return };

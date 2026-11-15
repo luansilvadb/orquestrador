@@ -1,0 +1,8 @@
+[env]
+# O Oniguruma (via `syntect`) marca os símbolos como `dllexport` no MSVC e o linker avisa que criou `.lib`/`.exp`
+# para cada executável; com ONIG_STATIC a `onig_sys` os compila como estáticos. Só para o alvo MSVC (sintaxe `/D`).
+CFLAGS_x86_64_pc_windows_msvc = "/DONIG_STATIC"
+
+[alias]
+# Tarefas do projeto em Rust (crates/xtask): `cargo xtask ajuda`.
+xtask = "run --quiet --package xtask --"

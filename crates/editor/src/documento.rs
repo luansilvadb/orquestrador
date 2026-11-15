@@ -58,10 +58,10 @@ pub fn registrar_atalhos(cx: &mut App) {
     ]);
 }
 
-/// Medidas do editor do Antigravity: texto de 14 px em linhas de 19 px, Consolas.
-pub const FONTE_EDITOR: &str = "Consolas";
-pub const TAMANHO_EDITOR: Pixels = px(15.5);
-pub const LINHA_EDITOR: Pixels = px(19.);
+/// Medidas do editor: as do código no tema (`tema::FONTE_CODIGO`).
+pub const FONTE_EDITOR: &str = orquestrador_ui::tema::FONTE_CODIGO;
+pub const TAMANHO_EDITOR: Pixels = px(orquestrador_ui::tema::TAMANHO_CODIGO);
+pub const LINHA_EDITOR: Pixels = px(orquestrador_ui::tema::LINHA_CODIGO);
 
 pub mod cor {
     use super::*;
@@ -203,19 +203,30 @@ fn centralizar(off: usize, tentativas: u8, window: &mut Window, cx: &mut Context
             return;
         }
         let caixa = s.input_bounds();
-        match s.range_to_bounds(&(off..off)) {
-            Some(b) if caixa.size.height > px(0.) => {
-                let delta = b.center().y - (caixa.origin.y + caixa.size.height / 2.);
-                let o = s.scroll_offset();
-                s.set_scroll_offset(gpui::point(o.x, (o.y - delta).min(px(0.))), cx);
-            }
-            _ if tentativas > 0 => {
-                // Sem layout ou fora da parte desenhada: rola até a borda e tenta de novo.
-                let p = s.text().offset_to_position(off);
-                s.set_cursor_position(p, window, cx);
+        let (Some(lh), true) = (s.line_height(), caixa.size.height > px(0.)) else {
+            if tentativas > 0 {
                 centralizar(off, tentativas - 1, window, cx);
             }
-            _ => {}
+            return;
+        };
+        // A linha visual sai do mapa de quebras (vale fora da parte desenhada); a linha desenhada só confere.
+        let alvo = match s.range_to_bounds(&(off..off)) {
+            Some(b) => b.center().y - s.text_bounds().map_or(caixa.origin.y, |t| t.origin.y),
+            None => {
+                let p = s.text().offset_to_point(off);
+                let col = off - s.text().line_start_offset(p.row);
+                let mapa = s.display_map();
+                let linha = mapa.buffer_pos_to_display_pos(gpui_kit::component::input::BufferPoint::new(p.row, col)).row;
+                mapa.display_row_top(linha, lh) + lh / 2.
+            }
+        };
+        let o = s.scroll_offset();
+        let y = (caixa.size.height / 2. - alvo).min(px(0.));
+        if (y - o.y).abs() > px(0.5) {
+            s.set_scroll_offset(gpui::point(o.x, y), cx);
+            if tentativas > 0 {
+                centralizar(off, tentativas - 1, window, cx);
+            }
         }
     });
 }

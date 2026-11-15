@@ -1,14 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-// O FFmpeg estático exporta símbolos e o link.exe avisa que criou a .lib do executável; é só informativo.
-#![allow(linker_messages)]
 // A saída dos macros do GPUI aponta para `gpui::`; o alias resolve tudo pelo Kit.
 extern crate gpui_kit as gpui;
 
+mod atualizacao;
 mod backend;
 mod bancada;
 mod estado;
 mod fechamento;
 mod instancia;
+mod medir;
+mod migracao;
 mod moldura;
 mod paineis;
 mod telas;
@@ -43,6 +44,7 @@ fn main() {
                     instancia::Instancia::Principal(guarda) => Some(guarda),
                 }
             };
+            migracao::executar();
             let paths = orquestrador_core::open_paths::extract_paths(&args, &cwd);
             abrir_janela(paths);
         }
@@ -70,6 +72,12 @@ fn abrir_janela(iniciais: Vec<std::path::PathBuf>) {
         let aberta = gpui_kit::open_window(opcoes, cx, move |window, cx| {
             let view = cx.new(|cx| Bancada::new(backend, eventos, iniciais, cx));
             window.focus(&view.read(cx).foco.clone(), cx);
+            #[cfg(windows)]
+            if let Ok(raw_window_handle::RawWindowHandle::Win32(h)) =
+                raw_window_handle::HasWindowHandle::window_handle(window).map(|h| h.as_raw())
+            {
+                terminal::motor::ligar_janela(h.hwnd.get());
+            }
             // Fechar a janela com arquivos não salvos ou terminais trabalhando pergunta antes (fechamento.rs).
             let v = view.downgrade();
             window.on_window_should_close(cx, move |window, cx| {

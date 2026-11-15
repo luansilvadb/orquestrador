@@ -127,15 +127,16 @@ Os testes do front-end, agrupados por tipo. Os do backend ficam em `crates/core/
 - `tests/check-tab-lists-ui.mjs`: listas de abas em menu: a do Orquestrador numa linha por item (ícone na margem, título cortado, estado e check) e o `...` do editor com o rótulo alinhado; executores vêm de `__mock.addNode`.
 - `tests/check-editor-tabs-ui.mjs`: o arrasto das abas do editor: clique sem mover, nova ordem, Esc e X sem reordenar, fixadas no começo, soltar no outro grupo e a faixa rolando com a aba na borda.
 
-## Scripts (`scripts/`)
+## Tarefas em Rust (`crates/xtask`, `cargo xtask`)
 
-Ferramentas, sem testes.
+- `cargo xtask release <comando>`: as regras do fluxo de release: versões iguais nos manifestos (o `[workspace.package]` e o `Cargo.lock` sempre; `package.json`, `package-lock.json` e `tauri.conf.json` enquanto existirem), notas completas, o `latest.json` que o app lê e a conferência do instalador. Testes: `cargo test -p xtask`. Detalhes em [notas de release](releases/README.md).
+- `cargo xtask limpar-target`: `cargo clean` quando `target` passa do teto (30 GB; `ORQUESTRADOR_TARGET_MAX_GB`).
+- `cargo xtask medir`: medição de desempenho do exe GPUI ([desempenho do GPUI](desempenho-gpui.md)).
+- `cargo xtask despejar`: o gerador de saída das medições (também do exemplo `eco_conpty`).
 
-**Release**
+## Scripts Node (`scripts/`)
 
-- `scripts/release.mjs`: as regras do fluxo de release: versões iguais nos manifests, notas completas, o `latest.json` que o app lê e a conferência do instalador. Detalhes em [notas de release](releases/README.md).
-
-**Sincronização de ícones**
+Ferramentas do React, sem testes. `release.mjs`, `limpar-target.mjs` e `medir-desempenho.mjs` têm porte no `xtask` e saem com o React. `capturar-referencia.mjs` e `sync-file-icons.mjs` não têm porte: dependem do React e do npm, e os dados que geram já estão versionados.
 
 - `scripts/sync-file-icons.mjs`: gera associações e SVGs locais do pacote `material-icon-theme` (MIT) antes de dev, check e build; a licença acompanha os assets gerados. Atualizar a dependência atualiza o catálogo no ciclo seguinte.
 

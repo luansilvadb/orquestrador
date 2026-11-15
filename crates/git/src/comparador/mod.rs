@@ -17,10 +17,10 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
-/// Medidas do `unsafeCSS` do app e do CSS do pacote.
-pub const LINHA: f32 = 19.;
-pub const TAMANHO: f32 = 14.;
-pub const FONTE: &str = "Consolas";
+/// Medidas do código no tema (as do `unsafeCSS` do app, na largura que o Chromium desenha).
+pub const LINHA: f32 = orquestrador_ui::tema::LINHA_CODIGO;
+pub const TAMANHO: f32 = orquestrador_ui::tema::TAMANHO_CODIGO;
+pub const FONTE: &str = orquestrador_ui::tema::FONTE_CODIGO;
 /// Vão entre as colunas do lado a lado.
 pub const VAO: f32 = 40.;
 /// `padding-block` da `pre` no lado a lado com quebra.
@@ -28,6 +28,11 @@ pub const MARGEM_LADO: f32 = 8.;
 /// Divisor: cada lado com pelo menos 15%.
 pub const MIN_PCT: f32 = 15.;
 pub const MAX_PCT: f32 = 85.;
+/// `text-wrap: pretty`: linhas finais refeitas e a fração da largura abaixo da qual a última linha é curta.
+const MAX_LINHAS_PRETTY: usize = 4;
+const ULTIMA_LINHA_MINIMA: f32 = 0.25;
+/// Menor medida do layout do Chromium (`LayoutUnit`).
+const UNIDADE: f32 = 1. / 64.;
 /// Pixels por linha de roda do mouse (o Chromium rola 100 px por entalhe de 3 linhas).
 const PIXELS_POR_LINHA: f32 = 100. / 3.;
 
@@ -140,6 +145,116 @@ impl Exibido {
     }
 }
 
+/// `totalLines` do `DiffHunksRenderer`: o fim do último bloco em cada lado e as linhas de cada lado no patch.
+fn total_linhas(patch: &str, modelo: &Modelo) -> usize {
+    let fim = crate::comparar::intervalos(patch).last().map_or(0, |b| (b.novo + b.novo_n).max(b.antigo + b.antigo_n));
+    let novas = modelo.linhas.iter().filter(|l| l.tipo != Tipo::Removida).count();
+    let antigas = modelo.linhas.iter().filter(|l| l.tipo != Tipo::Incluida).count();
+    fim.max(novas).max(antigas)
+}
+
+/// Quebra de linha do Chromium com `white-space: pre-wrap`, `word-break: break-word` e o `text-wrap: pretty` que o
+/// tema do Lobe UI põe no `html` (herdado pelo diff): quebra depois de espaços e de hífen antes de letra; os espaços no
+/// fim da linha ficam pendurados; a palavra que não cabe sozinha quebra no último caractere que cabe. Devolve o início
+/// (byte) de cada linha depois da primeira.
+fn quebrar_linha(texto: &str, util: f32, largura: &mut dyn FnMut(char) -> f32) -> Vec<usize> {
+    let cs: Vec<(usize, char)> = texto.char_indices().collect();
+    // Segmentos: início, fim do conteúdo visível e fim com os espaços, por índice em `cs`; e as larguras das duas partes.
+    let mut seg: Vec<(usize, usize, f32, f32)> = Vec::new();
+    let mut i = 0;
+    while i < cs.len() {
+        let ini = i;
+        while i < cs.len() && cs[i].1 != ' ' {
+            let hifen = cs[i].1 == '-' && i > ini && cs.get(i + 1).is_some_and(|c| c.1.is_alphabetic());
+            i += 1;
+            if hifen {
+                break;
+            }
+        }
+        let vis = i;
+        while i < cs.len() && cs[i].1 == ' ' {
+            i += 1;
+        }
+        let lw: f32 = (ini..vis).map(|k| largura(cs[k].1)).sum();
+        let ew: f32 = (vis..i).map(|k| largura(cs[k].1)).sum();
+        seg.push((ini, vis, lw, ew));
+    }
+    let mut out = Vec::new();
+    // Linhas da passada gulosa, pelo segmento que abre cada uma (sem quebra dentro de palavra).
+    let mut linhas = vec![0usize];
+    let mut forcada = false;
+    let mut w = 0.;
+    for (n, &(ini, vis, lw, ew)) in seg.iter().enumerate() {
+        if w > 0. && w + lw > util {
+            out.push(cs[ini].0);
+            linhas.push(n);
+            w = 0.;
+        }
+        if w == 0. && lw > util {
+            // `break-word`: a palavra é cortada onde a linha enche (ao menos um caractere por linha).
+            forcada = true;
+            for k in ini..vis {
+                let c = largura(cs[k].1);
+                if w > 0. && w + c > util {
+                    out.push(cs[k].0);
+                    w = 0.;
+                }
+                w += c;
+            }
+        } else {
+            w += lw;
+        }
+        w += ew;
+    }
+    // `text-wrap: pretty` (o `ScoreLineBreaker` do Chromium): sem palavra cortada e com a última linha curta, as
+    // últimas 4 linhas são refeitas pelo menor custo (folga² de cada linha; a última só conta se ficar curta).
+    let ultima = |a: usize| seg[a..].iter().map(|s| s.2 + s.3).sum::<f32>() - seg.last().map_or(0., |s| s.3);
+    if forcada || linhas.len() < 2 || ultima(*linhas.last().unwrap()) >= util * ULTIMA_LINHA_MINIMA {
+        return out;
+    }
+    let base = linhas[linhas.len().saturating_sub(MAX_LINHAS_PRETTY)];
+    let largura_linha = |a: usize, b: usize| seg[a..b].iter().map(|s| s.2 + s.3).sum::<f32>() - seg[b - 1].3;
+    let n = seg.len();
+    // custo[j]: menor custo das linhas de `base` até o segmento `j` (exclusivo), começando linha em `j`.
+    let mut custo = vec![f32::INFINITY; n + 1];
+    let mut de = vec![usize::MAX; n + 1];
+    custo[base] = 0.;
+    for b in base + 1..=n {
+        for a in base..b {
+            if !custo[a].is_finite() {
+                continue;
+            }
+            let lw = largura_linha(a, b);
+            if lw > util {
+                continue;
+            }
+            let folga = util - lw;
+            let c = if b < n { folga * folga } else if lw >= util * ULTIMA_LINHA_MINIMA { 0. } else { folga * folga };
+            if custo[a] + c < custo[b] {
+                custo[b] = custo[a] + c;
+                de[b] = a;
+            }
+        }
+    }
+    if !custo[n].is_finite() {
+        return out;
+    }
+    let mut inicios = Vec::new();
+    let mut b = n;
+    while b != base {
+        let a = de[b];
+        if a != base {
+            inicios.push(cs[seg[a].0].0);
+        }
+        b = a;
+    }
+    inicios.reverse();
+    let corte = if base == 0 { 0 } else { cs[seg[base].0].0 };
+    out.retain(|&q| q <= corte && base != 0);
+    out.extend(inicios);
+    out
+}
+
 /// Uma unidade de navegação: as fileiras (inclusive) que ela ocupa em cada modo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FaixaUnidade {
@@ -238,6 +353,8 @@ pub struct Comparador {
     larguras: Option<Vec<f32>>,
     medidas: Option<Medidas>,
     pub caixa: Bounds<Pixels>,
+    /// Largura mínima do número em dígitos: os do total de linhas (`--diffs-min-number-column-width-default`).
+    digitos_min: usize,
     pub selecao: Option<Selecao>,
     arraste: Option<Arraste>,
 }
@@ -257,6 +374,7 @@ impl Comparador {
             f.unificado = Some(f.unificado.map_or((un, un), |(a, b)| (a.min(un), b.max(un))));
         }
         let lado = !modelo.arquivo_novo;
+        let digitos_min = total_linhas(patch, &modelo).to_string().len();
         Comparador {
             modelo: Rc::new(modelo),
             exibidos,
@@ -274,6 +392,7 @@ impl Comparador {
             larguras: None,
             medidas: None,
             caixa: Bounds::default(),
+            digitos_min,
             selecao: None,
             arraste: None,
         }
@@ -408,7 +527,8 @@ impl Comparador {
         let f = fonte();
         let id = ts.resolve_font(&f);
         let tam = px(TAMANHO);
-        let ch = ts.ch_width(id, tam).map(f32::from).unwrap_or(TAMANHO * 0.55);
+        // O `ch` do CSS é o avanço do "0" (o `ch_width` do GPUI mede outro glyph e dá 7,2 px contra 8,5 no Consolas).
+        let ch = ts.advance(id, tam, '0').map(|s| f32::from(s.width)).unwrap_or(TAMANHO * 0.55);
         // O sinal (U+2212 pode vir de outra fonte) é medido moldado, como o navegador o desenha.
         let largura = |s: &str| {
             f32::from(ts.shape_line(SharedString::from(s.to_string()), tam, &[corrida(s.len(), &f, cores::numero())], None).width)
@@ -443,7 +563,7 @@ impl Comparador {
             .collect()
     }
 
-    /// Calha de uma coluna: `padding-left: 2ch`, número com no mínimo 3ch, o sinal −/+ com 4 px de margem nas linhas
+    /// Calha de uma coluna: `padding-left: 2ch`, número com no mínimo os dígitos do total de linhas, o sinal −/+ com 4 px de margem nas linhas
     /// mudadas, `padding-right` (4 px no lado a lado, 1ch no unificado) e a borda de 2 px.
     fn largura_calha(&self, m: Medidas, b: bool) -> f32 {
         let fileiras = self.modelo.fileiras(self.lado);
@@ -456,10 +576,10 @@ impl Comparador {
                     let n = self.modelo.numero(c, b, self.lado).unwrap_or(0);
                     let digitos = n.max(1).ilog10() as f32 + 1.;
                     let mudada = self.modelo.linhas[i].tipo != Tipo::Contexto;
-                    2. * m.ch + (digitos * m.ch).max(3. * m.ch) + if mudada { 4. + m.sinal } else { 0. } + pad_d
+                    2. * m.ch + digitos.max(self.digitos_min as f32) * m.ch + if mudada { 4. + m.sinal } else { 0. } + pad_d
                 }
-                // `[data-gutter-buffer]`: 2ch + 3ch + 1ch.
-                Celula::SemQuebra(_) | Celula::Vazia => 6. * m.ch,
+                // `[data-gutter-buffer]`: 2ch, o mínimo do número e 1ch.
+                Celula::SemQuebra(_) | Celula::Vazia => (3 + self.digitos_min) as f32 * m.ch,
                 Celula::Nada => 0.,
             };
             maior = maior.max(w);
@@ -477,13 +597,10 @@ impl Comparador {
         let m = self.medidas(window);
         let larguras = self.larguras(window);
         let ts = window.text_system().clone();
-        let mut quebrador = ts.line_wrapper(fonte(), px(TAMANHO));
-        let mut quebrar = |texto: &str, util: f32| -> Vec<usize> {
-            quebrador
-                .wrap_line(&[gpui_kit::LineFragment::text(texto)], px(util), gpui_kit::IndentAdjustment::NoIndent)
-                .map(|b| b.ix)
-                .collect()
-        };
+        let id = ts.resolve_font(&fonte());
+        let mut cache: std::collections::HashMap<char, f32> = std::collections::HashMap::new();
+        let mut avanco = |c: char| *cache.entry(c).or_insert_with(|| ts.advance(id, px(TAMANHO), c).map_or(TAMANHO, |s| f32::from(s.width)));
+        let mut quebrar = |texto: &str, util: f32| quebrar_linha(texto, util, &mut avanco);
         let g = self.calcular(largura, m, &larguras, &mut quebrar);
         self.larguras = Some(larguras);
         g
@@ -509,9 +626,10 @@ impl Comparador {
             colunas.txt_a = (n, largura.max(n));
             colunas.centro = largura / 2.;
         }
-        // Largura útil do texto: `padding-inline: 1ch` e, à esquerda do lado a lado, a borda de 1 px.
-        let util_a = (colunas.txt_a.1 - colunas.txt_a.0 - 2. * m.ch - if self.lado { 1. } else { 0. }).max(m.ch);
-        let util_b = (colunas.txt_b.1 - colunas.txt_b.0 - 2. * m.ch).max(m.ch);
+        // Largura útil do texto: `padding-inline: 1ch` e, à esquerda do lado a lado, a borda de 1 px. O Chromium mede em
+        // unidades de 1/64 px: um texto exatamente da largura útil já não cabe.
+        let util_a = (colunas.txt_a.1 - colunas.txt_a.0 - 2. * m.ch - if self.lado { 1. } else { 0. } - UNIDADE).max(m.ch);
+        let util_b = (colunas.txt_b.1 - colunas.txt_b.0 - 2. * m.ch - UNIDADE).max(m.ch);
         let fileiras = self.modelo.fileiras(self.lado);
         let mut quebras = Vec::with_capacity(fileiras.len());
         let mut topos = Vec::with_capacity(fileiras.len() + 1);
@@ -527,7 +645,7 @@ impl Comparador {
                     Celula::SemQuebra(_) => (SEM_QUEBRA, SEM_QUEBRA.len() as f32 * m.ch),
                     _ => continue,
                 };
-                if w > util + 0.01 {
+                if w > util {
                     q[k] = quebrar(texto, util);
                 }
                 linhas = linhas.max(q[k].len() + 1);
@@ -1101,10 +1219,7 @@ mod testes {
         let m = Medidas { ch: 8., sinal: 8., ascent: 11., descent: 3. };
         let larguras: Vec<f32> = c.exibidos.iter().map(|e| e.texto.chars().count() as f32 * 8.).collect();
         c.caixa = Bounds::new(point(px(0.), px(0.)), size(px(largura), px(alto)));
-        let mut quebrar = |t: &str, util: f32| -> Vec<usize> {
-            let n = (util / 8.).floor().max(1.) as usize;
-            t.char_indices().map(|(i, _)| i).skip(n).step_by(n).collect()
-        };
+        let mut quebrar = |t: &str, util: f32| quebrar_linha(t, util, &mut |_| 8.);
         c.calcular(largura, m, &larguras, &mut quebrar)
     }
 
@@ -1129,12 +1244,13 @@ mod testes {
     fn geometria_do_lado_a_lado() {
         let mut c = comparador(LONGO, None);
         let g = medir(&mut c, 500., 300.);
-        // Calha: 2ch + 3ch + 4 + sinal + 4 + borda 2 = 58; o resto dividido 50/50 depois do vão de 40.
-        assert_eq!(g.colunas.num_a, (0., 58.));
-        assert_eq!(g.colunas.txt_a, (58., 58. + 172.));
-        assert_eq!(g.colunas.num_b, (270., 328.));
+        // Calha: 2ch + 1ch (6 linhas no total: um dígito) + 4 + sinal + 4 + borda 2 = 42; o resto dividido 50/50
+        // depois do vão de 40.
+        assert_eq!(g.colunas.num_a, (0., 42.));
+        assert_eq!(g.colunas.txt_a, (42., 42. + 188.));
+        assert_eq!(g.colunas.num_b, (270., 312.));
         assert_eq!(g.colunas.centro, 250.);
-        // Margem de 8 px; a linha de 50 caracteres quebra em 172 - 16 - 1 = 155 px úteis (19 caracteres): 3 linhas.
+        // Margem de 8 px; a linha de 50 caracteres quebra em 188 - 16 - 1 = 171 px úteis (21 caracteres): 3 linhas.
         assert_eq!(g.topos[0], 8.);
         assert_eq!(g.topos[1], 27.);
         assert_eq!(g.topos[2] - g.topos[1], 3. * LINHA, "a fileira tem a altura do lado mais alto");
@@ -1142,8 +1258,35 @@ mod testes {
         // Divisor a 30%: o original encolhe e o vão acompanha.
         c.pct = 30.;
         let g = medir(&mut c, 500., 300.);
-        assert!((g.colunas.txt_a.1 - (58. + 344. * 0.3)).abs() < 0.01);
+        assert!((g.colunas.txt_a.1 - (42. + 376. * 0.3)).abs() < 0.01);
         assert!((g.colunas.centro - (g.colunas.txt_a.1 + 20.)).abs() < 0.01);
+    }
+
+    #[test]
+    fn numero_tem_os_digitos_do_total_de_linhas() {
+        // Bloco até a linha 120: três dígitos de mínimo, mesmo nas linhas de um dígito.
+        let mut c = comparador("--- a/x
++++ b/x
+@@ -118,2 +118,2 @@
+ a
+-b
++c
+", None);
+        let g = medir(&mut c, 500., 300.);
+        assert_eq!(g.colunas.num_a, (0., 16. + 24. + 4. + 8. + 4. + 2.));
+        // Arquivo de 9 linhas: o fim do bloco (1 + 9) já pede dois.
+        let mut p = String::from("--- a/x
++++ b/x
+@@ -1,9 +1,9 @@
+-a
++b
+");
+        for _ in 0..8 {
+            p.push_str(" x
+");
+        }
+        let mut c = comparador(&p, None);
+        assert_eq!(medir(&mut c, 500., 300.).colunas.num_a.1, 16. + 16. + 4. + 8. + 4. + 2.);
     }
 
     #[test]
@@ -1152,7 +1295,7 @@ mod testes {
         c.definir_lado(false);
         let g = medir(&mut c, 500., 300.);
         // Calha do unificado: padding-right de 1ch.
-        assert_eq!(g.colunas.num_a, (0., 16. + 24. + 4. + 8. + 8. + 2.));
+        assert_eq!(g.colunas.num_a, (0., 16. + 8. + 4. + 8. + 8. + 2.));
         assert_eq!(g.topos[0], 0.);
         assert_eq!(g.topos.len(), 7);
         assert_eq!(g.altura, g.topos[6]);
@@ -1205,6 +1348,37 @@ mod testes {
         c.selecao = Some(Selecao { b: true, ancora: Ponto { fileira: 0, byte: 0 }, foco: Ponto { fileira: 1, byte: 1 } });
         assert_eq!(c.texto_selecionado().as_deref(), Some("	b
 x"));
+    }
+
+    #[test]
+    fn quebra_como_o_chromium() {
+        let q = |t: &str, n: f32| quebrar_linha(t, n * 8., &mut |_| 8.);
+        // O espaço na quebra fica pendurado na linha de cima.
+        assert_eq!(q("itor:<project>`), validada ao ler;", 17.), vec![18]);
+        // Sem quebra depois da barra; depois do hífen, sim.
+        assert_eq!(q("'@lobehub/ui/base-ui';", 17.), vec![17]);
+        assert_eq!(q("'@lobehub/ui/base-ui';", 18.), vec![18]);
+        assert_eq!(q("a - b", 1.), vec![2, 4]);
+        // Texto exatamente da largura cabe.
+        assert_eq!(q("abcd", 4.), Vec::<usize>::new());
+        assert_eq!(q("abcde", 2.), vec![2, 4]);
+        // `text-wrap: pretty`: a última linha curta puxa a palavra de cima (casos das capturas, 49 colunas).
+        let t = "// layout externo, salvo na recuperação), `onRestoreLayout` (chamado uma vez na montagem com o layout salvo), `onReveal` (revelar no Explorer),";
+        let linhas = |t: &str, q: Vec<usize>| {
+            let mut v = Vec::new();
+            let mut a = 0;
+            for b in q.into_iter().chain([t.len()]) {
+                v.push(t[a..b].trim_end().to_string());
+                a = b;
+            }
+            v
+        };
+        assert_eq!(linhas(t, q(t, 49.4)).last().unwrap(), "no Explorer),");
+        let t = "import { MediaView, mediaOf } from './media-view';";
+        assert_eq!(linhas(t, q(t, 49.4)), ["import { MediaView, mediaOf } from", "'./media-view';"]);
+        // Com palavra cortada, fica a passada gulosa.
+        let t = "// Recuperação: localStorage por projeto (`orquestrador.editor:<project>`), validada ao ler; nunca grava no disco.";
+        assert_eq!(linhas(t, q(t, 17.9)).last().unwrap(), "disco.");
     }
 
     #[test]

@@ -1,0 +1,13 @@
+[package]
+name = "orquestrador-compat-tauri"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Prova de compatibilidade com o updater do 0.1.48 (tauri-plugin-updater 2.14.1), fora do workspace do app.
+[workspace]
+
+[dependencies]
+tauri = { version = "=2.12.3", default-features = false, features = ["test"] }
+tauri-plugin-updater = "=2.14.1"
+serde_json = "1"

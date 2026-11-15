@@ -188,9 +188,7 @@ impl FormEscolha {
             .p(px(3.))
             .gap(px(4.))
             .rounded(tema::RAIO_SM)
-            .bg(cor::pitch_black())
-            .border_1()
-            .border_color(cor::hairline());
+            .bg(cor::pitch_black());
         for t in &self.opcoes.tools {
             let ativo = t.name == self.escolha.tool;
             let nome = t.name.clone();
@@ -319,9 +317,10 @@ impl Render for FormEscolha {
             .w(px(460.))
             .max_w(janela.width - px(32.))
             .px(px(16.))
-            .pt(px(16.))
+            .pt(px(11.))
+            .pb(px(16.))
             .rounded(tema::RAIO_LG)
-            .bg(gpui_kit::rgb(0x141414))
+            .bg(gpui_kit::rgb(0x1a1a1a))
             .border_1()
             .border_color(gpui_kit::rgba(0xffffff1f))
             .text_color(cor::text_primary())
@@ -404,7 +403,7 @@ impl Render for FormEscolha {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(gpui_kit::rgba(0x000000a6))
+                    .bg(crate::fechamento::MASCARA)
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.cancelar(cx)))
                     .child(caixa),
             ),

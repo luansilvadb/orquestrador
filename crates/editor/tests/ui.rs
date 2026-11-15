@@ -335,3 +335,46 @@ fn esc_no_arrasto_entre_grupos_nao_move(cx: &mut TestAppContext) {
     arrastar(&mut vcx, false);
     assert!(nomes(&mut vcx, &a, Grupo::A).is_empty(), "sem Esc, a aba vai para o outro grupo");
 }
+
+#[gpui_kit::test]
+fn pre_carregar_le_antes_de_abrir(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("pre");
+    let (j, a) = montar(cx, &tmp.raiz(), Rc::default());
+    com(cx, j, &a, |a, w, cx| a.pre_carregar("src/a.ts", w, cx));
+    assert!(cx.read(|cx| a.read(cx).pre_carregado("src/a.ts")));
+    // Abrir logo depois usa o que já foi lido, mesmo que o disco mude no meio.
+    std::fs::write(tmp.0.join("src/a.ts"), "mudou\n").unwrap();
+    com(cx, j, &a, |a, w, cx| a.abrir_arquivo("src/a.ts", Abertura { permanente: true, ..Default::default() }, w, cx));
+    let e = editor_ativo(cx, &a);
+    assert_eq!(cx.read(|cx| e.read(cx).text().to_string()), "const a = 1;\nconst b = 2;\n");
+    assert!(!cx.read(|cx| a.read(cx).pre_carregado("src/a.ts")), "a entrada é consumida ao abrir");
+    // Aberto, mídia e caminho vazio não pré-carregam.
+    com(cx, j, &a, |a, w, cx| {
+        a.pre_carregar("src/a.ts", w, cx);
+        a.pre_carregar("assets/logo.png", w, cx);
+        a.pre_carregar("", w, cx);
+    });
+    assert!(!cx.read(|cx| a.read(cx).pre_carregado("src/a.ts")));
+    assert!(!cx.read(|cx| a.read(cx).pre_carregado("assets/logo.png")));
+}
+
+#[gpui_kit::test]
+fn rascunho_de_conflito_marca_sujo_recupera_e_descarta(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("conflito");
+    let mem: Armazem = Rc::default();
+    let (j, a) = montar(cx, &tmp.raiz(), mem.clone());
+    com(cx, j, &a, |a, w, cx| a.abrir_alvo(Alvo::Conflict { path: "src/c.ts".into() }, Abertura { permanente: true, ..Default::default() }, w, cx));
+    com(cx, j, &a, |a, _, cx| a.definir_rascunho_conflito("src/c.ts", "<<<<<<< a\n", "resolvido\n", "r1", cx));
+    assert_eq!(cx.read(|cx| a.read(cx).nao_salvos()), ["src/c.ts"], "aba de conflito suja entra no fechar com não salvos");
+    assert_eq!(cx.read(|cx| a.read(cx).rascunho_conflito("src/c.ts")).map(|r| r.draft), Some("resolvido\n".into()));
+    com(cx, j, &a, |a, _, cx| a.gravar_recuperacao(cx));
+    assert!(mem.borrow().0.values().any(|v| v.contains("resolvido")), "o rascunho entra na recuperação");
+    let relidos = Rc::new(RefCell::new(Vec::<String>::new()));
+    let r = relidos.clone();
+    com(cx, j, &a, |a, w, cx| {
+        a.ao_descartar_conflito(Rc::new(move |c: &str, _: &mut gpui_kit::Window, _: &mut gpui_kit::App| r.borrow_mut().push(c.to_string())));
+        a.descartar_tudo(w, cx);
+    });
+    assert!(cx.read(|cx| a.read(cx).nao_salvos()).is_empty());
+    assert_eq!(*relidos.borrow(), ["src/c.ts"], "a vista do conflito é avisada para reler");
+}

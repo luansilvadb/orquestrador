@@ -1,6 +1,7 @@
-//! Limite do sistema: tecla → eco no ConPTY sem o app. Abre 4 ConPTYs com `node flood.mjs` (6 mil linhas/s cada, lidas
+//! Limite do sistema: tecla → eco no ConPTY sem o app. Abre 4 ConPTYs com `xtask despejar` (6 mil linhas/s cada, lidas
 //! e descartadas) e um quinto com pwsh, onde escreve uma letra e mede até ela voltar na leitura. Mesmo cenário da bancada
-//! `bancada_latencia` de `crates/app`. Uso: `cargo run --release -p orquestrador-core --example eco_conpty -- <flood.mjs>`.
+//! `bancada_latencia` de `crates/app`. Uso: `cargo build -p xtask` e
+//! `cargo run --release -p orquestrador-core --example eco_conpty -- <caminho do xtask.exe>`.
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::sync::mpsc::{channel, Receiver};
@@ -39,7 +40,7 @@ fn main() {
     if std::env::var_os("ORQ_TIMER").is_some() {
         unsafe { timeBeginPeriod(1) };
     }
-    let flood = std::env::args().nth(1).expect("caminho do flood.mjs");
+    let flood = std::env::args().nth(1).expect("caminho do xtask.exe (gerador `despejar`)");
     let amostras: usize = std::env::var("ORQ_AMOSTRAS").ok().and_then(|v| v.parse().ok()).unwrap_or(250);
     let historico = std::env::var_os("APPDATA")
         .map(|a| std::path::PathBuf::from(a).join(r"Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"));
@@ -100,8 +101,8 @@ fn main() {
     let mut floods = Vec::new();
     for tag in ["1", "2", "3", "4"] {
         let par = sistema.openpty(TAMANHO).unwrap();
-        let mut cmd = CommandBuilder::new("node");
-        cmd.args([flood.as_str(), "900000", tag, "6000"]);
+        let mut cmd = CommandBuilder::new(&flood);
+        cmd.args(["despejar", "900000", tag, "6000"]);
         let filho = par.slave.spawn_command(cmd).unwrap();
         drop(par.slave);
         let mut leitor = par.master.try_clone_reader().unwrap();

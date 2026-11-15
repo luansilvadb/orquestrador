@@ -1,0 +1,15 @@
+[package]
+name = "orquestrador-assinador"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Ferramenta de release, fora do workspace do app.
+[workspace]
+
+[dependencies]
+minisign = "0.7"
+minisign-verify = "0.3"
+base64 = "0.22"
+serde_json = "1"
+time = { version = "0.3", features = ["formatting"] }

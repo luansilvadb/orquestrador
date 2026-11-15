@@ -1,6 +1,6 @@
 //! Janela 1400×900 com a coluna do editor na posição das capturas de referência (x 325..828, y 36..878), sobre um
 //! projeto temporário com os textos do mock (`examples/dados`, ver o README).
-//! Uso: cargo run -p orquestrador-editor --example vitrine -- arquivos|varias|menu|lista|dividido|rapido|md-preview|md-codigo|binario|vazio
+//! Uso: cargo run -p orquestrador-editor --example vitrine-editor -- arquivos|varias|menu|lista|dividido|rapido|md-preview|md-codigo|binario|vazio|git-bloco
 use gpui_kit::{div, prelude::*, px, size, App, Bounds, Context, Entity, Window, WindowBounds, WindowOptions};
 use orquestrador_editor::armazem::Chaves;
 use orquestrador_editor::{Abertura, AreaEditor};
@@ -9,6 +9,26 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
+
+/// Base do Git de `src/editor-workspace.tsx` como a do mock do React: a pasta muda as linhas 28, 32 e 96.
+struct GitVitrine(String);
+impl orquestrador_editor::gutter_git::FonteGutter for GitVitrine {
+    fn base(&self, caminho: &str) -> Result<Option<orquestrador_editor::gutter_git::BaseGit>, String> {
+        if caminho != "src/editor-workspace.tsx" {
+            return Ok(None);
+        }
+        let head = self
+            .0
+            .replace("useLayoutEffect, useMemo, useRef, useState,", "useLayoutEffect, useRef, useState,")
+            .replace("import { ChevronDown, Columns2, Ellipsis, Pin, X }", "import { Columns2, Ellipsis, Pin, X }")
+            .replace("readOnly: boolean; size: number };", "readOnly: boolean };");
+        Ok(Some(orquestrador_editor::gutter_git::BaseGit { index: Some(head.clone()), head: Some(head) }))
+    }
+    fn gravar_indice(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
 
 struct Memoria(BTreeMap<String, String>);
 impl Chaves for Memoria {
@@ -78,6 +98,10 @@ fn main() {
         gpui_kit::open_window(opcoes, cx, move |window, cx| {
             let projeto = raiz.to_string_lossy().to_string();
             let area = cx.new(|cx| AreaEditor::com_armazenamento(projeto, Rc::new(RefCell::new(Memoria(BTreeMap::new()))), window, cx));
+            let pasta = std::fs::read_to_string(raiz.join("src/editor-workspace.tsx")).unwrap_or_default().replace("
+", "
+");
+            area.update(cx, |a, cx| a.definir_fonte_git(Arc::new(GitVitrine(pasta)), cx));
             let p = |permanente| Abertura { permanente, ..Default::default() };
             area.update(cx, |a, cx| match modo.as_str() {
                 "varias" => {
@@ -104,6 +128,9 @@ fn main() {
                 "md-preview" | "md-codigo" => a.abrir_arquivo("docs/guia.md", p(true), window, cx),
                 "binario" => a.abrir_arquivo("dados/exportacao.json", p(true), window, cx),
                 "vazio" => {}
+                "git-bloco" => {
+                    a.abrir_arquivo("src/editor-workspace.tsx", Abertura { permanente: true, linha: Some(26), coluna: Some(1), ..Default::default() }, window, cx)
+                }
                 _ => a.abrir_arquivo("src/editor-workspace.tsx", Abertura { permanente: true, linha: Some(26), coluna: Some(1), ..Default::default() }, window, cx),
             });
             let v = cx.new(|_| Vitrine { area: area.clone() });

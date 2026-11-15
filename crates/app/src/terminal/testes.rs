@@ -505,3 +505,19 @@ fn orquestrador_delega_e_executores_aparecem_em_abas(cx: &mut TestAppContext) {
     esperar(cx, janela, Duration::from_secs(10), |cx| texto_da_tela(cx, &v).contains("eco:ola"));
     std::env::remove_var("ORQ_FAKE_DELEGAR");
 }
+
+#[gpui_kit::test]
+fn tab_no_terminal_fica_no_shell(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("tab-shell");
+    let (janela, b) = montar(cx, &tmp, exes_padrao());
+    let ids = abrir_shells(cx, janela, &b, 1);
+    let t = terminais(cx, &b);
+    let v = vista(cx, &t, &ids[0]);
+    let foco = cx.update(|cx| v.read(cx).foco.clone());
+    cx.update_window(janela.into(), |_, window, cx| window.focus(&foco, cx)).expect("janela");
+    desenhar(cx, janela);
+    cx.simulate_keystrokes(janela.into(), "tab shift-tab");
+    desenhar(cx, janela);
+    let ainda = cx.update_window(janela.into(), |_, window, _| foco.is_focused(window)).expect("janela");
+    assert!(ainda, "o Tab global da árvore não tira o foco do terminal");
+}

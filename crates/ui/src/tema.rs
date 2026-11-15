@@ -56,6 +56,11 @@ pub const TEXTO_BODY: Pixels = px(14.);
 pub const TEXTO_MENU: Pixels = px(13.);
 pub const TEXTO_LABEL: Pixels = px(12.);
 pub const TEXTO_MONO: Pixels = px(13.);
+/// Código (editor, comparador e conflito). O React declara Consolas 14 px em linhas de 19 px, mas as capturas medem
+/// ~8,45 px por caractere (o Chromium); no DirectWrite isso é a Consolas a 15,5 px.
+pub const FONTE_CODIGO: &str = "Consolas";
+pub const TAMANHO_CODIGO: f32 = 15.5;
+pub const LINHA_CODIGO: f32 = 19.;
 
 /// Raios.
 pub const RAIO_XS: Pixels = px(4.);

@@ -17,6 +17,9 @@ pub enum Escopo {
     Projeto(String),
 }
 
+/// A máscara dos diálogos do Lobe UI: a cor do painel a 60%, que clareia o preto em vez de escurecer tudo.
+pub(crate) const MASCARA: gpui_kit::Rgba = gpui_kit::Rgba { r: 13. / 255., g: 13. / 255., b: 13. / 255., a: 0.6 };
+
 pub struct Fechamento {
     pub escopo: Escopo,
     /// Arquivos não salvos; os de outro projeto levam "pasta: " na frente.
@@ -29,6 +32,20 @@ pub struct Fechamento {
     aguardando: usize,
     tudo_salvo: bool,
     pub foco: FocusHandle,
+    /// Botão com o foco, na ordem do rodapé; nasce no Cancelar (`autoFocus` no React).
+    pub focado: Resposta,
+}
+
+impl Fechamento {
+    /// Os botões do rodapé, na ordem do Tab; os desativados (salvando) ficam fora, como no navegador.
+    pub fn botoes(&self) -> Vec<Resposta> {
+        let todos = if self.arquivos.is_empty() {
+            vec![Resposta::Cancelar, Resposta::Fechar]
+        } else {
+            vec![Resposta::Cancelar, Resposta::Descartar, Resposta::Salvar]
+        };
+        todos.into_iter().filter(|b| !self.salvando || *b == Resposta::Salvar).collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +107,7 @@ impl Bancada {
             aguardando: 0,
             tudo_salvo: true,
             foco,
+            focado: Resposta::Cancelar,
         });
         cx.notify();
     }
@@ -215,11 +233,46 @@ impl Bancada {
         cx.notify();
     }
 
+    /// O foco fica preso no diálogo (o focus trap do Modal do antd): Tab e Shift+Tab dão a volta nos botões.
+    pub(crate) fn mover_foco_fechamento(&mut self, adiante: bool, cx: &mut Context<Self>) {
+        let Some(f) = self.fechamento.as_mut() else { return };
+        let botoes = f.botoes();
+        let n = botoes.len();
+        if n == 0 {
+            return;
+        }
+        let prox = match (botoes.iter().position(|b| *b == f.focado), adiante) {
+            (Some(i), true) => (i + 1) % n,
+            (Some(i), false) => (i + n - 1) % n,
+            (None, true) => 0,
+            (None, false) => n - 1,
+        };
+        f.focado = botoes[prox];
+        cx.notify();
+    }
+
     fn tecla_fechamento(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        // Foco inicial no Cancelar: Enter recusa o fechamento, como no React; Esc também.
-        if matches!(e.keystroke.key.as_str(), "escape" | "enter") {
-            cx.stop_propagation();
-            self.responder_fechamento(Resposta::Cancelar, window, cx);
+        let Some(f) = self.fechamento.as_ref() else { return };
+        let k = &e.keystroke;
+        let botoes = f.botoes();
+        match k.key.as_str() {
+            "escape" => {
+                cx.stop_propagation();
+                self.responder_fechamento(Resposta::Cancelar, window, cx);
+            }
+            "tab" if !k.modifiers.control && !k.modifiers.alt => {
+                cx.stop_propagation();
+                self.mover_foco_fechamento(!k.modifiers.shift, cx);
+            }
+            // Enter e espaço acionam o botão focado; o Salvar em andamento (loading) não responde.
+            "enter" | "space" => {
+                cx.stop_propagation();
+                let b = f.focado;
+                if botoes.contains(&b) && !(f.salvando && b == Resposta::Salvar) {
+                    self.responder_fechamento(b, window, cx);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -268,22 +321,25 @@ impl Bancada {
             ));
         }
         let salvando = f.salvando;
-        let botao = |id: &'static str, rotulo: SharedString, tipo: u8| {
-            // 0: padrão (com o foco), 1: perigo suave, 2: preenchido.
+        let focado = f.focado;
+        let botao = |id: &'static str, rotulo: SharedString, tipo: u8, resposta: Resposta| {
+            // 0: padrão, 1: perigo suave, 2: preenchido.
+            let borda = if tipo == 2 { 0. } else { 1. };
             div()
+                .relative()
                 .id(id)
                 .flex()
                 .items_center()
                 .justify_center()
                 .h(tema::CAMPO)
-                .px(px(15.))
+                .px(px(12.))
                 .rounded(tema::RAIO_SM)
                 .text_size(tema::TEXTO_BODY)
                 .font_weight(gpui_kit::FontWeight::MEDIUM)
                 .when(tipo == 0, |d| {
                     d.bg(cor::pitch_black())
                         .border_1()
-                        .border_color(cor::focus_blue())
+                        .border_color(cor::hairline())
                         .text_color(cor::text_primary())
                         .hover(|s| s.border_color(rgba(0xffffff4d)))
                 })
@@ -296,12 +352,27 @@ impl Bancada {
                 })
                 .when(tipo == 2, |d| d.bg(rgba(0xffffff1a)).text_color(cor::text_primary()).hover(|s| s.bg(rgba(0xffffff26))))
                 .when(salvando && tipo != 2, |d| d.opacity(0.4))
+                // O anel de foco do antd: contorno de 2 px afastado 2 px da borda, fora do layout.
+                .when(focado == resposta, |d| {
+                    let fora = px(-(4. + borda));
+                    d.child(
+                        div()
+                            .absolute()
+                            .top(fora)
+                            .left(fora)
+                            .right(fora)
+                            .bottom(fora)
+                            .rounded(tema::RAIO_SM + px(4.))
+                            .border_2()
+                            .border_color(gpui_kit::rgb(0x59a2e9)),
+                    )
+                })
                 .child(rotulo)
                 .test_support()
         };
         let encerrar = f.terminais;
         let mut rodape = div().flex().flex_wrap().justify_end().gap(px(8.)).pt(px(24.)).child(
-            botao("fechar-cancelar", "Cancelar".into(), 0)
+            botao("fechar-cancelar", "Cancelar".into(), 0, Resposta::Cancelar)
                 .on_click(cx.listener(|this, _, w, cx| this.responder_fechamento(Resposta::Cancelar, w, cx))),
         );
         if n > 0 {
@@ -311,6 +382,7 @@ impl Bancada {
                         "fechar-descartar",
                         if encerrar { "Descartar e encerrar todos" } else { "Descartar" }.into(),
                         1,
+                        Resposta::Descartar,
                     )
                     .on_click(cx.listener(|this, _, w, cx| this.responder_fechamento(Resposta::Descartar, w, cx))),
                 )
@@ -326,6 +398,7 @@ impl Bancada {
                         }
                         .into(),
                         2,
+                        Resposta::Salvar,
                     )
                     .on_click(cx.listener(|this, _, w, cx| this.responder_fechamento(Resposta::Salvar, w, cx))),
                 );
@@ -335,6 +408,7 @@ impl Bancada {
                     "fechar-encerrar",
                     if f.trabalho.is_some() { "Fechar projeto e encerrar" } else { "Fechar e encerrar todos" }.into(),
                     1,
+                    Resposta::Fechar,
                 )
                 .on_click(cx.listener(|this, _, w, cx| this.responder_fechamento(Resposta::Fechar, w, cx))),
             );
@@ -343,6 +417,9 @@ impl Bancada {
             .id("fechar-confirmacao")
             .track_focus(&f.foco)
             .on_key_down(cx.listener(Self::tecla_fechamento))
+            // O Tab global (árvore) chega como ação antes do `on_key_down`.
+            .on_action(cx.listener(|this, _: &orquestrador_arvore::FocarProximo, _, cx| this.mover_foco_fechamento(true, cx)))
+            .on_action(cx.listener(|this, _: &orquestrador_arvore::FocarAnterior, _, cx| this.mover_foco_fechamento(false, cx)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .occlude()
             .w(px(420.))
@@ -365,7 +442,7 @@ impl Bancada {
                         .w(window.viewport_size().width)
                         .h(window.viewport_size().height)
                         .occlude()
-                        .bg(rgba(0x00000073))
+                        .bg(MASCARA)
                         .flex()
                         .items_center()
                         .justify_center()

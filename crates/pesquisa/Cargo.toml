@@ -15,3 +15,8 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }
+
+[[example]]
+# Nome por crate: exemplos homônimos colidem no diretório de saída e o `cargo test` paralelo falha com LNK1104.
+name = "vitrine-pesquisa"
+path = "examples/vitrine.rs"

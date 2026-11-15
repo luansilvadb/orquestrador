@@ -37,8 +37,6 @@ $variaveis = @{
     VCPKG_ROOT      = $vcpkg
     VCPKGRS_TRIPLET = $triplet
     LIBCLANG_PATH   = (Join-Path $libclang 'clang\native')
-    # O bindgen do build script do ffmpeg-sys-next estoura a pilha sem otimização.
-    CARGO_PROFILE_DEV_BUILD_OVERRIDE_OPT_LEVEL = '3'
 }
 foreach ($v in $variaveis.GetEnumerator()) {
     [Environment]::SetEnvironmentVariable($v.Key, $v.Value, 'User')

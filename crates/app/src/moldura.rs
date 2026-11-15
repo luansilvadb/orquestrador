@@ -60,6 +60,7 @@ fn menu_arquivo(
 impl Render for Bancada {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title(&self.titulo());
+        crate::medir::quadro(window, cx);
         self.garantir_telas(window, cx);
         self.drenar_pendentes(window, cx);
         self.aplicar_telas(window, cx);
@@ -201,7 +202,8 @@ impl Bancada {
             self.passo_pesquisa(if m.shift { -1 } else { 1 }, cx);
             return;
         }
-        if so_ctrl && tecla == "p" && projeto && !no_terminal {
+        // Como no React (`input, textarea`, o que inclui a área de texto do Monaco): num campo de texto a tecla segue adiante.
+        if so_ctrl && tecla == "p" && projeto && !no_terminal && !gpui_kit::component::WindowExt::has_focused_input(window, cx) {
             consumir(cx);
             self.no_editor(window, cx, |e, w, cx| e.abrir_rapido(w, cx));
         }
@@ -430,11 +432,12 @@ impl Bancada {
             .child(botao)
     }
 
-    /// A dica dos botões da janela: 4 px abaixo da titlebar, borda direita na do botão.
+    /// A dica dos botões da janela: 4 px abaixo da titlebar e 4 px para dentro da borda direita do botão, como no React.
     pub(crate) fn dica_el(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
         let (texto, coluna) = self.dica_janela?;
-        let direita = window.viewport_size().width - tema::BOTAO_JANELA * coluna as f32;
-        let dica = Tooltip::new(texto).build(window, cx);
+        let direita = window.viewport_size().width - tema::BOTAO_JANELA * coluna as f32 - px(4.);
+        // Sem a margem de 12 px que o Kit põe em volta da dica (ela deslocaria a caixa).
+        let dica = Tooltip::new(texto).m_0().build(window, cx);
         Some(
             gpui_kit::deferred(
                 gpui_kit::anchored()

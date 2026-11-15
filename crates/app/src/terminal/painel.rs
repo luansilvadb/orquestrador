@@ -1263,12 +1263,3 @@ fn texto_da_escolha(c: &Choice, compacto: bool) -> impl IntoElement {
             d.child(div().flex_none().font_family(super::vista::FONTE).text_color(cor::text_secondary()).child(c.effort.clone()))
         })
 }
-
-#[cfg(test)]
-pub fn numero_livre(executores: &[Executor]) -> usize {
-    let mut n = 1;
-    while executores.iter().any(|e| e.n == n) {
-        n += 1;
-    }
-    n
-}

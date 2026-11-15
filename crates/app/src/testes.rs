@@ -601,8 +601,246 @@ fn dica_do_fechar_alinha_a_direita(cx: &mut TestAppContext) {
         window.render_frame(cx);
         let dica = window.find("dica-janela");
         let largura = window.viewport_size().width;
-        assert!((dica.bounds().right() - largura).abs() < gpui_kit::px(1.), "borda direita na da janela");
+        assert!((dica.bounds().right() - (largura - gpui_kit::px(4.))).abs() < gpui_kit::px(1.), "borda direita 4 px dentro da janela");
         assert_eq!(dica.bounds().top(), crate::tema::TITLEBAR + gpui_kit::px(4.));
     })
     .expect("janela");
+}
+
+#[gpui_kit::test]
+fn tab_percorre_os_botoes_do_fechamento(cx: &mut TestAppContext) {
+    use crate::fechamento::Resposta;
+    let tmp = Tmp::new("fechar-tab");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "p");
+    sujar_readme(cx, janela, &bancada, &id);
+    let fechar = gpui_kit::SharedString::from(format!("fechar-aba-{id}"));
+    let focado = |cx: &mut TestAppContext| cx.update(|cx| bancada.read(cx).fechamento.as_ref().map(|f| f.focado));
+    cx.update_window(janela.into(), |_, window, cx| window.click(fechar.clone(), cx)).expect("janela");
+    desenhar(cx, janela);
+    assert_eq!(focado(cx), Some(Resposta::Cancelar), "nasce no Cancelar");
+    let mut passos = Vec::new();
+    for tecla in ["tab", "tab", "tab", "shift-tab", "shift-tab"] {
+        cx.simulate_keystrokes(janela.into(), tecla);
+        desenhar(cx, janela);
+        passos.push(focado(cx).expect("diálogo aberto"));
+    }
+    use Resposta::*;
+    assert_eq!(passos, [Descartar, Salvar, Cancelar, Salvar, Descartar], "dá a volta nos dois sentidos");
+    // Enter aciona o botão focado (Descartar), não mais o Cancelar.
+    cx.simulate_keystrokes(janela.into(), "enter");
+    cx.run_until_parked();
+    assert!(cx.update(|cx| bancada.read(cx).abas.is_empty()), "Descartar fechou o projeto");
+}
+
+#[gpui_kit::test]
+fn ctrl_p_nao_e_consumido_em_campo_de_texto(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt as _;
+    let tmp = Tmp::new("ctrl-p");
+    let (janela, bancada, _) = com_projeto(cx, &tmp, "p");
+    // Os atalhos de projeto esperam o portão dos CLIs, como o `canShortcut` do React.
+    let limite = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !cx.update(|cx| bancada.read(cx).terminais.read(cx).pronto(cx)) {
+        assert!(std::time::Instant::now() < limite, "portão pronto");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        cx.run_until_parked();
+    }
+    // O arquivo rápido nasce com o foco no próprio campo: o campo focado diz se ele abriu.
+    let campo = |cx: &mut TestAppContext| {
+        cx.update_window(janela.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.focused_input(cx)
+        })
+        .expect("janela")
+    };
+    // Com o foco no campo da pesquisa a tecla segue para o campo, como no React.
+    cx.update_window(janela.into(), |_, window, cx| bancada.update(cx, |b, cx| b.abrir_pesquisa(window, cx))).expect("janela");
+    desenhar(cx, janela);
+    let pesquisa = campo(cx).expect("campo da pesquisa focado");
+    cx.simulate_keystrokes(janela.into(), "ctrl-p");
+    cx.run_until_parked();
+    assert_eq!(campo(cx), Some(pesquisa.clone()), "num campo, Ctrl+P não abre o arquivo rápido");
+    // Fora de campos, abre.
+    cx.update_window(janela.into(), |_, window, cx| {
+        let f = bancada.read(cx).foco.clone();
+        window.focus(&f, cx);
+    })
+    .expect("janela");
+    desenhar(cx, janela);
+    assert!(campo(cx).is_none());
+    cx.simulate_keystrokes(janela.into(), "ctrl-p");
+    cx.run_until_parked();
+    let aberto = campo(cx);
+    assert!(aberto.is_some() && aberto != Some(pesquisa), "fora de campos, Ctrl+P abre o arquivo rápido e foca o campo dele");
+}
+
+#[gpui_kit::test]
+fn tab_entra_na_arvore(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("tab-arvore");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "p");
+    cx.update(|cx| bancada.update(cx, |b, cx| b.ir(Rota::Arquivos, cx)));
+    desenhar(cx, janela);
+    let arvore = cx.update(|cx| bancada.read(cx).telas[&id].arvore.clone());
+    let mut chegou = false;
+    for _ in 0..40 {
+        cx.simulate_keystrokes(janela.into(), "tab");
+        desenhar(cx, janela);
+        chegou = cx
+            .update_window(janela.into(), |_, window, cx| {
+                gpui_kit::Focusable::focus_handle(arvore.read(cx), cx).contains_focused(window, cx)
+            })
+            .expect("janela");
+        if chegou {
+            break;
+        }
+    }
+    assert!(chegou, "Tab chega ao painel da árvore");
+}
+
+#[gpui_kit::test]
+fn voltar_da_pip_ativa_o_projeto_e_a_aba_da_midia(cx: &mut TestAppContext) {
+    use crate::telas::Conteudo;
+    let tmp = Tmp::new("pip");
+    let (janela, bancada, a) = com_projeto(cx, &tmp, "a");
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../midia/tests/fixtures/logo.png"), tmp.0.join("a").join("logo.png"))
+        .expect("png");
+    let editor = cx.update(|cx| bancada.read(cx).telas[&a].editor.clone());
+    cx.update_window(janela.into(), |_, window, cx| {
+        let op = orquestrador_editor::Abertura { permanente: true, ..Default::default() };
+        editor.update(cx, |e, cx| {
+            e.abrir_arquivo("logo.png", op, window, cx);
+            e.abrir_arquivo("README.md", op, window, cx);
+        });
+    })
+    .expect("janela");
+    desenhar(cx, janela);
+    let ativa_do_editor = |cx: &mut TestAppContext| {
+        cx.update(|cx| editor.read(cx).workspace().aba_focada().map(|t| t.alvo.clone()))
+    };
+    assert!(matches!(ativa_do_editor(cx), Some(orquestrador_editor::Alvo::File { path, .. }) if path == "README.md"));
+    let pasta_b = tmp.0.join("b");
+    std::fs::create_dir_all(&pasta_b).expect("b");
+    cx.update(|cx| bancada.update(cx, |b, cx| b.abrir(pasta_b, cx)));
+    cx.run_until_parked();
+    desenhar(cx, janela);
+    assert_ne!(cx.update(|cx| bancada.read(cx).ativa.clone()).as_deref(), Some(a.as_str()));
+
+    let midia = cx.update(|cx| {
+        let t = &bancada.read(cx).telas[&a];
+        let c = t.conteudos.borrow();
+        c.iter().find_map(|(_, v)| if let Conteudo::Midia(w) = v { w.upgrade() } else { None }).expect("aba de mídia")
+    });
+    cx.update(|cx| midia.update(cx, |_, cx| cx.emit(orquestrador_midia::EventoMidia::VoltarParaAba)));
+    cx.run_until_parked();
+    desenhar(cx, janela);
+    assert_eq!(cx.update(|cx| bancada.read(cx).ativa.clone()).as_deref(), Some(a.as_str()), "o projeto da mídia volta");
+    assert!(matches!(ativa_do_editor(cx), Some(orquestrador_editor::Alvo::File { path, .. }) if path == "logo.png"));
+}
+
+#[gpui_kit::test]
+fn arvore_e_pesquisa_pre_carregam_no_editor(cx: &mut TestAppContext) {
+    use orquestrador_arvore::EventoArvore;
+    use orquestrador_pesquisa::EventoPesquisa;
+    let tmp = Tmp::new("pre");
+    let (janela, bancada, id) = com_projeto(cx, &tmp, "p");
+    let (arvore, pesquisa, editor) = cx.update(|cx| {
+        let t = &bancada.read(cx).telas[&id];
+        (t.arvore.clone(), t.pesquisa.clone(), t.editor.clone())
+    });
+    cx.update(|cx| arvore.update(cx, |_, cx| cx.emit(EventoArvore::PreCarregar("README.md".into()))));
+    cx.update(|cx| pesquisa.update(cx, |_, cx| cx.emit(EventoPesquisa::PreLer { caminho: "src/a.rs".into() })));
+    desenhar(cx, janela);
+    cx.update(|cx| {
+        let ed = editor.read(cx);
+        assert!(ed.pre_carregado("README.md"), "a árvore pré-carrega");
+        assert!(ed.pre_carregado("src/a.rs"), "a pesquisa pré-carrega");
+    });
+}
+
+/// Repositório com `x.txt` em conflito de merge.
+fn repo_em_conflito(pasta: &std::path::Path) {
+    let git = |args: &[&str]| {
+        let s = std::process::Command::new("git").args(args).current_dir(pasta).output().expect("git");
+        assert!(s.status.success() || args[0] == "merge", "git {args:?}: {}", String::from_utf8_lossy(&s.stderr));
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    std::fs::write(pasta.join("x.txt"), "base\n").expect("x");
+    git(&["add", "."]);
+    git(&["commit", "-qm", "base"]);
+    git(&["checkout", "-qb", "outro"]);
+    std::fs::write(pasta.join("x.txt"), "outro\n").expect("x");
+    git(&["commit", "-qam", "outro"]);
+    git(&["checkout", "-q", "main"]);
+    std::fs::write(pasta.join("x.txt"), "main\n").expect("x");
+    git(&["commit", "-qam", "main"]);
+    git(&["merge", "-q", "outro"]);
+}
+
+#[gpui_kit::test]
+fn rascunho_do_conflito_suja_a_aba_e_descartar_rele(cx: &mut TestAppContext) {
+    use crate::telas::Conteudo;
+    let tmp = Tmp::new("conflito");
+    let pasta = tmp.0.join("p");
+    std::fs::create_dir_all(&pasta).expect("pasta");
+    repo_em_conflito(&pasta);
+    let (janela, bancada) = montar(cx, &tmp);
+    cx.update(|cx| bancada.update(cx, |b, cx| b.abrir(pasta.clone(), cx)));
+    cx.run_until_parked();
+    desenhar(cx, janela);
+    let id = cx.update(|cx| bancada.read(cx).ativa.clone().expect("aba ativa"));
+    let editor = cx.update(|cx| bancada.read(cx).telas[&id].editor.clone());
+    cx.update_window(janela.into(), |_, window, cx| {
+        let op = orquestrador_editor::Abertura { permanente: true, ..Default::default() };
+        editor.update(cx, |e, cx| e.abrir_alvo(orquestrador_editor::Alvo::Conflict { path: "x.txt".into() }, op, window, cx));
+    })
+    .expect("janela");
+    desenhar(cx, janela);
+    let vista = cx.update(|cx| {
+        let t = &bancada.read(cx).telas[&id];
+        let c = t.conteudos.borrow();
+        c.iter().find_map(|(_, v)| if let Conteudo::Conflito(w) = v { w.upgrade() } else { None }).expect("aba de conflito")
+    });
+    let limite = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while cx.update(|cx| vista.read(cx).rascunho().is_none()) {
+        assert!(std::time::Instant::now() < limite, "conflito lido");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        desenhar(cx, janela);
+    }
+    let original = cx.update(|cx| vista.read(cx).rascunho().expect("rascunho").texto.clone());
+    assert!(cx.update(|cx| editor.read(cx).nao_salvos()).is_empty(), "limpo ao abrir");
+
+    cx.update_window(janela.into(), |_, window, cx| vista.update(cx, |v, cx| v.restaurar_lado("resolvido\n".into(), window, cx)))
+        .expect("janela");
+    desenhar(cx, janela);
+    assert_eq!(cx.update(|cx| editor.read(cx).nao_salvos()), ["x.txt"], "sujo entra no fechar com não salvos");
+    let guardado = cx.update(|cx| editor.read(cx).rascunho_conflito("x.txt")).expect("rascunho guardado");
+    assert_eq!(guardado.draft, "resolvido\n");
+
+    cx.update_window(janela.into(), |_, window, cx| editor.update(cx, |e, cx| e.descartar_tudo(window, cx))).expect("janela");
+    let limite = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while cx.update(|cx| vista.read(cx).rascunho().map(|r| r.texto.clone())) != Some(original.clone()) {
+        assert!(std::time::Instant::now() < limite, "descartar relê a vista");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        desenhar(cx, janela);
+    }
+    assert!(cx.update(|cx| editor.read(cx).nao_salvos()).is_empty());
+}
+
+#[gpui_kit::test]
+fn subpasta_de_repositorio_avisa_que_abriu_a_raiz(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("subpasta");
+    let raiz = tmp.0.join("repo");
+    std::fs::create_dir_all(raiz.join("src")).expect("pasta");
+    let ok = std::process::Command::new("git").args(["init", "-q"]).current_dir(&raiz).status().expect("git").success();
+    assert!(ok, "git init");
+    let (_janela, bancada) = montar(cx, &tmp);
+    cx.update(|cx| bancada.update(cx, |b, cx| b.abrir(raiz.join("src"), cx)));
+    cx.run_until_parked();
+    let avisos = cx.update(|cx| orquestrador_ui::avisos::visiveis(cx));
+    assert!(
+        avisos.iter().any(|a| a.titulo.starts_with("Esta pasta está dentro do repositório") && a.titulo.ends_with("O projeto aberto é a raiz dele.")),
+        "{:?}",
+        avisos.iter().map(|a| a.titulo.clone()).collect::<Vec<_>>()
+    );
 }

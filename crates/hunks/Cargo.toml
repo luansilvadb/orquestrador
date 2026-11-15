@@ -1,0 +1,10 @@
+[package]
+name = "orquestrador-hunks"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "orquestrador_hunks"
+
+[dependencies]
+similar = "2.7"

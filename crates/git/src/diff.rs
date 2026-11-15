@@ -2,10 +2,11 @@
 //! comparador próprio (`crate::comparador`), lado a lado por padrão ou unificado, com realce `syntect`/Dark+ e diferença
 //! por palavra. No diff do índice, as ações por bloco (preparar, tirar do preparo, descartar) e descartar o arquivo; no
 //! commit, só leitura.
-use crate::comparador::{limitar_pct, Comparador, Corpo};
+use crate::comparador::{limitar_pct, Comparador, Corpo, Realce};
+use crate::pre_leitura::{self, Consumo, Lido as Leitura, PreLeiturasGit};
 use crate::comparar::{self, BlocoPatch, Comparacao, Intervalo, TipoUnidade};
 use crate::comum::{self, acao, botao, Alvo};
-use crate::fonte::{Diff as DiffGit, Fonte, HunkRef, ReviewDiff};
+use crate::fonte::{Fonte, HunkRef};
 use crate::guarda::GuardaGit;
 use crate::sondagem::Sondagem;
 use gpui_kit::component::button::ButtonVariant;
@@ -61,11 +62,6 @@ pub enum EventoDiff {
     AbrirLinha { caminho: String, linha: usize },
 }
 
-enum Leitura {
-    Indice(ReviewDiff),
-    Commit(DiffGit),
-}
-
 /// A comparação desenhada: o modelo das unidades e o estado do comparador.
 struct Mostrado {
     patch: String,
@@ -94,6 +90,8 @@ pub struct VisaoDiff {
     /// Ponteiro parado sobre o divisor há 300 ms: a linha fica azul e larga.
     divisor_realce: bool,
     divisor_sobre: bool,
+    /// Pré-leitura consumida ao abrir: a primeira leitura usa ela em vez de pedir outra.
+    primeira: Option<Consumo>,
     _tarefas: Vec<Task<()>>,
 }
 
@@ -108,6 +106,19 @@ impl Focusable for VisaoDiff {
 impl VisaoDiff {
     /// `alvo` é `Alvo::Diff` (índice, relido a cada 2,5 s com a aba ativa) ou `Alvo::Commit` (lido uma vez).
     pub fn new(fonte: Fonte, guarda: GuardaGit, alvo: Alvo, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::criar(fonte, guarda, alvo, None, window, cx)
+    }
+
+    /// Como `new`, usando (e consumindo) a pré-leitura do alvo em `pre`, se houver: pronta, a aba abre já com o diff
+    /// e o realce; pendente, a primeira leitura espera por ela.
+    pub fn com_pre_leitura(
+        fonte: Fonte, guarda: GuardaGit, alvo: Alvo, pre: &PreLeiturasGit, window: &mut Window, cx: &mut Context<Self>,
+    ) -> Self {
+        let primeira = pre.consumir(&alvo, cx);
+        Self::criar(fonte, guarda, alvo, primeira, window, cx)
+    }
+
+    fn criar(fonte: Fonte, guarda: GuardaGit, alvo: Alvo, primeira: Option<Consumo>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut v = VisaoDiff {
             fonte,
             guarda,
@@ -127,8 +138,14 @@ impl VisaoDiff {
             foco_divisor: cx.focus_handle(),
             divisor_realce: false,
             divisor_sobre: false,
+            primeira: None,
             _tarefas: Vec::new(),
         };
+        // Pronta: aplicada já, sem o "Lendo…"; a primeira rodada do índice a reaproveita sem consultar o Git.
+        if let Some(Consumo::Pronta(l)) = &primeira {
+            v.aplicar(l.clone(), cx);
+        }
+        v.primeira = primeira;
         // "Lendo…" só aparece depois de 200 ms, para a leitura rápida não piscar.
         v._tarefas.push(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(200)).await;
@@ -253,51 +270,58 @@ impl VisaoDiff {
     }
 
     fn ler_indice(&mut self, cx: &mut Context<Self>) -> Task<()> {
-        let Alvo::Diff { lado, caminho } = self.alvo.clone() else { return Task::ready(()) };
-        let fonte = self.fonte.clone();
-        let tarefa = cx.background_spawn(async move { fonte.review_diff(&caminho, lado.staged()) });
+        if !matches!(self.alvo, Alvo::Diff { .. }) {
+            return Task::ready(());
+        }
+        let leitura = self.leitura_inicial_ou(cx);
         cx.spawn(async move |this, cx| {
-            let r = tarefa.await;
-            let _ = this.update(cx, |this, cx| {
-                match r {
-                    Ok(r) => {
-                        this.erro.clear();
-                        this.receber(Leitura::Indice(r), cx);
-                    }
-                    Err(e) => this.erro = e,
-                }
-                cx.notify();
-            });
+            let l = leitura.await;
+            let _ = this.update(cx, |this, cx| this.aplicar(l, cx));
         })
     }
 
-    fn ler_commit(&mut self, cx: &mut Context<Self>) {
-        let Alvo::Commit { hash, caminho } = self.alvo.clone() else { return };
-        let fonte = self.fonte.clone();
-        let tarefa = cx.background_spawn(async move { fonte.commit_diff(&hash, &caminho) });
-        self._tarefas.push(cx.spawn(async move |this, cx| {
-            let r = tarefa.await;
-            let _ = this.update(cx, |this, cx| {
-                match r {
-                    Ok(d) => this.receber(Leitura::Commit(d), cx),
-                    Err(e) => this.erro = e,
+    /// A pré-leitura consumida (uma vez) ou uma leitura nova do alvo.
+    fn leitura_inicial_ou(&mut self, cx: &mut Context<Self>) -> Task<pre_leitura::Leitura> {
+        let (fonte, alvo) = (self.fonte.clone(), self.alvo.clone());
+        match self.primeira.take() {
+            Some(c) => cx.background_spawn(async move {
+                match c.obter().await {
+                    Some(l) => l,
+                    None => pre_leitura::ler(&fonte, &alvo),
                 }
-                cx.notify();
-            });
+            }),
+            None => cx.background_spawn(async move { pre_leitura::ler(&fonte, &alvo) }),
+        }
+    }
+
+    fn aplicar(&mut self, l: pre_leitura::Leitura, cx: &mut Context<Self>) {
+        match l.lido {
+            Ok(lido) => {
+                if matches!(lido, pre_leitura::Lido::Indice(_)) {
+                    self.erro.clear();
+                }
+                self.receber(lido, l.realce, cx);
+            }
+            Err(e) => self.erro = e,
+        }
+        cx.notify();
+    }
+
+    fn ler_commit(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.alvo, Alvo::Commit { .. }) || self.leitura.is_some() {
+            return;
+        }
+        let leitura = self.leitura_inicial_ou(cx);
+        self._tarefas.push(cx.spawn(async move |this, cx| {
+            let l = leitura.await;
+            let _ = this.update(cx, |this, cx| this.aplicar(l, cx));
         }));
     }
 
     /// Resposta nova: só refaz o comparador quando o patch mostrado mudou (o poll igual não rola nem pisca). Refeito, o
     /// comparador mantém a rolagem e a proporção, e só rola se a unidade atual mudar.
-    fn receber(&mut self, leitura: Leitura, cx: &mut Context<Self>) {
-        let (mostrar, blocos) = match &leitura {
-            Leitura::Indice(r) => {
-                let ok = !r.display.binary && !r.display.too_large && !r.diff.too_large && !r.diff.binary && !r.diff.patch.is_empty();
-                let blocos = (!r.untracked && !r.diff.patch.is_empty()).then(|| comparar::intervalos(&r.diff.patch));
-                (ok.then(|| r.display.patch.clone()), blocos)
-            }
-            Leitura::Commit(d) => ((!d.binary && !d.too_large && !d.patch.is_empty()).then(|| d.patch.clone()), None),
-        };
+    fn receber(&mut self, leitura: Leitura, realce: Option<(String, Realce, Realce)>, cx: &mut Context<Self>) {
+        let (mostrar, blocos) = pre_leitura::mostrar(&leitura);
         self.leitura = Some(leitura);
         let Some(patch) = mostrar else {
             self.mostrado = None;
@@ -307,7 +331,8 @@ impl VisaoDiff {
             return;
         }
         let anterior = self.mostrado.take();
-        self.mostrado = montar(&patch, blocos.as_deref(), self.alvo.caminho(), anterior.as_ref(), cx);
+        let realce = realce.filter(|(p, _, _)| *p == patch).map(|(_, a, n)| (a, n));
+        self.mostrado = montar(&patch, blocos.as_deref(), self.alvo.caminho(), anterior.as_ref(), realce, cx);
     }
 
     fn bloco_ref(&self, i: usize) -> Option<(HunkRef, BlocoPatch, String)> {
@@ -459,6 +484,8 @@ impl VisaoDiff {
             .h(px(28.))
             .px(px(8.))
             .overflow_hidden()
+            // A barra fica sobre o fundo da aba, não o do comparador.
+            .bg(cor::pitch_black())
             .border_b_1()
             .border_color(cor::hairline())
             .child(
@@ -723,7 +750,10 @@ fn comparador_cor_atual() -> gpui_kit::Hsla {
 
 /// O comparador para um patch. `None` se o patch não tem blocos. `anterior` é o da mesma aba antes da releitura: a
 /// rolagem, a proporção e a unidade passam para o novo, e a rolagem só muda se a unidade mudar.
-fn montar(patch: &str, blocos: Option<&[Intervalo]>, caminho: &str, anterior: Option<&Mostrado>, cx: &mut Context<VisaoDiff>) -> Option<Mostrado> {
+fn montar(
+    patch: &str, blocos: Option<&[Intervalo]>, caminho: &str, anterior: Option<&Mostrado>, realce: Option<(Realce, Realce)>,
+    cx: &mut Context<VisaoDiff>,
+) -> Option<Mostrado> {
     if comparar::intervalos(patch).is_empty() {
         return None;
     }
@@ -738,6 +768,12 @@ fn montar(patch: &str, blocos: Option<&[Intervalo]>, caminho: &str, anterior: Op
         c.caixa = a.caixa;
         c.lado = a.lado && !c.modelo.arquivo_novo;
         c.pular = false;
+    }
+    // Realce da pré-leitura: a aba abre colorida.
+    if let Some((a, n)) = realce {
+        c.definir_realce(a, n);
+        let estado = Rc::new(RefCell::new(c));
+        return Some(Mostrado { patch: patch.to_string(), comparacao, estado, _realce: Task::ready(()) });
     }
     let (antigo, novo) = c.textos();
     let modelo = (*c.modelo).clone();

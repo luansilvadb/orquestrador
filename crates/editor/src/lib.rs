@@ -9,6 +9,7 @@ pub mod caminhos;
 pub mod comparar;
 pub mod documento;
 pub mod formatar;
+pub mod gutter_git;
 pub mod linguagem;
 pub mod markdown;
 pub mod migalhas;
@@ -16,5 +17,5 @@ pub mod minimapa;
 pub mod modelo;
 pub mod realce;
 
-pub use area::{Abertura, AoAbrirDocumento, AreaEditor, EventoEditor, FabricaConteudo, InfoDocumento, WidgetInline};
+pub use area::{Abertura, AoAbrirDocumento, AoDescartarConflito, AreaEditor, EventoEditor, FabricaConteudo, InfoDocumento};
 pub use modelo::{Alvo, Grupo, Lado};

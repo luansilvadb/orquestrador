@@ -121,6 +121,12 @@ impl Bancada {
         if !cx.has_global::<GitIniciado>() {
             orquestrador_git::init(cx);
             orquestrador_midia::registrar_atalhos(cx);
+            orquestrador_arvore::registrar_atalhos(cx);
+            // O Tab global da árvore percorre o foco; no terminal a tecla vai ao shell (completar), como no xterm.
+            cx.bind_keys([
+                gpui_kit::KeyBinding::new("tab", gpui_kit::NoAction, Some("Terminal")),
+                gpui_kit::KeyBinding::new("shift-tab", gpui_kit::NoAction, Some("Terminal")),
+            ]);
             cx.set_global(GitIniciado);
         }
         let salvas: Projetos = backend.estado.borrow().ler();
@@ -375,6 +381,13 @@ impl Bancada {
                         this.incluir(aberto.id.clone(), aberto.project.clone());
                         this.lembrar(&aberto.project);
                         this.selecionar(&aberto.id, cx);
+                        if aberto.subfolder {
+                            let texto = format!(
+                                "Esta pasta está dentro do repositório {}. O projeto aberto é a raiz dele.",
+                                aberto.project
+                            );
+                            orquestrador_ui::avisos::mostrar(orquestrador_ui::avisos::Aviso::info(texto, 6000), cx);
+                        }
                     }
                     Err(e) => {
                         orquestrador_ui::avisos::mostrar(orquestrador_ui::avisos::Aviso::erro(e.clone(), 7000), cx);

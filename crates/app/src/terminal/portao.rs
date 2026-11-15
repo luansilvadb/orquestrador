@@ -1,6 +1,6 @@
-//! O portão de abertura: no instalado, antes de liberar o uso, os dois CLIs são garantidos (`clis::garantir_todos`), com o
-//! andamento de cada um na tela (porte da fase `clis` de update.rs e da tela `Screen` do App.tsx). O build de
-//! desenvolvimento libera direto.
+//! O portão de abertura: no instalado, antes de liberar o uso, o app se atualiza (`crate::atualizacao`) e os dois CLIs
+//! são garantidos (`clis::garantir_todos`), com o andamento na tela (porte de update.rs e da tela `Screen` do App.tsx).
+//! O build de desenvolvimento libera direto.
 use super::ui::{self, Variante};
 use crate::tema::{self, cor};
 use gpui_kit::TestSupportExt;
@@ -8,11 +8,13 @@ use gpui_kit::{
     anchored, canvas, deferred, div, point, prelude::*, px, size, App, Bounds, FontWeight, Hsla, MouseButton, PathBuilder,
     Pixels, Window,
 };
+use crate::atualizacao::Fase;
 use orquestrador_core::clis::{Andamento, Passo};
 use std::time::Instant;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Portao {
+    Atualizacao(crate::atualizacao::Fase),
     Clis { claude: Andamento, codex: Andamento },
     Pronto,
     Falhou(String),
@@ -23,8 +25,7 @@ impl Portao {
         if cfg!(debug_assertions) {
             Portao::Pronto
         } else {
-            let inicio = Andamento { step: Passo::Checking, version: None };
-            Portao::Clis { claude: inicio.clone(), codex: inicio }
+            Portao::Atualizacao(Fase::Verificando)
         }
     }
 }
@@ -45,22 +46,48 @@ pub fn linha_do_cli(nome: &str, a: &Andamento) -> String {
     }
 }
 
+const MB: f64 = 1024. * 1024.;
+
 /// O texto de status e as linhas dos CLIs.
-pub fn textos(p: &Portao) -> (&'static str, Vec<String>) {
-    match p {
+pub fn textos(p: &Portao) -> (String, Vec<String>) {
+    let (status, linhas): (&str, _) = match p {
+        Portao::Atualizacao(Fase::Verificando) => ("Verificando se há uma versão nova…", vec![]),
+        Portao::Atualizacao(Fase::Baixando { versao, baixado, total }) => {
+            let tamanho = match total {
+                Some(t) if *t > 0 => format!("{}%", (*baixado as f64 / *t as f64 * 100.).round()),
+                _ => format!("{:.1} MB", *baixado as f64 / MB).replace('.', ","),
+            };
+            return (format!("Baixando a versão {versao}… {tamanho}"), vec![]);
+        }
+        Portao::Atualizacao(Fase::Instalando { versao }) => {
+            return (format!("Instalando a versão {versao}. O app reabre sozinho."), vec![]);
+        }
         Portao::Clis { claude, codex } => {
             ("Preparando os CLIs…", vec![linha_do_cli("Claude Code", claude), linha_do_cli("Codex", codex)])
         }
         Portao::Falhou(_) => ("Não foi possível atualizar. O uso fica bloqueado até a atualização dar certo.", vec![]),
         Portao::Pronto => ("", vec![]),
+    };
+    (status.to_string(), linhas)
+}
+
+/// Fração da barra do download; `None` fora dele, 1 com o total desconhecido (como a barra cheia do React).
+pub fn progresso(p: &Portao) -> Option<f32> {
+    match p {
+        Portao::Atualizacao(Fase::Baixando { baixado, total: Some(t), .. }) if *t > 0 => Some((*baixado as f32 / *t as f32).min(1.)),
+        Portao::Atualizacao(Fase::Baixando { .. }) => Some(1.),
+        _ => None,
     }
 }
 
-/// A rodada dos CLIs numa thread: o andamento chega por `avisar`, e o fim traz os caminhos ou o erro.
+/// A rodada numa thread: atualização e depois CLIs; o andamento chega por `avisar`, e o fim traz os caminhos ou o erro.
 pub fn garantir(avisar: async_channel::Sender<Portao>, exes: orquestrador_core::agents::cli::Exes) {
     std::thread::spawn(move || {
         let progresso = avisar.clone();
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::atualizacao::rodada(|f| {
+                let _ = progresso.try_send(Portao::Atualizacao(f));
+            })?;
             orquestrador_core::clis::garantir_todos(&orquestrador_core::clis::Real, |claude, codex| {
                 let _ = progresso.try_send(Portao::Clis { claude, codex });
             })
@@ -86,6 +113,7 @@ pub fn tela(p: &Portao, inicio: Instant, window: &mut Window, tentar: impl Fn(&m
         _ => None,
     };
     let parada = falha.is_some();
+    let barra = progresso(p);
     let marca = canvas(|_, _, _| (), move |b, _, window, _| pintar_marca(b, inicio, parada, window)).size(px(64.)).mx_auto().mb(px(4.));
     let topo = div()
         .id("portao-topo")
@@ -126,6 +154,17 @@ pub fn tela(p: &Portao, inicio: Instant, window: &mut Window, tentar: impl Fn(&m
                         .test_support(),
                 ),
         )
+        .when_some(barra, |d, f| {
+            d.child(
+                div()
+                    .id("portao-progresso")
+                    .h(px(4.))
+                    .w_full()
+                    .rounded(px(2.))
+                    .bg(cor::hairline())
+                    .child(div().h_full().w(gpui_kit::relative(f)).rounded(px(2.)).bg(gpui_kit::rgb(0xf5a524))),
+            )
+        })
         .when_some(falha, |d, m| {
             d.child(
                 div()
@@ -273,6 +312,18 @@ mod testes {
     }
 
     #[test]
+    fn fases_da_atualizacao_como_o_react() {
+        let t = |f| textos(&Portao::Atualizacao(f)).0;
+        assert_eq!(t(Fase::Verificando), "Verificando se há uma versão nova…");
+        assert_eq!(t(Fase::Baixando { versao: "0.2.0".into(), baixado: 50, total: Some(200) }), "Baixando a versão 0.2.0… 25%");
+        assert_eq!(t(Fase::Baixando { versao: "0.2.0".into(), baixado: 1572864, total: None }), "Baixando a versão 0.2.0… 1,5 MB");
+        assert_eq!(t(Fase::Instalando { versao: "0.2.0".into() }), "Instalando a versão 0.2.0. O app reabre sozinho.");
+        assert_eq!(progresso(&Portao::Atualizacao(Fase::Baixando { versao: "x".into(), baixado: 1, total: Some(4) })), Some(0.25));
+        assert_eq!(progresso(&Portao::Atualizacao(Fase::Baixando { versao: "x".into(), baixado: 1, total: None })), Some(1.));
+        assert_eq!(progresso(&Portao::Atualizacao(Fase::Verificando)), None);
+    }
+
+    #[test]
     fn falha_bloqueia_com_o_motivo_e_desenvolvimento_libera() {
         assert!(textos(&Portao::Falhou("x".into())).0.starts_with("Não foi possível atualizar"));
         assert_eq!(Portao::inicial(), Portao::Pronto, "o teste roda no build de desenvolvimento");
@@ -336,8 +387,7 @@ impl Abertura {
     /// "Tentar novamente": só depois de uma falha.
     pub fn tentar(&mut self, cx: &mut gpui_kit::Context<Self>) {
         if matches!(self.estado, Portao::Falhou(_)) {
-            let inicio = Andamento { step: Passo::Checking, version: None };
-            self.estado = Portao::Clis { claude: inicio.clone(), codex: inicio };
+            self.estado = Portao::Atualizacao(Fase::Verificando);
             self.rodar(cx);
             cx.notify();
         }

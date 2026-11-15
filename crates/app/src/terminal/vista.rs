@@ -309,6 +309,7 @@ impl VistaTerminal {
             }
         }
         self.cursor_aceso = true;
+        self.motor.esperar_eco();
         self.escrever(texto);
         cx.notify();
     }
@@ -961,6 +962,8 @@ impl Element for GradeTerminal {
         let _ = mudou;
         let v = self.vista.read(cx);
         let (link, ctrl, aceso, escrevivel, marcado) = (v.link.clone(), v.ctrl, v.cursor_aceso, v.escrevivel, v.marcado.clone());
+        // Sem PTY (o diálogo do orquestrador ainda aberto) não há cursor, como o xterm que o React só monta depois.
+        let vivo = v.vivo;
         let motor = v.motor.clone();
         let tecla_em = v.tecla_em;
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
@@ -1103,7 +1106,7 @@ impl Element for GradeTerminal {
         let rc = term.renderable_content().cursor;
         let ponto = rc.point;
         let linha_tela = ponto.line.0 + off;
-        let cursor = if rc.shape != CursorShape::Hidden && linha_tela >= 0 && (linha_tela as usize) < g.screen_lines() && escrevivel {
+        let cursor = if rc.shape != CursorShape::Hidden && linha_tela >= 0 && (linha_tela as usize) < g.screen_lines() && escrevivel && vivo {
             let largo = g[ponto].flags.contains(Flags::WIDE_CHAR);
             let caixa = Bounds::new(
                 point(x_de(ponto.column.0), y_de(linha_tela as usize)),

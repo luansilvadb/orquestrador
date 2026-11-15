@@ -53,4 +53,4 @@ Métodos para a bancada:
 
 ## Vitrine
 
-`cargo run -p orquestrador-arvore --example vitrine -- <cenário>` (ver o cabeçalho de `examples/vitrine.rs`).
+`cargo run -p orquestrador-arvore --example vitrine-arvore -- <cenário>` (ver o cabeçalho de `examples/vitrine.rs`).

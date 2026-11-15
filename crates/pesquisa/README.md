@@ -28,4 +28,4 @@ Preferência (visão lista/árvore e histórico) na seção `pesquisa` do `estad
 
 ## Vitrine
 
-`cargo run -p orquestrador-pesquisa --example vitrine` (`VITRINE=substituir` ou `confirmar`).
+`cargo run -p orquestrador-pesquisa --example vitrine-pesquisa` (`VITRINE=substituir` ou `confirmar`).
