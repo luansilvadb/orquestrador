@@ -151,6 +151,29 @@ fn nomes(cx: &mut TestAppContext, bancada: &Entity<Bancada>) -> Vec<String> {
 }
 
 #[gpui_kit::test]
+fn fechar_aba_de_projeto_ativa_a_vizinha_da_esquerda(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("vizinha");
+    let (_janela, bancada) = montar(cx, &tmp);
+    abrir_pastas(cx, &bancada, &tmp, &["a", "b", "c", "d"]);
+    let ids: Vec<String> = cx.update(|cx| bancada.read(cx).abas.iter().map(|a| a.id.clone()).collect());
+    let ativa = |cx: &mut TestAppContext| cx.update(|cx| bancada.read(cx).ativa.clone());
+    let remover = |cx: &mut TestAppContext, id: &str| cx.update(|cx| bancada.update(cx, |b, cx| b.remover_aba(id, cx)));
+    cx.update(|cx| bancada.update(cx, |b, _| b.ativa = Some(ids[2].clone())));
+    // Outra que não a ativa: a ativa fica.
+    remover(cx, &ids[3]);
+    assert_eq!(ativa(cx), Some(ids[2].clone()));
+    // A ativa no meio: a da esquerda.
+    remover(cx, &ids[2]);
+    assert_eq!(ativa(cx), Some(ids[1].clone()));
+    // A ativa na primeira posição: a nova primeira.
+    cx.update(|cx| bancada.update(cx, |b, _| b.ativa = Some(ids[0].clone())));
+    remover(cx, &ids[0]);
+    assert_eq!(ativa(cx), Some(ids[1].clone()));
+    remover(cx, &ids[1]);
+    assert_eq!(ativa(cx), None);
+}
+
+#[gpui_kit::test]
 fn reordena_abas_e_grava_a_ordem(cx: &mut TestAppContext) {
     let tmp = Tmp::new("reordenar");
     let (janela, bancada) = montar(cx, &tmp);

@@ -950,6 +950,23 @@ mod testes {
     }
 
     #[test]
+    fn fechar_outra_ou_varias_como_o_react() {
+        let s = abrir_todos(Workspace::default(), A, &[("da", "a.ts"), ("db", "b.ts"), ("dc", "c.ts"), ("dd", "d.ts"), ("de", "e.ts")]);
+        let s = ativar(&s, &id(&s, A, "b.ts"));
+        // Outra que não a ativa: a ativa fica.
+        let s = fechar_abas(&s, &[id(&s, A, "a.ts")]);
+        assert_eq!(ativa(&s, A), Some(id(&s, A, "b.ts")));
+        // Várias com a ativa: a primeira à direita que fica.
+        let s = fechar_abas(&s, &[id(&s, A, "b.ts"), id(&s, A, "c.ts")]);
+        assert_eq!(ativa(&s, A), Some(id(&s, A, "d.ts")));
+        // A ativa e tudo à direita: a primeira à esquerda que fica.
+        let s = ativar(&s, &id(&s, A, "e.ts"));
+        let s = fechar_abas(&s, &[id(&s, A, "e.ts")]);
+        assert_eq!(ativa(&s, A), Some(id(&s, A, "d.ts")));
+        consistente(&s);
+    }
+
+    #[test]
     fn reabrir() {
         let s = abrir_todos(Workspace::default(), A, &[("da", "a.ts"), ("db", "b.ts")]);
         let s = fechar_abas(&s, &[id(&s, A, "b.ts")]);

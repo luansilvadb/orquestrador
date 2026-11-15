@@ -271,6 +271,40 @@ fn abas_de_shell_ordem_selecao_e_vizinha_ao_fechar(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn fechar_shell_no_meio_ou_inativa_como_o_react(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("abas-meio");
+    let (janela, b) = montar(cx, &tmp, exes_padrao());
+    let ids = abrir_shells(cx, janela, &b, 4);
+    let t = terminais(cx, &b);
+    let fechar = |cx: &mut TestAppContext, id: &str| {
+        desenhar(cx, janela);
+        let alvo = gpui_kit::SharedString::from(format!("fechar-shell-{id}"));
+        cx.update_window(janela.into(), |_, window, cx| window.click(alvo, cx)).expect("janela");
+        let id = id.to_string();
+        esperar(cx, janela, Duration::from_secs(10), |cx| !shells(cx, &t).contains(&id));
+    };
+    t.update(cx, |t, cx| t.selecionar_shell(&None, ids[1].clone(), cx));
+    // Outra que não a ativa: a ativa fica.
+    fechar(cx, &ids[3]);
+    assert_eq!(ativa(cx, &t), ids[1]);
+    // A ativa no meio: a da direita.
+    fechar(cx, &ids[1]);
+    assert_eq!(ativa(cx, &t), ids[2]);
+}
+
+#[test]
+fn executor_ativo_que_termina_volta_ao_orquestrador() {
+    let mut p = super::painel::Projeto::default();
+    let ex = |id: &str, n| super::painel::Executor { id: id.into(), titulo: String::new(), estado: "running".into(), escolha: None, n };
+    p.executores = vec![ex("e1", 1), ex("e2", 2), ex("e3", 3)];
+    p.aba = "e2".into();
+    p.executores.retain(|e| e.id != "e3");
+    assert_eq!(p.aba_ativa(), "e2", "outro que termina não troca a aba");
+    p.executores.retain(|e| e.id != "e2");
+    assert_eq!(p.aba_ativa(), ORCHESTRATOR);
+}
+
+#[gpui_kit::test]
 fn escondido_nao_desenha_e_ao_voltar_mostra_o_atual_sem_redimensionar(cx: &mut TestAppContext) {
     let tmp = Tmp::new("escondido");
     let (janela, b) = montar(cx, &tmp, exes_padrao());

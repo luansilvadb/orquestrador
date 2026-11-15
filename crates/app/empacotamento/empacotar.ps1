@@ -65,7 +65,7 @@ $exe = Get-ChildItem $Saida -Filter '*-setup.exe' | Select-Object -First 1
 if (-not $exe) { throw "cargo-packager não gerou o instalador em $Saida" }
 # Mesmo nome do tauri-bundler, que o fluxo de release e as URLs já usam.
 $nome = "${Produto}_${Versao}_x64-setup.exe"
-if ($exe.Name -ne $nome) { $exe = Rename-Item $exe.FullName $nome -PassThru }
+if ($exe.Name -cne $nome) { $exe = Rename-Item $exe.FullName $nome -PassThru }
 if (-not $Url) { $Url = "https://github.com/luansilvadb/orquestrador/releases/download/v$Versao/$nome" }
 
 $assinador = Join-Path $alvo 'release\orquestrador-assinador.exe'

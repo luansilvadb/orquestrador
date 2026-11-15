@@ -116,3 +116,18 @@ Rodadas com outros executores compilando (até 16 `rustc`) deram abertura de 364
 | Digitação com carga, p50 / p95 / máx | 13,47 / 19,84 / 20,92 | 12,58 / 13,41 / 16,36 | p95 < 16 | ok |
 
 Decomposição com carga (p50 / p95): pty 12,18 / 18,36 → 11,34 / 12,14; janela 1,27 / 1,73 → 1,20 / 1,64.
+
+## Tabela final da v0.2.0 (15/11/2026, `target\par-versao\medir-final\`)
+
+Máquina quieta (nenhum outro build). Mesmo exe de medição (dev com opt-level 3) da versão 0.2.0.
+
+| Medida | Base React (`desempenho-base.md`) | GPUI 0.2.0 | Meta | |
+|---|---|---|---|---|
+| Abertura, mediana (ms) | 1258 | 224 (820, 242, 224, 224, 222) | < 400 | ok |
+| RAM ociosa (MB privados / working set) | 582 / 738 | 129 / 82 (118 sem shells) | < 150 | ok |
+| RAM com 4 despejando (15 s); pico | 1172 / 1296; 2221 | 264 / 206; 265 | < 500 | ok |
+| RAM 30 s depois do fim | 2264 / 2376 | 263 / 207 (fim: 263) | não crescer | ok (+0,1) |
+| Digitação sem carga, p50 / p95 / máx (ms) | 26,2 / 27,7 / 29,3 | 12,66 / 13,41 / 18,50 | | |
+| Digitação com carga, p50 / p95 / máx (ms) | 27,6 / 40,3 / 59,1 (3 despejando) | 12,71 / 13,67 / 17,76 | p95 < 16 | ok |
+
+Decomposição com carga (p50 / p95): pty 11,36 / 12,19, janela 1,35 / 1,77. Histórico do PSReadLine intacto.

@@ -469,13 +469,13 @@ impl Bancada {
         cx.notify();
     }
 
-    /// Tira a aba já encerrada no core; a vizinha à direita (ou à esquerda) vira a ativa.
-    fn remover_aba(&mut self, id: &str, cx: &mut Context<Self>) {
+    /// Tira a aba já encerrada no core; como no React, a vizinha da esquerda (ou a primeira) vira a ativa.
+    pub(crate) fn remover_aba(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(indice) = self.abas.iter().position(|a| a.id == id) else { return };
         self.abas.remove(indice);
         self.vistas.remove(&Some(id.to_string()));
         if self.ativa.as_deref() == Some(id) {
-            let proxima = self.abas.get(indice).or_else(|| self.abas.last()).map(|a| a.id.clone());
+            let proxima = self.abas.get(indice.saturating_sub(1)).map(|a| a.id.clone());
             let nova = self.vistas.remove(&proxima).unwrap_or(match proxima {
                 Some(_) => self.vista_inicial,
                 None => Vista { lateral_aberta: false, ..self.vista_inicial },
