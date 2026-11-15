@@ -45,7 +45,10 @@ pub mod cor {
 }
 
 /// Tipografia.
-pub const FONTE: &str = "Inter";
+/// A Inter 4.1 variável embutida em `assets/fonts/`. O DirectWrite agrupa a família pelo STAT, que soma o nome da
+/// instância `opsz` padrão ("Text") ao `name` "Inter Variable".
+pub const FONTE: &str = "Inter Variable Text";
+/// Fonte do sistema, como em `src/terminal/term.ts`; o app não a empacota.
 pub const FONTE_MONO: &str = "Cascadia Mono";
 pub const TEXTO_HEADLINE: Pixels = px(20.);
 pub const TEXTO_TITLE: Pixels = px(16.);
@@ -84,11 +87,12 @@ pub const ARQUIVO_MIN: f32 = 160.;
 pub const JANELA_LARGURA: f32 = 1400.;
 pub const JANELA_ALTURA: f32 = 900.;
 
-const INTER: &[u8] = include_bytes!("../assets/fonts/InterVariable-latin.ttf");
+const INTER: &[u8] = include_bytes!("../assets/fonts/InterVariable.ttf");
+const INTER_ITALICO: &[u8] = include_bytes!("../assets/fonts/InterVariable-Italic.ttf");
 
 /// Registra a Inter embutida e liga o tema escuro do Kit aos tokens.
 pub fn aplicar(cx: &mut App) {
-    if let Err(e) = cx.text_system().add_fonts(vec![Cow::Borrowed(INTER)]) {
+    if let Err(e) = cx.text_system().add_fonts(vec![Cow::Borrowed(INTER), Cow::Borrowed(INTER_ITALICO)]) {
         eprintln!("Inter não carregou: {e}");
     }
     Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx);

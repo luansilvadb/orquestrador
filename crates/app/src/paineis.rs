@@ -63,31 +63,6 @@ fn alca(id: &'static str, divisor: Divisor, cx: &mut Context<Bancada>) -> impl I
     )
 }
 
-/// Faixa de abas de 36 px no estilo `variant="square"`: linha de 2 px sob a ativa e divisor de 1 px em toda a largura.
-fn faixa_de_abas(rotulo: &'static str) -> impl IntoElement {
-    div()
-        .relative()
-        .flex()
-        .flex_none()
-        .h(tema::FAIXA)
-        .px(px(4.))
-        .child(div().absolute().left_0().right_0().bottom_0().h(px(1.)).bg(cor::hairline()))
-        .child(
-            div()
-                .relative()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .px(px(12.))
-                .h_full()
-                .text_size(tema::TEXTO_MENU)
-                .font_weight(FontWeight::MEDIUM)
-                .child(icone(ic::TERMINAL, 14., cor::text_primary()))
-                .child(rotulo)
-                .child(div().absolute().left_0().right_0().bottom_0().h(px(2.)).bg(cor::ink_white())),
-        )
-}
-
 fn convite_abrir_pasta(descricao: &'static str, cx: &mut Context<Bancada>) -> impl IntoElement {
     div()
         .size_full()
@@ -261,10 +236,40 @@ impl Bancada {
             .bg(cor::painel_arrastavel())
             .border_t_1()
             .border_color(cor::hairline_soft())
-            .child(faixa_de_abas("Terminal"))
-            .child(div().flex_1())
+            .child(self.conteudo_terminal(cx))
             .child(alca("alca-terminal", Divisor::Terminal, cx))
             .test_support()
+    }
+
+    /// Visibilidade dos terminais e, com projeto aberto, o fim dos shells sem projeto (como no React).
+    fn ajustar_terminais(&self, cx: &mut Context<Self>) {
+        let (ativa, aberto) = (self.ativa.clone(), self.terminal_aberto);
+        self.terminais.update(cx, |t, cx| {
+            if ativa.is_some() {
+                t.soltar_sem_projeto(cx);
+            }
+            t.marcar_visiveis(&ativa, aberto, cx);
+        });
+    }
+
+    fn conteudo_terminal(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        let (ativa, raiz) = (self.ativa.clone(), self.aba_ativa().map(|a| a.caminho.clone()));
+        let el = self.terminais.update(cx, |t, cx| {
+            // Painel aberto sem shell (reaberto da sessão anterior): nasce o primeiro.
+            if t.projeto(&ativa).shells.is_empty() {
+                t.adicionar_shell(ativa.clone(), raiz.clone(), cx);
+            }
+            t.painel_terminal(ativa, raiz, cx)
+        });
+        self.ajustar_terminais(cx);
+        el
+    }
+
+    fn conteudo_orquestrador(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        let (ativa, raiz) = (self.ativa.clone(), self.aba_ativa().map(|a| a.caminho.clone()));
+        let el = self.terminais.update(cx, |t, cx| t.painel_orquestrador(ativa, raiz, cx));
+        self.ajustar_terminais(cx);
+        el
     }
 
     pub(crate) fn painel_orquestrador(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -279,40 +284,18 @@ impl Bancada {
             .bg(cor::painel_arrastavel())
             .border_l_1()
             .border_color(cor::hairline_soft())
-            .child(faixa_de_abas("Orquestrador"))
-            .child(
-                div().flex_1().min_h_0().flex().items_center().justify_center().child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .gap(px(12.))
-                        .p(px(16.))
-                        .w(px(380.))
-                        .max_w_full()
-                        .child(
-                            Button::new("abrir-terminal")
-                                .primary()
-                                .h(tema::CAMPO)
-                                .px(px(12.))
-                                .child(div().text_size(tema::TEXTO_BODY).child("Abrir terminal")),
-                        )
-                        .child(
-                            div()
-                                .text_size(tema::TEXTO_LABEL)
-                                .text_color(cor::text_secondary())
-                                .text_center()
-                                .child("Abre o orquestrador, com quem você conversa. Os executores aparecem em abas quando ele delega."),
-                        ),
-                ),
-            )
+            .child(self.conteudo_orquestrador(cx))
             .child(alca("alca-painel", Divisor::Painel, cx))
             .test_support()
     }
 
     pub(crate) fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let git = self.git_ativo().cloned();
+        // O portão de abertura (terminal/portao.rs) cobre a janela enquanto o uso não foi liberado.
+        let abertura = self.terminais.read(cx).abertura.clone();
+        let bloqueada = !abertura.read(cx).pronto();
         div()
+            .when(bloqueada, |d| d.child(abertura))
             .id("status-bar")
             .flex()
             .flex_none()

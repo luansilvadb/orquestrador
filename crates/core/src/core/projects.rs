@@ -147,6 +147,11 @@ impl Projects {
         }
     }
 
+    /// Os executáveis dos CLIs, que a etapa da abertura troca pelos caminhos absolutos.
+    pub fn exes(&self) -> &Exes {
+        &self.exes
+    }
+
     pub fn snapshot(&self, id: &str) -> Result<ProjectSnapshot, String> {
         self.core(id)?.snapshot()
     }

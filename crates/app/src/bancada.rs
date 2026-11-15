@@ -1,6 +1,8 @@
 //! A janela principal: estado da moldura (abas de projeto, tela da navegação, painéis) e a ligação com o core.
-use crate::backend::{self, AbasSalvas, Backend, Evento, Receptor, ResumoGit, RECENTES_MAX};
+use crate::backend::{self, Backend, Evento, Receptor, ResumoGit, RECENTES_MAX};
+use crate::estado::{Paineis, Projetos};
 use crate::tema;
+use crate::terminal::painel::{EventoTerminais, Terminais};
 use gpui_kit::{
     actions, App, AppContext, Context, FocusHandle, Focusable, PathPromptOptions, Pixels, Point, Task, WeakEntity,
     Window,
@@ -60,6 +62,10 @@ pub struct Bancada {
     pub erro: Option<String>,
     pub arrasto: Option<Arrasto>,
     pub foco: FocusHandle,
+    /// Arrasto e rolagem da faixa de abas de projeto (moldura.rs).
+    pub abas_ui: crate::moldura::AbasUi,
+    /// Orquestrador, executores e shells de cada projeto (terminal/painel.rs).
+    pub terminais: gpui_kit::Entity<Terminais>,
     _tarefas: Vec<Task<()>>,
 }
 
@@ -72,7 +78,8 @@ impl Focusable for Bancada {
 impl Bancada {
     /// `iniciais` são os caminhos da linha de comando; as abas salvas abrem antes deles.
     pub fn new(backend: Rc<Backend>, eventos: Receptor, iniciais: Vec<PathBuf>, cx: &mut Context<Self>) -> Self {
-        let salvas = backend.ler_abas();
+        let salvas: Projetos = backend.estado.borrow().ler();
+        let paineis: Paineis = backend.estado.borrow().ler();
         let mut tarefas = vec![cx.spawn(async move |this: WeakEntity<Self>, cx| {
             while let Ok(evento) = eventos.recv().await {
                 if this.update(cx, |this, cx| this.receber(evento, cx)).is_err() {
@@ -88,21 +95,34 @@ impl Bancada {
                 }
             }));
         }
+        let terminais = cx.new(|cx| Terminais::new(backend.clone(), cx));
+        // O estado dos painéis de terminal vive em `Terminais`; mudou, a janela redesenha.
+        cx.observe(&terminais, |_, _, cx| cx.notify()).detach();
+        cx.subscribe(&terminais, |this, _, e: &EventoTerminais, cx| match e {
+            EventoTerminais::FecharPainel => {
+                if this.terminal_aberto {
+                    this.alternar_terminal(cx);
+                }
+            }
+        })
+        .detach();
         let mut bancada = Bancada {
+            terminais,
             backend,
             abas: Vec::new(),
             ativa: None,
             recentes: salvas.recentes.clone(),
             rota: Rota::Arquivos,
             lateral_aberta: false,
-            terminal_aberto: false,
-            largura_lateral: tema::LATERAL,
-            largura_painel: tema::PAINEL,
-            altura_terminal: tema::TERMINAL,
+            terminal_aberto: paineis.terminal_aberto,
+            largura_lateral: paineis.largura_lateral.unwrap_or(tema::LATERAL),
+            largura_painel: paineis.largura_painel.unwrap_or(tema::PAINEL),
+            altura_terminal: paineis.altura_terminal.unwrap_or(tema::TERMINAL),
             git: HashMap::new(),
             erro: None,
             arrasto: None,
             foco: cx.focus_handle(),
+            abas_ui: Default::default(),
             _tarefas: tarefas,
         };
         bancada.restaurar(salvas, iniciais, cx);
@@ -122,7 +142,7 @@ impl Bancada {
         self.ativa.is_some() || self.lateral_aberta
     }
 
-    fn restaurar(&mut self, salvas: AbasSalvas, iniciais: Vec<PathBuf>, cx: &mut Context<Self>) {
+    fn restaurar(&mut self, salvas: Projetos, iniciais: Vec<PathBuf>, cx: &mut Context<Self>) {
         let projetos = self.backend.projetos.clone();
         let abertas = salvas.abertas.clone();
         let ativa = salvas.ativa.clone();
@@ -167,7 +187,8 @@ impl Bancada {
 
     fn receber(&mut self, evento: Evento, cx: &mut Context<Self>) {
         match evento {
-            Evento::Core { payload, .. } => {
+            Evento::Core { nome, payload } => {
+                self.terminais.update(cx, |t, cx| t.receber(&nome, &payload, cx));
                 // Qualquer mudança de estado do projeto ativo pode mexer no Git (lote terminado, commit do executor).
                 let projeto = payload.get("project").and_then(|v| v.as_str()).map(str::to_string);
                 if projeto.is_some() && projeto == self.ativa {
@@ -244,6 +265,7 @@ impl Bancada {
         if self.ativa.as_deref() == Some(id) {
             self.ativa = self.abas.get(indice).or_else(|| self.abas.last()).map(|a| a.id.clone());
         }
+        self.terminais.update(cx, |t, cx| t.fechar_projeto(id, cx));
         let projetos = self.backend.projetos.clone();
         let id = id.to_string();
         cx.background_spawn(async move {
@@ -261,13 +283,23 @@ impl Bancada {
         }
     }
 
-    fn salvar(&self) {
-        let abas = AbasSalvas {
+    pub fn salvar(&self) {
+        let abas = Projetos {
             abertas: self.abas.iter().map(|a| a.caminho.clone()).collect(),
             ativa: self.aba_ativa().map(|a| a.caminho.clone()),
             recentes: self.recentes.clone(),
         };
-        self.backend.gravar_abas(&abas);
+        self.backend.estado.borrow_mut().gravar(&abas);
+    }
+
+    pub fn salvar_paineis(&self) {
+        let paineis = Paineis {
+            largura_lateral: Some(self.largura_lateral),
+            largura_painel: Some(self.largura_painel),
+            altura_terminal: Some(self.altura_terminal),
+            terminal_aberto: self.terminal_aberto,
+        };
+        self.backend.estado.borrow_mut().gravar(&paineis);
     }
 
     pub fn atualizar_git(&mut self, cx: &mut Context<Self>) {
@@ -303,6 +335,12 @@ impl Bancada {
 
     pub fn alternar_terminal(&mut self, cx: &mut Context<Self>) {
         self.terminal_aberto = !self.terminal_aberto;
+        if self.terminal_aberto {
+            let raiz = self.aba_ativa().map(|a| a.caminho.clone());
+            let ativa = self.ativa.clone();
+            self.terminais.update(cx, |t, cx| t.painel_aberto(ativa, raiz, cx));
+        }
+        self.salvar_paineis();
         cx.notify();
     }
 
@@ -343,6 +381,7 @@ impl Bancada {
 
     pub fn soltar(&mut self, cx: &mut Context<Self>) {
         if self.arrasto.take().is_some() {
+            self.salvar_paineis();
             cx.notify();
         }
     }

@@ -1,10 +1,12 @@
 //! Liga o `orquestrador_core` à interface: o registro de projetos, o `Emit` num canal lido na thread principal e as abas
-//! salvas em disco.
+//! salvas em disco (`estado`).
 use orquestrador_core::agents::{cli, session};
 use orquestrador_core::config;
-use orquestrador_core::core::projects::Projects;
+use orquestrador_core::core::projects::{Projects, TermSink};
 use orquestrador_core::core::Emit;
-use serde::{Deserialize, Serialize};
+use crate::estado::Estado;
+pub use crate::estado::RECENTES_MAX;
+use std::cell::RefCell;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,7 +15,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub enum Evento {
     /// Um evento do core, com o `project` que o `scoped_emit` põe no payload.
-    Core { payload: Value },
+    Core { nome: String, payload: Value },
     /// Caminhos repassados por outra instância (`open_paths`).
     AbrirCaminhos(Vec<PathBuf>),
 }
@@ -21,20 +23,14 @@ pub enum Evento {
 pub type Remetente = async_channel::Sender<Evento>;
 pub type Receptor = async_channel::Receiver<Evento>;
 
-/// Abas abertas e projetos recentes. O React guarda isto no localStorage da webview; aqui vai num JSON ao lado da configuração.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AbasSalvas {
-    pub abertas: Vec<String>,
-    pub ativa: Option<String>,
-    pub recentes: Vec<String>,
-}
-
-pub const RECENTES_MAX: usize = 10;
-
 pub struct Backend {
     pub projetos: Arc<Projects>,
-    arquivo_abas: Option<PathBuf>,
+    /// O estado de todos os terminais, alimentado pela saída do core.
+    pub terminais: Arc<crate::terminal::motor::Registro>,
+    /// Avisos de saída nova por terminal, lidos pela janela.
+    pub avisos: crate::terminal::motor::Avisos,
+    /// O `interface.json`; `RefCell` porque o backend é compartilhado por `Rc`.
+    pub estado: RefCell<Estado>,
     /// Liga o poll do Git; os testes desligam para o executor ficar ocioso.
     pub poll_git: bool,
 }
@@ -43,39 +39,24 @@ impl Backend {
     /// O backend do app instalado: os mesmos caminhos e executáveis que o Tauri usa.
     pub fn real() -> (Backend, Remetente, Receptor) {
         let cfg_path = config::config_path().unwrap_or_default();
-        let abas = cfg_path.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.join("gpui-abas.json"));
-        Self::com(cli::Exes::real(), session::Places::real(), cfg_path, abas, true)
+        let interface = cfg_path.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.join("interface.json"));
+        Self::com(cli::Exes::real(), session::Places::real(), cfg_path, interface, true)
     }
 
     pub fn com(
-        exes: cli::Exes, places: session::Places, cfg_path: PathBuf, arquivo_abas: Option<PathBuf>, poll_git: bool,
+        exes: cli::Exes, places: session::Places, cfg_path: PathBuf, arquivo_interface: Option<PathBuf>, poll_git: bool,
     ) -> (Backend, Remetente, Receptor) {
         let (tx, rx) = async_channel::unbounded();
         let emissor = tx.clone();
-        let emit: Emit = Arc::new(move |_nome, payload| {
-            let _ = emissor.try_send(Evento::Core { payload });
+        let emit: Emit = Arc::new(move |nome, payload| {
+            let _ = emissor.try_send(Evento::Core { nome: nome.to_string(), payload });
         });
-        let projetos = Arc::new(Projects::new(exes, places, cfg_path, emit));
-        (Backend { projetos, arquivo_abas, poll_git }, tx, rx)
-    }
-
-    pub fn ler_abas(&self) -> AbasSalvas {
-        self.arquivo_abas
-            .as_deref()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|texto| serde_json::from_str(&texto).ok())
-            .unwrap_or_default()
-    }
-
-    /// Falha de gravação só perde a preferência; o app segue.
-    pub fn gravar_abas(&self, abas: &AbasSalvas) {
-        let Some(arquivo) = &self.arquivo_abas else { return };
-        if let Some(pasta) = arquivo.parent() {
-            let _ = std::fs::create_dir_all(pasta);
-        }
-        if let Ok(texto) = serde_json::to_string_pretty(abas) {
-            let _ = std::fs::write(arquivo, texto);
-        }
+        let (terminais, avisos) = crate::terminal::motor::Registro::novo();
+        let destino = terminais.clone();
+        let sink: TermSink = Arc::new(move |projeto, id, _seq, bytes| destino.receber(projeto, id, bytes));
+        let projetos = Arc::new(Projects::new(exes, places, cfg_path, emit).with_term_sink(sink));
+        terminais.ligar(&projetos);
+        (Backend { projetos, terminais, avisos, estado: RefCell::new(Estado::abrir(arquivo_interface)), poll_git }, tx, rx)
     }
 }
 

@@ -23,6 +23,23 @@ const PROPRIOS: &[(&str, &[u8])] = embutidos![
     "icons/window-maximize.svg",
     "icons/window-restore.svg",
     "icons/window-close.svg",
+    // Painéis de terminal (fase 2).
+    "icons/claude.svg",
+    "icons/codex.svg",
+    "icons/circle-question-mark.svg",
+    "icons/clock.svg",
+    "icons/loader-circle.svg",
+    "icons/circle-check.svg",
+    "icons/square.svg",
+    "icons/circle-x.svg",
+    "icons/sliders-horizontal.svg",
+    "icons/chevron-down.svg",
+    "icons/chevron-up.svg",
+    "icons/chevron-left.svg",
+    "icons/chevron-right.svg",
+    "icons/chevrons-up-down.svg",
+    "icons/list.svg",
+    "icons/check.svg",
 ];
 
 pub struct Recursos;

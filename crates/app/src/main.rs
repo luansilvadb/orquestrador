@@ -4,11 +4,13 @@ extern crate gpui_kit as gpui;
 
 mod backend;
 mod bancada;
+mod estado;
 mod instancia;
 mod moldura;
 mod paineis;
 mod recursos;
 mod tema;
+mod terminal;
 #[cfg(test)]
 mod testes;
 
