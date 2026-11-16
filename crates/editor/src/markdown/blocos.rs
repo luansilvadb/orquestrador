@@ -299,7 +299,16 @@ pub fn realcar(lang: &str, codigo: &str) -> Vec<(Range<usize>, Marca)> {
     let mut estado = syntect::highlighting::HighlightState::new(&hl, ScopeStack::new());
     let mut out: Vec<(Range<usize>, Marca)> = Vec::new();
     let mut offset = 0;
-    for linha in syntect::util::LinesWithEndings::from(codigo) {
+    for bruta in syntect::util::LinesWithEndings::from(codigo) {
+        // CRLF vira LF para a gramática, como no realce do editor.
+        let lf;
+        let linha = match bruta.strip_suffix("\r\n") {
+            Some(l) => {
+                lf = format!("{l}\n");
+                lf.as_str()
+            }
+            None => bruta,
+        };
         let Ok(ops) = parse.parse_line(linha, &SINTAXES) else { break };
         let mut pos = 0;
         for (st, pedaco) in syntect::highlighting::HighlightIterator::new(&mut estado, &ops, linha, &hl) {
@@ -319,7 +328,7 @@ pub fn realcar(lang: &str, codigo: &str) -> Vec<(Range<usize>, Marca)> {
                 _ => out.push((r, m)),
             }
         }
-        offset += linha.len();
+        offset += bruta.len();
     }
     out
 }

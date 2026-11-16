@@ -397,10 +397,14 @@ impl Motor {
         }
     }
 
-    /// Linha `i` com o fim de linha (as gramáticas do `two-face` contam com ele).
+    /// Linha `i` com o fim de linha em LF (as gramáticas do `two-face` contam com ele; o `\r` do CRLF as confunde,
+    /// e o vscode-textmate também o descarta).
     fn texto_linha(&self, i: usize) -> String {
         let mut l = self.texto.slice_line(i).to_string();
         if i + 1 < self.linhas.len() {
+            if l.ends_with('\r') {
+                l.pop();
+            }
             l.push('\n');
         }
         l

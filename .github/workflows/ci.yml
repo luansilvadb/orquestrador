@@ -22,7 +22,8 @@ jobs:
 
       # FFmpeg estático do orquestrador-midia: o cache guarda os pacotes binários do vcpkg e o libclang.
       - name: Cache do FFmpeg estático e do libclang
-        uses: actions/cache@v4
+        id: cache-ffmpeg
+        uses: actions/cache/restore@v4
         with:
           path: |
             C:\vcpkg-cache
@@ -37,6 +38,16 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           New-Item -ItemType Directory -Force C:\vcpkg-cache | Out-Null
           & pwsh crates/midia/preparar-ffmpeg.ps1
+
+      # Salvo logo após a preparação, para não depender do sucesso dos testes.
+      - name: Salvar o cache do FFmpeg estático e do libclang
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            C:\vcpkg-cache
+            ferramentas\libclang
+          key: ${{ steps.cache-ffmpeg.outputs.cache-primary-key }}
 
       - name: Testes Rust
         shell: bash
