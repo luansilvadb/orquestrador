@@ -146,6 +146,7 @@ fn fabrica(
                 let _ = b.update(cx, |b, cx| b.atualizar_visiveis(Some(&p), window, cx));
             });
         }
+        // Clonável: a aba de conflito leva a sua para depois do `defer`.
         let cutucar = {
             let git = git.clone();
             move |cx: &mut App| {
@@ -196,11 +197,11 @@ fn fabrica(
                 // A fábrica roda dentro do `update` do editor, que guarda o rascunho (da recuperação ou da sessão): a vista
                 // nasce logo depois, numa casca, já com ele.
                 let casca = cx.new(|_| CascaConflito(None));
-                let (fonte, guarda, editor, git, conteudos, travado, bancada, projeto, alvo, caminho) = (
+                let (fonte, guarda, editor, cutucar, conteudos, travado, bancada, projeto, alvo, caminho) = (
                     fonte.clone(),
                     guarda.clone(),
                     editor.clone(),
-                    git.clone(),
+                    cutucar.clone(),
                     conteudos.clone(),
                     travado.clone(),
                     bancada.clone(),
@@ -217,11 +218,6 @@ fn fabrica(
                     let v = cx.new(|cx| VisaoConflito::new(fonte, guarda, caminho.clone(), guardado, window, cx));
                     let trav = travado.get();
                     v.update(cx, |v, cx| v.definir_travado(trav, window, cx));
-                    let cutucar = move |cx: &mut App| {
-                        if let Some(g) = git.upgrade() {
-                            g.read(cx).cutucar();
-                        }
-                    };
                     cx.subscribe(&v, move |_, e: &EventoConflito, cx| match e {
                         EventoConflito::AtualizarGit => cutucar(cx),
                         EventoConflito::Rascunho(r) => {
@@ -592,8 +588,8 @@ impl Bancada {
             Conteudo::Conflito(w) => w.upgrade().is_some(),
         });
         let atual = t.alvo.clone();
-        for (alvo, c) in lista.clone() {
-            let visivel = projeto_ativo && visiveis.contains(&alvo);
+        for (alvo, c) in lista.iter() {
+            let visivel = projeto_ativo && visiveis.contains(alvo);
             match c {
                 Conteudo::Midia(w) => {
                     if let Some(v) = w.upgrade() {
@@ -606,7 +602,7 @@ impl Bancada {
                     }
                 }
                 Conteudo::Conflito(w) => {
-                    if let (Some(v), true) = (w.upgrade(), atual.as_ref() == Some(&alvo)) {
+                    if let (Some(v), true) = (w.upgrade(), atual.as_ref() == Some(alvo)) {
                         v.update(cx, |v, cx| v.mostrar(window, cx));
                     }
                 }

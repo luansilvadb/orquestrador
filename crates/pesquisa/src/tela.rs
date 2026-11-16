@@ -834,13 +834,15 @@ impl TelaPesquisa {
     }
 
     fn colapsaveis(&self) -> Vec<String> {
+        let arquivos: Vec<String> = self.arquivos.iter().map(|f| logica::chave_arquivo(&f.caminho)).collect();
         match self.visao {
-            Visao::Arvore => logica::linhas_da_tela(&self.arquivos, self.visao, &HashSet::new())
+            // Arquivos recolhidos só para não gerar as ocorrências; as linhas de arquivo saem do mesmo jeito.
+            Visao::Arvore => logica::linhas_da_tela(&self.arquivos, self.visao, &arquivos.into_iter().collect())
                 .into_iter()
                 .filter(|l| !matches!(l, Linha::Ocorrencia { .. }))
                 .map(|l| l.chave().to_string())
                 .collect(),
-            Visao::Lista => self.arquivos.iter().map(|f| logica::chave_arquivo(&f.caminho)).collect(),
+            Visao::Lista => arquivos,
         }
     }
 

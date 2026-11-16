@@ -436,20 +436,26 @@ impl AreaEditor {
 
     /// Estado do editor do documento aberto em `caminho` (relativo ou absoluto), para decorações.
     pub fn editor_de(&self, caminho: &str) -> Option<Entity<EditorState>> {
-        let c = caminho.to_lowercase();
-        self.docs.values().find(|d| d.buffer.path.to_lowercase() == c).map(|d| d.editor.clone())
+        self.doc_em(caminho).map(|d| d.editor.clone())
     }
 
     /// Decorações do documento aberto em `caminho`.
     pub fn decoracoes(&self, caminho: &str) -> Option<InfoDocumento> {
-        let c = caminho.to_lowercase();
-        self.docs.values().find(|d| d.buffer.path.to_lowercase() == c).map(info_de)
+        self.doc_em(caminho).map(info_de)
     }
 
     /// Colchetes sob o cursor sem par (em vermelho) no documento aberto em `caminho`.
     pub fn colchetes_sem_par(&self, caminho: &str) -> Vec<std::ops::Range<usize>> {
+        self.doc_em(caminho).map(|d| d.ligacao.sem_par.borrow().clone()).unwrap_or_default()
+    }
+
+    fn doc_em(&self, caminho: &str) -> Option<&Documento> {
         let c = caminho.to_lowercase();
-        self.docs.values().find(|d| d.buffer.path.to_lowercase() == c).map(|d| d.ligacao.sem_par.borrow().clone()).unwrap_or_default()
+        self.docs.values().find(|d| d.buffer.path.to_lowercase() == c)
+    }
+
+    fn projeto_rec(&self) -> String {
+        if self.projeto.is_empty() { armazem::SEM_PROJETO.to_string() } else { self.projeto.clone() }
     }
 
     // ---- Abrir ----
@@ -1021,8 +1027,9 @@ impl AreaEditor {
         if !eh_absoluto(&caminho) && !m::caminho_seguro(&caminho) {
             return Err("Caminho inválido.".into());
         }
+        let c = caminho.to_lowercase();
         let existente = self.ws.abas().find_map(|t| match &t.alvo {
-            Alvo::File { doc_id: x, path } if path.to_lowercase() == caminho.to_lowercase() && x != doc_id => Some((t.id.clone(), x.clone())),
+            Alvo::File { doc_id: x, path } if path.to_lowercase() == c && x != doc_id => Some((t.id.clone(), x.clone())),
             _ => None,
         });
         if let Some((_, x)) = &existente {
@@ -1542,7 +1549,7 @@ impl AreaEditor {
             cx.notify();
             return;
         };
-        let projeto_rec = if self.projeto.is_empty() { armazem::SEM_PROJETO.to_string() } else { self.projeto.clone() };
+        let projeto_rec = self.projeto_rec();
         let (rec, n) = decodificar_recuperacao(&texto, &projeto_rec);
         notas.extend(n);
         let carregado = rec.workspace.as_deref().map(|w| m::carregar(w, true));
@@ -1645,7 +1652,7 @@ impl AreaEditor {
             buffers,
             conflicts: conflitos,
         };
-        let projeto_rec = if self.projeto.is_empty() { armazem::SEM_PROJETO.to_string() } else { self.projeto.clone() };
+        let projeto_rec = self.projeto_rec();
         let (texto, notas) = codificar_recuperacao(&projeto_rec, &rec);
         if let Err(e) = a.gravar(&chave, &texto) {
             a.apagar(&chave);

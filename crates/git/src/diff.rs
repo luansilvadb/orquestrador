@@ -84,6 +84,8 @@ pub struct VisaoDiff {
     ativa: bool,
     tarde: bool,
     mostrado: Option<Mostrado>,
+    /// Blocos do patch do índice, contados ao receber a leitura (o render consulta várias vezes por quadro).
+    blocos: usize,
     sondagem: Option<Sondagem>,
     foco: FocusHandle,
     foco_divisor: FocusHandle,
@@ -133,6 +135,7 @@ impl VisaoDiff {
             ativa: false,
             tarde: false,
             mostrado: None,
+            blocos: 0,
             sondagem: None,
             foco: cx.focus_handle(),
             foco_divisor: cx.focus_handle(),
@@ -237,8 +240,7 @@ impl VisaoDiff {
 
     fn total(&self) -> usize {
         match &self.leitura {
-            Some(Leitura::Indice(r)) if r.untracked => 0,
-            Some(Leitura::Indice(r)) => comparar::blocos_patch(&r.diff.patch).len(),
+            Some(Leitura::Indice(_)) => self.blocos,
             Some(_) => self.mostrado.as_ref().map_or(0, |m| m.comparacao.unidades.len()),
             None => 0,
         }
@@ -322,6 +324,10 @@ impl VisaoDiff {
     /// comparador mantém a rolagem e a proporção, e só rola se a unidade atual mudar.
     fn receber(&mut self, leitura: Leitura, realce: Option<(String, Realce, Realce)>, cx: &mut Context<Self>) {
         let (mostrar, blocos) = pre_leitura::mostrar(&leitura);
+        self.blocos = match &leitura {
+            Leitura::Indice(r) if !r.untracked => comparar::blocos_patch(&r.diff.patch).len(),
+            _ => 0,
+        };
         self.leitura = Some(leitura);
         let Some(patch) = mostrar else {
             self.mostrado = None;
@@ -650,7 +656,7 @@ impl VisaoDiff {
                     // A linha de 1 px em x = 3,5 sai no Chromium em 2 px a meia força; o GPUI arredonda para 1 px cheio.
                     .left(px(if forte { 2. } else { 3. }))
                     .w(px(if forte { 4. } else { 2. }))
-                    .bg(if forte { comparador_cor_atual() } else { gpui_kit::rgba(0x6e6e6e80).into() }),
+                    .bg(if forte { cores::atual() } else { gpui_kit::rgba(0x6e6e6e80).into() }),
             )
             .into_any_element()
     }
@@ -748,10 +754,6 @@ impl VisaoDiff {
         }
         regua
     }
-}
-
-fn comparador_cor_atual() -> gpui_kit::Hsla {
-    cores::atual()
 }
 
 /// O comparador para um patch. `None` se o patch não tem blocos nem cabeçalho de arquivo (o `parsePatchFiles` do React
@@ -916,7 +918,7 @@ impl Render for VisaoDiff {
                 let _ = this2.update(cx, |this, cx| window.focus(&this.foco, cx));
             },
         );
-        let (sobre, lado) = {
+        let sobre = {
             let e = estado.borrow();
             let mut v = Vec::new();
             if let Some(g) = e.geo.clone().filter(|g| g.lado == e.lado && e.lado) {
@@ -927,9 +929,8 @@ impl Render for VisaoDiff {
                     v.extend(self.acoes_vao(centro, meio, cx));
                 }
             }
-            (v, e.lado)
+            v
         };
-        let _ = lado;
         raiz.child(self.barra(cx)).child(
             div()
                 .relative()

@@ -857,7 +857,6 @@ impl Element for Corpo {
         e.caixa = bounds;
         let rolagem = e.rolagem;
         let g = e.geometria(window);
-        let _ = &g;
         e.aplicar_pulo();
         if mudou || e.rolagem != rolagem {
             // A vista posiciona a régua e as ações do vão pela geometria deste quadro.
@@ -1147,8 +1146,9 @@ fn pintar(e: &Comparador, g: &Geometria, visiveis: Range<usize>, bounds: Bounds<
                     _ => cores::numero(),
                 };
                 let fim_num = if mudada { direita - m.sinal - 4. } else { direita };
-                let texto = n.to_string();
-                let linha = ts.shape_line(SharedString::from(texto.clone()), tam, &[corrida(texto.len(), &f, cor_num)], None);
+                let texto = SharedString::from(n.to_string());
+                let len = texto.len();
+                let linha = ts.shape_line(texto, tam, &[corrida(len, &f, cor_num)], None);
                 let _ = linha.paint(point(px(ox + fim_num - f32::from(linha.width)), px(oy + y0)), px(LINHA), TextAlign::Left, None, window, cx);
                 if mudada {
                     let s = if tipo == Some(Tipo::Removida) { "−" } else { "+" };

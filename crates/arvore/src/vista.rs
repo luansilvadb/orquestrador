@@ -2396,22 +2396,8 @@ fn janela_minimizada(_: &Window) -> bool {
     MINIMIZADA_NO_TESTE.with(|m| m.get())
 }
 
-#[cfg(all(windows, not(test)))]
-fn janela_minimizada(window: &Window) -> bool {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    match HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
-        // SAFETY: o HWND é da janela viva que o GPUI acabou de entregar.
-        Ok(RawWindowHandle::Win32(h)) => unsafe {
-            windows_sys::Win32::UI::WindowsAndMessaging::IsIconic(h.hwnd.get() as _) != 0
-        },
-        _ => false,
-    }
-}
-
-#[cfg(all(not(windows), not(test)))]
-fn janela_minimizada(_: &Window) -> bool {
-    false
-}
+#[cfg(not(test))]
+use orquestrador_ui::janela::minimizada as janela_minimizada;
 
 /// Mede a origem e a largura da lista (para o menu aberto pelo teclado e a largura do motivo embaixo do campo).
 fn canvas_origem(vista: WeakEntity<Explorador>) -> impl IntoElement {

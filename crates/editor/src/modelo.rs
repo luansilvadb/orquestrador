@@ -361,7 +361,7 @@ pub fn navegar(s: &Workspace, passo: i32) -> Workspace {
         None => n,
     };
     let i = (de + passo as i64 + n).rem_euclid(n) as usize;
-    ativar(s, &g.tabs[i].id.clone())
+    ativar(s, &g.tabs[i].id)
 }
 
 /// Move a aba para outro grupo (criando-o se couber) e a ativa lá. Recusa se a identidade já está no destino.
@@ -395,7 +395,7 @@ pub fn mover_aba(s: &Workspace, id: &str, para: Grupo, indice: Option<usize>) ->
             g.active = Some(id.to_string());
         }
     }
-    arrumar(ativar(&base, id))
+    ativar(&base, id)
 }
 
 /// Muda a aba de posição dentro do grupo; as fixadas continuam no começo.
@@ -588,7 +588,7 @@ fn abrir_em(s: &Workspace, gid: Grupo, alvo: Alvo, previa: bool, sujos: &HashSet
     let chave = alvo.chave();
     if let Some(mesma) = grupo.tabs.iter().find(|t| t.alvo.chave() == chave) {
         let mantido = if !previa && mesma.preview { marcar_editada(s, &mesma.id) } else { s.clone() };
-        return ativar(&mantido, &mesma.id.clone());
+        return ativar(&mantido, &mesma.id);
     }
     let (mut n, id) = cunhar(s);
     let aba = Aba { id: id.clone(), alvo, pinned: false, preview: previa, view: vista };

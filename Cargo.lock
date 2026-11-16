@@ -5902,7 +5902,6 @@ dependencies = [
  "gpui-kit",
  "orquestrador-core",
  "orquestrador-ui",
- "raw-window-handle",
  "windows-sys 0.59.0",
 ]
 
@@ -6005,8 +6004,10 @@ dependencies = [
  "gpui-kit",
  "icu_collator",
  "icu_locale_core",
+ "raw-window-handle",
  "serde",
  "serde_json",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

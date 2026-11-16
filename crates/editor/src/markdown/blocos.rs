@@ -377,12 +377,11 @@ pub fn desenhar_codigo(no: &MarkdownNode, window: &mut Window, cx: &mut App) -> 
     let Some(c) = no.data::<Codigo>() else { return div().into_any_element() };
     let chave = no.source_range().map_or(0, |r| r.start);
     let id = SharedString::from(format!("md-codigo-{chave}"));
-    let marcas = realcar(&c.lang, &c.codigo);
     let mono: SharedString = tema::FONTE_MONO.into();
+    let texto = c.codigo.trim().to_string();
+    let marcas = realcar(&c.lang, &texto);
     if c.linha_unica() {
         // `Snippet`: 38 px de altura, 12/8 px nas laterais, copiar sempre visível.
-        let texto = c.codigo.trim().to_string();
-        let marcas = if texto.len() == c.codigo.len() { marcas } else { realcar(&c.lang, &texto) };
         return div()
             .flex()
             .items_center()
@@ -411,8 +410,6 @@ pub fn desenhar_codigo(no: &MarkdownNode, window: &mut Window, cx: &mut App) -> 
     }
     // `Highlighter` preenchido: 16 px de respiro, 12 px de texto e 4 px entre as linhas; ações e linguagem no hover.
     let grupo = SharedString::from(format!("{id}-grupo"));
-    let texto = c.codigo.trim().to_string();
-    let marcas = if texto.len() == c.codigo.len() { marcas } else { realcar(&c.lang, &texto) };
     div()
         .id(id.clone())
         .group(grupo.clone())

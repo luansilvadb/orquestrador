@@ -181,7 +181,8 @@ impl Slot {
 struct Node {
     info: ExecutorNode,
     dir: PathBuf,
-    prompt: String,
+    /// Compartilhado: o laço da sessão o leva para fora do lock a cada volta sem copiar o texto.
+    prompt: Arc<str>,
 }
 
 #[cfg(test)]
@@ -196,7 +197,7 @@ fn test_node(index: usize, state: NodeState) -> Node {
             choice: None,
         },
         dir: PathBuf::new(),
-        prompt: String::new(),
+        prompt: Arc::from(""),
     }
 }
 
@@ -668,7 +669,7 @@ impl Core {
             std::thread::sleep(Duration::from_millis(200));
             // O sinal de fim de cada executor é lido no disco sem o lock do `Core`: com muitos executores, os comandos dos terminais
             // (tamanho, retrato, escrita) não esperam essa leitura.
-            let running: Vec<(String, PathBuf, String)> = {
+            let running: Vec<(String, PathBuf, Arc<str>)> = {
                 let Ok(inner) = self.lock() else { return };
                 if inner.epoch != epoch {
                     return;
@@ -736,7 +737,7 @@ impl Core {
                 let node_id = format!("exec-{}", inner.counter);
                 let info = ExecutorNode { id: node_id.clone(), batch: id.clone(), index, title: titles[index].clone(), state: NodeState::AwaitingChoice, choice: None };
                 inner.slots.insert(node_id.clone(), Slot::new(0));
-                inner.nodes.push(Node { info, dir: exec.join(&node_id), prompt: cli::executor_prompt(task) });
+                inner.nodes.push(Node { info, dir: exec.join(&node_id), prompt: cli::executor_prompt(task).into() });
             }
             // Cada nó entra na sessão já no estado em que vai ficar: rodando, na fila ou esperando a escolha.
             let first = inner.nodes.len() - tasks.len();
@@ -822,8 +823,8 @@ impl Core {
         std::fs::create_dir_all(dir.join("hook")).map_err(io)?;
         if prompt.len() > PROMPT_ARG_MAX {
             let file = dir.join("tarefa.md");
-            std::fs::write(&file, &prompt).map_err(io)?;
-            prompt = format!("Leia o arquivo {} por inteiro e siga as instruções dele.", file.display());
+            std::fs::write(&file, prompt.as_bytes()).map_err(io)?;
+            prompt = format!("Leia o arquivo {} por inteiro e siga as instruções dele.", file.display()).into();
             inner.nodes[i].prompt = prompt.clone();
         }
         let (spawn, settings) = cli::executor(&inner.exes, choice, &project, &dir, &prompt);
@@ -1124,7 +1125,7 @@ mod tests {
         let mut inner = core.inner.lock().unwrap();
         inner.nodes.clear();
         let info = ExecutorNode { id: "exec-1".into(), batch: "lote".into(), index: 0, title: "t".into(), state, choice: None };
-        inner.nodes.push(Node { info, dir: PathBuf::new(), prompt: String::new() });
+        inner.nodes.push(Node { info, dir: PathBuf::new(), prompt: Arc::from("") });
     }
 
     #[test]

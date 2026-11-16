@@ -192,19 +192,18 @@ pub fn diferenca<'a>(antiga: &'a str, nova: &'a str) -> Vec<Parte<'a>> {
 }
 
 /// `pushOrJoinSpan` com `enableJoin`: (realçado, comprimento em bytes).
-fn juntar(v: &mut Vec<(bool, usize, usize)>, valor: &str, neutro: bool, ultimo: bool) {
+fn juntar(v: &mut Vec<(bool, usize)>, valor: &str, neutro: bool, ultimo: bool) {
     match v.last_mut() {
         Some(u) if !ultimo => {
             let u_neutro = !u.0;
             // Igual depois de igual, mudança depois de mudança, ou um caractere igual entre mudanças: cola no anterior.
             if neutro == u_neutro || (neutro && valor.encode_utf16().count() == 1 && !u_neutro) {
                 u.1 += valor.len();
-                u.2 += 1;
                 return;
             }
-            v.push((!neutro, valor.len(), 1));
+            v.push((!neutro, valor.len()));
         }
-        _ => v.push((!neutro, valor.len(), 1)),
+        _ => v.push((!neutro, valor.len())),
     }
 }
 
@@ -227,10 +226,10 @@ pub fn realces(antiga: &str, nova: &str) -> (Vec<Range<usize>>, Vec<Range<usize>
             juntar(&mut a, p.valor, false, ultimo);
         }
     }
-    let faixas = |v: Vec<(bool, usize, usize)>| {
+    let faixas = |v: Vec<(bool, usize)>| {
         let mut pos = 0;
         let mut out = Vec::new();
-        for (realce, n, _) in v {
+        for (realce, n) in v {
             if realce {
                 out.push(pos..pos + n);
             }

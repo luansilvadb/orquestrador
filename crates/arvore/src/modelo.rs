@@ -14,12 +14,7 @@ pub fn juntar(dir: &str, nome: &str) -> String {
 }
 
 /// ("a/b", "c.txt") de "a/b/c.txt"; ("", "c.txt") na raiz.
-pub fn dividir(caminho: &str) -> (&str, &str) {
-    match caminho.rfind('/') {
-        Some(i) => (&caminho[..i], &caminho[i + 1..]),
-        None => ("", caminho),
-    }
-}
+pub use orquestrador_ui::caminhos::dividir;
 
 pub fn nome_de(caminho: &str) -> &str {
     dividir(caminho).1

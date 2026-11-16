@@ -124,10 +124,31 @@ pub fn read(project: &Path, rel: &str) -> Result<Content, String> {
 
 /// O arquivo absoluto que o usuário abriu ou escolheu para o editor. O caminho precisa ser absoluto e apontar para arquivo.
 pub fn read_at(path: &Path) -> Result<Content, String> {
-    if !path.is_absolute() {
-        return Err("O caminho do arquivo precisa ser absoluto.".into());
-    }
+    absoluto(path)?;
     read_path(path)
+}
+
+/// Recusa caminho relativo onde só vale o absoluto que o usuário escolheu.
+fn absoluto(path: &Path) -> Result<(), String> {
+    if path.is_absolute() {
+        Ok(())
+    } else {
+        Err("O caminho do arquivo precisa ser absoluto.".into())
+    }
+}
+
+/// A extensão de `path` em minúsculas; vazia quando não há.
+fn ext_lower(path: &Path) -> String {
+    path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
+}
+
+/// Recusa a extensão que não está em `MEDIA_EXTS`.
+fn media_ext(path: &Path, label: &str) -> Result<(), String> {
+    if MEDIA_EXTS.contains(&ext_lower(path).as_str()) {
+        Ok(())
+    } else {
+        Err(format!("Tipo de arquivo não aberto como mídia: {label}"))
+    }
 }
 
 fn read_path(file: &Path) -> Result<Content, String> {
@@ -156,24 +177,17 @@ pub(crate) const MAX_MEDIA: u64 = 32 * 1_048_576;
 /// o caminho passa por `plain` (sem `.git`, sem link em nenhuma parte, sem sair do projeto); e o arquivo não pode passar
 /// de `MAX_MEDIA`. Não há sniff de conteúdo: o navegador é quem decodifica (e recusa o que não for imagem).
 pub fn read_media(project: &Path, rel: &str) -> Result<Vec<u8>, String> {
-    let ext = Path::new(rel).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    if !MEDIA_EXTS.contains(&ext.as_str()) {
-        return Err(format!("Tipo de arquivo não aberto como mídia: {rel}"));
-    }
+    media_ext(Path::new(rel), rel)?;
     let file = plain(project, rel, false)?;
     read_media_path(&file, rel)
 }
 
 /// Imagem aberta pelo caminho absoluto que o usuário escolheu.
 pub fn read_media_at(path: &Path) -> Result<Vec<u8>, String> {
-    if !path.is_absolute() {
-        return Err("O caminho do arquivo precisa ser absoluto.".into());
-    }
-    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    if !MEDIA_EXTS.contains(&ext.as_str()) {
-        return Err(format!("Tipo de arquivo não aberto como mídia: {}", path.display()));
-    }
-    read_media_path(path, &path.display().to_string())
+    absoluto(path)?;
+    let label = path.display().to_string();
+    media_ext(path, &label)?;
+    read_media_path(path, &label)
 }
 
 fn read_media_path(file: &Path, label: &str) -> Result<Vec<u8>, String> {
@@ -202,7 +216,7 @@ pub(crate) const MAX_STREAM_CHUNK: u64 = 4 * 1_048_576;
 
 /// Recusa (403) a extensão que não é de vídeo nem de áudio.
 fn stream_ext(path: &Path, label: &str) -> Result<(), (u16, String)> {
-    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let ext = ext_lower(path);
     if VIDEO_EXTS.contains(&ext.as_str()) || AUDIO_EXTS.contains(&ext.as_str()) {
         Ok(())
     } else {
@@ -223,9 +237,7 @@ pub fn stream_path(project: &Path, rel: &str) -> Result<PathBuf, (u16, String)> 
 
 /// O vídeo ou áudio aberto pelo caminho absoluto que o usuário escolheu, com as regras de `read_media_at`.
 pub fn stream_path_at(path: &Path) -> Result<PathBuf, (u16, String)> {
-    if !path.is_absolute() {
-        return Err((403, "O caminho do arquivo precisa ser absoluto.".into()));
-    }
+    absoluto(path).map_err(|e| (403, e))?;
     stream_ext(path, &path.display().to_string())?;
     Ok(path.to_path_buf())
 }
@@ -233,13 +245,13 @@ pub fn stream_path_at(path: &Path) -> Result<PathBuf, (u16, String)> {
 /// O tipo MIME do vídeo ou áudio pela extensão. `.mov` vai como `video/mp4`: o Chromium não toca `video/quicktime`, e o
 /// `.mov` H.264 costuma tocar assim.
 fn stream_type(path: &Path) -> &'static str {
-    match path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).as_deref() {
-        Some("webm") => "video/webm",
-        Some("mp3") => "audio/mpeg",
-        Some("wav") => "audio/wav",
-        Some("ogg" | "oga") => "audio/ogg",
-        Some("flac") => "audio/flac",
-        Some("m4a") => "audio/mp4",
+    match ext_lower(path).as_str() {
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" | "oga" => "audio/ogg",
+        "flac" => "audio/flac",
+        "m4a" => "audio/mp4",
         _ => "video/mp4",
     }
 }
@@ -327,9 +339,7 @@ pub fn write_checked(project: &Path, rel: &str, text: &str, base: &str, base_bom
 
 /// Grava um caminho absoluto escolhido pelo usuário, criando o arquivo se ainda não existe e recusando mudanças externas.
 pub fn write_checked_at(path: &Path, text: &str, base: &str, base_bom: bool) -> Result<(), String> {
-    if !path.is_absolute() {
-        return Err("O caminho do arquivo precisa ser absoluto.".into());
-    }
+    absoluto(path)?;
     let file = if std::fs::symlink_metadata(path).is_ok() {
         hold_absolute(path)?
     } else {
@@ -404,9 +414,7 @@ fn hold(project: &Path, rel: &str) -> Result<File, String> {
 
 /// Abre um arquivo escolhido fora do projeto sem permitir gravação, renomeação ou troca do destino durante a checagem.
 fn hold_absolute(path: &Path) -> Result<File, String> {
-    if !path.is_absolute() {
-        return Err("O caminho do arquivo precisa ser absoluto.".into());
-    }
+    absoluto(path)?;
     let real = path.canonicalize().map_err(open_err)?;
     if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
         return Err(format!("{} não é um arquivo.", path.display()));
@@ -496,9 +504,10 @@ pub(crate) fn no_links(project: &Path, rel: &str) -> Result<(), String> {
 pub fn plain(project: &Path, rel: &str, dir: bool) -> Result<PathBuf, String> {
     no_git(rel)?;
     no_links(project, rel)?;
-    let real = inside(project, rel, dir)?;
+    valid_rel(rel)?;
+    let base = canon_project(project)?;
+    let real = inside_em(&base, rel, dir)?;
     // O caminho real pega o `.git` que o nome escrito esconde, como o nome curto `GIT~1`.
-    let base = project.canonicalize().map_err(|e| format!("Não foi possível abrir o projeto: {e}"))?;
     if real.strip_prefix(&base).is_ok_and(|r| r.components().any(|c| c.as_os_str().eq_ignore_ascii_case(".git"))) {
         return Err("A pasta .git não pode ser alterada aqui.".into());
     }
@@ -518,8 +527,9 @@ pub fn rename(project: &Path, rel: &str, name: &str) -> Result<String, String> {
         None => name.to_string(),
     };
     let dest = it.path.with_file_name(name);
-    let occupied = std::fs::symlink_metadata(&dest).is_ok();
-    let link = std::fs::symlink_metadata(&dest).is_ok_and(|m| m.file_type().is_symlink());
+    let meta = std::fs::symlink_metadata(&dest);
+    let occupied = meta.is_ok();
+    let link = meta.is_ok_and(|m| m.file_type().is_symlink());
     let same_file = occupied && !link && dest.canonicalize().ok() == it.path.canonicalize().ok();
     if occupied && !same_file {
         return Err(format!("Já existe um item chamado “{name}” nesta pasta."));
@@ -584,7 +594,7 @@ fn refused<T>(error: String) -> Batch<T> {
 /// O item `rel` do projeto, pronto para uma ação. Recusa a raiz, `.git`, link em qualquer parte do caminho, o que sai do
 /// projeto, e pasta com `.git` ou link dentro (a ação pegaria esse conteúdo junto). Arquivo ou pasta, sem seguir link.
 fn item(project: &Path, rel: &str) -> Result<Item, String> {
-    let rel = rel.split('/').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/");
+    let rel = limpo(rel);
     if rel.is_empty() {
         return Err("A raiz do projeto não pode ser alterada aqui.".into());
     }
@@ -597,6 +607,11 @@ fn item(project: &Path, rel: &str) -> Result<Item, String> {
     Ok(Item { path, dir, rel, name })
 }
 
+/// `rel` sem barras sobrando.
+fn limpo(rel: &str) -> String {
+    rel.split('/').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/")
+}
+
 /// Os itens de `rels`, checados antes de qualquer mudança: lista não vazia, sem repetido, sem um item dentro de outro e cada
 /// um passando por `item`. Qualquer recusa aborta o lote inteiro.
 fn selection(project: &Path, rels: &[String]) -> Result<Vec<Item>, String> {
@@ -606,6 +621,7 @@ fn selection(project: &Path, rels: &[String]) -> Result<Vec<Item>, String> {
     let items = rels.iter().map(|rel| item(project, rel)).collect::<Result<Vec<Item>, String>>()?;
     let keys: Vec<String> = items.iter().map(|it| it.rel.to_lowercase()).collect();
     for (i, it) in items.iter().enumerate() {
+        let inner = format!("{}/", keys[i]);
         for (j, key) in keys.iter().enumerate() {
             if i == j {
                 continue;
@@ -613,7 +629,7 @@ fn selection(project: &Path, rels: &[String]) -> Result<Vec<Item>, String> {
             if i < j && *key == keys[i] {
                 return Err(format!("“{}” está repetido na seleção.", it.name));
             }
-            if key.starts_with(&format!("{}/", keys[i])) {
+            if key.starts_with(&inner) {
                 return Err(format!("“{}” está dentro de “{}”, que também está na seleção. Escolha só um dos dois.", items[j].name, it.name));
             }
         }
@@ -647,7 +663,7 @@ fn move_plan(project: &Path, rels: &[String], dest: &str) -> Result<Vec<(Item, P
     let items = selection(project, rels)?;
     let dest_path = plain(project, dest, true)?;
     let dest_canon = dest_path.canonicalize().map_err(|e| format!("Não foi possível abrir a pasta de destino: {e}"))?;
-    let dest_rel = dest.split('/').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/");
+    let dest_rel = limpo(dest);
     let mut taken = HashSet::new();
     let mut plan = Vec::with_capacity(items.len());
     for it in items {
@@ -816,6 +832,7 @@ fn paste_plan(project: &Path, dest: &str, snap: &Snapshot) -> Result<(PathBuf, V
 /// Recusa a colagem em que um item aparece de novo ou está dentro de outro item. Compara o caminho do clipboard sem caixa.
 fn check_overlap(paths: &[PathBuf]) -> Result<(), String> {
     let keys: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_lowercase().replace('/', "\\")).collect();
+    let dentro: Vec<String> = keys.iter().map(|k| format!("{k}\\")).collect();
     for (i, key) in keys.iter().enumerate() {
         let name = paths[i].file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         for (j, other) in keys.iter().enumerate() {
@@ -825,7 +842,7 @@ fn check_overlap(paths: &[PathBuf]) -> Result<(), String> {
             if i < j && other == key {
                 return Err(format!("“{name}” está repetido na colagem. Nada foi colado."));
             }
-            if key.starts_with(&format!("{other}\\")) {
+            if key.starts_with(&dentro[j]) {
                 let outer = paths[j].file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
                 return Err(format!("“{name}” está dentro de “{outer}”, que também está na colagem. Escolha só um dos dois. Nada foi colado."));
             }
@@ -950,12 +967,20 @@ fn valid_rel(rel: &str) -> Result<(), String> {
 /// (pasta se `dir`, senão arquivo).
 fn inside(project: &Path, rel: &str, dir: bool) -> Result<PathBuf, String> {
     valid_rel(rel)?;
-    let base = project.canonicalize().map_err(|e| format!("Não foi possível abrir o projeto: {e}"))?;
+    inside_em(&canon_project(project)?, rel, dir)
+}
+
+fn canon_project(project: &Path) -> Result<PathBuf, String> {
+    project.canonicalize().map_err(|e| format!("Não foi possível abrir o projeto: {e}"))
+}
+
+/// O `inside` com o projeto já canonizado em `base` e `rel` já conferido por `valid_rel`.
+fn inside_em(base: &Path, rel: &str, dir: bool) -> Result<PathBuf, String> {
     let real = base.join(rel).canonicalize().map_err(|_| {
         if dir { format!("Pasta não encontrada: {rel}") } else { format!("Arquivo não encontrado: {rel}") }
     })?;
     // Um link simbólico que aponta para fora do projeto também sai da pasta.
-    if !real.starts_with(&base) {
+    if !real.starts_with(base) {
         return Err(format!("Caminho fora do projeto: {rel}"));
     }
     if real.is_dir() != dir {

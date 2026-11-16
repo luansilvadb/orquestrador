@@ -145,9 +145,9 @@ impl VisaoConflito {
         self.conflito.as_ref().map(|c| c.revision.clone())
     }
 
-    pub fn definir_travado(&mut self, travado: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn definir_travado(&mut self, travado: bool, _window: &mut Window, cx: &mut Context<Self>) {
         self.travado = travado;
-        self.aplicar_somente_leitura(window, cx);
+        self.aplicar_somente_leitura(cx);
         cx.notify();
     }
 
@@ -162,10 +162,9 @@ impl VisaoConflito {
         self.carregar(false, window, cx);
     }
 
-    fn aplicar_somente_leitura(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn aplicar_somente_leitura(&mut self, cx: &mut Context<Self>) {
         let ro = self.travado || self.marcando;
         self.editor.update(cx, |e, cx| e.set_readonly(ro, cx));
-        let _ = window;
     }
 
     fn por_texto(&mut self, texto: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -256,7 +255,7 @@ impl VisaoConflito {
         }
         self.ocupado = true;
         self.marcando = marcar;
-        self.aplicar_somente_leitura(window, cx);
+        self.aplicar_somente_leitura(cx);
         cx.notify();
         let fonte = self.fonte.clone();
         let (caminho, enviado, revisao) = (self.caminho.clone(), r.texto.clone(), r.revisao.clone());
@@ -275,7 +274,7 @@ impl VisaoConflito {
                 this.guarda.sair();
                 this.ocupado = false;
                 this.marcando = false;
-                this.aplicar_somente_leitura(window, cx);
+                this.aplicar_somente_leitura(cx);
                 match r {
                     Err(e) => comum::falha(e, window, cx),
                     Ok(None) => {
@@ -399,7 +398,7 @@ impl Render for VisaoConflito {
                 .text_color(if perigo { comum::perigo() } else { comum::descricao() })
                 .child(t)
         };
-        let (Some(c), Some(r)) = (self.conflito.clone(), self.rascunho.clone()) else {
+        let (Some(c), Some(r)) = (&self.conflito, &self.rascunho) else {
             return raiz.child(if !self.erro.is_empty() && self.conflito.is_none() {
                 aviso(self.erro.clone(), true)
             } else {
@@ -414,12 +413,11 @@ impl Render for VisaoConflito {
         }
         let (pecas, malformado) = ler_conflito(&r.texto);
         let n = contar_blocos(&pecas);
-        let resolvivel = !malformado;
         let marcadores = tem_marcadores(&r.texto);
         let remocao = c.ours.is_none() || c.theirs.is_none();
         let ausente = c.worktree.is_none();
         let bloq = self.travado || self.ocupado;
-        let pode_marcar = resolvivel && !marcadores && !bloq && !self.arquivo_sujo;
+        let pode_marcar = !malformado && !marcadores && !bloq && !self.arquivo_sujo;
         let pode_salvar = r.sujo() && !bloq && !self.arquivo_sujo;
         let topo = faixa()
             .flex_wrap()
@@ -524,13 +522,13 @@ impl Render for VisaoConflito {
                 ),
             );
         }
-        if !ausente && !resolvivel {
+        if !ausente && malformado {
             corpo = corpo.child(faixa().py(px(6.)).child(texto(
-                if malformado { "Marcadores de conflito incompletos: edite o texto final à mão." } else { "Edite o texto final à mão." },
+                "Marcadores de conflito incompletos: edite o texto final à mão.",
                 comum::descricao(),
             )));
         }
-        if !ausente && resolvivel && n > 0 {
+        if !ausente && !malformado && n > 0 {
             let mut lista = div()
                 .id("trechos")
                 .flex()

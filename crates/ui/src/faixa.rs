@@ -117,6 +117,19 @@ impl EstadoFaixa {
         self.0.arrasto.borrow().clone()
     }
 
+    /// Consulta o arrasto sem clonar as posições (o render e o mouse passam aqui a cada quadro).
+    fn ver_arrasto<R>(&self, f: impl FnOnce(&ArrastoAba) -> R) -> Option<R> {
+        self.0.arrasto.borrow().as_ref().map(f)
+    }
+
+    fn segurando(&self) -> bool {
+        self.0.arrasto.borrow().is_some()
+    }
+
+    fn movendo(&self) -> bool {
+        self.ver_arrasto(|a| a.movendo).unwrap_or(false)
+    }
+
     /// Rolagem atual, em px a partir do começo (o `scrollLeft`).
     pub fn rolagem_x(&self) -> f32 {
         -f32::from(self.0.rolagem.offset().x)
@@ -178,7 +191,7 @@ impl EstadoFaixa {
 
     /// Durante o arrasto, perto da borda, rola 8 px e pede outro quadro.
     fn rolar_na_borda(&self, window: &mut Window) {
-        let Some(x) = self.arrasto().filter(|a| a.movendo).map(|a| a.x) else { return };
+        let Some(x) = self.ver_arrasto(|a| a.movendo.then_some(a.x)).flatten() else { return };
         let r = &self.0.rolagem;
         let caixa = r.bounds();
         let passo = if x < f32::from(caixa.left()) + BORDA {
@@ -209,7 +222,7 @@ impl EstadoFaixa {
             }
             let Some(interno) = fraco.upgrade() else { return };
             let estado = EstadoFaixa(interno);
-            if estado.arrasto().is_some_and(|a| a.movendo) {
+            if estado.movendo() {
                 cx.stop_propagation();
                 // Soltar derruba esta assinatura, então fica para depois do despacho.
                 cx.defer(move |cx| {
@@ -372,7 +385,7 @@ impl RenderOnce for FaixaAbas {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let estado = self.estado;
         let vista = window.current_view();
-        if estado.arrasto().is_some() && !window.is_window_active() {
+        if estado.segurando() && !window.is_window_active() {
             estado.soltar(false);
         }
         estado.rolar_na_borda(window);
@@ -403,7 +416,7 @@ impl RenderOnce for FaixaAbas {
             faixa = if segurada { faixa.child(deferred(el)) } else { faixa.child(el) };
         }
         faixa = faixa.children(self.extras);
-        if estado.arrasto().is_none() {
+        if !estado.segurando() {
             return faixa;
         }
         // Enquanto há aba segurada, o ponteiro é acompanhado na janela inteira.
@@ -422,8 +435,8 @@ impl RenderOnce for FaixaAbas {
                             Passo::Nada => {}
                             Passo::Iniciou => {
                                 e.escutar_esc(vista, cx);
-                                if let (Some(f), Some(a)) = (&iniciar, e.arrasto()) {
-                                    f(&a.de, window, cx);
+                                if let (Some(f), Some(de)) = (&iniciar, e.ver_arrasto(|a| a.de)) {
+                                    f(&de, window, cx);
                                 }
                                 cx.notify(vista);
                             }

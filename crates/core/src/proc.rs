@@ -178,8 +178,13 @@ fn run_as(dir: &Path, globais: &[&str], args: &[&str], entrada: Option<&[u8]>) -
     if out.status.success() {
         return Ok((out.stdout, out.stderr));
     }
-    let why: Vec<String> = [&out.stderr, &out.stdout].into_iter().map(|bytes| String::from_utf8_lossy(bytes).trim().to_string()).filter(|s| !s.is_empty()).collect();
-    Err(Falha::Erro(if why.is_empty() { format!("código {}", out.status.code().unwrap_or(-1)) } else { why.join("\n") }))
+    Err(Falha::Erro(motivo(out.status, &out.stderr, &out.stdout)))
+}
+
+/// O que o Git escreveu (stderr e stdout, aparados e em UTF-8 com troca de byte inválido), ou o código de saída.
+fn motivo(status: std::process::ExitStatus, err: &[u8], out: &[u8]) -> String {
+    let why: Vec<String> = [err, out].into_iter().map(|bytes| String::from_utf8_lossy(bytes).trim().to_string()).filter(|s| !s.is_empty()).collect();
+    if why.is_empty() { format!("código {}", status.code().unwrap_or(-1)) } else { why.join("\n") }
 }
 
 /// A saída (stdout) do Git sem espera de digitação. Na falha, o erro traz o texto do Git.
@@ -229,8 +234,7 @@ pub fn git_bytes_ate(dir: &Path, args: &[&str], limite: usize) -> Result<Vec<u8>
     if cortado || status.success() {
         return Ok(out);
     }
-    let why: Vec<String> = [&err, &out].into_iter().map(|bytes| String::from_utf8_lossy(bytes).trim().to_string()).filter(|s| !s.is_empty()).collect();
-    Err(if why.is_empty() { format!("código {}", status.code().unwrap_or(-1)) } else { why.join("\n") })
+    Err(motivo(status, &err, &out))
 }
 
 /// O Git com `entrada` pela entrada padrão, como o `git apply` que recebe o patch. Na falha, o erro é o de `run`.

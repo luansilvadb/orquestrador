@@ -87,10 +87,8 @@ pub fn commits(n: u32) -> String {
 
 /// Nome e pasta de um caminho com "/".
 pub fn dividir(caminho: &str) -> (&str, &str) {
-    match caminho.rfind('/') {
-        Some(i) => (&caminho[i + 1..], &caminho[..i]),
-        None => (caminho, ""),
-    }
+    let (pasta, nome) = orquestrador_ui::caminhos::dividir(caminho);
+    (nome, pasta)
 }
 
 /// Letra, título e cor de cada tipo (KIND do painel e KIND_COLOR das decorações).

@@ -244,7 +244,7 @@ fn snapshot(dir: &Path, rel: &str, staged: bool) -> Result<Lido, String> {
         let raw = scope.spawn(|| raw_diff(dir, rel, staged, CONTEXTO_BLOCO));
         (registros.join(), raw.join())
     });
-    let registros = registros.map_err(|_| "Falha interna ao ler o índice do Git.".to_string())??;
+    let registros = juntar(registros, "o índice do Git")?;
     if folder_em(dir, &registros, rel) {
         return Err(format!("{rel} é uma pasta: o diff é de um arquivo por vez."));
     }
@@ -252,8 +252,13 @@ fn snapshot(dir: &Path, rel: &str, staged: bool) -> Result<Lido, String> {
         let diff = untracked(&guarded(dir, rel)?, rel)?;
         return Ok(Lido { raw: diff.patch.clone().into_bytes(), diff, untracked: true });
     }
-    let raw = raw.map_err(|_| "Falha interna ao ler o diff do Git.".to_string())??;
+    let raw = juntar(raw, "o diff do Git")?;
     Ok(Lido { diff: read_diff(&raw), raw, untracked: false })
+}
+
+/// O resultado de uma thread de leitura; o pânico dela vira "Falha interna ao ler `o_que`.".
+fn juntar<T>(r: std::thread::Result<Result<T, String>>, o_que: &str) -> Result<T, String> {
+    r.map_err(|_| format!("Falha interna ao ler {o_que}."))?
 }
 
 /// Contexto do diff que vira bloco: o padrão do Git. A revisão e as ações por bloco dependem dele.
@@ -308,15 +313,18 @@ fn untracked(file: &Path, rel: &str) -> Result<Diff, String> {
     if files::is_binary(&bytes) {
         return Ok(Diff { binary: true, ..empty });
     }
-    let lines: Vec<String> = String::from_utf8_lossy(&bytes).lines().map(str::to_string).collect();
-    if lines.is_empty() {
+    let text = String::from_utf8_lossy(&bytes);
+    let count = text.lines().count();
+    if count == 0 {
         return Ok(empty);
     }
-    let body: String = lines.iter().map(|l| format!("+{l}\n")).collect();
-    let patch = format!(
-        "diff --git a/{rel} b/{rel}\nnew file mode 100644\n--- /dev/null\n+++ b/{rel}\n@@ -0,0 +1,{} @@\n{body}",
-        lines.len()
-    );
+    let mut patch = format!("diff --git a/{rel} b/{rel}\nnew file mode 100644\n--- /dev/null\n+++ b/{rel}\n@@ -0,0 +1,{count} @@\n");
+    patch.reserve(text.len() + 2 * count);
+    for line in text.lines() {
+        patch.push('+');
+        patch.push_str(line);
+        patch.push('\n');
+    }
     Ok(Diff { patch, ..empty })
 }
 
@@ -624,14 +632,6 @@ fn tracked_file(dir: &Path, rel: &str) -> Result<bool, String> {
     Ok(tracked_em(&index_registros(dir, rel)?, rel))
 }
 
-/// Pasta com arquivos rastreados ou com o nome na pasta de trabalho. Um patch de pasta junta arquivos, então é recusado.
-fn is_folder(dir: &Path, rel: &str) -> Result<bool, String> {
-    if dir.join(rel).is_dir() {
-        return Ok(true);
-    }
-    Ok(folder_em(dir, &index_registros(dir, rel)?, rel))
-}
-
 fn stale(rel: &str) -> String {
     format!("{rel} mudou desde que o diff foi lido. Atualize o diff antes de agir.")
 }
@@ -853,9 +853,8 @@ pub fn commit_detail(dir: &Path, id: &str) -> Result<CommitDetail, String> {
         let files = scope.spawn(|| commit_files(dir, &hash));
         (commit.join(), files.join())
     });
-    let commit =
-        commit.map_err(|_| "Falha interna ao ler o cabeçalho do commit.".to_string())??;
-    let files = files.map_err(|_| "Falha interna ao ler os arquivos do commit.".to_string())??;
+    let commit = juntar(commit, "o cabeçalho do commit")?;
+    let files = juntar(files, "os arquivos do commit")?;
     Ok(CommitDetail { commit, files })
 }
 
@@ -889,12 +888,9 @@ pub fn commit_hover(dir: &Path, id: &str) -> Result<CommitHoverDetail, String> {
         let remote = scope.spawn(|| proc::git_saida(dir, &["remote", "get-url", "origin"]));
         (commit.join(), message.join(), stats.join(), remote.join())
     });
-    let commit =
-        commit.map_err(|_| "Falha interna ao ler o cabeçalho do commit.".to_string())??;
-    let message =
-        message.map_err(|_| "Falha interna ao ler a mensagem do commit.".to_string())??;
-    let stats =
-        stats.map_err(|_| "Falha interna ao ler as estatísticas do commit.".to_string())??;
+    let commit = juntar(commit, "o cabeçalho do commit")?;
+    let message = juntar(message, "a mensagem do commit")?;
+    let stats = juntar(stats, "as estatísticas do commit")?;
     let (files_changed, insertions, deletions) = parse_shortstat(&stats);
     let github_url = remote
         .ok()
@@ -1005,7 +1001,7 @@ fn unmerged(dir: &Path, rel: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
     for record in raw.split(|b| *b == 0).filter(|r| !r.is_empty()) {
         // `modo SP hash SP estágio TAB caminho`; o pathspec pode trazer outros caminhos (pasta), que não entram.
         let Some(tab) = record.iter().position(|&b| b == b'\t') else { continue };
-        if &record[tab + 1..] != rel.as_bytes() {
+        if registro_caminho(record) != rel.as_bytes() {
             continue;
         }
         let stage = record[..tab].split(|&b| b == b' ').nth(2).and_then(|s| std::str::from_utf8(s).ok()?.parse::<u8>().ok());
@@ -1152,7 +1148,7 @@ pub fn conflict(dir: &Path, rel: &str) -> Result<Conflict, String> {
 fn has_markers(text: &str) -> bool {
     text.lines().any(|l| {
         let l = l.trim_end_matches('\r');
-        ["<<<<<<<", ">>>>>>>"].iter().any(|m| l == *m || l.starts_with(&format!("{m} ")))
+        ["<<<<<<<", ">>>>>>>"].iter().any(|m| l.strip_prefix(m).is_some_and(|r| r.is_empty() || r.starts_with(' ')))
     })
 }
 
@@ -1351,10 +1347,16 @@ pub fn write_index(dir: &Path, rel: &str, text: &str, expected: &str) -> Result<
     }
     let rel = spec(rel)?;
     guarded(dir, rel)?;
-    if is_folder(dir, rel)? {
-        return Err(format!("{rel} é uma pasta, não um arquivo."));
+    let pasta = || format!("{rel} é uma pasta, não um arquivo.");
+    if dir.join(rel).is_dir() {
+        return Err(pasta());
     }
-    let (perm, antes) = match index_entry(dir, rel)? {
+    // Um `ls-files` serve à pasta e ao registro do estágio 0.
+    let registros = index_registros(dir, rel)?;
+    if folder_em(dir, &registros, rel) {
+        return Err(pasta());
+    }
+    let (perm, antes) = match entry_em(&registros, rel) {
         Some((m, hash)) if m == "100644" || m == "100755" => (m, hash),
         Some(_) => return Err(format!("{rel} não é um arquivo comum no índice (link ou submódulo).")),
         None => return Err(format!("{rel} não está no índice (não rastreado, em conflito ou removido do índice): prepare o arquivo inteiro.")),

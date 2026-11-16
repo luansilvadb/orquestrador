@@ -92,7 +92,7 @@ pub fn aplicar(a: &str, b: &str, trechos: &[Trecho]) -> String {
     for t in trechos.iter().rev() {
         let fim_a = t.ate_a.min(saida.len());
         let meio = &b[t.de_b.min(b.len())..t.ate_b.min(b.len())];
-        saida = format!("{}{}{}", &saida[..t.de_a.min(saida.len())], meio, &saida[fim_a..]);
+        saida.replace_range(t.de_a.min(fim_a)..fim_a, meio);
     }
     saida
 }
@@ -119,7 +119,7 @@ pub fn tirar_bloco(head: &str, indice: &str, buffer: &str, bloco: Faixa) -> Stri
     let faixa = Faixa { de: para_indice(bloco.de), ate: para_indice(bloco.ate) };
     let ts: Vec<Trecho> = trechos(head, indice)
         .into_iter()
-        .filter(|t| tocam(Faixa { de: t.de_b, ate: t.ate_b }, faixa))
+        .filter(|t| tocam((*t).into(), faixa))
         .map(|t| Trecho { de_a: t.de_b, ate_a: t.ate_b, de_b: t.de_a, ate_b: t.ate_a })
         .collect();
     aplicar(indice, head, &ts)

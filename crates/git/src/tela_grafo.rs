@@ -263,7 +263,7 @@ impl TelaGit {
                 None => f.path.clone(),
             };
             let alvo = Alvo::Commit { hash: hash.to_string(), caminho: f.path.clone() };
-            let (a1, a2, a3, a4) = (alvo.clone(), alvo.clone(), alvo.clone(), alvo);
+            let (a1, a2, a3) = (alvo.clone(), alvo.clone(), alvo);
             let c = cor_tipo(f.kind);
             lista = lista.child(
                 div()
@@ -304,7 +304,7 @@ impl TelaGit {
                             }))
                             .on_click(cx.listener(move |_, e: &gpui_kit::ClickEvent, _, cx| {
                                 let permanente = e.click_count() >= 2;
-                                cx.emit(EventoGit::AbrirAlvo { alvo: if permanente { a3.clone() } else { a4.clone() }, permanente });
+                                cx.emit(EventoGit::AbrirAlvo { alvo: a3.clone(), permanente });
                             }))
                             .child(icone_arquivo(&f.path, 16.))
                             .child(div().flex_shrink_0().max_w(gpui_kit::relative(0.7)).truncate().text_color(c).child(nome.to_string()))
@@ -368,7 +368,7 @@ impl TelaGit {
         self.hover.ativo = Some((hash.clone(), seq));
         let vizinhas: Vec<String> = [-1i64, 1, -2, 2]
             .iter()
-            .filter_map(|d| self.grafo.itens.as_ref()?.get((indice as i64 + d).max(-1) as usize).filter(|_| indice as i64 + d >= 0))
+            .filter_map(|d| self.grafo.itens.as_ref()?.get(usize::try_from(indice as i64 + d).ok()?))
             .map(|c| c.commit.hash.clone())
             .collect();
         // Com o cartão aberto a vizinhança é lida já; sem ele, só depois de o ponteiro parar um instante.
@@ -741,14 +741,27 @@ impl TelaGit {
         let head = c.commit.hash == s.head;
         let aberto = self.grafo_detalhe.aberto.as_deref() == Some(&c.commit.hash);
         let hash = c.commit.hash.clone();
-        let (h1, h2, h3, h4) = (hash.clone(), hash.clone(), hash.clone(), hash.clone());
-        let assunto = if c.commit.subject.is_empty() { "(sem mensagem)".to_string() } else { c.commit.subject.clone() };
+        let (h1, h2, h3) = (hash.clone(), hash.clone(), hash.clone());
+        let assunto = assunto(&c.commit.subject);
         let (copia_hash, copia_assunto) = (c.commit.hash.clone(), c.commit.subject.clone());
         let registro = self.linhas_grafo.clone();
         let chave = hash.clone();
         let chave_foco = format!("c:{hash}");
         let foco_l = self.foco_linha(&chave_foco, cx);
         let (foco_clique, registro2, k2) = (foco_l.clone(), self.limites_linha.clone(), chave_foco.clone());
+        let detalhe = aberto.then(|| match &self.grafo_detalhe.detalhe {
+            Some(d) if d.commit.hash == c.commit.hash => {
+                if d.files.is_empty() {
+                    nota_vao(&linha, "Nenhum arquivo neste commit.", false)
+                } else {
+                    self.arquivos_commit(&c.commit.hash, &d.files, Some(&linha), cx)
+                }
+            }
+            _ => {
+                let e = &self.grafo_detalhe.erro;
+                nota_vao(&linha, if e.is_empty() { "Lendo os arquivos…" } else { e }, !e.is_empty())
+            }
+        });
         let linha_commit = div()
             .id(("commit-grafo", i))
             .track_focus(&foco_l)
@@ -786,7 +799,7 @@ impl TelaGit {
                 registro.borrow_mut().insert(chave.clone(), b);
                 registro2.borrow_mut().insert(k2.clone(), b);
             }, |_, _, _, _| {}).absolute().size_full())
-            .child(faixas_commit(linha.clone(), head))
+            .child(faixas_commit(linha, head))
             .child(
                 div()
                     .flex_1()
@@ -800,20 +813,6 @@ impl TelaGit {
             .when(largura >= 384., |d| {
                 d.child(div().min_w_0().max_w(gpui_kit::relative(0.3)).truncate().text_size(px(11.7)).opacity(0.7).child(c.commit.author.clone()))
             });
-        let _ = h4;
-        let detalhe = aberto.then(|| match &self.grafo_detalhe.detalhe {
-            Some(d) if d.commit.hash == c.commit.hash => {
-                if d.files.is_empty() {
-                    nota_vao(&linha, "Nenhum arquivo neste commit.", false)
-                } else {
-                    self.arquivos_commit(&c.commit.hash, &d.files, Some(&linha), cx)
-                }
-            }
-            _ => {
-                let e = &self.grafo_detalhe.erro;
-                nota_vao(&linha, if e.is_empty() { "Lendo os arquivos…" } else { e }, !e.is_empty())
-            }
-        });
         div().flex().flex_col().child(linha_commit).children(detalhe).into_any_element()
     }
 
@@ -861,7 +860,7 @@ impl TelaGit {
                     )
                         .tooltip_texto("Atualizar o histórico")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.giro.insert("historico", std::time::Instant::now());
+                            this.giro("historico");
                             let e = this.historico.escopo.clone();
                             this.recarregar_historico(e, cx);
                         })),
@@ -929,7 +928,7 @@ impl TelaGit {
                             div()
                                 .text_size(px(13.))
                                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                .child(if c.subject.is_empty() { "(sem mensagem)".to_string() } else { c.subject.clone() }),
+                                .child(assunto(&c.subject)),
                         )
                         .child(div().font_family(tema::FONTE_MONO).text_size(px(11.)).text_color(descricao()).child(c.hash.clone()))
                         .child(div().text_size(tema::TEXTO_LABEL).text_color(descricao()).child(format!("{} · {}", c.author, comum::quando_medio(&c.date)))),
@@ -998,7 +997,7 @@ impl TelaGit {
                                     .min_w(px(96.))
                                     .truncate()
                                     .text_size(px(13.))
-                                    .child(if c.commit.subject.is_empty() { "(sem mensagem)".to_string() } else { c.commit.subject.clone() }),
+                                    .child(assunto(&c.commit.subject)),
                             )
                             .children(c.refs.iter().map(|r| etiqueta(r, largura >= 352.))),
                     )
@@ -1044,6 +1043,10 @@ impl TelaGit {
             })
             .into_any_element()
     }
+}
+
+fn assunto(s: &str) -> String {
+    if s.is_empty() { "(sem mensagem)".into() } else { s.to_string() }
 }
 
 fn nota_vao(linha: &LinhaGrafo, texto: &str, perigo: bool) -> AnyElement {

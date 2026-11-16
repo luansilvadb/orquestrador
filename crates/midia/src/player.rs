@@ -226,8 +226,7 @@ impl Player {
 
     /// Toca; no fim, recomeça do início, como o `<video>`. Com erro, não faz nada.
     pub fn tocar(&self) {
-        let info = travar(&self.comum.info).clone();
-        if info.erro.is_some() {
+        if travar(&self.comum.info).erro.is_some() {
             return;
         }
         let terminou = travar(&self.comum.relogio).terminou;
@@ -725,10 +724,15 @@ impl Video {
         let passo = self.convertido.stride(0);
         let dados = self.convertido.data(0);
         let linha = w as usize * 4;
-        let mut bgra = Vec::with_capacity(linha * h as usize);
-        for y in 0..h as usize {
-            bgra.extend_from_slice(&dados[y * passo..y * passo + linha]);
-        }
+        let bgra = if passo == linha {
+            dados[..linha * h as usize].to_vec()
+        } else {
+            let mut bgra = Vec::with_capacity(linha * h as usize);
+            for y in 0..h as usize {
+                bgra.extend_from_slice(&dados[y * passo..y * passo + linha]);
+            }
+            bgra
+        };
         Ok(Some(Quadro { pts, largura: w, altura: h, bgra, geracao }))
     }
 }

@@ -4,10 +4,12 @@
 extern crate gpui_kit as gpui;
 
 pub mod avisos;
+pub mod caminhos;
 pub mod colagem;
 pub mod estado;
 pub mod faixa;
 pub mod icones_arquivo;
+pub mod janela;
 pub mod lista;
 pub mod quebra;
 pub mod recursos;

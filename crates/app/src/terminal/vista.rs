@@ -867,8 +867,13 @@ pub fn medir_celula(window: &Window) -> (Font, Size<Pixels>) {
     (fonte, size(largura, px(altura)))
 }
 
+// Montada uma vez: a medida roda a cada preparação de desenho.
 fn fonte_base() -> Font {
-    Font { fallbacks: Some(FontFallbacks::from_fonts(RESERVAS.iter().map(|s| s.to_string()).collect())), ..font(FONTE) }
+    static FONTE_BASE: std::sync::LazyLock<Font> = std::sync::LazyLock::new(|| Font {
+        fallbacks: Some(FontFallbacks::from_fonts(RESERVAS.iter().map(|s| s.to_string()).collect())),
+        ..font(FONTE)
+    });
+    FONTE_BASE.clone()
 }
 
 #[derive(Clone, PartialEq)]
@@ -948,11 +953,10 @@ impl Element for GradeTerminal {
         let colunas = ((f32::from(bounds.size.width) / f32::from(celula.width)).floor() as u16).max(2);
         let linhas = ((f32::from(bounds.size.height) / f32::from(celula.height)).floor() as u16).max(1);
         let focado_agora = self.vista.read(cx).foco.is_focused(window);
-        let mudou = self.vista.update(cx, |v, cx| {
+        self.vista.update(cx, |v, cx| {
             v.geo = Geometria { origem: bounds.origin, celula };
             v.pinturas += 1;
-            let mudou = v.motor.redimensionar(colunas, linhas);
-            if mudou {
+            if v.motor.redimensionar(colunas, linhas) {
                 v.mandar_tamanho(cx);
             }
             if !v.medido {
@@ -967,9 +971,7 @@ impl Element for GradeTerminal {
                     v.escrever(if focado_agora { "\x1b[I" } else { "\x1b[O" });
                 }
             }
-            mudou
         });
-        let _ = mudou;
         let v = self.vista.read(cx);
         let (link, ctrl, aceso, escrevivel, marcado) = (v.link.clone(), v.ctrl, v.cursor_aceso, v.escrevivel, v.marcado.clone());
         // Sem PTY (o diálogo do orquestrador ainda aberto) não há cursor, como o xterm que o React só monta depois.
@@ -994,7 +996,6 @@ impl Element for GradeTerminal {
         let cols = g.columns();
         let trocadas = term.colors();
         let selecao = term.selection.as_ref().and_then(|s| s.to_range(term));
-        let fundo_padrao = cores::hsla(cores::FUNDO);
         let cor_selecao = cores::hsla(if focado_agora { cores::SELECAO } else { cores::SELECAO_INATIVA });
         let modo = *term.mode();
         let mut fundos: Vec<(Bounds<Pixels>, Hsla)> = Vec::new();
@@ -1159,7 +1160,6 @@ impl Element for GradeTerminal {
                 (origem, window.text_system().shape_line(lote.texto.into(), px(TAMANHO_FONTE), &lote.runs, Some(celula.width)))
             })
             .collect();
-        let _ = fundo_padrao;
         Pintura {
             hitbox,
             fundos,

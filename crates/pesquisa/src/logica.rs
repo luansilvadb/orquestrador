@@ -206,12 +206,7 @@ pub fn lembrar(historico: &mut Vec<String>, consulta: &str) {
 }
 
 /// Pasta e nome de um caminho com `/`.
-pub fn dividir(caminho: &str) -> (&str, &str) {
-    match caminho.rfind('/') {
-        Some(i) => (&caminho[..i], &caminho[i + 1..]),
-        None => ("", caminho),
-    }
-}
+pub use orquestrador_ui::caminhos::dividir;
 
 /// Texto de um arquivo para a área de transferência: caminho e, depois, "  linha: texto" por linha com resultado.
 pub fn texto_bloco(caminho: &str, ocorrencias: &[Ocorrencia]) -> String {

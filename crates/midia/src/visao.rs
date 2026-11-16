@@ -522,8 +522,7 @@ impl VisaoMidia {
                 mudou = true;
             }
         }
-        let antes = r.estado.clone();
-        r.estado = r.player.estado();
+        let antes = std::mem::replace(&mut r.estado, r.player.estado());
         if let Some(e) = r.estado.info.erro.clone().filter(|_| antes.info.erro.is_none()) {
             cx.emit(EventoMidia::Falhou(e));
         }
@@ -553,7 +552,7 @@ impl VisaoMidia {
     }
 
     fn conferir_janela(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if janela_minimizada(window) && !self.pip_aberta() {
+        if orquestrador_ui::janela::minimizada(window) && !self.pip_aberta() {
             self.pausar(cx);
         }
     }
@@ -601,23 +600,6 @@ fn mensagem_erro(video: bool) -> String {
 
 fn dirs_downloads() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Downloads")).filter(|p| p.is_dir())
-}
-
-#[cfg(windows)]
-fn janela_minimizada(window: &Window) -> bool {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    match HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
-        // SAFETY: o HWND é da janela viva que o GPUI acabou de entregar.
-        Ok(RawWindowHandle::Win32(h)) => unsafe {
-            windows_sys::Win32::UI::WindowsAndMessaging::IsIconic(h.hwnd.get() as _) != 0
-        },
-        _ => false,
-    }
-}
-
-#[cfg(not(windows))]
-fn janela_minimizada(_: &Window) -> bool {
-    false
 }
 
 /// `Note` do React: aviso no lugar do corpo da aba.

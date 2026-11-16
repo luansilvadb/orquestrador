@@ -1212,8 +1212,13 @@ impl TelaGit {
             _ => false,
         };
         let marcado = self.marcados.contains(&(lado, f.path.clone()));
-        let marcados_aqui = self.arquivos(lado).iter().filter(|x| self.marcados.contains(&(lado, x.path.clone()))).count();
-        let lote = marcados_aqui > 1 && marcado;
+        // Contagem só na linha marcada: em todas seria quadrática por render.
+        let marcados_aqui = if marcado {
+            self.arquivos(lado).iter().filter(|x| self.marcados.contains(&(lado, x.path.clone()))).count()
+        } else {
+            0
+        };
+        let lote = marcados_aqui > 1;
         let rotulo_stage = format!("{}{}", if staged { "Tirar do preparo" } else { "Preparar" }, if lote { format!(" ({marcados_aqui})") } else { String::new() });
         let ocupado = self.ocupado.is_some();
         let c = cor_tipo(k);

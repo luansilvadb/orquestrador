@@ -359,7 +359,7 @@ impl Bancada {
                         .text_color(cor::signal_error())
                         .hover(|s| s.bg(cor::signal_error().opacity(0.1)))
                 })
-                .when(tipo == 2, |d| d.bg(rgba(0xffffff1a)).text_color(cor::text_primary()).hover(|s| s.bg(rgba(0xffffff26))))
+                .when(tipo == 2, |d| d.bg(cor::fill_hover()).text_color(cor::text_primary()).hover(|s| s.bg(rgba(0xffffff26))))
                 .when(salvando && tipo != 2, |d| d.opacity(0.4))
                 // O anel de foco do antd: contorno de 2 px afastado 2 px da borda, fora do layout.
                 .when(focado == resposta, |d| {
