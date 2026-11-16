@@ -168,13 +168,25 @@ fn fonte(caminho: &Path) -> Result<IMFMediaSource, String> {
     }
 }
 
+/// O que a fonte diz do arquivo: tipo principal e subtipo (codec) de cada fluxo, na ordem dos índices do motor, e a duração.
+pub(crate) struct Descricao {
+    pub fluxos: Vec<(GUID, GUID)>,
+    pub duracao: Option<f64>,
+}
+
 /// Tipo principal e subtipo (codec) de cada fluxo do arquivo. Exige sessão na thread.
 pub(crate) fn fluxos(caminho: &Path) -> Result<Vec<(GUID, GUID)>, String> {
+    descrever(caminho).map(|d| d.fluxos)
+}
+
+/// Exige sessão na thread.
+pub(crate) fn descrever(caminho: &Path) -> Result<Descricao, String> {
     let fonte = fonte(caminho)?;
     // SAFETY: chamadas COM com a sessão da thread; a fonte é desligada no fim.
     let r = unsafe {
         (|| {
             let pd = fonte.CreatePresentationDescriptor()?;
+            let duracao = pd.GetUINT64(&MF_PD_DURATION).ok().map(|d| d as f64 / 1e7).filter(|d| *d > 0.);
             let mut v = Vec::new();
             for i in 0..pd.GetStreamDescriptorCount()? {
                 let mut selecionado = BOOL(0);
@@ -185,7 +197,7 @@ pub(crate) fn fluxos(caminho: &Path) -> Result<Vec<(GUID, GUID)>, String> {
                 let sub = h.GetMediaTypeByIndex(0).and_then(|t| t.GetGUID(&MF_MT_SUBTYPE)).unwrap_or_default();
                 v.push((h.GetMajorType()?, sub));
             }
-            Ok::<_, windows::core::Error>(v)
+            Ok::<_, windows::core::Error>(Descricao { fluxos: v, duracao })
         })()
     };
     // SAFETY: a fonte não é mais usada.
@@ -193,6 +205,29 @@ pub(crate) fn fluxos(caminho: &Path) -> Result<Vec<(GUID, GUID)>, String> {
         let _ = fonte.Shutdown();
     }
     r.map_err(|e| e.message())
+}
+
+static SEM_SAIDA_DE_AUDIO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Para testes: age como se a máquina não tivesse saída de áudio.
+#[doc(hidden)]
+pub fn simular_sem_saida_de_audio(sem: bool) {
+    SEM_SAIDA_DE_AUDIO.store(sem, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Há dispositivo de saída de áudio padrão. Sem ele, o Media Engine não monta o áudio e recusa o arquivo inteiro. Exige
+/// sessão na thread.
+pub(crate) fn tem_saida_de_audio() -> bool {
+    use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
+    if SEM_SAIDA_DE_AUDIO.load(std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    // SAFETY: chamadas COM com a sessão da thread.
+    unsafe {
+        CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
+            .and_then(|e| e.GetDefaultAudioEndpoint(eRender, eConsole))
+            .is_ok()
+    }
 }
 
 /// Há decodificador instalado para o fluxo (ou ele já vem descomprimido).

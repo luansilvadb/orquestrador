@@ -424,11 +424,11 @@ fn tamanho_saida(exibe: (u32, u32), alvo: (u32, u32)) -> (u32, u32) {
     (((w * fator).round() as u32).max(1), ((h * fator).round() as u32).max(1))
 }
 
-/// Mensagem de falha do motor: a extensão da Store que falta, quando é isso; senão, o erro do Windows.
-fn mensagem_de_erro(caminho: &Path, hr: HRESULT) -> String {
+/// Mensagem de falha ao abrir: a extensão da Store que falta, quando é isso; senão, o erro do Windows.
+fn mensagem_de_erro(caminho: &Path, detalhe: &str) -> String {
     match mf::extensao_que_falta(caminho) {
         Some(ext) => format!("O Windows não tem decodificador para este formato. Instale \u{201c}{ext}\u{201d} na Microsoft Store."),
-        None => format!("Não foi possível abrir o arquivo: {}", windows::core::Error::from(hr).message()),
+        None => format!("Não foi possível abrir o arquivo: {detalhe}"),
     }
 }
 
@@ -462,26 +462,97 @@ fn criar_motor(gpu: &Gpu, eventos: &Arc<Eventos>) -> Result<IMFMediaEngine, Stri
     }
 }
 
+/// Sem saída de áudio, o arquivo só de áudio toca sem som: o relógio corre e marca o fim, como no `<audio>` mudo.
+fn tocar_sem_som(c: &Comum, comandos: &Receiver<Comando>, duracao: Option<f64>) -> Result<(), String> {
+    {
+        let mut info = travar(&c.info);
+        info.duracao = duracao;
+        info.tem_audio = true;
+        info.pronto = true;
+    }
+    loop {
+        if c.parar.load(SeqCst) {
+            return Ok(());
+        }
+        if let Err(RecvTimeoutError::Disconnected) = comandos.recv_timeout(PASSO) {
+            return Ok(());
+        }
+        let mut r = travar(&c.relogio);
+        if let Some(d) = duracao.filter(|&d| r.tocando && r.agora() >= d) {
+            r.fixar(d);
+            r.tocando = false;
+            r.terminou = true;
+        }
+    }
+}
+
+/// Índices dos fluxos de áudio na numeração do motor (que não segue a ordem da fonte). Depois dos metadados.
+fn fluxos_de_audio(ex: &IMFMediaEngineEx) -> Vec<u32> {
+    use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
+    use windows::Win32::System::Variant::VT_CLSID;
+    // SAFETY: o PROPVARIANT é lido só quando traz um GUID e é liberado em seguida.
+    let n = unsafe { ex.GetNumberOfStreams() }.unwrap_or(0);
+    (0..n)
+        .filter(|&i| unsafe {
+            let Ok(mut pv) = ex.GetStreamAttribute(i, &MF_MT_MAJOR_TYPE) else { return false };
+            let v = &pv.Anonymous.Anonymous;
+            let audio = v.vt == VT_CLSID && !v.Anonymous.puuid.is_null() && *v.Anonymous.puuid == MFMediaType_Audio;
+            let _ = PropVariantClear(&mut pv);
+            audio
+        })
+        .collect()
+}
+
 fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &Gpu, motor: &IMFMediaEngine, eventos: &Eventos) -> Result<(), String> {
     let erro = |e: windows::core::Error| format!("Não foi possível abrir o arquivo: {}", e.message());
+    // Sem saída de áudio, as faixas de áudio são desligadas antes de o motor montar a reprodução; só áudio, nem passa por ele.
+    // `Some(tem áudio)` quando falta a saída.
+    let sem_som = if mf::tem_saida_de_audio() {
+        None
+    } else {
+        let d = mf::descrever(caminho).map_err(|e| mensagem_de_erro(caminho, &e))?;
+        let tem = |tipo| d.fluxos.iter().any(|f| f.0 == tipo);
+        match (tem(MFMediaType_Video), tem(MFMediaType_Audio)) {
+            (false, false) => return Err("O arquivo não tem áudio nem vídeo.".into()),
+            (false, true) => {
+                if !d.fluxos.iter().all(|&(p, s)| mf::decodifica(p, s)) {
+                    return Err(mensagem_de_erro(caminho, "sem decodificador para o áudio."));
+                }
+                return tocar_sem_som(c, comandos, d.duracao);
+            }
+            (true, audio) => Some(audio),
+        }
+    };
     let bs = mf::abrir(caminho)?;
     let url = BSTR::from(caminho.to_string_lossy().as_ref());
+    let ex = motor.cast::<IMFMediaEngineEx>().map_err(erro)?;
+    let preload = if sem_som.is_some() { MF_MEDIA_ENGINE_PRELOAD_METADATA } else { MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC };
     // SAFETY: chamadas COM com a sessão da thread.
     unsafe {
-        motor.SetPreload(MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC).map_err(erro)?;
-        motor.cast::<IMFMediaEngineEx>().map_err(erro)?.SetSourceFromByteStream(&bs, &url).map_err(erro)?;
+        motor.SetPreload(preload).map_err(erro)?;
+        ex.SetSourceFromByteStream(&bs, &url).map_err(erro)?;
     }
     loop {
         if c.parar.load(SeqCst) {
             return Ok(());
         }
         if let Some(hr) = *travar(&eventos.erro) {
-            return Err(mensagem_de_erro(caminho, hr));
+            return Err(mensagem_de_erro(caminho, &windows::core::Error::from(hr).message()));
         }
         if eventos.metadados.load(SeqCst) {
             break;
         }
         std::thread::sleep(PASSO);
+    }
+    if sem_som.is_some() {
+        // SAFETY: chamadas COM com a sessão da thread, depois dos metadados.
+        unsafe {
+            for i in fluxos_de_audio(&ex) {
+                ex.SetStreamSelection(i, false).map_err(erro)?;
+            }
+            ex.ApplyStreamSelections().map_err(erro)?;
+            motor.SetPreload(MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC).map_err(erro)?;
+        }
     }
     // SAFETY: metadados carregados; consultas sem efeito colateral.
     let (duracao, video, tem_audio) = unsafe {
@@ -495,7 +566,8 @@ fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &
             let largura = if px > 0 && py > 0 { ((f64::from(h) * f64::from(px) / f64::from(py)).round() as u32).max(1) } else { w };
             (largura, h)
         });
-        (duracao, video.filter(|v| v.0 > 0 && v.1 > 0), motor.HasAudio().as_bool())
+        let tem_audio = sem_som.unwrap_or_else(|| motor.HasAudio().as_bool());
+        (duracao, video.filter(|v| v.0 > 0 && v.1 > 0), tem_audio)
     };
     if video.is_none() && !tem_audio {
         return Err("O arquivo não tem áudio nem vídeo.".into());
@@ -517,6 +589,8 @@ fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &
     let mut busca: Option<(f64, Instant)> = None;
     // Posição do último quadro copiado.
     let mut ultimo: Option<f64> = None;
+    // Sem saída de áudio, o motor parado não desenha o quadro buscado: toca até ele aparecer e volta a parar no alvo.
+    let mut espiar: Option<f64> = None;
     loop {
         if c.parar.load(SeqCst) {
             return Ok(());
@@ -530,12 +604,23 @@ fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &
             // SAFETY: chamadas COM com a sessão da thread.
             unsafe {
                 let _ = match atual {
-                    Comando::Tocar => motor.Play(),
-                    Comando::Pausar => motor.Pause(),
+                    Comando::Tocar => {
+                        espiar = None;
+                        motor.Play()
+                    }
+                    Comando::Pausar => {
+                        espiar = None;
+                        motor.Pause()
+                    }
                     Comando::Buscar(t) => {
                         geracao = c.geracao.load(SeqCst);
                         busca = Some((t, Instant::now()));
-                        motor.SetCurrentTime(t)
+                        let r = motor.SetCurrentTime(t);
+                        if sem_som.is_some() && video.is_some() && !travar(&c.relogio).tocando {
+                            espiar = Some(t);
+                            let _ = motor.Play();
+                        }
+                        r
                     }
                     Comando::Volume(v) => motor.SetVolume(f64::from(v)),
                     Comando::Mudo(m) => motor.SetMuted(m),
@@ -591,6 +676,14 @@ fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &
         }
         let Some(d) = destino.as_ref() else { continue };
         if let Ok(bgra) = d.copiar(gpu, motor) {
+            if let Some(t) = espiar.take() {
+                // SAFETY: chamadas COM com a sessão da thread.
+                unsafe {
+                    let _ = motor.Pause();
+                    let _ = motor.SetCurrentTime(t);
+                }
+                eventos.fim.store(false, SeqCst);
+            }
             ultimo = Some(pts);
             *travar(&c.quadro) = Some(Quadro { pts, largura: tamanho.0, altura: tamanho.1, bgra, geracao });
         }

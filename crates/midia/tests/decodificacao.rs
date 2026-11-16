@@ -126,6 +126,29 @@ fn volume_mudo_e_velocidade() {
     assert!(inicio.elapsed() < Duration::from_millis(900), "velocidade 2x: {:?}", inicio.elapsed());
 }
 
+/// Sem saída de áudio (a CI não tem uma), o áudio toca sem som pelo relógio e o vídeo toca com o áudio desligado.
+#[test]
+fn sem_saida_de_audio() {
+    struct Volta;
+    impl Drop for Volta {
+        fn drop(&mut self) {
+            orquestrador_midia::simular_sem_saida_de_audio(false);
+        }
+    }
+    let _s = comum::serial();
+    let _volta = Volta;
+    orquestrador_midia::simular_sem_saida_de_audio(true);
+    let tmp = Tmp::new("sem-saida");
+    conferir(&copiar(&tmp, "tom.m4a", "tom.m4a"), None, true);
+    conferir(&copiar(&tmp, "clipe.mp4", "clipe.mp4"), Some((64, 48)), true);
+    let p = Player::abrir(&copiar(&tmp, "tom.wav", "tom.wav"));
+    esperar(&p, Duration::from_secs(10), |e| e.info.pronto);
+    p.buscar(1.7);
+    p.tocar();
+    let e = esperar(&p, Duration::from_secs(10), |e| e.terminou);
+    assert!(!e.tocando && (e.posicao - 2.).abs() < 0.01, "{e:?}");
+}
+
 #[test]
 fn erros_de_abertura() {
     let _s = comum::serial();

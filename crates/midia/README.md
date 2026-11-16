@@ -29,7 +29,8 @@ do disco pelo Media Foundation, sem o protocolo `orq-media`. Ícones `icons/midi
 
 Áudio e vídeo tocam no Media Engine do Windows (`IMFMediaEngine`), sem bibliotecas externas nem preparação. Cada quadro vai
 do Direct3D 11 (placa de vídeo, ou WARP) para BGRA. O arquivo abre com FILE_SHARE_DELETE: renomear ou apagar com a aba aberta
-funciona.
+funciona. Sem dispositivo de saída de áudio, o vídeo toca com as faixas de áudio desligadas e o áudio toca sem som, pelo
+relógio, como antes com o FFmpeg.
 
 Os codecs são os do Windows. MP4/MOV/M4V/MKV com H.264, AAC, MP3, WAV, FLAC, AVI e WMV vêm nele. HEVC, VP8/VP9, AV1, MPEG-2,
 Ogg, Vorbis e Opus dependem das extensões da Microsoft Store; quando falta uma, o aviso da aba diz qual instalar. No Windows
