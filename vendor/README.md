@@ -52,6 +52,8 @@ Alterações:
 - Dica (`tooltip.rs`): some quando o mouse aperta e quando um menu ou modal desenha no mesmo quadro
   (`marcar_sobreposicao`, chamado pelo `PopupMenu` e pela máscara de `orquestrador-ui`); a dica pendente do dono clicado
   nasce escondida (`registrar_clique`). Escondida, só volta num novo hover.
+- Cursor (`button/button.rs`, `menu/menu_item.rs`): mão em todo `Button` interativo (antes só link e texto) e no item
+  de menu habilitado com clique.
 
 ## gpui-pre-windows 0.3.12
 

@@ -32,6 +32,7 @@ pub fn seletor(previa: bool, ao_mudar: impl Fn(bool, &mut Window, &mut App) + 's
             .text_size(tema::TEXTO_LABEL)
             .line_height(px(12.))
             .when(ligado, |d| d.bg(cor::fill_hover()).text_color(cor::text_primary()))
+            .cursor_pointer()
             .when(!ligado, |d| d.text_color(cor::text_secondary()).hover(|s| s.text_color(cor::text_primary())))
             .on_click(move |_, window, cx| f(valor, window, cx))
             .child(rotulo)

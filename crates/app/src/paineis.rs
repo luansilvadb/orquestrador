@@ -70,6 +70,7 @@ fn item_status(id: &'static str) -> gpui_kit::Stateful<gpui_kit::Div> {
         .gap(px(4.))
         .px(px(5.))
         .h_full()
+        .cursor_pointer()
         .hover(|s| s.bg(cor::fill_muted()))
 }
 
@@ -117,6 +118,7 @@ impl Bancada {
                     .rounded(tema::RAIO_SM)
                     .when(ativo, |d| d.bg(cor::fill_hover()))
                     .when(!ativo, |d| d.hover(|s| s.bg(cor::fill_muted())))
+                    .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| this.ir(rota, cx)))
                     .child(icone(caminho, 20., cor::text_tertiary()))
                     .when(badge > 0, |d| {
@@ -303,7 +305,7 @@ impl Bancada {
                         }
                     };
                     item_status("status-sync")
-                        .when(sincronizando, |d| d.hover(|s| s.bg(gpui_kit::transparent_black())))
+                        .when(sincronizando, |d| d.cursor_default().hover(|s| s.bg(gpui_kit::transparent_black())))
                         .tooltip_texto(dica)
                         .when(!sincronizando, |d| d.on_click(cx.listener(|this, _, window, cx| this.sincronizar(window, cx))))
                         .child(icone(ic::SINCRONIZAR, 14., cor::text_primary()))

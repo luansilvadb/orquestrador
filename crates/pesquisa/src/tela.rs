@@ -1007,7 +1007,7 @@ impl TelaPesquisa {
             .size(px(22.))
             .rounded(tema::RAIO_XS)
             .when(habilitada, |d| {
-                d.hover(|s| s.bg(cor::fill_hover())).on_click(cx.listener(move |this, _, w, cx| f(this, w, cx)))
+                d.cursor_pointer().hover(|s| s.bg(cor::fill_hover())).on_click(cx.listener(move |this, _, w, cx| f(this, w, cx)))
             })
             .when(!habilitada, |d| d.opacity(0.35))
             .tooltip_texto(dica)
@@ -1028,6 +1028,7 @@ impl TelaPesquisa {
             .border_1()
             .border_color(if ligado { cor::focus_blue() } else { gpui_kit::transparent_black() })
             .when(ligado, |d| d.bg(rgba(0x007fd440)))
+            .cursor_pointer()
             .when(!ligado, |d| d.hover(|s| s.bg(cor::fill_hover())))
             .tooltip_texto(dica)
             .child(icone(caminho, 16., if ligado { cor::text_primary() } else { cor::text_secondary() }))
@@ -1106,7 +1107,7 @@ impl TelaPesquisa {
                         .size(px(24.))
                         .rounded(tema::RAIO_SM)
                         .when(pode, |d| {
-                            d.hover(|s| s.bg(cor::fill_hover())).on_click(cx.listener(|this, _, _, cx| this.substituir_tudo(cx)))
+                            d.cursor_pointer().hover(|s| s.bg(cor::fill_hover())).on_click(cx.listener(|this, _, _, cx| this.substituir_tudo(cx)))
                         })
                         .when(!pode, |d| d.opacity(0.35))
                         .tooltip_texto("Substituir Tudo (Ctrl+Alt+Enter)")
@@ -1124,6 +1125,7 @@ impl TelaPesquisa {
             .items_center()
             .justify_center()
             .rounded(px(3.))
+            .cursor_pointer()
             .hover(|s| s.bg(fill_terciario()))
             .tooltip_texto("Ativar/Desativar Substituição")
             .on_click(cx.listener(|this, _, _, cx| {
@@ -1181,6 +1183,7 @@ impl TelaPesquisa {
                             .items_center()
                             .justify_center()
                             .rounded(px(3.))
+                            .cursor_pointer()
                             .hover(|s| s.bg(fill_terciario()))
                             .tooltip_texto("Ativar/Desativar os Detalhes da Pesquisa")
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1286,6 +1289,7 @@ impl TelaPesquisa {
                 .w_full()
                 .pl(px(linha.nivel() as f32 * RECUO))
                 .text_size(tema::TEXTO_MENU)
+                .cursor_pointer()
                 .hover(|s| s.bg(fill_terciario()))
                 .when(focada, |d| d.border_1().border_color(cor::focus_blue()))
         };
@@ -1297,6 +1301,7 @@ impl TelaPesquisa {
                 .justify_center()
                 .size(px(20.))
                 .rounded(tema::RAIO_XS)
+                .cursor_pointer()
                 .hover(|s| s.bg(cor::fill_hover()))
                 .tooltip_texto("Ignorar (Delete)")
                 .child(icone(icones::FECHAR, 14., cor::text_secondary()))
@@ -1470,6 +1475,7 @@ impl TelaPesquisa {
                                         .size(px(20.))
                                         .rounded(tema::RAIO_XS)
                                         .when(aplicando, |d| d.opacity(0.35))
+                                        .when(!aplicando, |d| d.cursor_pointer())
                                         .hover(|s| s.bg(cor::fill_hover()))
                                         .tooltip_texto("Substituir Tudo")
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -1556,6 +1562,7 @@ impl TelaPesquisa {
                 .rounded(tema::RAIO_SM)
                 .text_size(tema::TEXTO_BODY)
                 .font_weight(FontWeight::MEDIUM)
+                .cursor_pointer()
                 .when(perigo, |d| d.bg(cor::signal_error()).text_color(cor::text_primary()).hover(|s| s.opacity(0.9)))
                 .when(!perigo, |d| d.bg(cor::pitch_black()).text_color(cor::text_primary()).hover(|s| s.bg(cor::raised_black())))
                 .child(rotulo)

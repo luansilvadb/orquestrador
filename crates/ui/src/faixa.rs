@@ -274,7 +274,7 @@ impl Aba {
                 el = el.italic();
             }
             if let Some(f) = a.pressionar {
-                el = el.on_mouse_down(MouseButton::Left, f);
+                el = el.cursor_pointer().on_mouse_down(MouseButton::Left, f);
             }
             match a.menu {
                 Some(f) => el.context_menu(move |m, w, cx| f(m, w, cx)).into_any_element(),

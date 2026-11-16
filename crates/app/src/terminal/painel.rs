@@ -793,6 +793,7 @@ fn sem_git(pasta: &std::path::Path) -> Option<&'static str> {
 fn aba(id: impl Into<gpui_kit::ElementId>, ativa: bool) -> gpui_kit::Stateful<gpui_kit::Div> {
     div()
         .id(id)
+        .cursor_pointer()
         .relative()
         .flex()
         .items_center()

@@ -298,6 +298,7 @@ fn fechar_ou_modificado(
                     .items_center()
                     .justify_center()
                     .rounded(tema::RAIO_MENU)
+                    .cursor_pointer()
                     .hover(|s| s.bg(cor::fill_hover()))
                     .when(!(ativa && !modificado), |d| d.opacity(0.))
                     .group_hover(grupo, |s| s.opacity(1.))
@@ -1896,6 +1897,7 @@ impl AreaEditor {
                 .text_size(tema::TEXTO_MENU)
                 .text_color(if e_ativa { cor::text_primary() } else { cor::text_secondary() })
                 .when(e_ativa, |d| d.bg(fundo_container()))
+                .cursor_pointer()
                 .when(!e_ativa, |d| d.hover(|s| s.bg(fundo_container())))
                 .tooltip_texto(rotulo(&t.alvo))
                 .on_click(move |ev: &ClickEvent, window, cx| {

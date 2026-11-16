@@ -29,6 +29,7 @@ pub fn botao(id: &'static str, rotulo: impl Into<SharedString>, variante: Varian
         .px(px(12.))
         .rounded(tema::RAIO_SM)
         .text_size(tema::TEXTO_BODY)
+        .when(!ocupado, |d| d.cursor_pointer())
         .when(ocupado, |d| d.opacity(0.6).child(icone("icons/loader-circle.svg", 14., cor::text_secondary())));
     let base = match variante {
         Variante::Primario => base
@@ -60,6 +61,7 @@ pub fn botao_pequeno(id: impl Into<gpui_kit::ElementId>) -> Stateful<Div> {
         .border_1()
         .border_color(gpui_kit::rgba(0xffffff26))
         .text_size(tema::TEXTO_LABEL)
+        .cursor_pointer()
         .hover(|s| s.border_color(gpui_kit::rgba(0xffffff4d)))
 }
 
@@ -87,7 +89,7 @@ pub fn acao(id: impl Into<gpui_kit::ElementId>, caminho: &'static str, habilitad
         .flex_none()
         .size(px(24.))
         .rounded(tema::RAIO_SM)
-        .when(habilitada, |d| d.hover(|s| s.bg(cor::fill_hover())))
+        .when(habilitada, |d| d.cursor_pointer().hover(|s| s.bg(cor::fill_hover())))
         .when(!habilitada, |d| d.opacity(0.35))
         .child(icone(caminho, 14., cor::text_secondary()))
 }

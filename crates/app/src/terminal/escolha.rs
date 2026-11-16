@@ -204,6 +204,7 @@ impl FormEscolha {
                     .text_size(tema::TEXTO_MENU)
                     .when(ativo, |d| d.bg(cor::raised_black()).font_weight(FontWeight::SEMIBOLD).text_color(cor::text_primary()))
                     .when(!ativo, |d| d.text_color(cor::text_secondary()).hover(|s| s.text_color(cor::text_primary())))
+                    .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| this.escolher_ferramenta(&nome, cx)))
                     .child(nome_da_ferramenta(&t.name).to_string())
                     .test_support(),
@@ -250,6 +251,7 @@ impl FormEscolha {
                     .bg(cor::fill_hover())
                     .hover(|s| s.bg(gpui_kit::rgba(0xffffff24)))
                     .text_size(tema::TEXTO_BODY)
+                    .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.aberto = if this.aberto == Some(campo) { None } else { Some(campo) };
                         cx.notify();
@@ -288,6 +290,7 @@ impl FormEscolha {
                             .text_size(tema::TEXTO_BODY)
                             .when(marcado, |d| d.bg(cor::fill_hover()))
                             .hover(|s| s.bg(cor::fill_muted()))
+                            .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| match campo {
                                 Campo::Modelo => this.escolher_modelo(&v, cx),
                                 Campo::Esforco => this.escolher_esforco(&v, cx),
@@ -341,6 +344,7 @@ impl Render for FormEscolha {
                                 .size(px(24.))
                                 .rounded(tema::RAIO_SM)
                                 .hover(|s| s.bg(cor::fill_hover()))
+                                .cursor_pointer()
                                 .on_click(cx.listener(|this, _, _, cx| this.cancelar(cx)))
                                 .child(ui::icone("icons/x.svg", 16., cor::text_secondary())),
                         )

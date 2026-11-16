@@ -61,6 +61,7 @@ pub fn barra(caminho: &str, g: Grupo, aberto: Option<&Seletor>, extra: Option<An
                         .gap(px(6.))
                         .px(px(4.))
                         .rounded(px(2.))
+                        .cursor_pointer()
                         .hover(|s| s.text_color(cor::text_primary()))
                         .when(aberto_aqui, |d| d.text_color(cor::text_primary()))
                         .tooltip_texto(cheio.clone())
@@ -125,6 +126,7 @@ pub fn seletor(s: &Seletor, ent: WeakEntity<AreaEditor>) -> AnyElement {
                         .justify_center()
                         .size(px(16.))
                         .rounded(px(2.))
+                        .cursor_pointer()
                         .hover(|s| s.bg(cor::fill_muted()))
                         .tooltip_texto("Pasta de cima")
                         .on_click(move |_, window, cx| {
@@ -156,6 +158,7 @@ pub fn seletor(s: &Seletor, ent: WeakEntity<AreaEditor>) -> AnyElement {
                 .text_size(tema::TEXTO_MENU)
                 .when(e.ignored, |d| d.text_color(cor::text_tertiary()))
                 .when(marcado, |d| d.bg(cor::fill_hover()))
+                .cursor_pointer()
                 .hover(|s| s.bg(cor::fill_muted()))
                 .tooltip_texto(cheio.clone())
                 .on_click(move |_, window, cx| {

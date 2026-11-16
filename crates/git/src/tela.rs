@@ -1274,6 +1274,7 @@ impl TelaGit {
             .child(
                 div()
                     .id("abrir")
+                    .cursor_pointer()
                     .flex()
                     .flex_1()
                     .min_w_0()

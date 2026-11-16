@@ -1667,6 +1667,7 @@ impl Explorador {
                 .size(px(24.))
                 .rounded(tema::RAIO_SM)
                 .text_color(cor::text_tertiary())
+                .cursor_pointer()
                 .hover(|s| s.bg(cor::fill_hover()))
                 .tooltip_texto(dica)
                 .child(icone(caminho, 14., cor::text_tertiary()))
@@ -1879,7 +1880,7 @@ impl Explorador {
             .w_full()
             .pl(px(RECUO * linha.nivel as f32))
             .pr(px(8.))
-            .cursor_pointer()
+            .when(!editando, |d| d.cursor_pointer())
             .text_size(tema::TEXTO_BODY)
             .text_color(cor::text_primary())
             .child(fundo)
@@ -2092,6 +2093,7 @@ impl Explorador {
                         .when(habilitado, |d| d.child(div().text_color(cor::text_tertiary()).child(*atalho)));
                     if habilitado {
                         linha = linha
+                            .cursor_pointer()
                             .on_hover(cx.listener(move |this, dentro: &bool, _, cx| {
                                 if let Some(m) = this.menu.as_mut() {
                                     if *dentro && m.destacado != Some(i) {
@@ -2144,6 +2146,7 @@ impl Explorador {
                 .when(!primario, |d| {
                     d.bg(rgba(0xffffff1a)).text_color(cor::text_primary()).when(!ocupado, |d| d.hover(|s| s.bg(rgba(0xffffff26))))
                 })
+                .when(!ocupado, |d| d.cursor_pointer())
                 .when(ocupado, |d| d.opacity(0.4))
                 .test_support()
         };
@@ -2219,6 +2222,7 @@ impl Explorador {
                         .justify_center()
                         .size(px(22.))
                         .rounded(px(5.))
+                        .cursor_pointer()
                         .hover(|s| s.bg(rgba(0xffffff26)))
                         .tooltip_texto("Fechar")
                         .on_click(cx.listener(|this, _, window, cx| this.fechar_excluir(window, cx)))

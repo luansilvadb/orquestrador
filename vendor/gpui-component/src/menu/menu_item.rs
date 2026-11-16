@@ -139,7 +139,8 @@ impl RenderOnce for MenuItemElement {
                         .text_color(cx.theme().accent_foreground)
                 })
                 .when_some(self.on_click, |this, on_click| {
-                    this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    // Orquestrador: mão no item clicável.
+                    this.cursor_pointer().on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cx.stop_propagation();
                     })
                     .on_click(on_click)

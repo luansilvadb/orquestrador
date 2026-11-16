@@ -273,6 +273,7 @@ impl TelaGit {
                     .child(
                         div()
                             .id(("arquivo-commit", i))
+                            .cursor_pointer()
                             .relative()
                             .flex()
                             .flex_1()
@@ -764,6 +765,7 @@ impl TelaGit {
         });
         let linha_commit = div()
             .id(("commit-grafo", i))
+            .cursor_pointer()
             .track_focus(&foco_l)
             .on_action(cx.listener(move |this, _: &crate::tela::MenuContexto, window, cx| this.menu_pelo_teclado(&chave_foco, window, cx)))
             .relative()

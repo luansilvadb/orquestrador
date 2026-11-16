@@ -117,6 +117,7 @@ pub fn botao_lista(id: impl Into<ElementId>, n: usize) -> Stateful<Div> {
         .rounded(tema::RAIO_SM)
         .text_size(tema::TEXTO_BODY)
         .font_weight(FontWeight::MEDIUM)
+        .cursor_pointer()
         .hover(|s| s.bg(cor::fill_hover()))
         .child(icone("icons/list.svg", 14., cor::text_primary()))
         .child(n.to_string())
@@ -285,6 +286,7 @@ impl RenderOnce for ListaAbas {
                     .pr(px(30.))
                     .rounded(tema::RAIO_MENU)
                     .text_size(tema::TEXTO_MENU)
+                    .cursor_pointer()
                     .when(realce, |d| d.bg(cor::fill_hover()))
                     .on_hover(move |dentro, _, cx| {
                         if *dentro && e1.0.destacada.get() != Some(i) {
