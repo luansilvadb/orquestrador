@@ -664,11 +664,14 @@ fn tab_percorre_os_botoes_do_fechamento(cx: &mut TestAppContext) {
     cx.update_window(janela.into(), |_, window, cx| window.click(fechar.clone(), cx)).expect("janela");
     desenhar(cx, janela);
     assert_eq!(focado(cx), Some(Resposta::Cancelar), "nasce no Cancelar");
+    let anel = |cx: &mut TestAppContext| cx.update_window(janela.into(), |_, window, _| window.try_find("fechar-anel").is_some()).expect("janela");
+    assert!(!anel(cx), "sem anel ao abrir");
     let mut passos = Vec::new();
     for tecla in ["tab", "tab", "tab", "shift-tab", "shift-tab"] {
         cx.simulate_keystrokes(janela.into(), tecla);
         desenhar(cx, janela);
         passos.push(focado(cx).expect("diálogo aberto"));
+        assert!(anel(cx), "anel após Tab");
     }
     use Resposta::*;
     assert_eq!(passos, [Descartar, Salvar, Cancelar, Salvar, Descartar], "dá a volta nos dois sentidos");

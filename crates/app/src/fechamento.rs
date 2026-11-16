@@ -34,6 +34,8 @@ pub struct Fechamento {
     pub foco: FocusHandle,
     /// Botão com o foco, na ordem do rodapé; nasce no Cancelar.
     pub focado: Resposta,
+    /// Houve Tab no diálogo: só então o anel aparece, como o `:focus-visible`.
+    pub teclado: bool,
 }
 
 impl Fechamento {
@@ -124,6 +126,7 @@ impl Bancada {
             tudo_salvo: true,
             foco,
             focado: Resposta::Cancelar,
+            teclado: false,
         });
         cx.notify();
     }
@@ -264,6 +267,7 @@ impl Bancada {
             (None, false) => n - 1,
         };
         f.focado = botoes[prox];
+        f.teclado = true;
         cx.notify();
     }
 
@@ -330,7 +334,7 @@ impl Bancada {
             ));
         }
         let salvando = f.salvando;
-        let focado = f.focado;
+        let anel = f.teclado.then_some(f.focado);
         let botao = |id: &'static str, rotulo: SharedString, tipo: u8, resposta: Resposta| {
             // 0: padrão, 1: perigo suave, 2: preenchido.
             let borda = if tipo == 2 { 0. } else { 1. };
@@ -362,10 +366,11 @@ impl Bancada {
                 .when(tipo == 2, |d| d.bg(cor::fill_hover()).text_color(cor::text_primary()).hover(|s| s.bg(rgba(0xffffff26))))
                 .when(salvando && tipo != 2, |d| d.opacity(0.4))
                 // O anel de foco do antd: contorno de 2 px afastado 2 px da borda, fora do layout.
-                .when(focado == resposta, |d| {
+                .when(anel == Some(resposta), |d| {
                     let fora = px(-(4. + borda));
                     d.child(
                         div()
+                            .id("fechar-anel")
                             .absolute()
                             .top(fora)
                             .left(fora)
@@ -373,7 +378,8 @@ impl Bancada {
                             .bottom(fora)
                             .rounded(tema::RAIO_SM + px(4.))
                             .border_2()
-                            .border_color(gpui_kit::rgb(0x59a2e9)),
+                            .border_color(gpui_kit::rgb(0x59a2e9))
+                            .test_support(),
                     )
                 })
                 .child(rotulo)
