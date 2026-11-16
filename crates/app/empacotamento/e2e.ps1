@@ -10,8 +10,6 @@ param(
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 $aqui = $PSScriptRoot
-$raizRepo = (Resolve-Path (Join-Path $aqui '..\..\..')).Path
-$alvo = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $raizRepo 'target' }
 $produto = 'OrquestradorTeste'
 $binario = 'orquestrador-teste'
 $chaveReg = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$produto"
@@ -20,10 +18,10 @@ $versoes = '0.2.0-teste.1', '0.2.0-teste.2'
 if (Test-Path $chaveReg) { throw "$produto já instalado; desinstale antes." }
 
 New-Item -ItemType Directory -Force $Raiz, "$Raiz\srv", "$Raiz\local" | Out-Null
-cargo build --release --locked --manifest-path (Join-Path $aqui 'assinador\Cargo.toml')
-cargo build --release --locked --manifest-path (Join-Path $aqui 'compat-tauri\Cargo.toml')
-$assinador = Join-Path $alvo 'release\orquestrador-assinador.exe'
-$compat = Join-Path $alvo 'release\orquestrador-compat-tauri.exe'
+cargo build --release --locked --manifest-path (Join-Path $aqui 'assinador\Cargo.toml') --target-dir (Join-Path $aqui 'assinador\target')
+cargo build --release --locked --manifest-path (Join-Path $aqui 'compat-tauri\Cargo.toml') --target-dir (Join-Path $aqui 'compat-tauri\target')
+$assinador = Join-Path $aqui 'assinador\target\release\orquestrador-assinador.exe'
+$compat = Join-Path $aqui 'compat-tauri\target\release\orquestrador-compat-tauri.exe'
 $chave = Join-Path $Raiz 'teste.key'
 if (-not (Test-Path $chave)) { & $assinador chaves $chave | Out-Null }
 $pub = (Get-Content -Raw (Join-Path $Raiz 'teste.pub')).Trim()

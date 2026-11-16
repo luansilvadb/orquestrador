@@ -5,3 +5,5 @@
 .playwright-mcp/
 # FFmpeg e libclang, criados por crates/midia/preparar-ffmpeg.ps1.
 /ferramentas/
+# Targets próprios dos workspaces do assinador e do compat-tauri.
+/crates/app/empacotamento/*/target/

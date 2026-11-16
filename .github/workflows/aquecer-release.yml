@@ -1,0 +1,89 @@
+# Aquece em main o cache que o release.yml restaura: cache salvo numa tag só é lido pela própria tag, e o de main é lido por todas.
+# Compila o que a release compila (app em release, xtask, assinador e compat-tauri) e guarda o cargo-packager. Fora do ci.yml para não atrasar o wait-ci.
+# Sem segredos, sem assinatura, sem publicação.
+name: aquecer-release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aquecer-release
+  cancel-in-progress: true
+
+jobs:
+  aquecer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Mesma toolchain e mesmo ambiente do release.yml: a chave do rust-cache inclui a versão do rustc e as variáveis CARGO*/RUST*.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Cache do FFmpeg e do libclang
+        id: cache-ffmpeg
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ferramentas\ffmpeg.zip
+            ferramentas\libclang
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('crates/midia/preparar-ffmpeg.ps1') }}
+
+      - name: Preparar o FFmpeg e o libclang
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          & pwsh crates/midia/preparar-ffmpeg.ps1
+
+      - name: Salvar o cache do FFmpeg e do libclang
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ferramentas\ffmpeg.zip
+            ferramentas\libclang
+          key: ${{ steps.cache-ffmpeg.outputs.cache-primary-key }}
+
+      # Mesma configuração do release.yml.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: release
+          cache-bin: 'false'
+          workspaces: |
+            . -> target
+            crates/app/empacotamento/assinador -> target
+            crates/app/empacotamento/compat-tauri -> target
+
+      - name: Cache do cargo-packager
+        id: cache-packager
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cargo/bin/cargo-packager.exe
+          key: cargo-packager-0.11.8-${{ runner.os }}
+
+      - name: Instalar o cargo-packager
+        if: steps.cache-packager.outputs.cache-hit != 'true'
+        shell: bash
+        run: cargo install cargo-packager --version 0.11.8 --locked
+
+      - name: Salvar o cache do cargo-packager
+        if: steps.cache-packager.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cargo/bin/cargo-packager.exe
+          key: ${{ steps.cache-packager.outputs.cache-primary-key }}
+
+      - name: Compilar o que a release compila
+        shell: bash
+        run: |
+          cargo build --locked -p xtask
+          cargo build --release --locked -p orquestrador-app --bin orquestrador
+          cargo build --release --locked --manifest-path crates/app/empacotamento/assinador/Cargo.toml --target-dir crates/app/empacotamento/assinador/target
+          cargo build --release --locked --manifest-path crates/app/empacotamento/compat-tauri/Cargo.toml --target-dir crates/app/empacotamento/compat-tauri/target

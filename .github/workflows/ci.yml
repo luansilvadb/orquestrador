@@ -46,6 +46,14 @@ jobs:
             ferramentas\libclang
           key: ${{ steps.cache-ffmpeg.outputs.cache-primary-key }}
 
+      # Só main salva: o cache de main é lido por PRs, o de um PR só pelo próprio PR.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: |
+            . -> target
+            crates/app/empacotamento/assinador -> target
+
       - name: Testes Rust
         shell: bash
         run: |
@@ -63,6 +71,10 @@ jobs:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Compilação do backend fora do Windows
         shell: bash

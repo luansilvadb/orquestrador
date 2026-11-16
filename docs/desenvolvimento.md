@@ -59,5 +59,6 @@ testa ponta a ponta, sem tocar na instalação real, a atualização a partir do
 ## CI
 
 `.github/workflows/ci.yml` roda a cada push em `main` e em pull request: no Windows, `cargo test --workspace` e o clippy; em
-Ubuntu e macOS, só `cargo check -p orquestrador-core --all-targets`. O workflow de release roda `cargo test --workspace` antes
-de publicar.
+Ubuntu e macOS, só `cargo check -p orquestrador-core --all-targets`. O workflow de release não repete os testes: exige essa CI
+verde para o SHA da tag antes de publicar. `.github/workflows/aquecer-release.yml` compila em `main` o que a release compila,
+para o cache de compilação que a release restaura.

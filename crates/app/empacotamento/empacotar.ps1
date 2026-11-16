@@ -70,6 +70,8 @@ Set-Content -Encoding utf8 $arquivoConfig $config
 
 $packager = (Get-Command cargo-packager -ErrorAction SilentlyContinue).Source
 if (-not $packager) { throw 'cargo-packager ausente: cargo install cargo-packager --version 0.11.8 --locked' }
+$versaoPackager = "$(& $packager --version)"
+if ($versaoPackager -notmatch '\b0\.11\.8\b') { throw "cargo-packager 0.11.8 exigido; encontrado: $versaoPackager" }
 Push-Location $palco
 try { & $packager --config $arquivoConfig -f nsis } finally { Pop-Location }
 
@@ -80,8 +82,10 @@ $nome = "${Produto}_${Versao}_x64-setup.exe"
 if ($exe.Name -cne $nome) { $exe = Rename-Item $exe.FullName $nome -PassThru }
 if (-not $Url) { $Url = "https://github.com/luansilvadb/orquestrador/releases/download/v$Versao/$nome" }
 
-$assinador = Join-Path $alvo 'release\orquestrador-assinador.exe'
-cargo build --release --locked --manifest-path (Join-Path $aqui 'assinador\Cargo.toml')
+# Target próprio do workspace do assinador, fora do CARGO_TARGET_DIR: o cache da CI guarda cada workspace separado.
+$alvoAssinador = Join-Path $aqui 'assinador\target'
+$assinador = Join-Path $alvoAssinador 'release\orquestrador-assinador.exe'
+cargo build --release --locked --manifest-path (Join-Path $aqui 'assinador\Cargo.toml') --target-dir $alvoAssinador
 & $assinador assinar $Chave $exe.FullName $Versao
 & $assinador manifesto $Versao $Url "$($exe.FullName).sig" $Notas (Join-Path $Saida 'latest.json')
 Write-Host "Pronto: $($exe.FullName), .sig e latest.json em $Saida"

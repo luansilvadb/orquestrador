@@ -1,5 +1,6 @@
 # Release de uma tag vX.Y.Z: gera o instalador NSIS (cargo-packager) assinado e o latest.json, confere tudo e só então publica como a última release estável.
-# Ordem: tag, versões e notas -> checks -> instalador em rascunho -> notas e latest.json -> conferência -> publicação.
+# Ordem: tag, versões e notas -> instalador em rascunho -> notas e latest.json -> conferência -> CI verde do SHA -> publicação.
+# O build corre em paralelo à CI (ci.yml, que roda os testes); só a publicação espera por ela.
 # Falha em qualquer passo deixa a release em rascunho (ou nem a cria). Rerun para uma tag já publicada para antes de alterar qualquer coisa.
 name: release
 
@@ -23,8 +24,6 @@ jobs:
       TAG: ${{ github.ref_name }}
       REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
-      # O app, o assinador e o compat-tauri compilam no mesmo target.
-      CARGO_TARGET_DIR: ${{ github.workspace }}\target
     steps:
       - uses: actions/checkout@v7
 
@@ -69,15 +68,6 @@ jobs:
           cargo xtask release check-notes $version $previous
           if ($LASTEXITCODE -ne 0) { throw "As notas de docs/releases/v$version.md não servem para publicar." }
 
-      - name: Aguardar CI verde para o commit da tag
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $sha = (& git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') { throw "Não foi possível obter o SHA do commit checkout: $sha" }
-          cargo xtask release wait-ci $sha
-          if ($LASTEXITCODE -ne 0) { throw "A CI de push em main não aprovou o commit $sha." }
-
       # FFmpeg compartilhado (LGPL) do orquestrador-midia: o cache guarda o zip baixado e o libclang.
       - name: Cache do FFmpeg e do libclang
         id: cache-ffmpeg
@@ -104,14 +94,45 @@ jobs:
             ferramentas\libclang
           key: ${{ steps.cache-ffmpeg.outputs.cache-primary-key }}
 
-      # Testes Rust do workspace, inclusive os do fluxo de release (xtask) e do updater (orquestrador-app).
-      - name: Rodar os checks
-        shell: bash
-        run: cargo test --workspace
+      # Cache do target, aquecido em main por aquecer-release.yml (cache criado numa tag não é lido por outras tags).
+      # Cada workspace tem target próprio: a limpeza do rust-cache apaga do target o que não é dependência do seu workspace.
+      # Salvo mesmo se um passo posterior falhar, para o rerun da mesma tag reaproveitar.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: release
+          cache-bin: 'false'
+          cache-on-failure: 'true'
+          workspaces: |
+            . -> target
+            crates/app/empacotamento/assinador -> target
+            crates/app/empacotamento/compat-tauri -> target
+
+      # Binário compilado uma vez e guardado: o cargo-packager não publica binários no GitHub.
+      - name: Cache do cargo-packager
+        id: cache-packager
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cargo/bin/cargo-packager.exe
+          key: cargo-packager-0.11.8-${{ runner.os }}
 
       - name: Instalar o cargo-packager
+        if: steps.cache-packager.outputs.cache-hit != 'true'
         shell: bash
         run: cargo install cargo-packager --version 0.11.8 --locked
+
+      - name: Salvar o cache do cargo-packager
+        if: steps.cache-packager.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cargo/bin/cargo-packager.exe
+          key: ${{ steps.cache-packager.outputs.cache-primary-key }}
+
+      # No target de cada workspace; o empacotar.ps1 e a conferência reusam os binários.
+      - name: Compilar o assinador e o compat-tauri
+        shell: bash
+        run: |
+          cargo build --release --locked --manifest-path crates/app/empacotamento/assinador/Cargo.toml --target-dir crates/app/empacotamento/assinador/target
+          cargo build --release --locked --manifest-path crates/app/empacotamento/compat-tauri/Cargo.toml --target-dir crates/app/empacotamento/compat-tauri/target
 
       # Instalador NSIS por usuário (cargo-packager), .sig com a versão assinada e latest.json com as notas completas (com o H1),
       # pela chave TAURI_SIGNING_PRIVATE_KEY (conteúdo da chave privada, secret do repositório; sem senha). Sobe tudo num rascunho.
@@ -166,17 +187,15 @@ jobs:
           $fonte = Get-Content -Raw crates/app/src/atualizacao/mod.rs
           if ($fonte -notmatch 'PUBKEY_OFICIAL: &str = "([A-Za-z0-9+/=]+)"') { throw 'PUBKEY_OFICIAL não encontrada.' }
           $pubkey = $Matches[1]
-          cargo build --release --locked --manifest-path crates/app/empacotamento/assinador/Cargo.toml
-          & target/release/orquestrador-assinador.exe verificar $pubkey $version (Join-Path $dir 'latest.json') (Join-Path $dir $exe)
-          cargo build --release --locked --manifest-path crates/app/empacotamento/compat-tauri/Cargo.toml
-          & target/release/orquestrador-compat-tauri.exe verificar $pubkey (Join-Path $dir 'latest.json') (Join-Path $dir $exe)
+          & crates/app/empacotamento/assinador/target/release/orquestrador-assinador.exe verificar $pubkey $version (Join-Path $dir 'latest.json') (Join-Path $dir $exe)
+          & crates/app/empacotamento/compat-tauri/target/release/orquestrador-compat-tauri.exe verificar $pubkey (Join-Path $dir 'latest.json') (Join-Path $dir $exe)
 
           # O corpo da release tem de ser o texto das notas sem o título (começa em ## Resumo; só CRLF/LF e espaço final podem diferir).
           $bodyFile = Join-Path $dir 'body.md'
           [System.IO.File]::WriteAllText($bodyFile, [string]$release.body)
           cargo xtask release verify-body $bodyFile "docs/releases/v$version.md"
 
-      # Último passo: a release vira a latest estável, que é o endereço que os apps consultam. Só chega aqui se a conferência passou.
+      # Último passo: exige CI verde de push em main para o SHA da tag (espera até 30 min) e a release vira a latest estável, que é o endereço que os apps consultam. Só chega aqui se a conferência passou.
       - name: Publicar como a última release estável
         shell: pwsh
         run: |
