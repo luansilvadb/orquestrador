@@ -8,12 +8,12 @@
 4. FFmpeg estático e libclang, usados pelo `orquestrador-midia`:
 
    ```powershell
-   pwsh crates/midia/preparar-ffmpeg.ps1 [-Ferramentas D:\ferramentas]
+   pwsh crates/midia/preparar-ffmpeg.ps1
    ```
 
-   O script baixa o vcpkg (commit fixo), compila o FFmpeg LGPL em `x64-windows-static-md`, baixa o libclang e grava
-   `VCPKG_ROOT`, `VCPKGRS_TRIPLET` e `LIBCLANG_PATH` nas variáveis do usuário (HKCU\Environment). Rodar de novo só
-   confere. Abra um terminal novo depois.
+   O script baixa o vcpkg (commit fixo), compila o FFmpeg LGPL em `x64-windows-static-md`, baixa o libclang, tudo em `ferramentas/`,
+   ignorada pelo git. O `[env]` do `.cargo/config.toml` define `VCPKG_ROOT`, `VCPKGRS_TRIPLET` e `LIBCLANG_PATH`. Rodar de
+   novo só confere.
 
 ## Rodar e testar
 

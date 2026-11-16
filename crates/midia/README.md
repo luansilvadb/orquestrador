@@ -31,14 +31,14 @@ do disco pelo FFmpeg, sem o protocolo `orq-media`. Ícones `icons/midia-*.svg` e
 vorbis, opus, flac, aac, h264, hevc, mpeg4, vp8, vp9, prores; mov/mp4, matroska/webm, ogg, wav, flac, mp3). O teste
 `decodificadores_nativos_e_licenca` confere licença, flags e decodificadores.
 
-Preparação (uma vez por máquina e na CI), fora do repositório:
+Preparação (uma vez por clone e na CI), em `ferramentas/` na raiz, ignorada pelo git:
 
 ```powershell
-pwsh crates/midia/preparar-ffmpeg.ps1 -Ferramentas D:\ferramentas
+pwsh crates/midia/preparar-ffmpeg.ps1
 ```
 
 O script fixa o commit do vcpkg, instala `ffmpeg[core,avcodec,avformat,avfilter,swscale,swresample]:x64-windows-static-md`,
-baixa o `libclang` (pip `libclang==18.1.1`) para o bindgen e grava no ambiente do usuário `VCPKG_ROOT`,
+baixa o `libclang` (pip `libclang==18.1.1`) para o bindgen. O `[env]` do `.cargo/config.toml` define `VCPKG_ROOT`,
 `VCPKGRS_TRIPLET=x64-windows-static-md` e `LIBCLANG_PATH`. O `Cargo.toml` da raiz compila o bindgen otimizado (em opt-level 0 o
 build script estoura a pilha). Requer Git, Python e o Visual Studio com C++. O `build.rs` liga as bibliotecas do
 sistema que o Media Foundation e o DXVA do FFmpeg pedem (`mfuuid`, `strmiids`, `mfplat` e outras).

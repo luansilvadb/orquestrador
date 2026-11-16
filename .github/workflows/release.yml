@@ -84,7 +84,7 @@ jobs:
         with:
           path: |
             C:\vcpkg-cache
-            C:\ferramentas\libclang
+            ferramentas\libclang
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('crates/midia/preparar-ffmpeg.ps1') }}
 
       - name: Preparar o FFmpeg estático e o libclang
@@ -94,10 +94,7 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           New-Item -ItemType Directory -Force C:\vcpkg-cache | Out-Null
-          & pwsh crates/midia/preparar-ffmpeg.ps1 -Ferramentas C:\ferramentas
-          foreach ($n in 'VCPKG_ROOT', 'VCPKGRS_TRIPLET', 'LIBCLANG_PATH') {
-            "$n=$([Environment]::GetEnvironmentVariable($n, 'User'))" >> $env:GITHUB_ENV
-          }
+          & pwsh crates/midia/preparar-ffmpeg.ps1
 
       # Testes Rust do workspace, inclusive os do fluxo de release (xtask) e do updater (orquestrador-app).
       - name: Rodar os checks

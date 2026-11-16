@@ -3,3 +3,5 @@
 *.key
 # Capturas e logs do Playwright MCP, da conferência local da interface.
 .playwright-mcp/
+# vcpkg com o FFmpeg e libclang, criados por crates/midia/preparar-ffmpeg.ps1.
+/ferramentas/
