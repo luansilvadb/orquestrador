@@ -110,6 +110,8 @@ pub struct Player {
 const PASSO: Duration = Duration::from_millis(4);
 /// Depois de uma busca, quanto esperar pelo quadro do alvo antes de aceitar outro.
 const PRAZO_DA_BUSCA: Duration = Duration::from_millis(500);
+/// Sem saída de áudio, quanto tocar à procura do quadro do alvo antes de aceitar outro.
+const PRAZO_DA_ESPIADA: Duration = Duration::from_secs(3);
 
 static ATIVOS: AtomicUsize = AtomicUsize::new(0);
 
@@ -589,8 +591,9 @@ fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &
     let mut busca: Option<(f64, Instant)> = None;
     // Posição do último quadro copiado.
     let mut ultimo: Option<f64> = None;
-    // Sem saída de áudio, o motor parado não desenha o quadro buscado: toca até ele aparecer e volta a parar no alvo.
-    let mut espiar: Option<f64> = None;
+    // Sem saída de áudio, o motor parado não desenha o quadro buscado: depois da busca, toca até ele aparecer e volta a
+    // parar no alvo. `(alvo, já tocou)`.
+    let mut espiar: Option<(f64, bool)> = None;
     loop {
         if c.parar.load(SeqCst) {
             return Ok(());
@@ -617,8 +620,7 @@ fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &
                         busca = Some((t, Instant::now()));
                         let r = motor.SetCurrentTime(t);
                         if sem_som.is_some() && video.is_some() && !travar(&c.relogio).tocando {
-                            espiar = Some(t);
-                            let _ = motor.Play();
+                            espiar = Some((t, false));
                         }
                         r
                     }
@@ -641,6 +643,15 @@ fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &
                 r.fixar(agora);
             }
         }
+        if let Some((t, tocou @ false)) = espiar.as_mut().filter(|_| !buscando) {
+            *tocou = true;
+            // A busca de antes do fim do carregamento pode ter sido ignorada: repete antes de tocar.
+            // SAFETY: chamadas COM com a sessão da thread.
+            unsafe {
+                let _ = motor.SetCurrentTime(*t);
+                let _ = motor.Play();
+            }
+        }
         let Some(exibe) = video else { continue };
         let mut pts = 0i64;
         // SAFETY: o `windows` trata S_FALSE (sem quadro novo) como sucesso; o HRESULT cru separa os dois.
@@ -651,8 +662,11 @@ fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &
             let pts = pts as f64 / 1e7;
             // Quadro de antes da busca que chegou depois dela (o primeiro do arquivo, por exemplo): fica de fora até o
             // motor mostrar o do alvo, ou até o prazo, se a busca não cair exata.
+            // Na espiada, só serve o quadro do alvo em diante.
+            let fora = |pts: f64, alvo: f64| if espiar.is_some() { pts + 0.05 < alvo || pts > alvo + 0.25 } else { (pts - alvo).abs() > 0.25 };
+            let prazo = if espiar.is_some() { PRAZO_DA_ESPIADA } else { PRAZO_DA_BUSCA };
             if let Some((alvo, desde)) = busca {
-                if (pts - alvo).abs() > 0.25 && desde.elapsed() < PRAZO_DA_BUSCA {
+                if fora(pts, alvo) && desde.elapsed() < prazo {
                     continue;
                 }
             }
@@ -661,7 +675,7 @@ fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &
         } else {
             // Sem quadro novo, o atual é refeito quando muda o tamanho de saída ou quando a busca cai nele (o motor não
             // repete o quadro ao buscar a posição em que já está).
-            let Some(ultimo) = ultimo else { continue };
+            let Some(ultimo) = ultimo.filter(|_| espiar.is_none()) else { continue };
             let mesma_posicao = busca.is_some_and(|(alvo, _)| (alvo - ultimo).abs() < 0.05);
             if !mesma_posicao && destino.as_ref().is_some_and(|d| d.tamanho == tamanho) {
                 continue;
@@ -676,7 +690,7 @@ fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &
         }
         let Some(d) = destino.as_ref() else { continue };
         if let Ok(bgra) = d.copiar(gpu, motor) {
-            if let Some(t) = espiar.take() {
+            if let Some((t, _)) = espiar.take() {
                 // SAFETY: chamadas COM com a sessão da thread.
                 unsafe {
                     let _ = motor.Pause();
