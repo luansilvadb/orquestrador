@@ -181,6 +181,7 @@ pub struct TelaGit {
     /// Itens da última lista desenhada: mudando, as alturas são medidas de novo sem perder a rolagem.
     itens_lista: RefCell<Vec<Item>>,
     branch_aberto: bool,
+    sobre_branch: bool,
     branches: Option<Branches>,
     erro_branch: String,
     nome_branch: Entity<InputState>,
@@ -272,6 +273,7 @@ impl TelaGit {
             lista: ListState::new(0, ListAlignment::Top, px(200.)),
             itens_lista: RefCell::default(),
             branch_aberto: false,
+            sobre_branch: false,
             branches: None,
             erro_branch: String::new(),
             nome_branch,
@@ -832,6 +834,7 @@ impl TelaGit {
             .child(icone("icons/git-branch.svg", 14., cor::text_primary()))
             .child(div().min_w_0().truncate().font_family(tema::FONTE_MONO).text_size(px(13.)).child(s.branch.clone()))
             .tooltip_texto(format!("Branch atual: {}. Trocar ou criar uma branch", s.branch))
+            .on_hover(cx.listener(|this, h: &bool, _, _| this.sobre_branch = *h))
             .on_click(cx.listener(|this, _, w, cx| {
                 let abrir = !this.branch_aberto;
                 this.abrir_branches(abrir, w, cx)
@@ -855,7 +858,9 @@ impl TelaGit {
                             .flex_1()
                             .min_w_0()
                             .child(botao_branch)
-                            .when(self.branch_aberto, |d| d.child(self.popup_branch(cx))),
+                            .when(self.branch_aberto, |d| {
+                                d.child(deferred(anchored().anchor(gpui_kit::Anchor::TopLeft).snap_to_window_with_margin(px(8.)).child(self.popup_branch(cx))).with_priority(1))
+                            }),
                     )
                     .child(
                         div()
@@ -903,7 +908,11 @@ impl TelaGit {
             .border_1()
             .border_color(cor::hairline())
             .occlude()
-            .on_mouse_down_out(cx.listener(|this, _, w, cx| this.abrir_branches(false, w, cx)));
+            .on_mouse_down_out(cx.listener(|this, _, w, cx| {
+                if !this.sobre_branch {
+                    this.abrir_branches(false, w, cx)
+                }
+            }));
         let texto = |t: String, c: Hsla| div().px(px(4.)).text_size(tema::TEXTO_LABEL).text_color(c).child(t);
         if let Some(o) = self.ocupado {
             corpo = corpo.child(texto(o.texto().into(), descricao()));
