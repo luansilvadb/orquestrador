@@ -5876,6 +5876,7 @@ dependencies = [
  "alacritty_terminal",
  "async-channel",
  "base64 0.22.1",
+ "embed-resource",
  "gpui-kit",
  "minisign-verify",
  "orquestrador-arvore",
