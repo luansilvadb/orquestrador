@@ -145,7 +145,20 @@ fn abrir_shells(cx: &mut TestAppContext, janela: WindowHandle<Root>, b: &Entity<
         let ids = shells(cx, &t);
         ids.len() == n && cx.update(|cx| ids.iter().all(|id| t.read(cx).vistas[&chave(None, id)].read(cx).vivo))
     });
-    shells(cx, &t)
+    let ids = shells(cx, &t);
+    // O ConPTY repinta a tela com o que o shell imprimiu e apagaria saída injetada antes; espera o prompt e o silêncio.
+    let vistas: Vec<_> = ids.iter().map(|id| vista(cx, &t, id)).collect();
+    let mut ultimas: Vec<String> = Vec::new();
+    let mut desde = Instant::now();
+    esperar(cx, janela, Duration::from_secs(30), |cx| {
+        let telas: Vec<String> = vistas.iter().map(|v| texto_da_tela(cx, v)).collect();
+        if telas != ultimas {
+            ultimas = telas;
+            desde = Instant::now();
+        }
+        ultimas.iter().all(|s| !s.trim().is_empty()) && desde.elapsed() >= Duration::from_millis(500)
+    });
+    ids
 }
 
 /// Manda um evento de ponteiro à janela, como o sistema.
