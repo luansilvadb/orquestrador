@@ -6,6 +6,9 @@ use super::cores;
 use super::links::{self, Link};
 use super::motor::{Chave, Motor, Registro};
 use super::teclas;
+use super::ui;
+use gpui_kit::TestSupportExt;
+use crate::tema::{self, cor};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point as TPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
@@ -174,6 +177,9 @@ pub struct VistaTerminal {
     pub vivo: bool,
     /// A aba, o painel e o projeto aparecem.
     pub visivel: bool,
+    /// Do `ligar` até o CLI escrever o primeiro caractere visível: mostra o giro no lugar da tela preta.
+    pub iniciando: bool,
+    _giro: Option<Task<()>>,
     cursor_aceso: bool,
     focado: bool,
     geo: Geometria,
@@ -235,6 +241,8 @@ impl VistaTerminal {
             foco: cx.focus_handle(),
             vivo: false,
             visivel: false,
+            iniciando: false,
+            _giro: None,
             cursor_aceso: true,
             focado: false,
             geo: Geometria::default(),
@@ -278,6 +286,22 @@ impl VistaTerminal {
     /// Marca que o PTY existe e manda o tamanho atual.
     pub fn ligar(&mut self, cx: &mut Context<Self>) {
         self.vivo = true;
+        // Só a abertura do orquestrador define `cli`; shells e executores não mostram o giro.
+        if self.cli.is_some() {
+            self.iniciando = true;
+            self._giro = Some(cx.spawn(async move |this: gpui_kit::WeakEntity<Self>, cx| loop {
+            cx.background_executor().timer(ui::PASSO_GIRO).await;
+            let segue = this.update(cx, |v, cx| {
+                if v.iniciando && v.visivel {
+                    cx.notify();
+                }
+                v.iniciando
+            });
+            if !matches!(segue, Ok(true)) {
+                break;
+            }
+        }));
+        }
         self.mandar_tamanho(cx);
     }
 
@@ -825,7 +849,29 @@ impl Render for VistaTerminal {
             .pb(px(4.))
             .pl(px(12.))
             .bg(cores::hsla(cores::FUNDO))
+            .relative()
             .child(GradeTerminal { vista: cx.entity() })
+            .when_some(self.cli.filter(|_| self.iniciando), |d, cli| {
+                let rotulo = match cli {
+                    Cli::Codex => "Abrindo Codex…",
+                    Cli::Claude => "Abrindo Claude Code…",
+                };
+                d.child(
+                    div()
+                        .id("terminal-iniciando")
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(8.))
+                        .text_size(tema::TEXTO_BODY)
+                        .text_color(cor::text_secondary())
+                        .child(ui::icone_estado("running", "icons/loader-circle.svg", 16., cor::text_secondary()))
+                        .child(rotulo)
+                        .test_support(),
+                )
+            })
     }
 }
 
@@ -976,6 +1022,8 @@ impl Element for GradeTerminal {
         let (link, ctrl, aceso, escrevivel, marcado) = (v.link.clone(), v.ctrl, v.cursor_aceso, v.escrevivel, v.marcado.clone());
         // Sem PTY (o diálogo do orquestrador ainda aberto) não há cursor.
         let vivo = v.vivo;
+        let iniciando = v.iniciando;
+        let mut visto = false;
         let motor = v.motor.clone();
         let tecla_em = v.tecla_em;
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
@@ -1067,6 +1115,7 @@ impl Element for GradeTerminal {
                 };
                 let estilo = Estilo { cor, negrito, italico: f.contains(Flags::ITALIC), sublinhado, riscado: f.contains(Flags::STRIKEOUT) };
                 let ch = if cel.c == '\0' || cel.c == '\t' { ' ' } else { cel.c };
+                visto |= iniciando && ch != ' ';
                 let simples = ch == ' ' && estilo.sublinhado.is_none() && !estilo.riscado;
                 if largura == 2 {
                     // Caractere largo em lote próprio: a largura forçada vale por glifo.
@@ -1152,6 +1201,12 @@ impl Element for GradeTerminal {
             (Bounds::new(origem, size(linha.width(), celula.height)), origem, linha)
         });
         drop(est);
+        if visto {
+            self.vista.update(cx, |v, cx| {
+                v.iniciando = false;
+                cx.notify();
+            });
+        }
 
         let linhas = lotes
             .into_iter()

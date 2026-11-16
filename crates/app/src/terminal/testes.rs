@@ -649,3 +649,72 @@ fn executor_em_execucao_nao_muda_o_titulo_e_marca_a_aba(cx: &mut TestAppContext)
     })
     .expect("janela");
 }
+
+#[gpui_kit::test]
+fn iniciando_mostra_o_giro_ate_o_primeiro_texto_visivel(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("iniciando");
+    let (janela, b) = montar(cx, &tmp, exes_padrao());
+    let ids = abrir_shells(cx, janela, &b, 1);
+    let t = terminais(cx, &b);
+    let v = vista(cx, &t, &ids[0]);
+    let registro = cx.update(|cx| b.read(cx).backend.terminais.clone());
+    // Motor sem PTY do outro lado: só chega o que o teste manda.
+    let k = chave(None, "iniciando");
+    let motor = registro.recriar(&k, 80, 24);
+    v.update(cx, |v, cx| {
+        v.trocar_motor(motor, cx);
+        v.cli = Some(super::colar::Cli::Codex);
+        v.ligar(cx);
+    });
+    let giro = |cx: &mut TestAppContext| cx.update_window(janela.into(), |_, w, _| w.try_find("terminal-iniciando").is_some()).unwrap();
+    desenhar(cx, janela);
+    assert!(giro(cx), "o giro aparece ao ligar");
+    assert!(texto_da_tela(cx, &v).trim().is_empty());
+    registro.receber(None, "iniciando", b"\x1b[?9001h\x1b[?1004h");
+    desenhar(cx, janela);
+    desenhar(cx, janela);
+    assert!(cx.update(|cx| v.read(cx).iniciando) && giro(cx), "só controle não desliga");
+    registro.receber(None, "iniciando", b"Codex pronto");
+    desenhar(cx, janela);
+    desenhar(cx, janela);
+    assert!(!cx.update(|cx| v.read(cx).iniciando) && !giro(cx), "texto visível desliga");
+}
+
+#[gpui_kit::test]
+fn ligar_shell_sem_cli_nao_mostra_o_giro(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("iniciando-shell");
+    let (janela, b) = montar(cx, &tmp, exes_padrao());
+    let ids = abrir_shells(cx, janela, &b, 1);
+    let t = terminais(cx, &b);
+    let v = vista(cx, &t, &ids[0]);
+    v.update(cx, |v, cx| v.ligar(cx));
+    desenhar(cx, janela);
+    assert!(!cx.update(|cx| v.read(cx).iniciando));
+    assert!(cx.update_window(janela.into(), |_, w, _| w.try_find("terminal-iniciando").is_none()).unwrap());
+}
+
+#[gpui_kit::test]
+fn abrir_terminal_fica_ocupado_ate_o_formulario_e_ignora_o_segundo_clique(cx: &mut TestAppContext) {
+    let tmp = Tmp::new("ocupado");
+    let pasta = tmp.0.join("projeto");
+    std::fs::create_dir_all(&pasta).expect("pasta");
+    let (janela, b) = montar(cx, &tmp, exes_padrao());
+    b.update(cx, |b, cx| b.abrir(pasta.clone(), cx));
+    esperar(cx, janela, Duration::from_secs(10), |cx| cx.update(|cx| b.read(cx).ativa.is_some()));
+    let projeto = cx.update(|cx| b.read(cx).ativa.clone());
+    let t = terminais(cx, &b);
+    desenhar(cx, janela);
+    cx.update_window(janela.into(), |_, window, cx| window.click("abrir-terminal", cx)).expect("janela");
+    assert!(cx.update(|cx| t.read(cx).projetos[&projeto].carregando), "ocupado logo no clique");
+    desenhar(cx, janela);
+    cx.update_window(janela.into(), |_, window, cx| window.click("abrir-terminal", cx)).expect("janela");
+    esperar(cx, janela, Duration::from_secs(60), |cx| cx.update(|cx| t.read(cx).form_aberto().is_some()));
+    let form = cx.update(|cx| t.read(cx).form_aberto());
+    assert!(!cx.update(|cx| t.read(cx).projetos[&projeto].carregando), "a marca sai com o formulário");
+    for _ in 0..10 {
+        cx.run_until_parked();
+        desenhar(cx, janela);
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    assert_eq!(cx.update(|cx| t.read(cx).form_aberto()), form, "um formulário só");
+}

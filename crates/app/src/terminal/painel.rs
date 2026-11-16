@@ -113,6 +113,8 @@ pub struct Projeto {
     pub aba: String,
     pub opcoes: Option<Options>,
     pub sem_git: Option<&'static str>,
+    /// Entre o clique em "Abrir terminal" e o formulário.
+    pub carregando: bool,
     pub shells: Vec<Shell>,
     pub shell_ativa: String,
 }
@@ -174,8 +176,27 @@ impl Terminais {
             }
         });
         let exes = backend.projetos.exes().clone();
-        let abertura = cx.new(|cx| super::portao::Abertura::new(exes, cx));
-        cx.observe(&abertura, |_, _, cx| cx.notify()).detach();
+        let abertura = cx.new(|cx| super::portao::Abertura::new(exes.clone(), cx));
+        // Com o portão liberado, a lista de modelos do Codex sai do clique em "Abrir terminal".
+        let aquecido = Rc::new(Cell::new(false));
+        let aquecer = {
+            let (aquecido, exes) = (aquecido.clone(), exes.clone());
+            move |pronto: bool, cx: &mut App| {
+                if pronto && !aquecido.replace(true) {
+                    let codex = exes.codex();
+                    cx.background_spawn(async move {
+                        orquestrador_core::config::models("codex", &codex);
+                    })
+                    .detach();
+                }
+            }
+        };
+        aquecer(abertura.read(cx).pronto(), cx);
+        cx.observe(&abertura, move |_, a, cx| {
+            aquecer(a.read(cx).pronto(), cx);
+            cx.notify();
+        })
+        .detach();
         // Giro dos executores rodando: o painel redesenha a cada passo, e só enquanto há algum.
         let giro = cx.spawn(async move |this: WeakEntity<Self>, cx| loop {
             cx.background_executor().timer(ui::PASSO_GIRO).await;
@@ -343,6 +364,11 @@ impl Terminais {
 
     // ---------- orquestrador ----------
 
+    #[cfg(test)]
+    pub fn form_aberto(&self) -> Option<gpui_kit::EntityId> {
+        self.form.as_ref().map(|(_, f, _)| f.entity_id())
+    }
+
     pub fn pronto(&self, cx: &App) -> bool {
         self.abertura.read(cx).pronto()
     }
@@ -352,9 +378,12 @@ impl Terminais {
             return;
         }
         self.janela = Some(window.window_handle());
-        if self.projeto(&projeto).orquestrador.is_some() {
+        let p = self.projeto(&projeto);
+        if p.orquestrador.is_some() || p.carregando {
             return;
         }
+        p.carregando = true;
+        cx.notify();
         let projetos = self.backend.projetos.clone();
         let repo = raiz.clone();
         let tarefa = cx.background_spawn(async move {
@@ -367,6 +396,7 @@ impl Terminais {
             let _ = this.update_in(cx, |this, window, cx| match opcoes {
                 Ok(opcoes) => {
                     let p = this.projeto(&projeto);
+                    p.carregando = false;
                     p.opcoes = Some(opcoes.clone());
                     p.aviso.clear();
                     p.sem_git = sem_git;
@@ -383,7 +413,11 @@ impl Terminais {
                     });
                     this.abrir_form(projeto.clone(), Sobre::Inicio, window, cx);
                 }
-                Err(e) => super::vista::avisar(e, window, cx),
+                Err(e) => {
+                    this.projeto(&projeto).carregando = false;
+                    cx.notify();
+                    super::vista::avisar(e, window, cx)
+                }
             });
         })
         .detach();
@@ -803,6 +837,7 @@ impl Terminais {
         let executores = p.executores.clone();
         let escolha_exec = p.escolha_executores.clone();
         let aviso = p.aviso.clone();
+        let carregando = p.carregando;
         let aguardando = executores.iter().any(|e| e.estado == "awaiting-choice");
         // Executor aguardando escolha: a janela dele é a única e não fecha sem confirmar.
         if aguardando && orq.as_ref().is_some_and(|o| o.sobre != Some(Sobre::Executores)) && self.form.is_none() {
@@ -1010,7 +1045,7 @@ impl Terminais {
                             )
                         })
                         .child(
-                            ui::botao("abrir-terminal", "Abrir terminal", Variante::Primario, false)
+                            ui::botao("abrir-terminal", "Abrir terminal", Variante::Primario, carregando)
                                 .on_click(cx.listener(move |this, _, window, cx| this.abrir_orquestrador(pp.clone(), rr.clone(), window, cx)))
                                 .test_support(),
                         )
