@@ -110,3 +110,25 @@ fn verificar(pubkey: &str, versao: &str, manifesto: &Path, instalador: &Path) ->
     println!("ok: {nome} {versao}");
     Ok(())
 }
+
+#[cfg(test)]
+mod testes {
+    // Par descartável com senha vazia gerado por `chaves` (scrypt com senha vazia) (mesmo formato do Tauri CLI).
+    const SK: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5ClJXUlRZMEl5T0V4NUw1MWljaDZDOEkwU1RocnI3NkYzdEtKQmpDS3RURC9JcndJNTEzc0FBQkFBQUFBQUFBQUFBQUlBQUFBQU1GWEp0ZlNRaW5YUFdMRFErUUI5QnJEYXM3bmlsSXVjMUNrdTl1NVpDRVlZMDlNcWZZTElTbi95ZlFZQWlWYU45TEg5dnhRVHpubEI1VUdvS0I1VzI0SWFqR0FBVlVmZjl3dUREMCsrMTA5WWtjVVR0aVhpMGRKNlVrbDc4UndySDQwNFNrME9xa0E9Cg==";
+    const PK: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM3NzQ1RTBEQjY2QTc2MkQKUldRdGRtcTJEVjUwTjh0RGpGSmc5ZHZmYzFzc290bitlbml5cEdYa0Z0aUVlL0NCNXJHajRDbDEK";
+
+    #[test]
+    fn abre_chave_sem_senha_do_tauri() {
+        let dir = std::env::temp_dir().join(format!("assinador-teste-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let arq = dir.join("instalador.exe");
+        std::fs::write(&arq, b"conteudo").unwrap();
+        let r = super::assinar(SK, &arq, "0.0.0");
+        let sig = std::fs::read_to_string(dir.join("instalador.exe.sig"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        r.unwrap();
+        let pk = minisign_verify::PublicKey::decode(&super::b64_texto(PK).unwrap()).unwrap();
+        let sig = minisign_verify::Signature::decode(&super::b64_texto(&sig.unwrap()).unwrap()).unwrap();
+        pk.verify(b"conteudo", &sig, true).unwrap();
+    }
+}
