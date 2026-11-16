@@ -365,8 +365,8 @@ fn lote_com_escolha_fila_parada_falha_e_aguardar() {
     assert_eq!(b.core.term_snapshot(&a).unwrap().seq, 0, "o slot do executor concluído saiu");
     // A saída de cada terminal chegou à entrega: a do executor (que já saiu) e a do orquestrador.
     let entregue = |id: &str| String::from_utf8_lossy(b.delivered.lock().unwrap().get(id).map_or(&[][..], Vec::as_slice)).into_owned();
-    assert!(entregue(&a).contains("feito: linha 2 d'água"), "a saída do executor não foi entregue: {}", entregue(&a));
-    assert!(entregue(ORCHESTRATOR).contains("eco:oi"), "a saída do orquestrador não foi entregue");
+    until("a entrega da saída do executor", || entregue(&a).contains("feito: linha 2 d'água"));
+    until("a entrega da saída do orquestrador", || entregue(ORCHESTRATOR).contains("eco:oi"));
 
     // Com a escolha feita, o próximo lote abre sozinho; agora com executor Claude.
     b.core.apply_executor_choice(Choice::new("claude", "", "")).unwrap();

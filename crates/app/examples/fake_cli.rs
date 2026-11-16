@@ -36,16 +36,16 @@ fn main() {
             Command::new(&n[0]).args(&n[1..]).arg(json.to_string()).status().unwrap();
         };
         send(format!("Generate a concise, single-line task title.\n\nUser prompt:\n{prompt}"), "{\"title\":\"x\"}");
-        send(prompt.clone(), &answer);
         println!("{answer}");
+        send(prompt.clone(), &answer);
     } else if let Some(hook) = stop.filter(|h| h["command"].is_string()) {
         std::thread::sleep(std::time::Duration::from_millis(300));
         let hook_args: Vec<String> = serde_json::from_value(hook["args"].clone()).unwrap();
+        println!("{answer}");
         let mut child = Command::new(hook["command"].as_str().unwrap()).args(hook_args).stdin(Stdio::piped()).spawn().unwrap();
         let json = serde_json::json!({ "hook_event_name": "Stop", "last_assistant_message": answer });
         child.stdin.take().unwrap().write_all(json.to_string().as_bytes()).unwrap();
         child.wait().unwrap();
-        println!("{answer}");
     }
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));
