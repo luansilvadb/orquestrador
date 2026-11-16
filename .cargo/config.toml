@@ -10,3 +10,7 @@ LIBCLANG_PATH = { value = "ferramentas/libclang/clang/native", relative = true, 
 [alias]
 # Tarefas do projeto em Rust (crates/xtask): `cargo xtask ajuda`.
 xtask = "run --quiet --package xtask --"
+
+# Executa testes, `cargo run` e exemplos com `ferramentas\ffmpeg\bin` no início do PATH, onde o cargo puser o exe.
+[target.x86_64-pc-windows-msvc]
+runner = ".cargo/executar.cmd"

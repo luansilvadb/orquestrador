@@ -40,7 +40,7 @@ pwsh crates/midia/preparar-ffmpeg.ps1
 O script baixa e confere o zip em `ferramentas/ffmpeg` (recusa build com GPL ou nonfree) e o `libclang` (pip
 `libclang==18.1.1`) para o bindgen. O `[env]` do `.cargo/config.toml` define `FFMPEG_DIR` e `LIBCLANG_PATH`. O `Cargo.toml`
 da raiz compila o bindgen otimizado (em opt-level 0 o build script estoura a pilha). Requer Python e o Visual Studio com C++.
-O `build.rs` copia as DLLs para `target/<perfil>`, `deps` e `examples`; o `empacotar.ps1` as instala ao lado do exe com
+O runner `.cargo/executar.cmd` põe `ferramentas/ffmpeg/bin` no PATH de `cargo run`, `cargo test` e exemplos; o `empacotar.ps1` as instala ao lado do exe com
 `FFmpeg-LICENSE.txt`.
 
 ## Testes e vitrine

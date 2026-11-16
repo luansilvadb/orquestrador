@@ -43,9 +43,25 @@ impl Drop for Tmp {
 /// `cargo test --workspace`.
 fn falsos() -> Option<(PathBuf, PathBuf)> {
     let exe = std::env::current_exe().ok()?;
-    let fake = exe.ancestors().map(|d| d.join("examples").join("fake_cli.exe")).find(|p| p.is_file())?;
-    let pasta = fake.parent()?.parent()?.to_path_buf();
-    let app = Some(pasta.join("orquestrador.exe")).filter(|p| p.is_file())?;
+    // Com `build-dir` fora de `target`, o exe do teste não fica sob a pasta do perfil: tenta também `target\<perfil>`.
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("target"));
+    let pasta = exe
+        .ancestors()
+        .flat_map(|d| [Some(d.to_path_buf()), d.file_name().map(|n| target.join(n))])
+        .flatten()
+        .find(|d| d.join("examples").join("fake_cli.exe").is_file() && d.join("orquestrador.exe").is_file())?;
+    let (fake, app) = (pasta.join("examples").join("fake_cli.exe"), pasta.join("orquestrador.exe"));
+    // O app roda neto do PTY, cujo PATH o portable-pty refaz do registro sem o FFmpeg do runner: as DLLs vão ao lado.
+    if let Some(dir) = option_env!("FFMPEG_DIR") {
+        for dll in std::fs::read_dir(PathBuf::from(dir).join("bin")).ok()?.flatten() {
+            let destino = pasta.join(dll.file_name());
+            if dll.path().extension().is_some_and(|e| e.eq_ignore_ascii_case("dll")) && !destino.is_file() {
+                std::fs::copy(dll.path(), &destino).ok()?;
+            }
+        }
+    }
     Some((fake, app))
 }
 
