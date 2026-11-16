@@ -109,18 +109,17 @@ fn workflow_permissoes_e_gates_precedem_alteracoes_remotas_e_publicacao() {
     let steps = wf["jobs"]["release"]["steps"].as_sequence().unwrap();
     let run = |s: &serde_yaml::Value| s["run"].as_str().unwrap_or("").to_string();
     let gate = |r: &str| r.rfind("cargo xtask release wait-ci $sha");
+    assert_eq!(texto.matches("wait-ci").count(), 1);
     let gates: Vec<usize> =
         (0..steps.len()).filter(|&i| run(&steps[i]).contains("git rev-parse HEAD") && gate(&run(&steps[i])).is_some()).collect();
-    assert_eq!(gates.len(), 2);
-    let escrita = regex::Regex::new(r"\bgh release (?:create|edit|upload|delete)\b").unwrap();
-    let writes: Vec<usize> = (0..steps.len())
-        .filter(|&i| escrita.is_match(&run(&steps[i])))
-        .collect();
-    assert!(!writes.is_empty());
-    assert!(writes.iter().all(|&i| gates[0] < i));
-    let publish = run(&steps[gates[1]]);
-    let cmd = publish.find("--draft=false --latest").unwrap();
-    assert!(cmd > gate(&publish).unwrap());
+    assert_eq!(gates.len(), 1);
+    let publica = regex::Regex::new(r"--draft=false|--latest").unwrap();
+    let publicacoes: Vec<usize> = (0..steps.len()).filter(|&i| publica.is_match(&run(&steps[i]))).collect();
+    assert_eq!(publicacoes, gates);
+    let publish = run(&steps[gates[0]]);
+    let cmd = publish.find("gh release edit").unwrap();
+    assert!(publish[cmd..].contains("--draft=false --latest"));
+    assert!(gate(&publish).unwrap() < cmd && publica.find(&publish).unwrap().start() > gate(&publish).unwrap());
 }
 
 #[test]
