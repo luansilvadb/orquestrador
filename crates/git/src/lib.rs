@@ -1,5 +1,4 @@
-//! A tela Git (lateral) e as vistas de comparação e de conflito do editor, porte de `src/git/` e de
-//! `src/editor/{diff-view,compare-rows,conflict-view}.tsx`. API pública em `README.md`.
+//! A tela Git (lateral) e as vistas de comparação e de conflito do editor. API pública em `README.md`.
 // A saída dos macros do GPUI aponta para `gpui::`; o alias resolve tudo pelo Kit.
 extern crate gpui_kit as gpui;
 

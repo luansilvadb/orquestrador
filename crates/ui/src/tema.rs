@@ -1,4 +1,4 @@
-//! Tokens de `DESIGN.md` e medidas tiradas de `src/window/`, `src/App.tsx` e `src/terminal/`, aplicados ao tema do GPUI Kit.
+//! Tokens de `DESIGN.md` e medidas da interface, aplicados ao tema do GPUI Kit.
 // Tokens ainda sem uso na casca ficam para as próximas fases.
 #![allow(dead_code)]
 use gpui_kit::component::Theme;
@@ -33,7 +33,7 @@ pub mod cor {
     /// `close-red` a 90%, como no hover do Fechar da titlebar.
     pub fn close_red() -> Hsla { rgba(0xe81123e6).into() }
 
-    // Exceções fixas da titlebar e da navegação (titlebar.tsx, nav.tsx).
+    // Exceções fixas da titlebar e da navegação.
     pub fn titlebar_text() -> Hsla { rgb(0xcccccc).into() }
     pub fn aba_ativa_texto() -> Hsla { rgb(0xececec).into() }
     pub fn aba_inativa_texto() -> Hsla { rgb(0x999999).into() }
@@ -60,8 +60,8 @@ pub const TEXTO_BODY: Pixels = px(14.);
 pub const TEXTO_MENU: Pixels = px(13.);
 pub const TEXTO_LABEL: Pixels = px(12.);
 pub const TEXTO_MONO: Pixels = px(13.);
-/// Código (editor, comparador e conflito). O React declara Consolas 14 px em linhas de 19 px, mas as capturas medem
-/// ~8,45 px por caractere (o Chromium); no DirectWrite isso é a Consolas a 15,5 px.
+/// Código (editor, comparador e conflito). A referência mede ~8,45 px por caractere em linhas de
+/// 19 px; no DirectWrite isso é a Consolas a 15,5 px.
 pub const FONTE_CODIGO: &str = "Consolas";
 pub const TAMANHO_CODIGO: f32 = 15.5;
 pub const LINHA_CODIGO: f32 = 19.;

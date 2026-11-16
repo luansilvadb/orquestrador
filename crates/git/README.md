@@ -1,7 +1,6 @@
 # orquestrador-git
 
-Tela Git da lateral e as vistas de comparação e de conflito do editor, porte de `src/git/` e de
-`src/editor/{diff-view,compare-rows,conflict-view}.tsx`.
+Tela Git da lateral e as vistas de comparação e de conflito do editor.
 
 ## Montagem
 
@@ -13,7 +12,7 @@ let tela = cx.new(|cx| TelaGit::new(fonte.clone(), guarda.clone(), window, cx));
 ```
 
 `FonteGit` é o trait com os comandos (`estado`, `stage`, `commit`, `review_diff`, `conflict`...); `simulado::Simulado`
-é a implementação com os dados de `src/backend/mock.ts`, para testes e para a vitrine.
+é a implementação com dados fixos, para testes.
 
 ## `TelaGit` (lateral)
 
@@ -33,14 +32,14 @@ ou `Alvo::Commit { hash, caminho }` (lido uma vez). Métodos: `definir_ativa`, `
 `passo`, `escolher`, `proporcao`/`definir_proporcao` (divisor, 15 a 85), `rolagem`, `faixa_atual`, `selecao`. Eventos `EventoDiff`: `AtualizarGit`,
 `AbrirLinha { caminho, linha }`.
 
-O corpo é o comparador próprio (`comparador::{Comparador, Corpo}`), porte do `FileDiff` do `@pierre/diffs` 1.2.12 como o
-React o configura: a fonte de código do tema (`tema::FONTE_CODIGO`, Consolas 15,5/19 px, a largura que o Chromium desenha), calha com número e −/+, vão de 40 px com divisor arrastável e ações do bloco,
+O corpo é o comparador próprio (`comparador::{Comparador, Corpo}`), porte do `FileDiff` do `@pierre/diffs` 1.2.12 com esta
+configuração: a fonte de código do tema (`tema::FONTE_CODIGO`, Consolas 15,5/19 px, a largura que o Chromium desenha), calha com número e −/+, vão de 40 px com divisor arrastável e ações do bloco,
 células vazias hachuradas, `word-alt` (`comparador::palavras`), régua e F8/Shift+F8 pela geometria calculada.
 Ctrl+C copia a seleção; setas, PageUp/PageDown, Home/End rolam.
 
 ## Pré-leitura (`PreLeiturasGit`)
 
-Porte do `prefetchTarget`/`gitReadFor` de `editor-workspace.tsx`: lê o diff ou o commit (e calcula o realce) antes do
+Lê o diff ou o commit (e calcula o realce) antes do
 clique. Uma por projeto, compartilhada (clonar compartilha o cache).
 
 ```rust
@@ -68,10 +67,4 @@ Na tela Git, Shift+F10 e a tecla de menu abrem o menu de contexto da linha focad
 
 ## Puro, para o git gutter
 
-`preparo` (reexporta o crate `orquestrador-hunks`, também usado pelo git gutter do editor): `{trechos, preparar_bloco, tirar_bloco, aplicar, tocam, linhas_antigas, ir_para_bloco}` (porte de
-`git-stage.ts` e da parte pura de `git-hunk.ts`): o texto novo do índice para `git::write_index`.
-
-## Vitrine
-
-`cargo run -p orquestrador-git --example vitrine-git -- <cena>`, cena = `alteracoes`, `historico`, `commit-diff`,
-`lado-a-lado`, `unificado`, `sem-repositorio`, `ausente` ou `conflito`.
+`preparo` (reexporta o crate `orquestrador-hunks`, também usado pelo git gutter do editor): `{trechos, preparar_bloco, tirar_bloco, aplicar, tocam, linhas_antigas, ir_para_bloco}`: o texto novo do índice para `git::write_index`.

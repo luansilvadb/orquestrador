@@ -174,9 +174,9 @@ mod testes {
         assert!(quebradas.is_empty(), "{quebradas:?}");
     }
 
-    /// `check-file-icons-ui.mjs`: árvore e abas usam o mesmo SVG, válido, para os nomes do Godot e o desconhecido.
+    /// Árvore e abas usam o mesmo SVG, válido, para os nomes do Godot e o desconhecido.
     #[test]
-    fn svg_dos_nomes_da_vitrine() {
+    fn svg_dos_nomes_godot() {
         let t = tema();
         for nome in ["script.gd", "scene.tscn", "resource.tres", "project.godot", "arquivo.inventado"] {
             let ext = nome.rsplit('.').next().unwrap();

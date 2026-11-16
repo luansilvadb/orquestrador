@@ -1,12 +1,12 @@
-//! Pré-leitura (`prefetch` de editor-workspace.tsx) e o rascunho das abas de conflito.
+//! Pré-leitura e o rascunho das abas de conflito.
 //!
 //! Árvore, pesquisa e Git chamam [`AreaEditor::pre_carregar`] ao passar o mouse ou apertar o botão sobre um arquivo:
-//! a leitura e a gramática começam antes do clique, e abrir usa o resultado. Como o `readFor` do React, a entrada
-//! vence 5 s depois de pedida, ou 3 s depois de pronta; além disso há um teto de entradas.
+//! a leitura e a gramática começam antes do clique, e abrir usa o resultado. A entrada vence
+//! 5 s depois de pedida, ou 3 s depois de pronta; além disso há um teto de entradas.
 use super::*;
 use std::time::Instant;
 
-/// Prazo de uma pré-leitura pendente e de uma pronta, como no React.
+/// Prazo de uma pré-leitura pendente e de uma pronta.
 const PRAZO_PENDENTE: Duration = Duration::from_secs(5);
 const PRAZO_PRONTA: Duration = Duration::from_secs(3);
 /// Teto de entradas guardadas (a mais antiga sai primeiro).
@@ -158,7 +158,7 @@ mod testes {
     }
 
     #[test]
-    fn prazos_do_react() {
+    fn prazos_da_pre_leitura() {
         let agora = Instant::now();
         let mut e = PreLeitura { pedida: agora - Duration::from_secs(4), pronta: None, esperando: Vec::new() };
         assert!(e.viva(agora));

@@ -1,4 +1,4 @@
-//! De onde a tela tira o Git: cada comando é a função do core correspondente. A bancada entrega um [`FonteCore`] com o `Core` do projeto; a vitrine e os testes, o simulado.
+//! De onde a tela tira o Git: cada comando é a função do core correspondente. A bancada entrega um [`FonteCore`] com o `Core` do projeto; os testes, o simulado.
 use orquestrador_core::core::Core;
 use orquestrador_core::ide::git;
 use std::sync::Arc;
@@ -34,7 +34,7 @@ pub trait FonteGit: Send + Sync + 'static {
     fn conflict(&self, caminho: &str) -> Result<Conflict, String>;
     fn write_resolution(&self, caminho: &str, texto: &str, revisao: &str, resolvido: bool) -> Result<(), String>;
     fn accept_deletion(&self, caminho: &str, revisao: &str) -> Result<(), String>;
-    /// Abre a URL no navegador (o `open_url` do React, no cartão do commit).
+    /// Abre a URL no navegador (no cartão do commit).
     fn abrir_url(&self, url: &str) -> Result<(), String>;
 }
 

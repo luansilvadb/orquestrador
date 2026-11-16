@@ -128,8 +128,7 @@ pub(crate) fn sintaxe(lang: &str, caminho: &str) -> Option<&'static SyntaxRefere
     x
 }
 
-/// Linguagens já pedidas nesta sessão. O Shiki do React nasce com `langs: []` e carrega a gramática de cada arquivo
-/// aberto; um bloco cercado do Markdown só ganha realce se a linguagem dele já estiver carregada.
+/// Linguagens já pedidas nesta sessão. A gramática de cada arquivo carrega ao abrir; um bloco cercado do Markdown só ganha realce se a linguagem dele já estiver carregada.
 static CARREGADAS: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyLock::new(Default::default);
 
 fn embutida_carregada(lang: &str) -> bool {
@@ -182,7 +181,7 @@ static REALCADOR: LazyLock<Highlighter<'static>> = LazyLock::new(|| Highlighter:
 /// Linhas entre dois estados guardados do parser.
 const PASSO: usize = 16;
 /// Até esta distância (linhas) do fim da parte exata, a região pedida é colorida exata na hora; acima, sai de um estado
-/// próximo (ou do inicial) e fica provisória até o segundo plano chegar, como o CodeMirror faz ao pular o parse.
+/// próximo (ou do inicial) e fica provisória até o segundo plano chegar.
 const SALTO: usize = 96;
 /// Duração de cada fatia do trabalho em segundo plano (o desenho espera no máximo uma fatia).
 const FATIA: Duration = Duration::from_millis(4);
@@ -232,7 +231,7 @@ fn colorir_linha(estado: &mut Estado, linha: &str) -> Trechos {
     if let Some(ops) = &ops {
         let mut pilha = estado.tema.path.clone();
         let mut cursor = 0;
-        // No `.env`, o valor depois do `=` é texto para os pares, como no modo Properties do CodeMirror.
+        // No `.env`, o valor depois do `=` é texto para os pares.
         let mut valor = false;
         let mut marcar = |a: usize, b: usize, pilha: &ScopeStack| {
             if a >= b {
@@ -244,7 +243,7 @@ fn colorir_linha(estado: &mut Estado, linha: &str) -> Trechos {
             } else if escopos.iter().any(|e| ATRIBUICAO_ENV.with(|t| t.is_prefix_of(*e))) {
                 valor = true;
             }
-            // Dentro de `${…}` da template string os colchetes voltam a contar, como no React.
+            // Dentro de `${…}` da template string os colchetes voltam a contar.
             let texto = escopos.iter().rposition(|e| fora_str.is_prefix_of(*e) || fora_com.is_prefix_of(*e));
             let expressao = escopos.iter().rposition(|e| TEMPLATE.with(|t| t.is_prefix_of(*e)));
             if texto.is_some_and(|t| expressao.is_none_or(|x| x < t)) {
@@ -822,7 +821,7 @@ impl InputHighlighter for Realce {
 }
 
 /// Fábrica para o `EditorState`: o "nome de linguagem" que o editor recebe é o caminho do arquivo, e daí sai a
-/// linguagem Shiki e a gramática. Sem gramática, ainda colore os colchetes, como o editor do React.
+/// linguagem Shiki e a gramática. Sem gramática, ainda colore os colchetes.
 pub fn fabrica() -> InputHighlighterFactory {
     fabrica_com(None)
 }
@@ -929,7 +928,7 @@ mod testes {
 
     /// TSX real repetido até `linhas`.
     fn amostra(linhas: usize) -> String {
-        let base = include_str!("../examples/dados/editor-workspace.tsx");
+        let base = include_str!("../tests/dados/editor-workspace.tsx");
         base.lines().cycle().take(linhas).map(|l| format!("{l}\n")).collect()
     }
 

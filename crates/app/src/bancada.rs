@@ -49,7 +49,7 @@ pub struct Arrasto {
     pub valor: f32,
 }
 
-/// O que cada `ProjectApp` do React guarda para si: rota, faixa, painel Terminal e medidas.
+/// O que cada projeto guarda para si: rota, faixa, painel Terminal e medidas.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Vista {
     pub rota: Rota,
@@ -66,7 +66,7 @@ pub struct Bancada {
     pub ativa: Option<String>,
     pub recentes: Vec<String>,
     pub rota: Rota,
-    /// Sem projeto, a navegação abre e fecha a faixa lateral (o `sideOpen` do React).
+    /// Sem projeto, a navegação abre e fecha a faixa lateral.
     pub lateral_aberta: bool,
     pub terminal_aberto: bool,
     pub largura_lateral: f32,
@@ -471,7 +471,7 @@ impl Bancada {
         cx.notify();
     }
 
-    /// Tira a aba já encerrada no core; como no React, a vizinha da esquerda (ou a primeira) vira a ativa.
+    /// Tira a aba já encerrada no core; a vizinha da esquerda (ou a primeira) vira a ativa.
     pub(crate) fn remover_aba(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(indice) = self.abas.iter().position(|a| a.id == id) else { return };
         self.abas.remove(indice);

@@ -1,4 +1,4 @@
-//! Estado de interface que o React guarda no localStorage, num único `interface.json` em `%LOCALAPPDATA%\orquestrador\`.
+//! Estado de interface num único `interface.json` em `%LOCALAPPDATA%\orquestrador\`.
 //! Cada seção tem nome e versão próprios: uma seção de versão desconhecida, ilegível ou ausente volta ao padrão sem
 //! derrubar as outras, e seções que este binário não conhece (editor, pesquisa de outras fases) são preservadas.
 //! Cada crate de tela declara a própria seção (`impl Secao`) e a lê e grava por [`ler`] e [`gravar`].

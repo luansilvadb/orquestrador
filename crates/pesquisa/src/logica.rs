@@ -1,5 +1,5 @@
 //! Regras da tela sem interface: ocorrências por linha, corte do trecho, alinhamento da prévia, linhas da lista (lista e
-//! árvore), resumo e histórico. Porte das funções de `src/search/search.tsx`.
+//! árvore), resumo e histórico.
 use orquestrador_core::ide::search::{FileMatches, Match, SkipReason};
 use regex::Regex;
 use std::collections::{BTreeMap, HashMap, HashSet};

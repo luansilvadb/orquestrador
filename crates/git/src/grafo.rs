@@ -1,4 +1,4 @@
-//! Modelo puro do grafo de commits (porte de `src/git/git-graph.ts`): faixas e segmentos de cada linha, sem desenho.
+//! Modelo puro do grafo de commits: faixas e segmentos de cada linha, sem desenho.
 //! Cada linha descreve um commit: a faixa onde ele fica, a cor dela e os segmentos que ligam a borda de cima ao meio e o
 //! meio à borda de baixo.
 
@@ -91,7 +91,6 @@ pub fn montar_grafo<'a>(commits: impl IntoIterator<Item = (&'a str, &'a [String]
 
 #[cfg(test)]
 mod testes {
-    //! Porte de `tests/check-git-graph.mjs`.
     use super::*;
 
     fn c(hash: &str, pais: &[&str]) -> (String, Vec<String>) {

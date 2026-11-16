@@ -1,5 +1,5 @@
-//! Avisos curtos (o `toast` do Lobe UI em `src/main.tsx` e `.app-toasts` de `src/index.css`): no alto e no meio da
-//! janela, com o topo a 43 px (o deslocamento de 44 px do CSS, como sai na captura), largura do texto até 560 px, fundo
+//! Avisos curtos: no alto e no meio da
+//! janela, com o topo a 43 px, largura do texto até 560 px, fundo
 //! `raised_black`, borda de 1 px, raio de 8 px, 8 px por 12 px de respiro e o ícone do tipo a 8 px do título de 13 px.
 //! Os mais novos ficam embaixo, 8 px entre eles. Qualquer tela chama [`mostrar`]; a bancada desenha [`camada`] uma vez,
 //! por cima de tudo.

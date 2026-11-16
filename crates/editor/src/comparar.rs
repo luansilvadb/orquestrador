@@ -1,4 +1,4 @@
-//! Comparação antes de gravar sobre o disco ou de usar o disco (o `CompareView` do React): as linhas do disco e as da
+//! Comparação antes de gravar sobre o disco ou de usar o disco: as linhas do disco e as da
 //! edição, lado a lado, com as removidas em vermelho e as inseridas em verde.
 use gpui::{div, prelude::*, px, AnyElement, Hsla, SharedString};
 use orquestrador_ui::tema::{self, cor};

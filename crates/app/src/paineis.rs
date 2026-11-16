@@ -218,7 +218,7 @@ impl Bancada {
             .test_support()
     }
 
-    /// Visibilidade dos terminais e, com projeto aberto, o fim dos shells sem projeto (como no React).
+    /// Visibilidade dos terminais e, com projeto aberto, o fim dos shells sem projeto.
     fn ajustar_terminais(&self, cx: &mut Context<Self>) {
         let (ativa, aberto) = (self.ativa.clone(), self.terminal_aberto);
         self.terminais.update(cx, |t, cx| {

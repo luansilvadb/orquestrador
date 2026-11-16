@@ -146,7 +146,7 @@ pub struct Terminais {
     seq_shell: u64,
     ultimo_programa: String,
     assinaturas: HashMap<Chave, Subscription>,
-    /// O portão de abertura: sem ele liberado, nenhum terminal abre (o `gated` do Tauri).
+    /// O portão de abertura: sem ele liberado, nenhum terminal abre.
     pub abertura: Entity<super::portao::Abertura>,
     /// A janela, guardada na primeira ação com ela: o que chega do core (sem janela) abre o formulário e avisa erros por ela.
     janela: Option<gpui_kit::AnyWindowHandle>,
@@ -208,7 +208,7 @@ impl Terminais {
         .com_avisos(cx)
     }
 
-    /// Erros dos terminais viram o aviso de erro do Kit (o toast do React).
+    /// Erros dos terminais viram o aviso de erro do Kit.
     fn com_avisos(self, cx: &mut Context<Self>) -> Self {
         cx.set_global(super::vista::AvisarErro(Some(Rc::new(|msg, _window, cx| {
             orquestrador_ui::avisos::mostrar(orquestrador_ui::avisos::Aviso::erro(msg, 7000), cx)
@@ -542,7 +542,7 @@ impl Terminais {
         }
     }
 
-    /// O foco está num terminal (os atalhos de projeto deixam a tecla seguir para ele, como o `.xterm` do React).
+    /// O foco está num terminal (os atalhos de projeto deixam a tecla seguir para ele).
     pub fn foco_em_terminal(&self, window: &Window, cx: &App) -> bool {
         self.vistas.values().any(|v| v.read(cx).foco.is_focused(window))
     }
@@ -712,7 +712,7 @@ impl Terminais {
         cx.notify();
     }
 
-    /// Os shells do terminal sem projeto morrem quando a primeira pasta abre (o ProjectApp sem projeto sai, no React).
+    /// Os shells do terminal sem projeto morrem quando a primeira pasta abre.
     pub fn soltar_sem_projeto(&mut self, cx: &mut Context<Self>) {
         let Some(p) = self.projetos.get_mut(&None) else { return };
         let ids: Vec<String> = p.shells.drain(..).map(|s| s.id).collect();
@@ -1187,7 +1187,7 @@ impl Terminais {
                 .h_full()
                 .abas(abas)
                 .ativa(Some(ativa.clone()).filter(|a| !a.is_empty()))
-                // Como no React (`z-20 bg-card`): a arrastada cobre as vizinhas com o fundo do painel.
+                // A arrastada cobre as vizinhas com o fundo do painel.
                 .estilo_arrastada(|s| s.bg(cor::painel_arrastavel()))
                 .ao_iniciar(cx.listener(move |this, de: &usize, _, cx| {
                     if let Some(id) = ids_i.get(*de) {

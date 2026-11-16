@@ -69,7 +69,7 @@ fn activity_bar_troca_a_tela(cx: &mut TestAppContext) {
         window.click("nav-arquivos", cx);
         assert!(window.find("tela-arquivos").visible());
 
-        // Sem projeto, o botão da tela aberta fecha a faixa, como no React.
+        // Sem projeto, o botão da tela aberta fecha a faixa.
         window.click("nav-arquivos", cx);
         assert!(window.try_find("tela-arquivos").is_none());
     })
@@ -683,7 +683,7 @@ fn ctrl_p_nao_e_consumido_em_campo_de_texto(cx: &mut TestAppContext) {
     use gpui_kit::component::WindowExt as _;
     let tmp = Tmp::new("ctrl-p");
     let (janela, bancada, _) = com_projeto(cx, &tmp, "p");
-    // Os atalhos de projeto esperam o portão dos CLIs, como o `canShortcut` do React.
+    // Os atalhos de projeto esperam o portão dos CLIs.
     let limite = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !cx.update(|cx| bancada.read(cx).terminais.read(cx).pronto(cx)) {
         assert!(std::time::Instant::now() < limite, "portão pronto");
@@ -698,7 +698,7 @@ fn ctrl_p_nao_e_consumido_em_campo_de_texto(cx: &mut TestAppContext) {
         })
         .expect("janela")
     };
-    // Com o foco no campo da pesquisa a tecla segue para o campo, como no React.
+    // Com o foco no campo da pesquisa a tecla segue para o campo.
     cx.update_window(janela.into(), |_, window, cx| bancada.update(cx, |b, cx| b.abrir_pesquisa(window, cx))).expect("janela");
     desenhar(cx, janela);
     let pesquisa = campo(cx).expect("campo da pesquisa focado");

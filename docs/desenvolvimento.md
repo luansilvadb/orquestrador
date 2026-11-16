@@ -37,8 +37,6 @@ Testes que chamam CLIs reais ficam ignorados:
   `cargo test -p orquestrador-core --test colagem -- --ignored --nocapture --test-threads=1`. `colar_imagem` lê a imagem do
   clipboard.
 
-Os crates de tela têm vitrines (`cargo run -p <crate> --example ...`, ver o README de cada um).
-
 ## Tarefas
 
 `cargo xtask ajuda` lista as tarefas:

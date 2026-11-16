@@ -1,4 +1,4 @@
-//! `a.localeCompare(b, 'pt-BR')` do Chromium (ICU, força terciária): acentos, caixa, dígitos e pontuação como no React.
+//! `a.localeCompare(b, 'pt-BR')` do Chromium (ICU, força terciária): acentos, caixa, dígitos e pontuação.
 use std::cmp::Ordering;
 use std::sync::LazyLock;
 

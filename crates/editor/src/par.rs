@@ -1,10 +1,10 @@
-//! O par de colchetes sob o cursor, como o `bracketMatching` do CodeMirror da versão React: caixa nos dois colchetes do
+//! O par de colchetes sob o cursor: caixa nos dois colchetes do
 //! par e vermelho no colchete sem par (ou nos dois de tipos diferentes).
 use gpui::Hsla;
 use gpui_kit::component::input::{RangeDecoration, RangeDecorationStyle, Rope};
 use std::ops::Range;
 
-/// O `maxScanDistance` padrão do CodeMirror.
+/// Distância máxima da busca do par.
 const DISTANCIA: usize = 10_000;
 const COLCHETES: &[u8; 6] = b"()[]{}";
 
@@ -28,7 +28,7 @@ fn byte(t: &Rope, i: usize) -> Option<u8> {
 }
 
 /// `matchBrackets(state, pos, dir)`: `dir < 0` olha o fechamento antes de `pos`, `dir > 0` a abertura em `pos`. Só
-/// conta colchetes da mesma classe do inicial (`contado`: fora de string e comentário), como o `tokenType` do CodeMirror.
+/// conta colchetes da mesma classe do inicial (`contado`: fora de string e comentário).
 fn casar_em(t: &Rope, pos: usize, dir: i8, contado: &dyn Fn(usize) -> bool) -> Option<Casamento> {
     let ini = if dir < 0 { pos.checked_sub(1)? } else { pos };
     let c = byte(t, ini)?;
@@ -97,7 +97,7 @@ mod testes {
     }
 
     #[test]
-    fn ordem_do_codemirror() {
+    fn ordem_da_busca() {
         // `f(a)|`: fechamento antes do cursor.
         assert_eq!(em("f(a)", 4), Some(Casamento { inicio: 3..4, fim: Some(1..2), casado: true }));
         // `f(|a)`: abertura antes do cursor.

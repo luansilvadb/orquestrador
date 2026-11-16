@@ -23,7 +23,7 @@ use gpui_kit::{px, size, AppContext, Bounds, TitlebarOptions, WindowBackgroundAp
 use std::rc::Rc;
 
 fn main() {
-    // Chamado pelos CLIs dos executores, o executável só faz o serviço do hook e sai, sem janela (o mesmo despacho do Tauri).
+    // Chamado pelos CLIs dos executores, o executável só faz o serviço do hook e sai, sem janela.
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--hook") => std::process::exit(orquestrador_core::agents::hook::run(&args[1..])),
@@ -35,7 +35,7 @@ fn main() {
         Some("--mcp") => std::process::exit(orquestrador_core::agents::mcp::serve(&args[1..])),
         _ => {
             let cwd = std::env::current_dir().unwrap_or_default();
-            // Como o Tauri, a instância única vale só no build de release.
+            // A instância única vale só no build de release.
             let _guarda = if cfg!(debug_assertions) {
                 None
             } else {

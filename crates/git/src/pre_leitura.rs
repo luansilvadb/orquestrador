@@ -1,10 +1,10 @@
-//! Pré-leitura das abas de diff e de commit (`gitReadFor`/`prefetchTarget` de editor-workspace.tsx): a tela Git emite
+//! Pré-leitura das abas de diff e de commit: a tela Git emite
 //! `EventoGit::PreCarregar` ao apertar o botão num arquivo (e, nas listas de arquivos de commit, depois de 100 ms com o
 //! ponteiro parado); a bancada chama [`PreLeiturasGit::pre_carregar`], e a [`crate::VisaoDiff`] criada com
 //! [`crate::VisaoDiff::com_pre_leitura`] usa a leitura em curso ou pronta em vez de pedir outra. O realce de sintaxe
-//! é calculado junto (o `primeDiffHighlightCache` do worker), e a aba já abre colorida.
+//! é calculado junto, e a aba já abre colorida.
 //!
-//! Como no React, a entrada vence 5 s depois de pedida ou 3 s depois de pronta, e abrir a consome.
+//! A entrada vence 5 s depois de pedida ou 3 s depois de pronta, e abrir a consome.
 use crate::comparador::{Comparador, Realce};
 use crate::comum::Alvo;
 use crate::fonte::{Diff, Fonte, ReviewDiff};
@@ -76,7 +76,7 @@ impl Entrada {
     }
 }
 
-/// `targetKey` do React: lado, hash e caminho sem diferença de caixa. Conflito não tem pré-leitura.
+/// Chave: lado, hash e caminho sem diferença de caixa. Conflito não tem pré-leitura.
 fn chave(alvo: &Alvo) -> Option<String> {
     match alvo {
         Alvo::Diff { lado, caminho } => Some(format!("diff:{}:{}", if lado.staged() { "staged" } else { "unstaged" }, caminho.to_lowercase())),
@@ -181,14 +181,14 @@ impl PreLeiturasGit {
         chave(alvo).is_some_and(|k| self.entradas.borrow().get(&k).is_some_and(|e| e.viva(agora) && e.vaga.borrow().pronta.is_some()))
     }
 
-    /// Descarta a leitura do alvo (o `consume` do React quando a aba já está aberta).
+    /// Descarta a leitura do alvo (quando a aba já está aberta).
     pub fn descartar(&self, alvo: &Alvo) {
         if let Some(k) = chave(alvo) {
             self.entradas.borrow_mut().remove(&k);
         }
     }
 
-    /// Espera para abrir a aba (o `openTarget` do React): começa a leitura se não houver e termina quando ela chega ou
+    /// Espera para abrir a aba: começa a leitura se não houver e termina quando ela chega ou
     /// quando passam 500 ms do botão apertado (ou de agora, sem pré-leitura pelo botão). A bancada abre a aba depois.
     pub fn aguardar(&self, fonte: &Fonte, alvo: &Alvo, cx: &mut App) -> Task<()> {
         self.pre_carregar(fonte, alvo, true, cx);

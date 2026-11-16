@@ -1,4 +1,4 @@
-//! Trava das operações Git que a UI dispara (porte de `src/git/git-guard.ts`): uma por vez, mesmo entre a lateral e as abas
+//! Trava das operações Git que a UI dispara: uma por vez, mesmo entre a lateral e as abas
 //! do editor. A bancada cria uma só e passa para todas as telas. Não cobre os executores vivos: isso é regra do backend.
 use gpui_kit::{App, Window};
 use std::cell::Cell;

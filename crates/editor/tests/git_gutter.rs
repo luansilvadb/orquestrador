@@ -1,5 +1,4 @@
-//! Porte de `tests/check-git-gutter-ui.mjs` (fixture `src/marcadores.ts` de `mock-fixtures.ts`) e da quebra de linha
-//! conferida em `docs/referencia-visual/arquivos-editor.png`, numa janela sem tela.
+//! Contas do git gutter com a fixture `src/marcadores.ts` e a quebra de linha da captura, numa janela sem tela.
 use gpui_kit::base::input::{browser_linebreaks, wrap_line_boundaries, WrappingIndent};
 use gpui_kit::base::Root;
 use gpui_kit::component::input::EditorState;
@@ -29,7 +28,7 @@ fn linhas_visuais(texto: &str, largura: f32) -> Vec<&str> {
 }
 
 #[test]
-fn quebra_nos_mesmos_pontos_da_captura_do_react() {
+fn quebra_nos_pontos_da_captura() {
     // Na captura, 40 colunas cabem e 41 não; os espaços ficam no fim da linha e contam (`break-spaces`).
     let l = 40.5;
     assert_eq!(
@@ -117,7 +116,7 @@ impl Chaves for Memoria {
     }
 }
 
-/// O Git simulado: a base de `src/marcadores.ts`, as leituras e as gravações do índice, como o `__mock` do React.
+/// O Git simulado: a base de `src/marcadores.ts`, as leituras e as gravações do índice.
 #[derive(Default)]
 struct Git {
     base: Mutex<BTreeMap<String, BaseGit>>,

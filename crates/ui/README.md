@@ -13,8 +13,8 @@ Cada tela (editor, árvore, mídia, pesquisa, Git) é um crate próprio que:
   `estado::ler::<S>(cx)` e `estado::gravar(&s, cx)`;
 - usa `tema::cor`, as medidas de `tema` e `tema::FONTE`; ícones novos entram em `assets/icons/` e em `recursos.rs`;
 - usa `FaixaAbas` e `ListaAbas` para abas;
-- usa os menus do Kit (`PopupMenu`, com `widgets::item_menu` para rótulo e atalho), já nas medidas do React;
+- usa os menus do Kit (`PopupMenu`, com `widgets::item_menu` para rótulo e atalho);
 - usa `TooltipTexto::tooltip_texto` para dicas e `widgets::mascara` sob os modais; menu ou camada própria que deve
   esconder a dica visível chama `widgets::marcar_sobreposicao()` ao desenhar.
-- ordena como o `localeCompare` do React com `colagem::comparar` e quebra texto corrido com `quebra::linhas` (o
+- ordena como o `localeCompare` pt-BR com `colagem::comparar` e quebra texto corrido com `quebra::linhas` (o
   `text-wrap: pretty` do Lobe) ou com `widgets::texto_pretty`.

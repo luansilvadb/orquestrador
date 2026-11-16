@@ -73,14 +73,6 @@ Dois formatos, da mesma fonte:
 ## Conferências fora do workflow
 
 - Última release publicada, sempre pela tag e pela API: `gh api repos/luansilvadb/orquestrador/releases/latest --jq .tag_name`. Não use o campo `isLatest` de `gh release view`.
-- Assinatura de um instalador real, em um diretório temporário fora do repositório (exemplo com a v0.1.6):
-
-```powershell
-gh release download v0.1.6 --repo luansilvadb/orquestrador --pattern "Orquestrador_0.1.6_x64-setup.exe*" --dir <pasta-temporária>
-cargo xtask release verify-installer 0.1.6 <pasta-temporária>\Orquestrador_0.1.6_x64-setup.exe <pasta-temporária>\Orquestrador_0.1.6_x64-setup.exe.sig
-```
-
-  A saída é a linha de confirmação com código 0. Instalador ou `.sig` alterados, ou assinados com outra chave, saem com código 1 e a mensagem do motivo.
 
 ## Correção editorial do corpo publicado
 

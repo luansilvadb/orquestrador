@@ -1,4 +1,4 @@
-//! Tarefas do projeto em Rust, no lugar dos scripts Node: `cargo xtask <comando>`.
+//! Tarefas do projeto em Rust: `cargo xtask <comando>`.
 mod despejar;
 mod limpar;
 mod medir;

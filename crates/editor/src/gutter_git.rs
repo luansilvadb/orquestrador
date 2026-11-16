@@ -328,7 +328,7 @@ fn botao(
         .test_support()
 }
 
-/// Linhas antigas com a sintaxe do arquivo, lidas fora de contexto (o "se for simples" do React).
+/// Linhas antigas com a sintaxe do arquivo, lidas fora de contexto.
 fn linhas_antigas(caminho: &str, antigas: &[String]) -> Vec<AnyElement> {
     let texto = antigas[..antigas.len().min(LIMITE_ANTIGAS)].join("\n");
     let marcas = if texto.len() <= LIMITE_COR_ANTIGAS { realce::colorir_caminho(caminho, &texto) } else { Vec::new() };
@@ -458,7 +458,7 @@ struct Marca {
     ultima: bool,
 }
 
-/// O editor passa por baixo do minimapa (`area.rs`): o Kit reserva 10 px à direita da quebra e o texto do CodeMirror
+/// O editor passa por baixo do minimapa (`area.rs`): o Kit reserva 10 px à direita da quebra e o texto
 /// vai até a borda do minimapa (40 colunas cabem, 41 não, nas capturas). O widget do bloco termina nessa borda.
 pub const SOB_MINIMAPA: f32 = 13.;
 
@@ -499,7 +499,7 @@ pub fn faixa_minimapa(blocos: &[Bloco]) -> Vec<(usize, Hsla)> {
 }
 
 /// Recuo da faixa do Git a partir do começo do texto: os números terminam 24 px antes dele (6 de margem e 18 da
-/// dobra do Kit); nas capturas do React, a faixa começa logo depois deles.
+/// dobra do Kit); a faixa começa logo depois deles.
 const RECUO_CALHA: f32 = 27.;
 
 fn marcas(s: &EditorState, blocos: &[Bloco]) -> Option<(Vec<Marca>, Pixels, Bounds<Pixels>)> {
@@ -526,7 +526,7 @@ fn marcas(s: &EditorState, blocos: &[Bloco]) -> Option<(Vec<Marca>, Pixels, Boun
 }
 
 fn triangulo(x: Pixels, y: Pixels, cheio: bool, cor: Hsla, window: &mut Window) {
-    // 5×8 apontando para o texto, como o SVG do React; o vazado é o contorno de 1 px por dentro.
+    // 5×8 apontando para o texto; o vazado é o contorno de 1 px por dentro.
     let (topo, meio, base) = (y - px(4.), y, y + px(4.));
     let mut p = if cheio { gpui::PathBuilder::fill() } else { gpui::PathBuilder::stroke(px(1.)) };
     if cheio {
@@ -664,7 +664,7 @@ pub fn linhas_novas(estado: &EstadoGit, texto: &str) -> Vec<gpui_kit::component:
 
 #[cfg(test)]
 mod testes {
-    //! Porte das contas de `tests/check-git-gutter-ui.mjs` (fixture `src/marcadores.ts` de `mock-fixtures.ts`).
+    //! Contas do git gutter com a fixture `src/marcadores.ts`.
     use super::*;
 
     pub fn marcadores() -> (String, String, String) {
@@ -790,7 +790,7 @@ mod testes {
     }
 
     #[test]
-    fn widget_reserva_a_altura_do_react() {
+    fn widget_reserva_a_altura() {
         let (head, indice, pasta) = marcadores();
         let mut e = EstadoGit::default();
         e.definir_base(Some(BaseGit { head: Some(head), index: Some(indice) }), &pasta);

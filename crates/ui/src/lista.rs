@@ -1,4 +1,4 @@
-//! Lista "Todas as abas" (porte de `src/shared/tab-list-menu.tsx`): uma linha de 26 px por aba, ícone, rótulo cortado,
+//! Lista "Todas as abas": uma linha de 26 px por aba, ícone, rótulo cortado,
 //! estado e ● de alteração à direita e o check da ativa no canto. Com `ao_fechar`, o X toma o lugar do check na linha
 //! destacada (ponteiro ou teclado). Setas, Home e End destacam, Enter escolhe, Delete fecha a destacada e Esc fecha o menu.
 use crate::tema::{self, cor};

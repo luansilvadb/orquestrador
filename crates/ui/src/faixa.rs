@@ -1,4 +1,4 @@
-//! Faixa de abas com rolagem horizontal (porte de `src/shared/tab-strip.ts`), comum às abas de projeto, de shell, de
+//! Faixa de abas com rolagem horizontal, comum às abas de projeto, de shell, de
 //! executores e do editor. Quem chama desenha cada aba; a faixa cuida do arrasto (começa depois de 4 px, as vizinhas abrem
 //! espaço, rola sozinha na borda, Esc ou a janela perdendo o foco cancelam), da roda do mouse e de revelar a aba ativa.
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
@@ -412,7 +412,7 @@ impl RenderOnce for FaixaAbas {
                 pressionar,
                 menu: aba.menu,
             });
-            // A arrastada pinta por cima das vizinhas (o `z-10` do React).
+            // A arrastada pinta por cima das vizinhas.
             faixa = if segurada { faixa.child(deferred(el)) } else { faixa.child(el) };
         }
         faixa = faixa.children(self.extras);

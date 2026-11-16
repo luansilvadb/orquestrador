@@ -1,5 +1,5 @@
-//! Seção Grafo da tela Git (porte de `src/git/git-graph-view.tsx`) e a lista de commits paginada e o commit aberto, comuns
-//! ao grafo e ao histórico (`usePagedList`, `useCommitDetail` e `CommitFileList` de `git-history.tsx`).
+//! Seção Grafo da tela Git e a lista de commits paginada e o commit aberto, comuns
+//! ao grafo e ao histórico.
 use crate::comum::{self, cor_faixa, cor_tipo, descricao, dividir, etiqueta, icone_arquivo, letra, palavra, secundario, Alvo};
 use crate::fonte::{CommitFile, GraphCommit, RefKind, Status};
 use crate::grafo::{montar_grafo, LinhaGrafo, Metade};

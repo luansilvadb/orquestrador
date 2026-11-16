@@ -1,4 +1,4 @@
-//! O git gutter na área do editor (`useGitBase` de editor-workspace.tsx e as ações de git-hunk.ts): a base é lida ao
+//! O git gutter na área do editor: a base é lida ao
 //! abrir, depois de gravar (o `raw` muda), a cada consulta com a aba visível e logo depois de preparar; a digitação
 //! recalcula os blocos na hora.
 use super::*;

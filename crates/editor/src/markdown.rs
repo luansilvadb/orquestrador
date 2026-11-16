@@ -195,7 +195,7 @@ pub fn instalar_realce_de_codigo(cx: &mut App) {
     .install(cx);
 }
 
-/// A imagem como o `LocalImage` do React: relativa ao `.md` (sem sair do projeto) lida do disco; http(s), `data:` e
+/// Imagem relativa ao `.md` (sem sair do projeto) lida do disco; http(s), `data:` e
 /// `blob:` pela URL.
 pub fn fonte_imagem(projeto: &str, base: &str, url: &str) -> Option<ImageSource> {
     let l = url.to_lowercase();

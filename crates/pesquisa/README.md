@@ -1,6 +1,6 @@
 # orquestrador-pesquisa
 
-Tela Pesquisar (porte de `src/search/search.tsx`), com busca, prévia e substituição pelo motor de `orquestrador_core::ide::search`.
+Tela Pesquisar, com busca, prévia e substituição pelo motor de `orquestrador_core::ide::search`.
 
 ## View
 
@@ -25,7 +25,3 @@ Preferência (visão lista/árvore e histórico) na seção `pesquisa` do `estad
 - `PreLer { caminho }`: botão desceu sobre um resultado.
 - `ArquivosAlterados { caminhos }`: a substituição gravou; recarregar o que estiver aberto.
 - `Aviso(String)`: mensagem curta (cópia feita).
-
-## Vitrine
-
-`cargo run -p orquestrador-pesquisa --example vitrine-pesquisa` (`VITRINE=substituir` ou `confirmar`).

@@ -71,7 +71,7 @@ pub fn textos(p: &Portao) -> (String, Vec<String>) {
     (status.to_string(), linhas)
 }
 
-/// Fração da barra do download; `None` fora dele, 1 com o total desconhecido (como a barra cheia do React).
+/// Fração da barra do download; `None` fora dele, 1 com o total desconhecido (barra cheia).
 pub fn progresso(p: &Portao) -> Option<f32> {
     match p {
         Portao::Atualizacao(Fase::Baixando { baixado, total: Some(t), .. }) if *t > 0 => Some((*baixado as f32 / *t as f32).min(1.)),
@@ -381,7 +381,7 @@ mod testes {
     }
 
     #[test]
-    fn fases_da_atualizacao_como_o_react() {
+    fn fases_da_atualizacao() {
         let t = |f| textos(&Portao::Atualizacao(f)).0;
         assert_eq!(t(Fase::Verificando), "Verificando se há uma versão nova…");
         assert_eq!(t(Fase::Baixando { versao: "0.2.0".into(), baixado: 50, total: Some(200) }), "Baixando a versão 0.2.0… 25%");

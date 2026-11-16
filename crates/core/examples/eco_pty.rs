@@ -1,5 +1,5 @@
 //! Latência de eco de um PTY puro (sem o app): escreve 1 caractere no PTY e mede até o eco chegar à leitura.
-//! Piso do caminho ConPTY + shell, para comparar com o eco do app (keydown -> letra no DOM do xterm: p50 23,2 ms em docs/desempenho-base.md).
+//! Piso do caminho ConPTY + shell, para comparar com o eco do app (ver docs/desempenho-gpui.md).
 //!
 //! Rodar: cargo run --release --example eco_pty -p orquestrador-core [-- <amostras> [--v=psrl,sempsrl,laco,cmd] [cenário ...]]
 //! (amostras: padrão 250; ECO_DEBUG=1 mostra o texto lido; sem cenário roda só 62x24).

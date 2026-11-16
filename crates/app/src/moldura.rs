@@ -182,7 +182,7 @@ impl Bancada {
                 _ => {}
             }
         }
-        // Ctrl+R e F5 recarregariam a webview no React; aqui só são consumidos, como lá.
+        // Ctrl+R e F5 são consumidos sem efeito.
         if (ctrl && tecla == "r") || (tecla == "f5" && !m.alt && !m.platform) {
             consumir(cx);
             return;
@@ -202,7 +202,7 @@ impl Bancada {
             self.passo_pesquisa(if m.shift { -1 } else { 1 }, cx);
             return;
         }
-        // Como no React (`input, textarea`, o que inclui a área de texto do Monaco): num campo de texto a tecla segue adiante.
+        // Num campo de texto a tecla segue adiante.
         if so_ctrl && tecla == "p" && projeto && !no_terminal && !gpui_kit::component::WindowExt::has_focused_input(window, cx) {
             consumir(cx);
             self.no_editor(window, cx, |e, w, cx| e.abrir_rapido(w, cx));
@@ -249,7 +249,7 @@ impl Bancada {
                         menu_arquivo(menu.action_context(foco.clone()), recentes.clone(), projeto_aberto, window, cx)
                     }),
             )
-            // A faixa inteira arrasta a janela (o `data-tauri-drag-region` do React): a área de arrasto fica atrás das
+            // A faixa inteira arrasta a janela: a área de arrasto fica atrás das
             // pílulas, que bloqueiam o mouse para não virarem barra de título.
             .child(
                 div()
@@ -402,7 +402,7 @@ impl Bancada {
             )
     }
 
-    /// Botão da janela com a dica alinhada à direita, embaixo (o `placement="bottomRight"` do React). `coluna` conta da
+    /// Botão da janela com a dica alinhada à direita, embaixo. `coluna` conta da
     /// borda direita (0 é o Fechar).
     fn botao_com_dica(
         &self, coluna: u8, dica: &'static str, botao: impl IntoElement, cx: &mut Context<Self>,
@@ -434,7 +434,7 @@ impl Bancada {
             .child(botao)
     }
 
-    /// A dica dos botões da janela: 4 px abaixo da titlebar e 4 px para dentro da borda direita do botão, como no React.
+    /// A dica dos botões da janela: 4 px abaixo da titlebar e 4 px para dentro da borda direita do botão.
     /// Como a do `tooltip_texto`, some quando um menu ou modal abre e só volta num novo hover.
     pub(crate) fn dica_el(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
         let Some((texto, coluna)) = self.dica_janela else {
@@ -467,7 +467,7 @@ impl Bancada {
     }
 }
 
-/// A tecla física à esquerda do 1 (o `e.code === 'Backquote'` do React): no ABNT2 ela produz `'`, então o atalho
+/// A tecla física à esquerda do 1: no ABNT2 ela produz `'`, então o atalho
 /// confere o scancode 0x29 em vez do caractere.
 fn tecla_crase(k: &gpui_kit::Keystroke) -> bool {
     #[cfg(windows)]
@@ -482,7 +482,7 @@ fn tecla_crase(k: &gpui_kit::Keystroke) -> bool {
     k.key == "`"
 }
 
-/// Roda do mouse sobre a pílula rola a faixa na horizontal (o `wheelToScroll` do React).
+/// Roda do mouse sobre a pílula rola a faixa na horizontal.
 fn rolar_faixa(rolagem: &gpui_kit::ScrollHandle, e: &gpui_kit::ScrollEvent, window: &mut Window, cx: &mut gpui_kit::App) {
     let d = e.delta.pixel_delta(window.line_height());
     let passo = if d.x.abs() > d.y.abs() { d.x } else { d.y };
@@ -495,7 +495,7 @@ fn rolar_faixa(rolagem: &gpui_kit::ScrollHandle, e: &gpui_kit::ScrollEvent, wind
 }
 
 /// Dica e ícone do botão do meio, relidos a cada quadro: o Windows alterna maximizar e restaurar (o botão, o duplo
-/// clique na barra e o snap), e `is_maximized` é o `IsZoomed`, que o snap lateral não liga, como o `isMaximized` do Tauri.
+/// clique na barra e o snap), e `is_maximized` é o `IsZoomed`, que o snap lateral não liga.
 pub(crate) fn controle_maximizar(maximizada: bool) -> (&'static str, &'static str) {
     if maximizada {
         ("Restaurar", icone::RESTAURAR)

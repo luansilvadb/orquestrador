@@ -1,5 +1,5 @@
-//! Formatar Documento (Shift+Alt+F), porte de `src/editor/format.ts`. O core descobre o formatador do arquivo
-//! (`ide::format::info`); no caso Prettier, que o React roda em JavaScript, aqui os crates Rust do ecossistema dprint
+//! Formatar Documento (Shift+Alt+F). O core descobre o formatador do arquivo
+//! (`ide::format::info`); no caso Prettier, os crates Rust do ecossistema dprint
 //! fazem o trabalho com as opções da config do Prettier do projeto mapeadas para a saída mais próxima possível; os outros
 //! motores (Python, Rust, Go) seguem pelo CLI do core.
 use crate::armazem::FimDeLinha;
@@ -108,7 +108,7 @@ fn extensao(caminho: &Path) -> String {
     caminho.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
 
-/// Escolhe o motor pela extensão, como o `parserFor` do React.
+/// Escolhe o motor pela extensão.
 pub fn prettier(caminho: &Path, texto: &str, o: &Opcoes) -> Result<String, String> {
     let ext = extensao(caminho);
     match ext.as_str() {

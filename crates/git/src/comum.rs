@@ -20,7 +20,7 @@ impl Lado {
     }
 }
 
-/// O que uma aba do editor mostra a partir do Git (o `TabTarget` de diff, conflito e commit do React).
+/// O que uma aba do editor mostra a partir do Git (diff, conflito e commit).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Alvo {
     Diff { lado: Lado, caminho: String },
@@ -35,7 +35,7 @@ impl Alvo {
         }
     }
 
-    /// Título da aba, como no React: `nome · conflito`, `curto · nome` (commit) e `nome · alterações/preparadas`.
+    /// Título da aba: `nome · conflito`, `curto · nome` (commit) e `nome · alterações/preparadas`.
     pub fn titulo(&self) -> String {
         let nome = dividir(self.caminho()).0;
         match self {
@@ -47,7 +47,7 @@ impl Alvo {
     }
 }
 
-/// Título e descrição numa linha cada, como o `toast({ title, description })` do React.
+/// Título e descrição numa linha cada.
 fn com_descricao(titulo: SharedString, descricao: &str) -> SharedString {
     if descricao.is_empty() {
         titulo
@@ -160,7 +160,7 @@ pub fn icone_arquivo(caminho: &str, tamanho: f32) -> impl IntoElement {
     img(orquestrador_ui::icone_arquivo(caminho, false, false)).size(px(tamanho)).flex_none()
 }
 
-/// Animação do ícone a cada clique (`src/shared/spin.ts`): atualizar dá uma volta; Enviar solta a seta para cima, Receber
+/// Animação do ícone a cada clique: atualizar dá uma volta; Enviar solta a seta para cima, Receber
 /// e Buscar para baixo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Animacao {
@@ -331,7 +331,7 @@ pub fn quando_longo(iso: &str) -> String {
     format!("{} de {} de {} às {:02}:{:02}", d.day(), MESES[d.month0() as usize], d.year(), d.hour(), d.minute())
 }
 
-/// `Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' })` com as unidades do React.
+/// `Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' })`.
 pub fn data_relativa(iso: &str) -> String {
     let Some(d) = data(iso) else { return iso.to_string() };
     relativa((d - Local::now()).num_milliseconds() as f64 / 1000.)

@@ -1,5 +1,4 @@
-//! Porte da parte de árvore de `tests/check-files-search-ui.mjs`, numa janela de teste do Kit com o core numa pasta
-//! temporária de verdade (o lugar do `src/backend/mock.ts`). Excluir manda os arquivos temporários à Lixeira. Recortar,
+//! Testes da árvore numa janela de teste do Kit com o core numa pasta temporária de verdade. Excluir manda os arquivos temporários à Lixeira. Recortar,
 //! copiar e colar usam o clipboard de arquivos do Windows de verdade: o teste guarda o conteúdo do usuário e devolve no fim.
 use crate::{EventoArvore, Explorador};
 use gpui_kit::base::Root;
@@ -36,7 +35,7 @@ fn arquivo(raiz: &Path, rel: &str, texto: &str) {
     std::fs::write(p, texto).unwrap();
 }
 
-/// A árvore do mock (`src/backend/mock.ts`), sem Git.
+/// A árvore de exemplo, sem Git.
 fn exemplo(raiz: &Path) {
     for rel in [
         ".gitignore", "README.md", "debug.log", "package.json", "assets/logo.png", "dados/exportacao.json",
@@ -226,7 +225,7 @@ fn clique_vazio_limpa_selecao_e_ctrl_a_inclui_linhas_virtuais(cx: &mut TestAppCo
     assert!(m.selecao().contains(&"grande".to_string()), "pasta fechada entra na seleção");
     assert!(!m.selecao().iter().any(|s| s.starts_with("grande/")), "descendente fechado fica fora");
     m.expandir(&["docs", "grande"]);
-    // Com a lista cheia não sobra área vazia à vista: o evento vai direto ao painel, como no React.
+    // Com a lista cheia não sobra área vazia à vista: o evento vai direto ao painel.
     let a = m.arvore.clone();
     m.cx.update(|window, cx| a.update(cx, |a, cx| a.clique_vazio(window, cx)));
     m.esperar();
@@ -590,7 +589,7 @@ fn shift_f10_abre_o_menu_na_linha_focada(cx: &mut TestAppContext) {
     let (posicao, linha) = m.ler(|a, _| (a.posicao_menu(), a.limites_linha("docs/rascunho-painel.md")));
     let linha = linha.expect("linha desenhada");
     let esperado = gpui_kit::point(linha.origin.x + px(24.), linha.origin.y + linha.size.height / 2.);
-    assert_eq!(posicao, Some(esperado), "o menu do teclado sai na conta do React (24 px, meio da linha)");
+    assert_eq!(posicao, Some(esperado), "o menu do teclado sai a 24 px da esquerda, no meio da linha");
 }
 
 #[gpui_kit::test]

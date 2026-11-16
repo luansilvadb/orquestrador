@@ -974,7 +974,7 @@ impl Element for GradeTerminal {
         });
         let v = self.vista.read(cx);
         let (link, ctrl, aceso, escrevivel, marcado) = (v.link.clone(), v.ctrl, v.cursor_aceso, v.escrevivel, v.marcado.clone());
-        // Sem PTY (o diálogo do orquestrador ainda aberto) não há cursor, como o xterm que o React só monta depois.
+        // Sem PTY (o diálogo do orquestrador ainda aberto) não há cursor.
         let vivo = v.vivo;
         let motor = v.motor.clone();
         let tecla_em = v.tecla_em;

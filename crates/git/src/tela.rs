@@ -1,7 +1,7 @@
-//! Barra lateral do Git (porte de `src/git/git.tsx`): abas Alterações e Histórico. Alterações tem a branch com ahead/behind,
+//! Barra lateral do Git: abas Alterações e Histórico. Alterações tem a branch com ahead/behind,
 //! a mensagem e o botão do commit (com o modo Commit ou Commit e Push), as seções Preparadas e Alterações (lista virtual,
 //! stage/unstage por arquivo e em lote, Ctrl+clique marca) e o Grafo. Fora do modo `repo`, só o estado vazio. O status é
-//! relido a cada 1,5 s com foco (10 s sem), como o `usePolled` do React; cada ação relê na hora.
+//! relido a cada 1,5 s com foco (10 s sem); cada ação relê na hora.
 use crate::comum::{self, acao, acao_secao, cor_tipo, descricao, dividir, icone_arquivo, letra, palavra, secundario, Alvo, Lado};
 use crate::fonte::{Branches, CommitDetail, CommitHoverDetail, Estado, Fonte, GitFile, GraphCommit, Kind, Status};
 use crate::grafo::LinhaGrafo;
@@ -195,7 +195,7 @@ pub struct TelaGit {
     pub(crate) hover: Hover,
     pub(crate) hovers: HashMap<String, EstadoHover>,
     pub(crate) linhas_grafo: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
-    /// Foco de cada linha com menu (o `button` do React) e onde ela foi desenhada, para o menu pelo teclado.
+    /// Foco de cada linha com menu e onde ela foi desenhada, para o menu pelo teclado.
     focos_linha: RefCell<HashMap<String, FocusHandle>>,
     pub(crate) limites_linha: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
     pub(crate) arrasto: Option<(f32, f32, f32)>,
@@ -418,7 +418,7 @@ impl TelaGit {
     fn receber(&mut self, r: Result<Estado, String>, cx: &mut Context<Self>) {
         match r {
             Ok(mut e) => {
-                // O React recebe a lista ordenada por `localeCompare` pt-BR; o core ordena por bytes.
+                // O core ordena por bytes; aqui reordena por `localeCompare` pt-BR.
                 if let Estado::Repo { status } = &mut e {
                     status.files.sort_by(|a, b| orquestrador_ui::colagem::comparar(&a.path, &b.path));
                 }
@@ -1343,7 +1343,7 @@ impl TelaGit {
             .into_any_element()
     }
 
-    /// Foco da linha `chave` (entra na ordem do Tab, como o `button` da linha no React).
+    /// Foco da linha `chave` (entra na ordem do Tab).
     pub(crate) fn foco_linha(&self, chave: &str, cx: &mut App) -> FocusHandle {
         self.focos_linha.borrow_mut().entry(chave.to_string()).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
@@ -1386,8 +1386,8 @@ impl TelaGit {
             .flex_basis(px(0.))
             .min_h(px(0.))
             .child(
-                // Lista virtual com alturas próprias: as linhas têm 22 px e o "Nenhuma alteração." a altura do parágrafo
-                // do React (12 px com `line-height` 1,5715 e 4 px em cima e embaixo).
+                // Lista virtual com alturas próprias: as linhas têm 22 px e o "Nenhuma alteração." a altura de um
+                // parágrafo (12 px com `line-height` 1,5715 e 4 px em cima e embaixo).
                 list(
                     self.lista.clone(),
                     cx.processor(move |this, i: usize, window, cx| {

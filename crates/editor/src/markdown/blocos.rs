@@ -409,7 +409,7 @@ pub fn desenhar_codigo(no: &MarkdownNode, window: &mut Window, cx: &mut App) -> 
                     .overflow_x_scroll()
                     .whitespace_nowrap()
                     .font_family(mono.clone())
-                    // 0,85 em no Lobe; medido no React, a Cascadia sai com 12,6 px.
+                    // 0,85 em no Lobe, a Cascadia sai com 12,6 px.
                     .text_size(px(12.6))
                     .text_color(lobe::texto())
                     .child(TextoRico::new(SharedString::from(format!("{id}-texto")), texto.clone(), marcas, mono)),
@@ -548,7 +548,7 @@ pub fn desenhar_tabela(no: &MarkdownNode, _window: &mut Window, _cx: &mut App) -
                 .child(TextoRico::new(SharedString::from(format!("md-tabela-{chave}-{i}-{j}")), c.texto, c.marcas, mono.clone()))
         }))
     };
-    // O contorno do React é `box-shadow` (fora da caixa): 1 px a mais acima e abaixo, e a primeira linha 1 px mais baixa.
+    // O contorno fica fora da caixa: 1 px a mais acima e abaixo, e a primeira linha 1 px mais baixa.
     div()
         .flex()
         .my(px(1.))
@@ -651,7 +651,7 @@ mod testes {
             let i = c.find(s).unwrap();
             m.iter().find(|(r, _)| r.contains(&i)).and_then(|(_, m)| m.cor)
         };
-        // storage.type: purple10; support.type: colorWarning; constant.numeric: volcano10 (como na captura do React).
+        // storage.type: purple10; support.type: colorWarning; constant.numeric: volcano10.
         assert_eq!(cor("const"), Some(gpui::rgb(0xd590da).into()));
         assert_eq!(cor("number"), Some(gpui::rgb(0xffb224).into()));
         assert_eq!(cor("1"), Some(gpui::rgb(0xff9480).into()));

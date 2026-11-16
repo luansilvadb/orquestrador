@@ -1,4 +1,4 @@
-//! Comparador do editor central (porte de `DiffTab` e `CommitTab` de `src/editor/diff-view.tsx`): o arquivo inteiro no
+//! Comparador do editor central: o arquivo inteiro no
 //! comparador próprio (`crate::comparador`), lado a lado por padrão ou unificado, com realce `syntect`/Dark+ e diferença
 //! por palavra. No diff do índice, as ações por bloco (preparar, tirar do preparo, descartar) e descartar o arquivo; no
 //! commit, só leitura.
@@ -23,7 +23,7 @@ use std::time::Duration;
 
 actions!(visao_diff, [ProximaMudanca, MudancaAnterior, Copiar, RolarAcima, RolarAbaixo, PaginaAcima, PaginaAbaixo, Inicio, Fim]);
 
-/// Atalhos F8 e Shift+F8 (vale em toda a aba), a cópia da seleção e a rolagem pelo teclado, como no corpo focado do React.
+/// Atalhos F8 e Shift+F8 (vale em toda a aba), a cópia da seleção e a rolagem pelo teclado.
 pub fn init(cx: &mut App) {
     let c = Some("VisaoDiff");
     cx.bind_keys([
@@ -255,7 +255,7 @@ impl VisaoDiff {
         self.escolher((cur + por).clamp(0, n as i32 - 1) as usize, cx);
     }
 
-    /// Escolhe a unidade; a rolagem vai a ela quando a unidade muda (o `jump` do React).
+    /// Escolhe a unidade; a rolagem vai a ela quando a unidade muda.
     pub fn escolher(&mut self, unidade: usize, cx: &mut Context<Self>) {
         self.atual = unidade;
         cx.notify();
@@ -756,8 +756,8 @@ impl VisaoDiff {
     }
 }
 
-/// O comparador para um patch. `None` se o patch não tem blocos nem cabeçalho de arquivo (o `parsePatchFiles` do React
-/// aceita renomeação pura, modo trocado e arquivo vazio: o comparador sai vazio). `anterior` é o da mesma aba antes da releitura: a
+/// O comparador para um patch. `None` se o patch não tem blocos nem cabeçalho de arquivo
+/// (renomeação pura, modo trocado e arquivo vazio dão comparador vazio). `anterior` é o da mesma aba antes da releitura: a
 /// rolagem, a proporção e a unidade passam para o novo, e a rolagem só muda se a unidade mudar.
 fn montar(
     patch: &str, blocos: Option<&[Intervalo]>, caminho: &str, anterior: Option<&Mostrado>, realce: Option<(Realce, Realce)>,
@@ -788,7 +788,7 @@ fn montar(
     let modelo = (*c.modelo).clone();
     let estado = Rc::new(RefCell::new(c));
     let cam = caminho.to_string();
-    // O realce chega depois, como o do worker do React: o diff aparece sem cores e ganha as cores em seguida.
+    // O realce chega depois: o diff aparece sem cores e ganha as cores em seguida.
     let tarefa = cx.background_spawn(async move { Comparador::realcar(&cam, &modelo, &antigo, &novo) });
     let e2 = estado.clone();
     let realce = cx.spawn(async move |this, cx| {
@@ -803,7 +803,7 @@ pub(crate) fn interpretavel(patch: &str) -> bool {
     !comparar::intervalos(patch).is_empty() || patch.lines().any(|l| l.starts_with("diff --git ") || l.starts_with("--- "))
 }
 
-/// Diálogo de confirmação com o texto em monoespaçado (o `ask` do workspace do React).
+/// Diálogo de confirmação com o texto em monoespaçado.
 pub fn confirmar(
     titulo: &'static str,
     corpo: String,

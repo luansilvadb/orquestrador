@@ -1,7 +1,7 @@
 //! Regras de release sem rede (porte do antigo `check-release.mjs`).
 use super::*;
 use base64::engine::general_purpose::STANDARD;
-use ed25519_dalek::{Signer, SigningKey};
+use base64::Engine;
 use serde_json::json;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -250,6 +250,14 @@ fn manifest(version: &str, sig: &str) -> String {
     .unwrap()
 }
 
+/// latest.json já com a URL pública e as notas, como o fluxo de release publica.
+fn manifest_pronto(version: &str, sig: &str, notes: &str) -> String {
+    let mut m: Value = serde_json::from_str(&manifest(version, sig)).unwrap();
+    m["platforms"]["windows-x86_64"]["url"] = installer_url(version, REPO).into();
+    m["notes"] = canonical_text(notes.trim()).into();
+    serde_json::to_string_pretty(&m).unwrap()
+}
+
 #[test]
 fn notas_completas_passam_com_a_comparacao_citando_a_anterior() {
     assert!(note_problems(&notes(), "0.1.7", Some("0.1.6")).is_empty());
@@ -333,7 +341,7 @@ fn repositorio_tem_as_versoes_sincronizadas() {
 fn manifesto_url_de_rascunho_assinatura_trocada_ou_notes_antigas_sao_recusados() {
     let sig = sig_for("0.1.7", "");
     let n = notes();
-    let fixed = prepare_manifest(&manifest("0.1.7", &sig), "0.1.7", &n, REPO).unwrap();
+    let fixed = manifest_pronto("0.1.7", &sig, &n);
     verify_manifest(&fixed, "0.1.7", &sig, Some(&n), REPO).unwrap();
     assert!(erro(verify_manifest(&manifest("0.1.7", &sig), "0.1.7", &sig, Some(&n), REPO)).contains("URL https://api.github"));
     assert!(erro(verify_manifest(&fixed, "0.1.7", &sig_for("0.1.7", "\tother"), Some(&n), REPO)).contains("não é a do .sig"));
@@ -346,121 +354,16 @@ fn notes_do_latest_crlf_e_espaco_final_sao_o_mesmo_texto() {
     let sig = sig_for("0.1.7", "");
     let lf = notes();
     let crlf = lf.replace('\n', "\r\n");
-    let mut m: Value = serde_json::from_str(&prepare_manifest(&manifest("0.1.7", &sig), "0.1.7", &lf, REPO).unwrap()).unwrap();
+    let mut m: Value = serde_json::from_str(&manifest_pronto("0.1.7", &sig, &lf)).unwrap();
     m["notes"] = crlf.clone().into();
     let crlf_manifest = serde_json::to_string_pretty(&m).unwrap();
     verify_manifest(&crlf_manifest, "0.1.7", &sig, Some(&lf), REPO).unwrap();
-    verify_manifest(&prepare_manifest(&manifest("0.1.7", &sig), "0.1.7", &crlf, REPO).unwrap(), "0.1.7", &sig, Some(&crlf), REPO).unwrap();
+    verify_manifest(&manifest_pronto("0.1.7", &sig, &crlf), "0.1.7", &sig, Some(&crlf), REPO).unwrap();
     verify_manifest(&crlf_manifest, "0.1.7", &sig, Some(&format!("{crlf}\r\n")), REPO).unwrap();
     assert!(erro(verify_manifest(&crlf_manifest, "0.1.7", &sig, Some(&lf.replacen("Resumo", "Resumo alterado", 1)), REPO)).contains("notes do latest.json"));
     assert!(erro(verify_manifest(&crlf_manifest, "0.1.7", &sig, Some(&format!("{lf}x")), REPO)).contains("notes do latest.json"));
-    let out: Value = serde_json::from_str(&prepare_manifest(&manifest("0.1.7", &sig), "0.1.7", &crlf, REPO).unwrap()).unwrap();
+    let out: Value = serde_json::from_str(&manifest_pronto("0.1.7", &sig, &crlf)).unwrap();
     assert_eq!(out["notes"], lf.trim());
-}
-
-#[test]
-fn prepare_manifest_poe_a_url_publica_e_o_texto_completo() {
-    let sig = sig_for("0.1.7", "");
-    let out: Value = serde_json::from_str(&prepare_manifest(&manifest("0.1.7", &sig), "0.1.7", &format!("{}\n", notes()), REPO).unwrap()).unwrap();
-    assert_eq!(out["platforms"]["windows-x86_64"]["url"], installer_url("0.1.7", REPO).as_str());
-    assert_eq!(
-        out["platforms"]["windows-x86_64"]["url"],
-        "https://github.com/luansilvadb/orquestrador/releases/download/v0.1.7/Orquestrador_0.1.7_x64-setup.exe"
-    );
-    assert_eq!(out["notes"], notes().trim());
-    assert_eq!(out["platforms"]["windows-x86_64"]["signature"], sig.as_str());
-    // A ordem das chaves do arquivo é mantida.
-    let texto = prepare_manifest(&manifest("0.1.7", &sig), "0.1.7", "x", REPO).unwrap();
-    assert!(texto.find("\"version\"").unwrap() < texto.find("\"platforms\"").unwrap());
-    assert!(erro(prepare_manifest(&manifest("0.1.6", &sig), "0.1.7", "x", REPO)).contains("anuncia 0.1.6"));
-}
-
-// ---------------------------------------------------------------- Minisign
-// Chaves Ed25519 geradas aqui de sementes fixas (nenhum segredo do projeto). Formato igual ao do Tauri.
-
-struct Par {
-    key_b64: String,
-    key_id: [u8; 8],
-    sk: SigningKey,
-}
-
-fn key_pair(semente: u8, key_id: [u8; 8]) -> Par {
-    let sk = SigningKey::from_bytes(&[semente; 32]);
-    let mut raw = b"Ed".to_vec();
-    raw.extend_from_slice(&key_id);
-    raw.extend_from_slice(&sk.verifying_key().to_bytes());
-    let hex: String = key_id.iter().map(|b| format!("{b:02X}")).collect();
-    let file = format!("untrusted comment: minisign public key: {hex}\n{}\n", STANDARD.encode(raw));
-    Par { key_b64: STANDARD.encode(file), key_id, sk }
-}
-
-fn sign_installer(k: &Par, file: &[u8], name: &str, version: &str, alg: &[u8; 2]) -> String {
-    use blake2::Digest;
-    let message = if alg == b"ED" { blake2::Blake2b512::digest(file).to_vec() } else { file.to_vec() };
-    let sig = k.sk.sign(&message).to_bytes();
-    let trusted = format!("timestamp:1700000000\tfile:{name}\tversion:{version}");
-    let mut g = sig.to_vec();
-    g.extend_from_slice(trusted.as_bytes());
-    let global = k.sk.sign(&g).to_bytes();
-    let mut linha = alg.to_vec();
-    linha.extend_from_slice(&k.key_id);
-    linha.extend_from_slice(&sig);
-    let text = format!(
-        "untrusted comment: signature from test key\n{}\ntrusted comment: {trusted}\n{}\n",
-        STANDARD.encode(linha),
-        STANDARD.encode(global)
-    );
-    STANDARD.encode(text)
-}
-
-/// Edita as linhas do .sig decodificado (0 comentário, 1 assinatura, 2 comentário confiável, 3 global) e recodifica.
-fn edit_sig(sig: &str, f: impl FnOnce(&mut Vec<String>)) -> String {
-    let mut l: Vec<String> = String::from_utf8(STANDARD.decode(sig).unwrap()).unwrap().split('\n').map(String::from).collect();
-    f(&mut l);
-    STANDARD.encode(l.join("\n"))
-}
-
-fn flip_line(b: &str, at: usize) -> String {
-    let mut bytes = STANDARD.decode(b).unwrap();
-    bytes[at] ^= 1;
-    STANDARD.encode(bytes)
-}
-
-const INSTALLER: &[u8] = "conteúdo de teste do instalador, nunca distribuído".as_bytes();
-const ID: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
-
-fn nome() -> String {
-    installer_name("0.1.7")
-}
-
-#[test]
-fn instalador_assinado_confere_e_adulteracoes_falham() {
-    let key = key_pair(7, ID);
-    let sig = sign_installer(&key, INSTALLER, &nome(), "0.1.7", b"ED");
-    let ok = |s: &str, f: &[u8], k: &str| verify_installer("0.1.7", &nome(), f, s, k);
-    assert!(ok(&sig, INSTALLER, &key.key_b64).unwrap().contains("conferidos (versão 0.1.7)"));
-    ok(&sign_installer(&key, INSTALLER, &nome(), "0.1.7", b"Ed"), INSTALLER, &key.key_b64).unwrap();
-    let mut file_bad = INSTALLER.to_vec();
-    file_bad[3] ^= 1;
-    assert!(erro(ok(&sig, &file_bad, &key.key_b64)).contains("não confere com a chave"));
-    let sig_bad = edit_sig(&sig, |l| l[1] = flip_line(&l[1], 20));
-    assert!(erro(ok(&sig_bad, INSTALLER, &key.key_b64)).contains("não confere com a chave"));
-    let comment_bad = edit_sig(&sig, |l| l[2] = l[2].replace("version:0.1.7", "version:0.1.8"));
-    assert!(erro(ok(&comment_bad, INSTALLER, &key.key_b64)).contains("comentário confiável alterado"));
-    assert!(erro(ok(&sig, INSTALLER, &key_pair(9, ID).key_b64)).contains("não confere com a chave"));
-    assert!(erro(ok(&sig, INSTALLER, &key_pair(9, [9; 8]).key_b64)).contains("assinatura de outra chave"));
-    let kt: Vec<String> = String::from_utf8(STANDARD.decode(&key.key_b64).unwrap()).unwrap().split('\n').map(String::from).collect();
-    let key_bad = STANDARD.encode(format!("{}\n{}\n", kt[0], flip_line(&kt[1], 30)));
-    assert!(erro(ok(&sig, INSTALLER, &key_bad)).contains("não confere com a chave"));
-}
-
-#[test]
-fn versao_ou_nome_assinados_diferentes_sao_recusados() {
-    let key = key_pair(7, ID);
-    let v = |n: &str, s: &str| verify_installer("0.1.7", n, INSTALLER, s, &key.key_b64);
-    assert!(erro(v(&nome(), &sign_installer(&key, INSTALLER, &nome(), "0.1.8", b"ED"))).contains("versão assinada é 0.1.8"));
-    assert!(erro(v(&nome(), &sign_installer(&key, INSTALLER, "outro.exe", "0.1.7", b"ED"))).contains("diz o arquivo outro.exe"));
-    assert!(erro(v("outro.exe", &sign_installer(&key, INSTALLER, &nome(), "0.1.7", b"ED"))).contains("se chama outro.exe"));
 }
 
 // ---------------------------------------------------------------- corpo

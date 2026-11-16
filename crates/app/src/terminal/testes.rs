@@ -198,7 +198,7 @@ fn arrastar_aba_de_shell_como_a_de_projeto(cx: &mut TestAppContext) {
     let caixa = |cx: &mut TestAppContext, i: usize| {
         cx.update(|cx| t.read(cx).faixa_shells.rolagem().bounds_for_item(i).expect("aba desenhada"))
     };
-    // Janela inativa cancela o arrasto, como no React (`blur`).
+    // Janela inativa cancela o arrasto.
     cx.update_window(janela.into(), |_, window, _| window.activate_window()).expect("janela");
     cx.run_until_parked();
     let primeira = caixa(cx, 0);
@@ -300,7 +300,7 @@ fn abas_de_shell_ordem_selecao_e_vizinha_ao_fechar(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn fechar_shell_no_meio_ou_inativa_como_o_react(cx: &mut TestAppContext) {
+fn fechar_shell_no_meio_ou_inativa(cx: &mut TestAppContext) {
     let tmp = Tmp::new("abas-meio");
     let (janela, b) = montar(cx, &tmp, exes_padrao());
     let ids = abrir_shells(cx, janela, &b, 4);

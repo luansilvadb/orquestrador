@@ -1,6 +1,6 @@
 //! Um documento aberto: o buffer do disco e o `EditorState` do Kit que guarda o texto, a seleção e o histórico de
 //! desfazer. As vistas do mesmo `doc_id` em grupos diferentes compartilham este estado. Aqui ficam também os comandos de
-//! `@codemirror/commands` que o app usa e o Kit não traz, e as cores e medidas do editor (as do Antigravity, Dark Modern).
+//! edição que o Kit não traz, e as cores e medidas do editor (as do Antigravity, Dark Modern).
 use crate::armazem::{difere_do_disco, Buffer};
 use crate::realce;
 use gpui::{
@@ -36,7 +36,7 @@ actions!(
     ]
 );
 
-/// Atalhos de `@codemirror/commands` (o `standardKeymap`/`defaultKeymap` do `basicSetup`) que o editor do app usa.
+/// Atalhos de edição que o Kit não traz.
 pub fn registrar_atalhos(cx: &mut App) {
     let c = Some(CONTEXTO);
     cx.bind_keys([
@@ -218,7 +218,7 @@ fn observar_par(editor: &Entity<EditorState>, ligacao: std::rc::Rc<realce::Ligac
     cx.observe(editor, move |ed, cx| {
         let s = ed.read(cx);
         let sel = s.selected_range();
-        // Com seleção, o CodeMirror não marca par.
+        // Com seleção, não há par marcado.
         let novo = if sel.is_empty() { crate::par::casar(s.text(), sel.start, &|i| ligacao.colchete_contado(i)) } else { None };
         if *ultimo.borrow() == novo {
             return;
@@ -336,7 +336,7 @@ pub fn ler_ir_para(valor: &str, linhas: usize, tamanho_linha: impl Fn(usize) -> 
     Ok((linha as u64, coluna as u64))
 }
 
-/// Comentário de linha da linguagem (o `commentTokens.line` do CodeMirror), ou bloco quando não há de linha.
+/// Comentário de linha da linguagem, ou bloco quando não há de linha.
 pub fn comentario(caminho: &str) -> (&'static str, Option<&'static str>) {
     let l = crate::linguagem::linguagem(caminho).unwrap_or_default();
     match l.as_str() {
@@ -640,7 +640,7 @@ impl gpui::Element for ComTemaDoEditor {
             t.foreground = cor::texto();
             t.muted_foreground = cor::numero();
             t.selection = cor::selecao();
-            // O CodeMirror pinta a seleção por baixo e mantém a cor do texto.
+            // A seleção fica por baixo e mantém a cor do texto.
             t.selection_foreground = None;
             t.inactive_selection = Some(cor::selecao_inativa());
             t.caret = cor::cursor();

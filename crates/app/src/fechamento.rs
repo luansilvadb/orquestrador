@@ -32,7 +32,7 @@ pub struct Fechamento {
     aguardando: usize,
     tudo_salvo: bool,
     pub foco: FocusHandle,
-    /// Botão com o foco, na ordem do rodapé; nasce no Cancelar (`autoFocus` no React).
+    /// Botão com o foco, na ordem do rodapé; nasce no Cancelar.
     pub focado: Resposta,
 }
 

@@ -1,7 +1,7 @@
-//! A tela Arquivos sem o editor: porte de `src/explorer/explorer.tsx` e `explorer-tree.tsx`. Barra com as ações da view,
+//! A tela Arquivos sem o editor. Barra com as ações da view,
 //! seção recolhível com o nome do projeto, linhas virtuais de 22 px com recuo de 8 px por nível, decorações do Git,
 //! renomear e criar na própria linha, menus de contexto, diálogo de excluir, arrastar para mover e copiar, recortar e
-//! colar pelo clipboard de arquivos do Windows. A lista se atualiza sozinha (o `usePolling` do React: 1,5 s com a
+//! colar pelo clipboard de arquivos do Windows. A lista se atualiza sozinha (1,5 s com a
 //! janela em foco, 10 s sem foco).
 use crate::modelo::{self, Arvore, Criando, Linha, Mods, TipoCaminho, TipoLinha};
 use orquestrador_core::ide::files::{self, DirListing, Entry, Moved};
@@ -239,7 +239,7 @@ pub struct Explorador {
     erro: String,
     selecao: Vec<String>,
     ancora: Option<String>,
-    /// A linha com o "foco" do teclado (o `tabIndex` itinerante do React); None é o painel.
+    /// A linha com o "foco" do teclado; None é o painel.
     cursor: Option<String>,
     aberto: Option<String>,
     decoracoes: HashMap<String, modelo::Decoracao>,
@@ -289,7 +289,7 @@ impl Explorador {
     /// `raiz` é a pasta do projeto; `projeto`, o nome mostrado na seção. A primeira leitura sai na hora.
     pub fn new(raiz: PathBuf, projeto: impl Into<SharedString>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let campo = cx.new(|cx| InputState::new(window, cx));
-        // Parada de Tab, como o `tabIndex` itinerante da árvore no React.
+        // Parada de Tab itinerante.
         let foco = cx.focus_handle().tab_stop(true);
         let subs = vec![
             cx.subscribe_in(&campo, window, Self::no_campo),
@@ -531,7 +531,7 @@ impl Explorador {
                 let minimizada = janela_minimizada(window);
                 if this.minimizada != minimizada {
                     this.minimizada = minimizada;
-                    // Ao restaurar, a rodada sai na hora (o `visibilitychange` do React).
+                    // Ao restaurar, a rodada sai na hora.
                     if !minimizada {
                         this.proxima_rodada = cx.background_executor().now();
                     }
@@ -683,7 +683,7 @@ impl Explorador {
             return;
         }
         self.garantir_linhas();
-        // Ctrl soma à marcação exibida, que sem seleção é o arquivo aberto (como o `selected` do explorer-tree.tsx).
+        // Ctrl soma à marcação exibida, que sem seleção é o arquivo aberto.
         let marcados = self.marcados();
         let (nova, ancora) = modelo::selecionar(&self.linhas, &marcados, self.ancora.as_deref(), linha, mods);
         self.selecao = nova;
@@ -1342,7 +1342,7 @@ impl Explorador {
         }
     }
 
-    /// Teclas da árvore (`explorer-tree.tsx`) e do painel (`onTreeKey`). Com o cursor numa linha, valem para a seleção (ou
+    /// Teclas da árvore e do painel. Com o cursor numa linha, valem para a seleção (ou
     /// só para a linha, se ela não está nela); sem cursor, para a raiz.
     fn tecla(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !self.foco.is_focused(window) {
@@ -1534,7 +1534,7 @@ impl Explorador {
             .and_then(|i| self.linhas.get(i))
             .and_then(|l| self.limites_linhas.borrow().get(&l.chave).copied());
         if let Some(b) = desenhada {
-            // A conta do React: `rect.left + 24`, `rect.top + rect.height / 2` da linha.
+            // Âncora: 24 px da esquerda da linha, no meio da altura.
             return point(b.origin.x + px(24.), b.origin.y + b.size.height / 2.);
         }
         match indice {

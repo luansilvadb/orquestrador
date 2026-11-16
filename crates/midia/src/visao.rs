@@ -157,7 +157,7 @@ impl VisaoMidia {
         self.tipo
     }
 
-    /// Renomeação com a aba aberta: recarrega do caminho novo (o `key` do React).
+    /// Renomeação com a aba aberta: recarrega do caminho novo.
     pub fn trocar_caminho(&mut self, caminho: impl Into<PathBuf>, cx: &mut Context<Self>) {
         self.carregar(caminho.into(), cx);
     }
@@ -602,7 +602,7 @@ fn dirs_downloads() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Downloads")).filter(|p| p.is_dir())
 }
 
-/// `Note` do React: aviso no lugar do corpo da aba.
+/// Aviso no lugar do corpo da aba.
 fn nota(texto: impl Into<SharedString>, perigo: bool) -> impl IntoElement {
     div()
         .flex()

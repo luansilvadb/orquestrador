@@ -1,5 +1,4 @@
-//! Leitura e decodificação de imagem fora da thread da UI. Os bytes vêm de `files::read_media_at` (as mesmas regras e
-//! mensagens do comando `read_media_at` do Tauri); GIF e WebP animados viram vários quadros, que o `img` do GPUI anima.
+//! Leitura e decodificação de imagem fora da thread da UI. Os bytes vêm de `files::read_media_at`; GIF e WebP animados viram vários quadros, que o `img` do GPUI anima.
 use gpui_kit::RenderImage;
 use image::{AnimationDecoder, Delay, Frame, ImageFormat, RgbaImage};
 use smallvec::SmallVec;

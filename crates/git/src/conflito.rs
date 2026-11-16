@@ -1,4 +1,4 @@
-//! Aba de conflito de merge (porte de `src/editor/conflict-view.tsx` e do `saveConflict` do workspace): escolha por trecho
+//! Aba de conflito de merge: escolha por trecho
 //! (marcadores normais e diff3), restauração de um lado, aceite de remoção e o texto final editável. O rascunho é a fonte:
 //! os trechos são lidos do texto dele a cada render, e a edição à mão vale junto com as escolhas.
 use crate::comum::{self, botao};
@@ -86,8 +86,7 @@ impl VisaoConflito {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // O texto final no editor do app, com a mesma configuração do de arquivo (realce, calha, quebra, guias), como o
-        // `CodeEditor` que o React usa aqui.
+        // O texto final no editor do app, com a mesma configuração do de arquivo (realce, calha, quebra, guias).
         let doc = Documento::novo(Buffer::do_disco(&format!("conflito:{caminho}"), &caminho, String::new(), false, false), window, cx);
         let editor = doc.editor.clone();
         let sub = cx.subscribe(&editor, |this: &mut Self, editor, ev: &InputEvent, cx| {
@@ -573,7 +572,7 @@ impl Render for VisaoConflito {
                 .bg(documento::cor::fundo())
                 .child(
                     div().flex_1().min_w_0().h_full().child(ComTemaDoEditor(Some(
-                        // Sem o recuo vertical do Kit: a primeira linha encosta no topo, como o CodeMirror do React.
+                        // Sem o recuo vertical do Kit: a primeira linha encosta no topo.
                         Editor::new(&self.editor)
                             .appearance(false)
                             .bordered(false)

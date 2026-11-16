@@ -1,4 +1,4 @@
-//! A coluna central do editor (porte de `src/editor/editor-workspace.tsx`): até dois grupos de abas lado a lado, cada
+//! A coluna central do editor: até dois grupos de abas lado a lado, cada
 //! aba um arquivo (editor do Kit), um rascunho sem caminho, um Markdown com Preview ou um conteúdo de outro tipo (diff,
 //! commit, conflito, mídia) que a bancada fornece por [`FabricaConteudo`]. Buffers e rascunhos são do documento
 //! (`doc_id`), não da aba. API pública e eventos em `README.md`.
@@ -36,7 +36,7 @@ use std::time::Duration;
 mod git;
 mod pre;
 
-/// Intervalo da consulta ao disco das abas ativas (o `POLL_MS` do React).
+/// Intervalo da consulta ao disco das abas ativas.
 pub const CONSULTA: Duration = Duration::from_millis(2500);
 const PROPORCAO_PADRAO: f32 = 0.5;
 const ESPERA_RECUPERACAO: Duration = Duration::from_millis(400);
@@ -267,8 +267,7 @@ pub fn titulo(a: &Alvo) -> String {
 }
 
 /// X de 20 px à direita da aba, visível na ativa e com o ponteiro sobre a aba (`grupo`); com alteração não salva, o ponto
-/// fica no lugar dele até o ponteiro chegar. O ● do React sai da fonte do sistema com ~6 px; o da Inter é maior, então
-/// o ponto é desenhado.
+/// fica no lugar dele até o ponteiro chegar. O ● da Inter é maior que ~6 px, então o ponto é desenhado.
 fn fechar_ou_modificado(
     id: impl Into<gpui::ElementId>, grupo: impl Into<SharedString>, ativa: bool, modificado: bool,
     ao_fechar: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -328,7 +327,7 @@ impl AreaEditor {
         Self::com_armazenamento(projeto, Rc::new(RefCell::new(ArquivoChaves::padrao())), window, cx)
     }
 
-    /// Como [`AreaEditor::new`], com a recuperação noutro armazenamento (testes e vitrine).
+    /// Como [`AreaEditor::new`], com a recuperação noutro armazenamento (testes).
     pub fn com_armazenamento(
         projeto: impl Into<String>, armazenamento: Rc<RefCell<dyn Chaves>>, window: &mut Window, cx: &mut Context<Self>,
     ) -> Self {
@@ -2305,7 +2304,7 @@ impl AreaEditor {
             .on_action(cx.listener(|a, _: &documento::IrParaPar, w, cx| a.comando(Comando::IrParaPar, w, cx)))
             .on_action(cx.listener(|a, _: &documento::ProximaAlteracao, w, cx| a.ir_para_alteracao(1, w, cx)))
             .on_action(cx.listener(|a, _: &documento::AlteracaoAnterior, w, cx| a.ir_para_alteracao(-1, w, cx)))
-            // O Esc fecha o bloco do Git antes de qualquer atalho do editor (o `Prec.high` do React).
+            // O Esc fecha o bloco do Git antes de qualquer atalho do editor.
             .capture_key_down(cx.listener({
                 let id = doc_id.clone();
                 move |a, ev: &KeyDownEvent, _, cx| {
@@ -2321,15 +2320,14 @@ impl AreaEditor {
             .min_w_0()
             .bg(documento::cor::fundo())
             .child(
-                // Medido nas capturas do React: o texto do CodeMirror quebra na borda do minimapa e o Kit reserva 10 px à
+                // O texto quebra na borda do minimapa e o Kit reserva 10 px à
                 // direita; o editor passa por baixo do minimapa, desenhado por cima (`gutter_git::SOB_MINIMAPA`).
                 div().flex_1().min_w_0().h_full().mr(-px(crate::gutter_git::SOB_MINIMAPA)).child(ComTemaDoEditor(Some(
                     Editor::new(&editor)
                         .appearance(false)
                         .bordered(false)
                         .h_full()
-                        // O `.cm-content` não tem padding: o tamanho XSmall tira os 8 px de cima e deixa 4 px nas laterais;
-                        // mais 2 px à esquerda põem o texto onde o CodeMirror põe, e a quebra fica na mesma coluna.
+                        // O tamanho XSmall tira os 8 px de cima e deixa 4 px nas laterais; mais 2 px à esquerda completam o recuo.
                         .with_size(gpui_kit::component::Size::XSmall)
                         .pl(px(2.))
                         .font_family(documento::FONTE_EDITOR)
@@ -2343,14 +2341,14 @@ impl AreaEditor {
                 e.update(cx, |a, cx| a.menu_editor(menu, &id_doc, window, cx))
             })
             .child({
-                // Sem base do Git o React não configura a faixa no minimapa, e o texto começa na borda.
+                // Sem base do Git não há faixa no minimapa, e o texto começa na borda.
                 let mini = minimapa::Minimapa::new(editor.clone());
                 match self.git.get(&doc_id).filter(|e| e.base.is_some()) {
                     Some(e) => mini.com_git(crate::gutter_git::faixa_minimapa(&e.blocos)),
                     None => mini,
                 }
             })
-            // Depois do minimapa: a régua fica por cima dele, como o `zIndex` do React.
+            // Depois do minimapa: a régua fica por cima dele.
             .children(camada_git);
         col.child(editor_el).into_any_element()
     }
@@ -2474,58 +2472,6 @@ impl AreaEditor {
     /// Link relativo do Preview de Markdown: abre no editor.
     pub(crate) fn abrir_do_markdown(&mut self, caminho: String, window: &mut Window, cx: &mut Context<Self>) {
         self.abrir_arquivo(&caminho, Abertura::default(), window, cx);
-    }
-
-    /// Passos da vitrine que dependem da leitura em segundo plano (`examples/vitrine.rs`).
-    #[doc(hidden)]
-    pub fn passo_vitrine(&mut self, modo: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let focada = self.ws.aba_focada().cloned();
-        let doc = focada.as_ref().and_then(|t| t.alvo.doc_id()).and_then(|d| self.docs.get(d)).map(|d| d.editor.clone());
-        match modo {
-            "varias" => {
-                if let Some(e) = doc {
-                    e.update(cx, |s, cx| {
-                        let fim = s.text().len();
-                        s.set_selected_range(fim..fim, cx);
-                        s.insert("
-linha nova", window, cx);
-                    });
-                }
-            }
-            "lista" => {
-                let g = self.ws.focus;
-                self.listas[idx(g)].abrir(window, cx);
-            }
-            "md-preview" => {
-                if let Some(t) = focada {
-                    let ws = m::definir_vista(&self.ws, &t.id, Some(Vista::Preview));
-                    self.definir_ws(ws, cx);
-                }
-            }
-            "rapido" => {
-                if let Some(v) = self.abrir_rapido.clone() {
-                    v.update(cx, |r, cx| r.definir_termo("app", window, cx));
-                }
-            }
-            "git-bloco" => {
-                if let Some(d) = focada.as_ref().and_then(|t| t.alvo.doc_id()).map(str::to_string) {
-                    self.git_ir(&d, 1, window, cx);
-                }
-            }
-            "arquivos" => {
-                if let Some(e) = doc {
-                    // A captura do React tem a linha 26 no topo.
-                    e.update(cx, |s, cx| {
-                        if let Some(lh) = s.line_height() {
-                            let topo = s.display_map().buffer_line_box_top(25, lh);
-                            s.set_scroll_offset(gpui::point(px(0.), -topo), cx);
-                        }
-                    });
-                }
-            }
-            _ => {}
-        }
-        cx.notify();
     }
 
     pub(crate) fn migalha_mut(&mut self) -> Option<&mut migalhas::Seletor> {

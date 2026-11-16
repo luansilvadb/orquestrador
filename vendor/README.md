@@ -43,8 +43,7 @@ Licença Apache-2.0 (`gpui-component/LICENSE-APACHE`). Trechos alterados levam `
 
 Alterações:
 
-- Menus (`menu/popup_menu.rs`, `menu/menu_item.rs`, `menu/dropdown_menu.rs`) nas medidas do menu do React
-  (`src/index.css` sobre o DropdownMenu do Lobe UI): itens de 26 px, texto de 13 px a 26 px da borda, raio de 4 px, sem
+- Menus (`menu/popup_menu.rs`, `menu/menu_item.rs`, `menu/dropdown_menu.rs`) nestas medidas: itens de 26 px, texto de 13 px a 26 px da borda, raio de 4 px, sem
   espaço entre itens; menu com 4 px de folga, borda de 1 px, anel claro por fora, raio de 5 px e 220 px de largura
   mínima; separador de 1 px com 5 px de margem; ícone absoluto a 6 px da borda; submenu sem seta, encostado no menu e
   4 px acima; desabilitado em branco a 25% com opacidade de 50%; dropdown 6 px abaixo do gatilho.

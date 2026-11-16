@@ -1,5 +1,5 @@
-//! Minimapa à direita do editor, como o `@replit/codemirror-minimap` 0.5.2 com `displayText: 'characters'`,
-//! `showOverlay: 'mouse-over'` e uma faixa de git (`gutters`). O pacote desenha num canvas com 2 pixels por pixel e o
+//! Minimapa à direita do editor: o texto em caracteres, a sobreposição ao passar o mouse e uma faixa de git. Desenha
+//! num canvas com 2 pixels por pixel e o
 //! conteúdo reduzido a 1/4: em pixels da tela, a linha tem 1/8 da do editor (19 → 2,375 px), e o texto é escrito na
 //! fonte do editor com esse tamanho, na cor do texto. A largura é 1/6 da do editor, até 120 px.
 use crate::realce;

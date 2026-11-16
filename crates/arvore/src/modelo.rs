@@ -1,6 +1,5 @@
 //! A lógica da árvore sem tela: linhas à vista, seleção, decorações do Git, nomes, destino do arraste e os textos dos
-//! avisos. Porte de `explorer-tree.tsx` (`treeRows`, seleção), `explorer-decorations.ts` e das funções puras de
-//! `explorer.tsx`. Caminhos relativos ao projeto com "/"; a raiz é "".
+//! avisos. Caminhos relativos ao projeto com "/"; a raiz é "".
 use orquestrador_core::ide::files::{Entry, Moved};
 use orquestrador_core::ide::git::{GitFile, Kind};
 use std::collections::{HashMap, HashSet};
@@ -150,7 +149,7 @@ impl Arvore {
     }
 }
 
-/// A ordem do React: pastas antes, depois `a.name.localeCompare(b.name, 'pt-BR')`.
+/// Pastas antes, depois `a.name.localeCompare(b.name, 'pt-BR')`.
 pub fn ordenar(lista: &mut [Entry]) {
     lista.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| orquestrador_ui::colagem::comparar(&a.name, &b.name)));
 }
@@ -516,7 +515,6 @@ pub fn relativo_a(projeto: &str, absoluto: &str) -> Option<String> {
 
 #[cfg(test)]
 mod testes {
-    //! Porte de `tests/check-explorer.mjs` (decorações) e das partes puras de `tests/check-files-search-ui.mjs`.
     use super::*;
 
     fn f(path: &str, staged: Option<Kind>, unstaged: Option<Kind>) -> GitFile {

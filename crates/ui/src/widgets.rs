@@ -63,7 +63,7 @@ pub fn botao_pequeno(id: impl Into<gpui_kit::ElementId>) -> Stateful<Div> {
         .hover(|s| s.border_color(gpui_kit::rgba(0xffffff4d)))
 }
 
-/// Passo do giro: 30 passos por volta de 1,5 s (o `--animate-spin` do src/index.css), 20 quadros/s.
+/// Passo do giro: 30 passos por volta de 1,5 s, 20 quadros/s.
 pub const PASSO_GIRO: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Ícone do estado do executor; o de "executando" gira em passos, pelo relógio comum (quem redesenha é o painel, a 20 Hz).
@@ -136,7 +136,7 @@ pub fn item_menu(rotulo: &'static str, atalho: &'static str) -> impl Fn(&mut Win
     }
 }
 
-/// Avisa que um menu ou modal próprio está sendo desenhado: a dica visível some, como no React. O `PopupMenu` do Kit e
+/// Avisa que um menu ou modal próprio está sendo desenhado: a dica visível some. O `PopupMenu` do Kit e
 /// a [`mascara`] já chamam.
 pub use gpui_kit::component::tooltip::marcar_sobreposicao;
 

@@ -1,4 +1,4 @@
-//! Marcadores de conflito (normais e diff3), porte da parte de conflitos de `src/editor/workspace-store.ts`. Trabalha com
+//! Marcadores de conflito (normais e diff3). Trabalha com
 //! linhas `\n`, como o texto que o backend devolve.
 
 #[derive(Clone, Debug, PartialEq, Eq)]

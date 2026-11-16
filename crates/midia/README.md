@@ -1,6 +1,6 @@
 # orquestrador-midia
 
-Aba de mídia do editor central (porte de `src/editor/media-view.tsx`): imagem, áudio e vídeo, só leitura.
+Aba de mídia do editor central: imagem, áudio e vídeo, só leitura.
 
 ## API
 
@@ -43,9 +43,8 @@ da raiz compila o bindgen otimizado (em opt-level 0 o build script estoura a pil
 O runner `.cargo/executar.cmd` põe `ferramentas/ffmpeg/bin` no PATH de `cargo run`, `cargo test` e exemplos; o `empacotar.ps1` as instala ao lado do exe com
 `FFmpeg-LICENSE.txt`.
 
-## Testes e vitrine
+## Testes
 
 ```powershell
 cargo test -p orquestrador-midia
-cargo run -p orquestrador-midia --example vitrine-midia -- imagem|audio|video|tocar|pip|erro [arquivo]
 ```

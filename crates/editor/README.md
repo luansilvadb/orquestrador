@@ -32,7 +32,7 @@ texto do GPUI Kit com realce `syntect`/dark-plus, Markdown com Preview, abrir r�
 | `colchetes_sem_par(caminho)` | Colchetes sob o cursor sem par, pintados de vermelho. |
 | `definir_fonte_git(Arc<dyn FonteGutter>, cx)` | De onde vêm a base do Git e a gravação do índice do git gutter (padrão: `gutter_git::FonteCore`, os comandos do core no projeto). A bancada passa a sua para serializar com a `GuardaGit`. |
 | `alteracoes_git(doc_id)`, `alteracao_aberta(doc_id)` | Blocos do Git do documento e o aberto. |
-| `pre_carregar(caminho, w, cx)`, `pre_carregado(caminho)` | Pré-leitura (`prefetch`): árvore, pesquisa e Git chamam ao passar o mouse ou apertar o botão num arquivo (`EventoGit::PreCarregar` com alvo de arquivo). Lê o texto e carrega a gramática; abrir usa o resultado. Vence 5 s depois de pedida ou 3 s depois de pronta, como no React, com teto de 16 entradas; mídia e arquivo aberto ficam de fora. |
+| `pre_carregar(caminho, w, cx)`, `pre_carregado(caminho)` | Pré-leitura: árvore, pesquisa e Git chamam ao passar o mouse ou apertar o botão num arquivo (`EventoGit::PreCarregar` com alvo de arquivo). Lê o texto e carrega a gramática; abrir usa o resultado. Vence 5 s depois de pedida ou 3 s depois de pronta, com teto de 16 entradas; mídia e arquivo aberto ficam de fora. |
 | `definir_rascunho_conflito(caminho, origem, texto, revisao, cx)`, `rascunho_conflito(caminho)` | Rascunho da aba de conflito: a bancada repassa cada `EventoConflito::Rascunho` (campo a campo) e a fábrica de conteúdo devolve o guardado (`armazem::RascunhoConflito`, convertido) ao criar a `VisaoConflito`. Sujo marca a aba, entra na recuperação e no "fechar com não salvos". |
 | `ao_descartar_conflito(AoDescartarConflito)` | Chamado com o caminho quando o editor descarta o rascunho de um conflito: a bancada chama `VisaoConflito::carregar(true, ..)`. |
 
@@ -71,10 +71,10 @@ continua colorindo com dark-plus os `TextView` de fora do Preview.
 
 ## Dados gerados
 
-Ficam versionados; os pacotes Node de onde vieram saíram do projeto.
+Ficam versionados.
 
 - `assets/linguagens.json` (detecção de linguagem): `bundledLanguagesInfo` do Shiki, `linguist-languages` e
-  `@codemirror/language-data`, nas versões usadas pela versão React.
+  `@codemirror/language-data`.
 - `assets/dark-plus.json`: `colors` e `tokenColors` de `shiki/themes/dark-plus`.
 - `assets/gramaticas/*.sublime-syntax`: gramáticas TextMate do `@shikijs/langs` 4.5.0 convertidas mecanicamente
   (`begin`/`end` viram `push` com `meta_scope`, `while` vira `pop` na linha que não casa, `repository` vira contextos,
@@ -82,16 +82,11 @@ Ficam versionados; os pacotes Node de onde vieram saíram do projeto.
   go, html, php, shellscript e vue continuam com o `two-face`. `assets/sintaxes.packdump` é o conjunto `two-face` +
   convertidas já ligado (carrega em ~20 ms); depois de mudar as gramáticas: `cargo test -p orquestrador-editor --lib
   gerar_sintaxes -- --ignored` (o teste `packdump_em_dia_com_as_gramaticas` acusa o esquecimento).
-- `examples/dados/*`: textos do mock do React (`src/backend/mock.ts`, `mock-fixtures.ts`) para a vitrine.
-
-Vitrine: `cargo run -p orquestrador-editor --example vitrine-editor --
-arquivos|varias|menu|lista|dividido|rapido|md-preview|md-codigo|binario|vazio|git-bloco`
-(`git-bloco`: a base do mock do React em `src/editor-workspace.tsx`, com o bloco da linha 28 aberto).
 
 ## Cores comparadas com o Shiki
 
 `tests/shiki/amostra.<ext>` e `.cores` (cor de cada token do `codeToTokensBase` dark-plus, gerada uma vez) medem a
-fração de caracteres visíveis, fora colchetes, com a cor do React. Atual (antes da conversão): ts 100 (97,6), tsx 100,
+fração de caracteres visíveis, fora colchetes, com a cor esperada. Atual (antes da conversão): ts 100 (97,6), tsx 100,
 js 100 (81,0), jsx 100 (85,1), json 100 (54,7), css 100 (80,9), scss 98,7 (91,9), html 93,5, md 93,4 (82,1), rs 100
 (60,6), py 100 (83,8), go 86,9, java 94,9 (68,4), c 93,9, cpp 72,0, cs 77,0, sh 76,5, ps1 100, yaml 99,3 (97,4), toml
 90,8 (67,2), sql 96,4 (89,4), xml 100 (97,7), php 90,0, rb 94,5 (74,0), kt 84,2 (72,4), swift 74,8 (71,9), lua 98,3

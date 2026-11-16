@@ -1,6 +1,6 @@
 # orquestrador-arvore
 
-A tela Arquivos sem o editor: porte de `src/explorer/` (árvore, decorações do Git, menus, renomear e criar na linha,
+A tela Arquivos sem o editor (árvore, decorações do Git, menus, renomear e criar na linha,
 excluir, arrastar, copiar, recortar e colar). Chama o core direto (`ide::files`) numa thread de fundo.
 
 ## View
@@ -50,7 +50,3 @@ Métodos para a bancada:
 
 - `icone_arquivo(caminho, pasta, aberta) -> SharedString`: o ícone do Material Icon Theme, desenhado com `img()`.
 - `avisos::mostrar(Aviso, cx)`: os toasts. A bancada desenha `avisos::camada(window, cx)` uma vez, por cima de tudo.
-
-## Vitrine
-
-`cargo run -p orquestrador-arvore --example vitrine-arvore -- <cenário>` (ver o cabeçalho de `examples/vitrine.rs`).

@@ -1,8 +1,5 @@
 //! Regras do fluxo de release: versões iguais nos manifestos, notas completas, o `latest.json` que o app lê e a
 //! conferência do instalador. Uso: `cargo xtask release <comando> ...` (detalhes em docs/releases/README.md).
-use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
-use base64::engine::DecodePaddingMode;
-use base64::Engine;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -446,28 +443,6 @@ fn json_texto(v: &Value) -> String {
     v.as_str().map_or_else(|| v.to_string(), String::from)
 }
 
-/// Troca a URL da API do asset (rascunho) pela pública e põe as notas completas no campo `notes`.
-pub fn prepare_manifest(text: &str, version: &str, notes: &str, repo: &str) -> R<String> {
-    let mut m: Value = serde_json::from_str(text).map_err(|e| format!("latest.json inválido: {e}"))?;
-    if m["version"] != version {
-        return Err(format!("latest.json anuncia {}, não {version}.", json_texto(&m["version"])));
-    }
-    let keys: Vec<String> = m["platforms"]
-        .as_object()
-        .map(|o| o.keys().filter(|k| k.starts_with("windows-x86_64")).cloned().collect())
-        .unwrap_or_default();
-    if keys.is_empty() {
-        return Err("latest.json sem plataforma windows-x86_64.".into());
-    }
-    for k in keys {
-        if let Some(p) = m["platforms"][&k].as_object_mut() {
-            p.insert("url".into(), installer_url(version, repo).into());
-        }
-    }
-    m["notes"] = canonical_text(notes.trim()).into();
-    Ok(format!("{}\n", serde_json::to_string_pretty(&m).unwrap()))
-}
-
 pub fn verify_manifest(text: &str, version: &str, sig_text: &str, notes: Option<&str>, repo: &str) -> R<String> {
     let m: Value = serde_json::from_str(text).map_err(|e| format!("latest.json inválido: {e}"))?;
     let mut problems = Vec::new();
@@ -498,120 +473,6 @@ pub fn verify_manifest(text: &str, version: &str, sig_text: &str, notes: Option<
     }
 }
 
-// ---------------------------------------------------------------- Minisign
-// Assinatura Minisign, como o tauri-plugin-updater grava (https://jedisct1.github.io/minisign/). Só verificação.
-// Chave pública (pubkey do updater) = base64 de "untrusted comment: …\n" + base64(alg "Ed" + key id 8 + chave 32).
-// .sig = base64 de: "untrusted comment: …", base64(alg + key id + assinatura 64), "trusted comment: …" e base64(global 64).
-// Alg "ED" assina o BLAKE2b-512 do arquivo (o modo do Tauri); "Ed" assina o arquivo direto. A global cobre a
-// assinatura do arquivo seguida do texto do comentário confiável, com a mesma chave.
-
-/// Base64 tolerante como o `Buffer.from(…, 'base64')`: ignora padding e espaços.
-fn b64(s: &str) -> Vec<u8> {
-    const E: GeneralPurpose = GeneralPurpose::new(
-        &base64::alphabet::STANDARD,
-        GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent).with_decode_allow_trailing_bits(true),
-    );
-    let limpo: String = s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '+' || *c == '/').collect();
-    E.decode(limpo).unwrap_or_default()
-}
-
-fn linhas(t: &str) -> Vec<&str> {
-    t.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l)).collect()
-}
-
-pub struct ChaveMinisign {
-    pub key_id: [u8; 8],
-    pub public_key: [u8; 32],
-}
-
-pub fn parse_minisign_key(key_b64: &str) -> R<ChaveMinisign> {
-    let text = String::from_utf8_lossy(&b64(key_b64.trim())).into_owned();
-    let raw = b64(linhas(&text).get(1).copied().unwrap_or(""));
-    if raw.len() != 42 || &raw[..2] != b"Ed" {
-        return Err("chave pública do updater não é Minisign Ed25519.".into());
-    }
-    Ok(ChaveMinisign { key_id: raw[2..10].try_into().unwrap(), public_key: raw[10..42].try_into().unwrap() })
-}
-
-pub struct AssinaturaMinisign {
-    pub algorithm: [u8; 2],
-    pub key_id: [u8; 8],
-    pub signature: [u8; 64],
-    pub global: [u8; 64],
-    pub trusted: String,
-}
-
-pub fn parse_minisign_sig(sig_text: &str) -> R<AssinaturaMinisign> {
-    let text = String::from_utf8_lossy(&b64(sig_text.trim())).into_owned();
-    let l = linhas(&text);
-    let (comment, trusted) = (l.first().copied().unwrap_or(""), l.get(2).copied().unwrap_or(""));
-    if !comment.starts_with("untrusted comment: ") || !trusted.starts_with("trusted comment: ") {
-        return Err("assinatura sem os comentários do formato Minisign.".into());
-    }
-    let sig = b64(l.get(1).copied().unwrap_or(""));
-    let global = b64(l.get(3).copied().unwrap_or(""));
-    if sig.len() != 74 || global.len() != 64 {
-        return Err("assinatura Minisign com tamanho inválido.".into());
-    }
-    Ok(AssinaturaMinisign {
-        algorithm: sig[..2].try_into().unwrap(),
-        key_id: sig[2..10].try_into().unwrap(),
-        signature: sig[10..74].try_into().unwrap(),
-        global: global.try_into().unwrap(),
-        trusted: trusted["trusted comment: ".len()..].to_string(),
-    })
-}
-
-/// Confere o arquivo contra a chave: key id, assinatura do payload e assinatura global do comentário confiável.
-/// Devolve os campos do comentário.
-pub fn verify_minisign(key_b64: &str, sig_text: &str, file: &[u8]) -> R<BTreeMap<String, String>> {
-    use blake2::Digest;
-    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-    let key = parse_minisign_key(key_b64)?;
-    let sig = parse_minisign_sig(sig_text)?;
-    if sig.key_id != key.key_id {
-        return Err("assinatura de outra chave: o key id não é o da pubkey do updater.".into());
-    }
-    let message: Vec<u8> = match &sig.algorithm {
-        b"ED" => blake2::Blake2b512::digest(file).to_vec(),
-        b"Ed" => file.to_vec(),
-        a => return Err(format!("algoritmo de assinatura desconhecido: {}.", String::from_utf8_lossy(a))),
-    };
-    let nao_confere = || "assinatura do instalador não confere com a chave pública.".to_string();
-    let pk = VerifyingKey::from_bytes(&key.public_key).map_err(|_| nao_confere())?;
-    pk.verify(&message, &Signature::from_bytes(&sig.signature)).map_err(|_| nao_confere())?;
-    let mut global_msg = sig.signature.to_vec();
-    global_msg.extend_from_slice(sig.trusted.as_bytes());
-    pk.verify(&global_msg, &Signature::from_bytes(&sig.global))
-        .map_err(|_| "comentário confiável alterado: a assinatura global não confere.".to_string())?;
-    Ok(sig
-        .trusted
-        .split('\t')
-        .map(|f| match f.split_once(':') {
-            Some((k, v)) => (k.to_string(), v.to_string()),
-            None => (f.to_string(), String::new()),
-        })
-        .collect())
-}
-
-/// Instalador de `version` (nome `file_name`, conteúdo `file`) assinado pela chave pública, com o comentário confiável
-/// dizendo o mesmo arquivo e a mesma versão.
-pub fn verify_installer(version: &str, file_name: &str, file: &[u8], sig_text: &str, key_b64: &str) -> R<String> {
-    check_semver(version)?;
-    if file_name != installer_name(version) {
-        return Err(format!("o instalador se chama {file_name}, não {}.", installer_name(version)));
-    }
-    let f = verify_minisign(key_b64, sig_text, file)?;
-    let campo = |k: &str| f.get(k).cloned();
-    if campo("file").as_deref() != Some(file_name) {
-        return Err(format!("o comentário confiável diz o arquivo {}, não {file_name}.", campo("file").unwrap_or("undefined".into())));
-    }
-    if campo("version").as_deref() != Some(version) {
-        return Err(format!("a versão assinada é {}, não {version}.", campo("version").unwrap_or("ausente".into())));
-    }
-    Ok(format!("{file_name}: assinatura Minisign, key id e comentário confiável conferidos (versão {version})."))
-}
-
 // ---------------------------------------------------------------- corpo
 
 /// Só diferença de representação é ignorada: CRLF x LF e espaço final.
@@ -639,18 +500,7 @@ pub fn verify_body(body: &str, notes: &str) -> R<String> {
 
 // ---------------------------------------------------------------- comandos
 
-const USO: &str = "comandos: wait-ci <SHA>, check-versions [X.Y.Z], check-notes X.Y.Z [anterior], prepare-manifest X.Y.Z latest.json notas.md, verify-manifest X.Y.Z latest.json arquivo.sig [notas.md], verify-installer X.Y.Z instalador.exe arquivo.sig [pubkey], release-body X.Y.Z corpo.md, verify-body corpo.md notas.md";
-
-/// Pubkey do updater: o arquivo dado ou a `PUBKEY_OFICIAL` embutida no app.
-fn pubkey(root: &Path, arquivo: Option<&String>) -> R<String> {
-    if let Some(a) = arquivo {
-        return std::fs::read_to_string(a).map(|s| s.trim().to_string()).map_err(|e| format!("{a}: {e}"));
-    }
-    let fonte = "crates/app/src/atualizacao/mod.rs";
-    let texto = std::fs::read_to_string(root.join(fonte)).map_err(|e| format!("{fonte}: {e}"))?;
-    let re = regex::Regex::new(r#"PUBKEY_OFICIAL: &str = "([A-Za-z0-9+/=]+)""#).unwrap();
-    re.captures(&texto).map(|c| c[1].to_string()).ok_or(format!("{fonte} sem PUBKEY_OFICIAL."))
-}
+const USO: &str = "comandos: wait-ci <SHA>, check-versions [X.Y.Z], check-notes X.Y.Z [anterior], verify-manifest X.Y.Z latest.json arquivo.sig [notas.md], release-body X.Y.Z corpo.md, verify-body corpo.md notas.md";
 
 pub fn run(root: &Path, args: &[String]) -> R<String> {
     let read = |p: &str| std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"));
@@ -685,23 +535,10 @@ pub fn run(root: &Path, args: &[String]) -> R<String> {
             check_notes(&text, version, arg(2))?;
             Ok(format!("Notas da v{version} completas."))
         }
-        Some("prepare-manifest") => {
-            precisa(3)?;
-            let out = prepare_manifest(&read(&args[2])?, &args[1], &read(&args[3])?, REPO)?;
-            std::fs::write(&args[2], out).map_err(|e| e.to_string())?;
-            Ok(format!("latest.json de {} apontando para a URL pública, com as notas.", args[1]))
-        }
         Some("verify-manifest") => {
             precisa(3)?;
             let notes = args.get(4).map(|p| read(p)).transpose()?;
             verify_manifest(&read(&args[2])?, &args[1], &read(&args[3])?, notes.as_deref(), REPO)
-        }
-        Some("verify-installer") => {
-            precisa(3)?;
-            let exe = Path::new(&args[2]);
-            let nome = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let file = std::fs::read(exe).map_err(|e| format!("{}: {e}", args[2]))?;
-            verify_installer(&args[1], &nome, &file, &read(&args[3])?, &pubkey(root, args.get(4))?)
         }
         Some("release-body") => {
             precisa(2)?;

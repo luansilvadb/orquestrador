@@ -1,4 +1,4 @@
-//! A tela Pesquisar (porte de `src/search/search.tsx`): cabeçalho com Atualizar, Limpar, Árvore/Lista e Recolher; a seta
+//! A tela Pesquisar: cabeçalho com Atualizar, Limpar, Árvore/Lista e Recolher; a seta
 //! à esquerda abre o Substituir; o `...` abre os filtros de caminho; resumo e avisos; lista virtual de resultados; diálogo
 //! do Substituir Tudo. Busca, prévia e aplicação rodam no motor do core, fora da thread da interface.
 use orquestrador_ui::icones_arquivo::icone_arquivo;
@@ -46,7 +46,7 @@ mod icones {
     pub const FECHAR: &str = "icons/x.svg";
 }
 
-// Cores do `index.css` (.search-hit*) e do antd escuro (fill-secondary/tertiary).
+// Cores do realce e do antd escuro (fill-secondary/tertiary).
 fn cor_achado() -> Hsla { rgba(0xea5c0054).into() }
 fn cor_removido() -> Hsla { rgba(0xff000033).into() }
 fn cor_inserido() -> Hsla { rgba(0x9ccc2c33).into() }
@@ -68,7 +68,7 @@ pub enum EventoPesquisa {
     Aviso(String),
 }
 
-/// Preferência salva: visão da lista e histórico de consultas (no React, `localStorage`).
+/// Preferência salva: visão da lista e histórico de consultas.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct PreferenciaPesquisa {
@@ -1595,7 +1595,7 @@ impl TelaPesquisa {
                     .px(px(16.))
                     .pb(px(16.))
                     // Os espaços do DirectWrite saem um pouco mais largos que os do Chromium: a folga de 4 px sobre o recuo
-                    // mantém as quebras de linha do React.
+                    // mantém as quebras de linha esperadas.
                     .child(
                         div()
                             .mr(px(-4.))

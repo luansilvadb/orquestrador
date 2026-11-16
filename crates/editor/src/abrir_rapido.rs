@@ -29,7 +29,7 @@ struct Achado {
     total: usize,
 }
 
-/// A ordem do React (`quickOpen` do mock): nome com todos os termos antes, depois o caminho mais curto (em UTF-16) e
+/// Ordem: nome com todos os termos antes, depois o caminho mais curto (em UTF-16) e
 /// `localeCompare` sem localidade (pt-BR no WebView2).
 pub fn ordenar(termo: &str, caminhos: &mut [String]) {
     let termos: Vec<String> = termo.to_lowercase().split_whitespace().map(str::to_string).collect();
@@ -76,12 +76,6 @@ impl AbrirRapido {
 
     pub fn campo(&self) -> gpui::Entity<InputState> {
         self.campo.clone()
-    }
-
-    /// Define o termo (vitrine e testes).
-    pub fn definir_termo(&mut self, termo: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.campo.update(cx, |s, cx| s.set_value(termo.to_string(), window, cx));
-        self.consultar(cx);
     }
 
     fn termo(&self, cx: &App) -> String {
@@ -269,7 +263,7 @@ mod testes_ordem {
     use super::ordenar;
 
     #[test]
-    fn como_o_quick_open_do_react() {
+    fn ordem_do_abrir_rapido() {
         let mut v: Vec<String> = ["src/b/Ab.ts", "src/a/ab.ts", "ab/x.ts", "src/á/ab.ts", "src/A/ab.ts"].map(String::from).into();
         ordenar("ab", &mut v);
         // Nome primeiro; empate de tamanho pela colagem pt-BR (a, A, á), não pelos bytes (A antes de a).

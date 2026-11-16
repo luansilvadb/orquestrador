@@ -1,5 +1,4 @@
-//! Testes da tela Git e das vistas numa janela sem tela, com o simulado (porte do que `tests/check-git-ui.mjs`,
-//! `check-pollers-ui.mjs` e a parte de diff/conflito verificam no React).
+//! Testes da tela Git e das vistas numa janela sem tela, com o simulado.
 use crate::comum::{Alvo, Lado};
 use crate::conflito::{EventoConflito, VisaoConflito};
 use crate::conflito_texto::Escolha;

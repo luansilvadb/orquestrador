@@ -1,4 +1,4 @@
-//! Aba de mídia do editor central: imagem, áudio e vídeo, porte de `src/editor/media-view.tsx`. Contrato em `README.md`.
+//! Aba de mídia do editor central: imagem, áudio e vídeo. Contrato em `README.md`.
 // A saída dos macros do GPUI aponta para `gpui::`; o alias resolve tudo pelo Kit.
 extern crate gpui_kit as gpui;
 

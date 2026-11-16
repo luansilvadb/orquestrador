@@ -13,7 +13,7 @@ use std::collections::HashSet;
 pub const VERSAO_WORKSPACE: u64 = 1;
 pub const MAX_GRUPOS: usize = 2;
 const MAX_FECHADAS: usize = 20;
-/// `Number.MAX_SAFE_INTEGER`: o JSON salvo é o mesmo formato do React.
+/// `Number.MAX_SAFE_INTEGER`: o JSON salvo segue o formato da 0.1.48 migrada.
 const MAX_SEGURO: u64 = (1 << 53) - 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -950,7 +950,7 @@ mod testes {
     }
 
     #[test]
-    fn fechar_outra_ou_varias_como_o_react() {
+    fn fechar_outra_ou_varias() {
         let s = abrir_todos(Workspace::default(), A, &[("da", "a.ts"), ("db", "b.ts"), ("dc", "c.ts"), ("dd", "d.ts"), ("de", "e.ts")]);
         let s = ativar(&s, &id(&s, A, "b.ts"));
         // Outra que não a ativa: a ativa fica.

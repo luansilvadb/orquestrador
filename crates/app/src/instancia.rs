@@ -1,4 +1,4 @@
-//! Instância única, no lugar do `tauri-plugin-single-instance`: um mutex nomeado diz se já há janela; a segunda instância
+//! Instância única: um mutex nomeado diz se já há janela; a segunda instância
 //! manda os argumentos e a pasta atual por um pipe nomeado e sai. A primeira os converte com `open_paths::extract_paths`.
 use crate::backend::{Evento, Remetente};
 use serde::{Deserialize, Serialize};
@@ -125,7 +125,7 @@ pub fn escutar(remetente: Remetente) {
 #[cfg(not(windows))]
 pub fn escutar(_remetente: Remetente) {}
 
-/// Mesmo filtro do Tauri: só caminhos, sem as opções.
+/// Só caminhos, sem as opções.
 pub fn caminhos_do_pedido(args: &[String], cwd: &Path) -> Vec<PathBuf> {
     orquestrador_core::open_paths::extract_paths(args, cwd)
 }

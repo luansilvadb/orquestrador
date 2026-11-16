@@ -1,5 +1,4 @@
-//! Porte de `tests/check-media-ui.mjs`: a View numa janela de teste, com arquivos reais em pasta temporária. O que lá era
-//! da árvore e das abas (duplo clique, renomear pelo menu, recarregar o app) aqui é a API que a bancada usa:
+//! A View numa janela de teste, com arquivos reais em pasta temporária, pela API que a bancada usa:
 //! `VisaoMidia::new`, `trocar_caminho`, `definir_visivel` e soltar a entidade.
 mod comum;
 

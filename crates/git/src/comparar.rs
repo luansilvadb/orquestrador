@@ -1,4 +1,4 @@
-//! Modelo do comparador contínuo (porte de `src/editor/compare-rows.ts` e dos blocos de patch de `workspace-store.ts`): o
+//! Modelo do comparador contínuo: o
 //! arquivo inteiro (patch com todo o contexto) vira linhas, em lado a lado e unificado. Cada linha de mudança aponta para a
 //! sua unidade: o bloco do Git (-U3), que é onde as ações agem, ou, sem blocos (commit), cada trecho de mudança.
 

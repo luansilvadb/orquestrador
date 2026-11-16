@@ -23,8 +23,3 @@ two-face = { version = "0.4.5", default-features = false, features = ["syntect-f
 
 [dev-dependencies]
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }
-
-[[example]]
-# Nome por crate: exemplos homônimos colidem no diretório de saída e o `cargo test` paralelo falha com LNK1104.
-name = "vitrine-git"
-path = "examples/vitrine.rs"

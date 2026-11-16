@@ -1,4 +1,4 @@
-//! Atualização periódica (porte de `src/shared/polling.ts`): uma rodada por vez, a cada `ms` com a janela em foco e a cada
+//! Atualização periódica: uma rodada por vez, a cada `ms` com a janela em foco e a cada
 //! 10 s sem foco. Ganhar foco adianta a rodada; perder estica a espera em curso. `cutucar` (evento de executor) pede uma
 //! rodada imediata mesmo sem foco; rajadas viram no máximo uma rodada pendente.
 use futures_lite::future;

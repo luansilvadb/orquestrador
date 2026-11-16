@@ -1,5 +1,5 @@
-//! Git simulado com os dados de `src/backend/mock.ts` (o mesmo que gerou as capturas de referência): estado só no que o
-//! mock modela (blocos, descarte, commit, histórico, grafo e conflitos). Serve à vitrine e aos testes; registra cada
+//! Git simulado com dados fixos: estado só em blocos, descarte, commit, histórico, grafo e
+//! conflitos. Serve aos testes; registra cada
 //! chamada em [`Simulado::chamadas`].
 use crate::fonte::*;
 use chrono::{Duration, Local, TimeZone};
@@ -329,7 +329,7 @@ impl Simulado {
         };
     }
 
-    /// Conflito novo, como o `__mock.addConflict`.
+    /// Conflito novo.
     pub fn conflito(&self, caminho: &str, nossa: Option<&str>, deles: Option<&str>, texto: Option<&str>) {
         let mut i = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(t) = texto {
@@ -339,7 +339,7 @@ impl Simulado {
         i.arquivos.push(entrada(caminho, None, Some(Kind::Conflicted)));
     }
 
-    /// Patch de commit fixo para um caminho, como `__mock.commitPatches`.
+    /// Patch de commit fixo para um caminho.
     pub fn patch_de_commit(&self, caminho: &str, patch: &str) {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).patches_commit.insert(caminho.into(), patch.into());
     }

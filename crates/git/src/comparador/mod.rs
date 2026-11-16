@@ -1,5 +1,5 @@
 //! Comparador próprio do editor central, no lugar do `Diff` do GPUI Kit: reproduz o `FileDiff` do `@pierre/diffs` 1.2.12
-//! como `src/editor/diff-view.tsx` o configura (Consolas 14 px em linhas de 19 px, quebra de linha, calha com o número e o
+//! com esta configuração (Consolas 14 px em linhas de 19 px, quebra de linha, calha com o número e o
 //! sinal −/+, vão de 40 px no lado a lado, células vazias hachuradas, realce por palavra `word-alt`). A geometria é
 //! calculada, não medida: cada fileira tem a altura das suas linhas quebradas, e só as fileiras visíveis são moldadas.
 pub mod modelo;
@@ -40,7 +40,7 @@ pub fn limitar_pct(p: f32) -> f32 {
     p.clamp(MIN_PCT, MAX_PCT)
 }
 
-/// Cores do `unsafeCSS` do app e as que o pacote calcula para o tema escuro (conferidas nas capturas do React).
+/// Cores do `unsafeCSS` do app e as que o pacote calcula para o tema escuro.
 pub mod cores {
     use gpui_kit::{rgb, rgba, Hsla};
     pub fn fundo() -> Hsla {

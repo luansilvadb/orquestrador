@@ -1,5 +1,5 @@
-//! Realce de sintaxe do comparador: `syntect` com as gramáticas do `two-face` e o tema Dark+ do VS Code (o `dark-plus` do
-//! Shiki que o `@pierre/diffs` usa no React). Roda no executor de fundo do `DiffState`, uma vez por lado de cada bloco.
+//! Realce de sintaxe do comparador: `syntect` com as gramáticas do `two-face` e o tema Dark+ do VS Code.
+//! Roda no executor de fundo do `DiffState`, uma vez por lado de cada bloco.
 use gpui_kit::{FontStyle, FontWeight, HighlightStyle, Hsla, Rgba};
 use std::ops::Range;
 use std::sync::LazyLock;
@@ -20,7 +20,7 @@ pub fn aquecer() {
     });
 }
 
-/// Acima disto o texto não é realçado (o motor do React desiste de linhas gigantes do mesmo jeito).
+/// Acima disto o texto não é realçado.
 const LIMITE: usize = 2_000_000;
 
 fn sintaxe(caminho: &str) -> Option<&'static SyntaxReference> {
@@ -80,7 +80,7 @@ pub fn realcar(caminho: &str, texto: &str) -> Vec<(Range<usize>, HighlightStyle)
 }
 
 /// A gramática TypeScript do `two-face` não conhece o modificador `type` de `import { type X }`/`export { type X }` e
-/// o pinta como identificador; o Shiki o marca `keyword.control.type`, #C586C0 no Dark+ (conferido na referência).
+/// o pinta como identificador; o Shiki o marca `keyword.control.type`, #C586C0 no Dark+.
 fn modificador_type(texto: &str, saida: &mut [(Range<usize>, HighlightStyle)]) {
     let cor_chave: Hsla = gpui_kit::rgb(0xc586c0).into();
     for (r, estilo) in saida.iter_mut() {
