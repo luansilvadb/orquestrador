@@ -1,47 +1,86 @@
-//! Tipos de mídia pela extensão, espelho de `TYPES` em `src/editor/media-view.tsx` e das listas `MEDIA_EXTS`, `AUDIO_EXTS`
-//! e `VIDEO_EXTS` de `crates/core/src/ide/files.rs`.
+//! O que é mídia: os decodificadores do crate `image` e do FFmpeg, registrados no core (`ide::midia`), que é a regra única.
+use ffmpeg_next as ff;
+use orquestrador_core::ide::midia::{self, Decodificadores};
+use std::collections::HashMap;
+use std::ffi::{c_char, c_void, CStr};
 use std::path::Path;
+use std::sync::LazyLock;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TipoMidia {
-    Imagem,
-    Audio,
-    Video,
-}
+pub use orquestrador_core::ide::midia::TipoMidia;
 
-const TIPOS: &[(&str, TipoMidia, &str)] = &[
-    ("png", TipoMidia::Imagem, "image/png"),
-    ("jpg", TipoMidia::Imagem, "image/jpeg"),
-    ("jpeg", TipoMidia::Imagem, "image/jpeg"),
-    ("gif", TipoMidia::Imagem, "image/gif"),
-    ("webp", TipoMidia::Imagem, "image/webp"),
-    ("bmp", TipoMidia::Imagem, "image/bmp"),
-    ("mp3", TipoMidia::Audio, "audio/mpeg"),
-    ("wav", TipoMidia::Audio, "audio/wav"),
-    ("ogg", TipoMidia::Audio, "audio/ogg"),
-    ("oga", TipoMidia::Audio, "audio/ogg"),
-    ("flac", TipoMidia::Audio, "audio/flac"),
-    ("m4a", TipoMidia::Audio, "audio/mp4"),
-    ("mp4", TipoMidia::Video, "video/mp4"),
-    ("m4v", TipoMidia::Video, "video/mp4"),
-    ("webm", TipoMidia::Video, "video/webm"),
-    ("mov", TipoMidia::Video, "video/quicktime"),
-];
+struct Formatos;
 
-/// Todas as extensões aceitas, em minúsculas.
-pub fn extensoes() -> impl Iterator<Item = &'static str> {
-    TIPOS.iter().map(|(e, _, _)| *e)
-}
-
-/// Tipo e MIME pelo nome do arquivo; `None` se não é mídia. Nome que começa com ponto e não tem outro ponto não tem extensão.
-pub fn midia_de(caminho: &Path) -> Option<(TipoMidia, &'static str)> {
-    let nome = caminho.file_name()?.to_string_lossy();
-    let ponto = nome.rfind('.')?;
-    if ponto == 0 {
-        return None;
+/// Extensão de cada demuxer e muxer do FFmpeg (o muxer cobre o `wav`, o `ts` e o `opus`, que o demuxer acha pelo
+/// conteúdo), com o primeiro MIME que algum deles declara.
+static AV: LazyLock<HashMap<String, Option<&'static str>>> = LazyLock::new(|| {
+    crate::player::iniciar_ffmpeg();
+    let texto = |p: *const c_char| (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_str().ok()).flatten();
+    let mut mapa: HashMap<String, Option<&'static str>> = HashMap::new();
+    let mut juntar = |exts: Option<&'static str>, mime: Option<&'static str>| {
+        // O de vídeo vence: o Matroska declara `audio/webm` antes de `video/webm`.
+        let peso = |m: &Option<&str>| m.map_or(0, |m| if m.starts_with("video/") { 2 } else { 1 });
+        let mimes = || mime.into_iter().flat_map(|m| m.split(',')).map(str::trim);
+        let mime = mimes().find(|m| m.starts_with("video/")).or_else(|| mimes().find(|m| m.starts_with("audio/")));
+        for e in exts.into_iter().flat_map(|e| e.split(',')).map(|e| e.trim().to_ascii_lowercase()).filter(|e| !e.is_empty()) {
+            let m = mapa.entry(e).or_default();
+            if peso(&mime) > peso(m) {
+                *m = mime;
+            }
+        }
+    };
+    // SAFETY: as tabelas de formatos são estáticas; as strings vivem até o fim do processo.
+    unsafe {
+        let mut op: *mut c_void = std::ptr::null_mut();
+        while let Some(f) = ff::ffi::av_demuxer_iterate(&mut op).as_ref() {
+            juntar(texto(f.extensions), texto(f.mime_type));
+        }
+        let mut op: *mut c_void = std::ptr::null_mut();
+        while let Some(f) = ff::ffi::av_muxer_iterate(&mut op).as_ref() {
+            juntar(texto(f.extensions), texto(f.mime_type));
+        }
     }
-    let ext = nome[ponto + 1..].to_ascii_lowercase();
-    TIPOS.iter().find(|(e, _, _)| *e == ext).map(|(_, t, m)| (*t, *m))
+    mapa
+});
+
+impl Decodificadores for Formatos {
+    fn imagem(&self, ext: &str) -> Option<&'static str> {
+        let f = image::ImageFormat::from_extension(ext).filter(|f| f.reading_enabled())?;
+        Some(f.to_mime_type())
+    }
+
+    fn av(&self, ext: &str) -> Option<Option<&'static str>> {
+        AV.get(ext).copied()
+    }
+
+    fn sondar(&self, caminho: &Path) -> Option<TipoMidia> {
+        if midia::texto(caminho) {
+            return None;
+        }
+        let entrada = crate::player::abrir_entrada(caminho).ok()?;
+        let decodifica = |s: &ff::format::stream::Stream| ff::decoder::find(s.parameters().id()).is_some();
+        let video = entrada.streams().filter(|s| s.parameters().medium() == ff::media::Type::Video).any(|s| {
+            !s.disposition().contains(ff::format::stream::Disposition::ATTACHED_PIC) && decodifica(&s)
+        });
+        let audio = entrada.streams().filter(|s| s.parameters().medium() == ff::media::Type::Audio).any(|s| decodifica(&s));
+        if video {
+            Some(TipoMidia::Video)
+        } else if audio {
+            Some(TipoMidia::Audio)
+        } else {
+            None
+        }
+    }
+}
+
+/// Registra os formatos no core. Idempotente; quem classifica pelo crate já chama.
+pub fn iniciar() {
+    midia::registrar(&Formatos);
+}
+
+/// O tipo do arquivo (`ide::midia::classificar`); `None` se não é mídia. Pode abrir o arquivo para sondar.
+pub fn midia_de(caminho: &Path) -> Option<TipoMidia> {
+    iniciar();
+    midia::classificar(caminho)
 }
 
 /// Nome do arquivo para rótulos.
@@ -65,16 +104,38 @@ mod testes {
     use super::*;
 
     #[test]
-    fn extensoes_e_tipos() {
-        assert_eq!(midia_de(Path::new("a/logo.PNG")), Some((TipoMidia::Imagem, "image/png")));
-        assert_eq!(midia_de(Path::new("tom.wav")).map(|m| m.0), Some(TipoMidia::Audio));
-        assert_eq!(midia_de(Path::new("clipe.webm")).map(|m| m.0), Some(TipoMidia::Video));
-        assert_eq!(midia_de(Path::new("x.mov")), Some((TipoMidia::Video, "video/quicktime")));
-        assert_eq!(midia_de(Path::new(".png")), None);
-        assert_eq!(midia_de(Path::new("README.md")), None);
-        assert_eq!(midia_de(Path::new("semponto")), None);
-        assert_eq!(midia_de(Path::new("x.svg")), None);
-        assert_eq!(extensoes().count(), 16);
+    fn extensoes_sem_abrir() {
+        iniciar();
+        let ext = |n: &str| midia::por_extensao(Path::new(n));
+        for n in ["a/logo.PNG", "x.ico", "x.tiff", "x.tga", "x.qoi", "x.jpeg"] {
+            assert_eq!(ext(n), Some(TipoMidia::Imagem), "{n}");
+        }
+        for n in ["tom.wav", "x.mp3", "x.opus", "x.flac"] {
+            assert_eq!(ext(n), Some(TipoMidia::Audio), "{n}");
+        }
+        // Sem MIME de áudio: até sondar, conta como vídeo.
+        for n in ["clipe.webm", "x.mov", "x.mkv", "x.avi", "x.ts"] {
+            assert_eq!(ext(n), Some(TipoMidia::Video), "{n}");
+        }
+        for n in [".png", "README.md", "semponto", "x.svg"] {
+            assert_eq!(ext(n), None, "{n}");
+        }
+        assert_eq!(midia::mime(Path::new("a.ico")), "image/x-icon");
+        assert_eq!(midia::mime(Path::new("a.mp3")), "audio/mpeg");
+        assert_eq!(midia::mime(Path::new("a.zzz")), "application/octet-stream");
+    }
+
+    #[test]
+    fn texto_com_extensao_de_demuxer_nao_e_midia() {
+        let dir = std::env::temp_dir().join(format!("orq-tipos-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["notas.txt", "tipos.ts", "legenda.srt", "x.mp4"] {
+            let c = dir.join(n);
+            std::fs::write(&c, "não é mídia
+").unwrap();
+            assert_eq!(midia_de(&c), None, "{n}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -124,7 +124,7 @@ pub fn registrar_atalhos(cx: &mut App) {
 }
 
 impl VisaoMidia {
-    /// `caminho` absoluto do arquivo; a extensão decide o tipo (`tipos::midia_de`). Fora de mídia, a view fica vazia.
+    /// `caminho` absoluto do arquivo; o tipo vem de `tipos::midia_de`. Fora de mídia, a view fica vazia.
     pub fn new(caminho: impl Into<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut v = VisaoMidia {
             caminho: PathBuf::new(),
@@ -429,7 +429,7 @@ impl VisaoMidia {
     fn carregar(&mut self, caminho: PathBuf, cx: &mut Context<Self>) {
         self.fechar_janela_pip(cx);
         self.nome = tipos::nome_de(&caminho).into();
-        self.tipo = tipos::midia_de(&caminho).map(|m| m.0);
+        self.tipo = tipos::midia_de(&caminho);
         self.caminho = caminho.clone();
         self.corpo = match self.tipo {
             None => Corpo::NaoMidia,

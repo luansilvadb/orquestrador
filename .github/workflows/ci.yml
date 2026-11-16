@@ -20,32 +20,29 @@ jobs:
         with:
           components: clippy
 
-      # FFmpeg estático do orquestrador-midia: o cache guarda os pacotes binários do vcpkg e o libclang.
-      - name: Cache do FFmpeg estático e do libclang
+      # FFmpeg compartilhado (LGPL) do orquestrador-midia: o cache guarda o zip baixado e o libclang.
+      - name: Cache do FFmpeg e do libclang
         id: cache-ffmpeg
         uses: actions/cache/restore@v4
         with:
           path: |
-            C:\vcpkg-cache
+            ferramentas\ffmpeg.zip
             ferramentas\libclang
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('crates/midia/preparar-ffmpeg.ps1') }}
 
-      - name: Preparar o FFmpeg estático e o libclang
+      - name: Preparar o FFmpeg e o libclang
         shell: pwsh
-        env:
-          VCPKG_DEFAULT_BINARY_CACHE: C:\vcpkg-cache
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          New-Item -ItemType Directory -Force C:\vcpkg-cache | Out-Null
           & pwsh crates/midia/preparar-ffmpeg.ps1
 
       # Salvo logo após a preparação, para não depender do sucesso dos testes.
-      - name: Salvar o cache do FFmpeg estático e do libclang
+      - name: Salvar o cache do FFmpeg e do libclang
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
-            C:\vcpkg-cache
+            ferramentas\ffmpeg.zip
             ferramentas\libclang
           key: ${{ steps.cache-ffmpeg.outputs.cache-primary-key }}
 

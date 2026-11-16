@@ -34,6 +34,17 @@ if (-not $SemBuild) {
 }
 Copy-Item (Join-Path $alvo "release\$Origem.exe") (Join-Path $palco "$Binario.exe")
 
+# DLLs do FFmpeg compartilhado (LGPL) ao lado do exe e a licença, exigida pela LGPL. O avdevice não é usado.
+$ffmpeg = Join-Path $raiz 'ferramentas\ffmpeg'
+$recursos = @()
+foreach ($dll in Get-ChildItem (Join-Path $ffmpeg 'bin') -Filter '*.dll' | Where-Object Name -NotLike 'avdevice-*') {
+    Copy-Item $dll.FullName $palco
+    $recursos += @{ src = $dll.Name; target = $dll.Name }
+}
+if ($recursos.Count -lt 6) { throw "DLLs do FFmpeg ausentes em $ffmpeg (crates/midia/preparar-ffmpeg.ps1)" }
+Copy-Item (Join-Path $ffmpeg 'LICENSE.txt') (Join-Path $palco 'FFmpeg-LICENSE.txt')
+$recursos += @{ src = 'FFmpeg-LICENSE.txt'; target = 'FFmpeg-LICENSE.txt' }
+
 # O modelo inclui os hooks por caminho absoluto.
 $hooks = Join-Path $aqui 'hooks.nsh'
 $modelo = Join-Path $palco 'installer.nsi'
@@ -51,6 +62,7 @@ $config = @{
     binariesDir = $palco
     binaries = @(@{ path = $Binario; main = $true })
     icons = @($icone)
+    resources = $recursos
     nsis = @{ installMode = 'currentUser'; template = $modelo; installerIcon = $icone }
 } | ConvertTo-Json -Depth 5
 $arquivoConfig = Join-Path $palco 'Packager.json'

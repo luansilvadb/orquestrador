@@ -65,7 +65,7 @@ Dois formatos, da mesma fonte:
 5. O workflow `.github/workflows/release.yml` faz o resto, nesta ordem:
    - confere tag e manifests; recusa release já publicada; verifica a ordem em relação à última publicada e as notas;
    - exige CI verde de `push` em `main` para o SHA de `git rev-parse HEAD` (o commit checkout da tag), esperando até 30 minutos; PR, SHA diferente, falha, cancelamento, erro de consulta ou timeout bloqueiam a release;
-   - prepara o FFmpeg estático e o libclang (com cache) e roda `cargo test --workspace`;
+   - prepara o FFmpeg e o libclang (com cache) e roda `cargo test --workspace`;
    - gera por `crates/app/empacotamento/empacotar.ps1` (cargo-packager) o instalador NSIS assinado e o `latest.json` com as notas completas (com o H1) e a URL pública da tag, e sobe tudo num rascunho com o texto das notas sem o título no corpo;
    - confere o rascunho: baixa o instalador, o `.sig` e o `latest.json`; verifica a assinatura Minisign do instalador com a pubkey embutida no app, pelo assinador e pelo `tauri-plugin-updater` 2.14.1 do 0.1.48 (`compat-tauri`); confere versão, URL, assinatura e notas do `latest.json`; e confere que o corpo da release é o texto das notas sem o título (só diferença de CRLF/LF e espaço final é ignorada; título repetido, seção faltando ou qualquer mudança de conteúdo é recusada; o campo `notes` do `latest.json` segue a regra de conteúdo, com o H1);
    - reconfere o mesmo SHA da CI, com espera de até 30 minutos, imediatamente antes de publicar como a última release estável.

@@ -1,7 +1,7 @@
 # Ponta a ponta local, sem tocar na instalação real: chave temporária, produto `OrquestradorTeste`, exe `orquestrador-teste`.
 # 1. O updater do 0.1.48 (compat-tauri, tauri-plugin-updater 2.14.1) instala a 0.2.0-teste.1 pelo instalador novo.
 # 2. A .1 abre sozinha (/R), acha a .2 no latest.json local, baixa, valida, instala e reabre.
-# 3. Confere registro e exe, desinstala e confere a limpeza. Exige o FFmpeg estático, o cargo-packager e Python (servidor HTTP).
+# 3. Confere registro e exe, desinstala e confere a limpeza. Exige o FFmpeg (crates/midia/preparar-ffmpeg.ps1), o cargo-packager e Python (servidor HTTP).
 param(
     [string]$Raiz = (Join-Path $env:TEMP 'orq-e2e'),
     [int]$Porta = 8765,
@@ -81,6 +81,7 @@ try {
     $r = Get-ItemProperty $chaveReg
     if ($r.Publisher -ne 'luansilvadb' -or $r.UninstallString -ne "`"$destino\uninstall.exe`"") { throw "Registro inesperado: $($r | Out-String)" }
     if (-not (Test-Path "HKCU:\Software\Classes\$produto.File\shell\open\command")) { throw 'Hook de pós-instalação não rodou' }
+    if (-not (Test-Path "$destino\avcodec-*.dll") -or -not (Test-Path "$destino\FFmpeg-LICENSE.txt")) { throw 'Faltam as DLLs ou a licença do FFmpeg' }
     Write-Host 'exe, registro e hooks: ok'
 } finally {
     $env:LOCALAPPDATA = $antigoLocal
@@ -93,5 +94,6 @@ try {
     Stop-Process -Id $servidor.Id -Force -ErrorAction SilentlyContinue
 }
 if (Test-Path $chaveReg) { throw 'A desinstalação deixou a chave de registro' }
+if (Test-Path "$Raiz\instalado\avcodec-*.dll") { throw 'A desinstalação deixou as DLLs do FFmpeg' }
 if (Test-Path "HKCU:\Software\Classes\$produto.File") { throw 'A desinstalação deixou as associações' }
 Write-Host 'desinstalação limpa: ok'

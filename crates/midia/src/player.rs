@@ -1,4 +1,4 @@
-//! Player de áudio e vídeo: uma thread por arquivo lê e decodifica com o FFmpeg (estático, só LGPL), o áudio sai pelo
+//! Player de áudio e vídeo: uma thread por arquivo lê e decodifica com o FFmpeg (DLLs, só LGPL), o áudio sai pelo
 //! `cpal` e marca o relógio, e a UI pega o quadro de vídeo cuja hora chegou. Sem saída de áudio (ou sem faixa de áudio),
 //! o relógio é o do sistema. Soltar o `Player` para a thread, que fecha o arquivo, o decodificador e o stream de áudio.
 use ffmpeg_next as ff;
@@ -137,6 +137,18 @@ impl Drop for Viva {
     fn drop(&mut self) {
         ATIVOS.fetch_sub(1, SeqCst);
     }
+}
+
+/// Abre o contêiner (e acha os fluxos). O `File` do Rust abre com FILE_SHARE_DELETE: renomear ou apagar o arquivo com
+/// a aba aberta funciona, como no protocolo `orq-media`, que abria o arquivo a cada pedaço. O nome só ajuda o FFmpeg a
+/// adivinhar o formato.
+pub(crate) fn abrir_entrada(caminho: &Path) -> Result<ff::format::context::Input, String> {
+    iniciar_ffmpeg();
+    let erro = |e: &dyn std::fmt::Display| format!("Não foi possível abrir o arquivo: {e}");
+    let arquivo = std::fs::File::open(caminho).map_err(|e| erro(&e))?;
+    let io = ff::format::context::StreamIo::from_read_seek(arquivo).map_err(|e| erro(&e))?;
+    let nome = caminho.file_name().map(|n| n.to_string_lossy().into_owned());
+    ff::format::input_from_stream(io, nome.as_deref(), None).map_err(|e| erro(&e))
 }
 
 pub fn iniciar_ffmpeg() {
@@ -487,13 +499,7 @@ struct Tempo {
 
 impl Decodificador {
     fn rodar(caminho: &Path, comum: &Arc<Comum>, comandos: Receiver<Comando>) -> Result<(), String> {
-        // O `File` do Rust abre com FILE_SHARE_DELETE: renomear ou apagar o arquivo com a aba aberta funciona, como no
-        // protocolo `orq-media`, que abria o arquivo a cada pedaço. O nome só ajuda o FFmpeg a adivinhar o formato.
-        let erro = |e: &dyn std::fmt::Display| format!("Não foi possível abrir o arquivo: {e}");
-        let arquivo = std::fs::File::open(caminho).map_err(|e| erro(&e))?;
-        let io = ff::format::context::StreamIo::from_read_seek(arquivo).map_err(|e| erro(&e))?;
-        let nome = caminho.file_name().map(|n| n.to_string_lossy().into_owned());
-        let entrada = ff::format::input_from_stream(io, nome.as_deref(), None).map_err(|e| erro(&e))?;
+        let entrada = abrir_entrada(caminho)?;
         let duracao = (entrada.duration() > 0).then(|| entrada.duration() as f64 / f64::from(ff::ffi::AV_TIME_BASE));
         let video = match entrada.streams().best(ff::media::Type::Video) {
             Some(s) if s.disposition().contains(ff::format::stream::Disposition::ATTACHED_PIC) => None,
@@ -779,6 +785,11 @@ impl Audio {
             self.reamostra = Some(r);
         }
         let r = self.reamostra.as_mut().expect("reamostrador criado acima");
+        // O `run` só aloca a saída vazia, com o tamanho do quadro de entrada: reaproveitada, ela corta os quadros maiores
+        // que o primeiro (o de Vorbis e o de Opus é curto) e o áudio sai picotado e adiantado. Cabe o que o swr vai devolver.
+        // SAFETY: o contexto é válido enquanto `r` vive.
+        let cabe = unsafe { ff::ffi::swr_get_out_samples(r.as_mut_ptr(), q.samples() as i32) }.max(1) as usize;
+        self.convertido = ff::frame::Audio::new(ff::format::Sample::F32(ff::format::sample::Type::Packed), cabe, estereo);
         r.run(q, &mut self.convertido).map_err(|e| e.to_string())?;
         let n = self.convertido.samples() * CANAIS;
         if n == 0 {

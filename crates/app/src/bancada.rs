@@ -120,6 +120,8 @@ impl Bancada {
     /// `iniciais` são os caminhos da linha de comando; as abas salvas abrem antes deles.
     pub fn new(backend: Rc<Backend>, eventos: Receptor, iniciais: Vec<PathBuf>, cx: &mut Context<Self>) -> Self {
         orquestrador_ui::estado::instalar(backend.estado.clone(), cx);
+        // O core e o editor classificam mídia pelos decodificadores do `orquestrador-midia`.
+        orquestrador_midia::iniciar();
         if !cx.has_global::<GitIniciado>() {
             orquestrador_git::init(cx);
             orquestrador_midia::registrar_atalhos(cx);

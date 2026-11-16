@@ -12,9 +12,6 @@ const PRAZO_PRONTA: Duration = Duration::from_secs(3);
 /// Teto de entradas guardadas (a mais antiga sai primeiro).
 pub(super) const LIMITE_PRE_LEITURAS: usize = 16;
 
-/// Extensões abertas como mídia (`TYPES` de media-view.tsx): sem pré-leitura de texto.
-const MIDIA: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "mp3", "wav", "ogg", "oga", "flac", "m4a", "mp4", "m4v", "webm", "mov"];
-
 type Espera = (String, String, Option<(u64, u64)>);
 
 pub(super) struct PreLeitura {
@@ -37,12 +34,10 @@ fn chave(caminho: &str) -> String {
     caminho.to_lowercase()
 }
 
+/// Extensão de mídia (`ide::midia::por_extensao`, sem abrir o arquivo) que não é de linguagem: o `.ts` e o `.txt`
+/// também são de demuxer e seguem com pré-leitura.
 fn eh_midia(caminho: &str) -> bool {
-    let nome = nome_arquivo(caminho);
-    match nome.rfind('.') {
-        Some(i) if i > 0 => MIDIA.contains(&nome[i + 1..].to_lowercase().as_str()),
-        _ => false,
-    }
+    orquestrador_core::ide::midia::por_extensao(std::path::Path::new(caminho)).is_some() && crate::linguagem::linguagem(caminho).is_none()
 }
 
 impl AreaEditor {
@@ -155,6 +150,7 @@ mod testes {
 
     #[test]
     fn midia_fica_sem_pre_leitura() {
+        orquestrador_core::ide::midia::teste::registrar();
         assert!(eh_midia("assets/logo.PNG"));
         assert!(eh_midia("v/a.webm"));
         assert!(!eh_midia("src/a.ts"));

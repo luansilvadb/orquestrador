@@ -5,15 +5,15 @@
 1. Visual Studio Build Tools com a carga "Desenvolvimento para desktop com C++" (MSVC e Windows SDK).
 2. Rust pelo [rustup](https://rustup.rs), toolchain `stable-x86_64-pc-windows-msvc`, com `clippy`.
 3. Git.
-4. FFmpeg estático e libclang, usados pelo `orquestrador-midia`:
+4. FFmpeg compartilhado (LGPL) e libclang, usados pelo `orquestrador-midia`:
 
    ```powershell
    pwsh crates/midia/preparar-ffmpeg.ps1
    ```
 
-   O script baixa o vcpkg (commit fixo), compila o FFmpeg LGPL em `x64-windows-static-md`, baixa o libclang, tudo em `ferramentas/`,
-   ignorada pelo git. O `[env]` do `.cargo/config.toml` define `VCPKG_ROOT`, `VCPKGRS_TRIPLET` e `LIBCLANG_PATH`. Rodar de
-   novo só confere.
+   O script baixa o FFmpeg LGPL pré-compilado (URL e SHA-256 fixos) e o libclang, tudo em `ferramentas/`, ignorada pelo git.
+   O `[env]` do `.cargo/config.toml` define `FFMPEG_DIR` e `LIBCLANG_PATH`; o `build.rs` do `orquestrador-midia` copia as DLLs
+   para `target/`. Rodar de novo só confere.
 
 ## Rodar e testar
 

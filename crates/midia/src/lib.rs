@@ -8,5 +8,5 @@ pub mod player;
 pub mod tipos;
 mod visao;
 
-pub use tipos::{formatar_tempo, midia_de, TipoMidia};
+pub use tipos::{formatar_tempo, iniciar, midia_de, TipoMidia};
 pub use visao::{registrar_atalhos, EventoMidia, VisaoMidia, VELOCIDADES};

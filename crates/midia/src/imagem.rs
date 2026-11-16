@@ -21,13 +21,19 @@ pub struct ImagemDecodificada {
 }
 
 pub fn carregar(caminho: &Path) -> Result<ImagemDecodificada, FalhaImagem> {
+    crate::iniciar();
     let bytes = orquestrador_core::ide::files::read_media_at(caminho).map_err(FalhaImagem::Leitura)?;
-    decodificar(&bytes).ok_or(FalhaImagem::Decodificacao)
+    decodificar_com(&bytes, ImageFormat::from_path(caminho).ok()).ok_or(FalhaImagem::Decodificacao)
 }
 
 /// Decodifica pelo conteúdo (como o navegador, que não olha a extensão).
 pub fn decodificar(bytes: &[u8]) -> Option<ImagemDecodificada> {
-    let formato = image::guess_format(bytes).ok()?;
+    decodificar_com(bytes, None)
+}
+
+/// Pelo conteúdo; sem assinatura reconhecida (o TGA não tem), pelo formato da extensão.
+fn decodificar_com(bytes: &[u8], extensao: Option<ImageFormat>) -> Option<ImagemDecodificada> {
+    let formato = image::guess_format(bytes).ok().or(extensao)?;
     let quadros: Vec<Frame> = match formato {
         ImageFormat::Gif => image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).ok()?.into_frames().collect_frames().ok()?,
         ImageFormat::WebP => {

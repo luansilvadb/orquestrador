@@ -2,4 +2,5 @@
 pub mod files;
 pub mod format;
 pub mod git;
+pub mod midia;
 pub mod search;

@@ -2,10 +2,9 @@
 # O Oniguruma (via `syntect`) marca os símbolos como `dllexport` no MSVC e o linker avisa que criou `.lib`/`.exp`
 # para cada executável; com ONIG_STATIC a `onig_sys` os compila como estáticos. Só para o alvo MSVC (sintaxe `/D`).
 CFLAGS_x86_64_pc_windows_msvc = "/DONIG_STATIC"
-# FFmpeg estático e libclang do `orquestrador-midia`, em `ferramentas/` (crates/midia/preparar-ffmpeg.ps1).
+# FFmpeg compartilhado (LGPL) e libclang do `orquestrador-midia`, em `ferramentas/` (crates/midia/preparar-ffmpeg.ps1).
 # `force` faz prevalecer sobre variáveis antigas da máquina.
-VCPKG_ROOT = { value = "ferramentas/vcpkg", relative = true, force = true }
-VCPKGRS_TRIPLET = { value = "x64-windows-static-md", force = true }
+FFMPEG_DIR = { value = "ferramentas/ffmpeg", relative = true, force = true }
 LIBCLANG_PATH = { value = "ferramentas/libclang/clang/native", relative = true, force = true }
 
 [alias]

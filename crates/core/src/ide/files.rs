@@ -137,14 +137,9 @@ fn absoluto(path: &Path) -> Result<(), String> {
     }
 }
 
-/// A extensão de `path` em minúsculas; vazia quando não há.
-fn ext_lower(path: &Path) -> String {
-    path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
-}
-
-/// Recusa a extensão que não está em `MEDIA_EXTS`.
+/// Recusa o que não é imagem para `midia::classificar` (que decide pela extensão).
 fn media_ext(path: &Path, label: &str) -> Result<(), String> {
-    if MEDIA_EXTS.contains(&ext_lower(path).as_str()) {
+    if super::midia::classificar(path) == Some(super::midia::TipoMidia::Imagem) {
         Ok(())
     } else {
         Err(format!("Tipo de arquivo não aberto como mídia: {label}"))
@@ -166,14 +161,10 @@ fn read_path(file: &Path) -> Result<Content, String> {
     Ok(Content { binary: false, too_large: false, read_only: std::str::from_utf8(text).is_err(), bom: text.len() != bytes.len(), text: String::from_utf8_lossy(text).into_owned() })
 }
 
-/// Extensões (minúsculas) de imagem que a aba de mídia lê pela IPC. SVG e HTML ficam de fora de propósito, porque viram
-/// documento ativo; eles seguem como texto. Os tipos MIME ficam em `src/media-view.tsx`, que é quem monta o blob.
-/// Áudio e vídeo não passam por aqui: ver `AUDIO_EXTS` e `VIDEO_EXTS`.
-const MEDIA_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 /// Imagem acima disto não é lida: a aba mostra o erro. Os bytes inteiros passam pela memória do app.
 pub(crate) const MAX_MEDIA: u64 = 32 * 1_048_576;
 
-/// Os bytes do arquivo de imagem `rel` do projeto, para a aba de mídia. A extensão precisa estar em `MEDIA_EXTS`;
+/// Os bytes do arquivo de imagem `rel` do projeto, para a aba de mídia. A extensão precisa ser de imagem (`midia::classificar`);
 /// o caminho passa por `plain` (sem `.git`, sem link em nenhuma parte, sem sair do projeto); e o arquivo não pode passar
 /// de `MAX_MEDIA`. Não há sniff de conteúdo: o navegador é quem decodifica (e recusa o que não for imagem).
 pub fn read_media(project: &Path, rel: &str) -> Result<Vec<u8>, String> {
@@ -206,18 +197,15 @@ fn read_media_path(file: &Path, label: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// Extensões (minúsculas) de vídeo. Vídeo e áudio não passam pela IPC: o protocolo `orq-media` serve pedaços (HTTP Range)
-/// lidos do disco sob demanda, porque costumam passar de `MAX_MEDIA`.
-pub(crate) const VIDEO_EXTS: &[&str] = &["mp4", "m4v", "webm", "mov"];
-/// Extensões (minúsculas) de áudio, servidas pelo mesmo protocolo que o vídeo.
-pub(crate) const AUDIO_EXTS: &[&str] = &["mp3", "wav", "ogg", "oga", "flac", "m4a"];
+// Vídeo e áudio não passam pela IPC: o protocolo `orq-media` serve pedaços (HTTP Range) lidos do disco sob demanda,
+// porque costumam passar de `MAX_MEDIA`.
 /// Maior pedaço de vídeo ou áudio numa resposta: intervalo aberto ou maior é cortado aqui, e o arquivo nunca vai inteiro para a memória.
 pub(crate) const MAX_STREAM_CHUNK: u64 = 4 * 1_048_576;
 
-/// Recusa (403) a extensão que não é de vídeo nem de áudio.
+/// Recusa (403) o que não é vídeo nem áudio para `midia::classificar`.
 fn stream_ext(path: &Path, label: &str) -> Result<(), (u16, String)> {
-    let ext = ext_lower(path);
-    if VIDEO_EXTS.contains(&ext.as_str()) || AUDIO_EXTS.contains(&ext.as_str()) {
+    use super::midia::TipoMidia::{Audio, Video};
+    if matches!(super::midia::classificar(path), Some(Audio | Video)) {
         Ok(())
     } else {
         Err((403, format!("Tipo de arquivo não aberto como vídeo ou áudio: {label}")))
@@ -242,19 +230,6 @@ pub fn stream_path_at(path: &Path) -> Result<PathBuf, (u16, String)> {
     Ok(path.to_path_buf())
 }
 
-/// O tipo MIME do vídeo ou áudio pela extensão. `.mov` vai como `video/mp4`: o Chromium não toca `video/quicktime`, e o
-/// `.mov` H.264 costuma tocar assim.
-fn stream_type(path: &Path) -> &'static str {
-    match ext_lower(path).as_str() {
-        "webm" => "video/webm",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "ogg" | "oga" => "audio/ogg",
-        "flac" => "audio/flac",
-        "m4a" => "audio/mp4",
-        _ => "video/mp4",
-    }
-}
 
 /// O intervalo inclusivo pedido em `range` num arquivo de `total` bytes, cortado em `MAX_STREAM_CHUNK`. Aceita um intervalo
 /// só (`a-b`, `a-`, `-n`); sem cabeçalho, ou com um que não se entende, vale `bytes=0-`. `None`: não cabe no arquivo (416).
@@ -297,7 +272,7 @@ pub fn serve_stream(file: &Path, range: Option<&str>) -> http::Response<Vec<u8>>
     let read = || -> std::io::Result<http::Response<Vec<u8>>> {
         let mut handle = File::open(file)?;
         let total = handle.metadata()?.len();
-        let response = http::Response::builder().header("Accept-Ranges", "bytes").header("Content-Type", stream_type(file));
+        let response = http::Response::builder().header("Accept-Ranges", "bytes").header("Content-Type", super::midia::mime(file));
         if total == 0 {
             return Ok(response.status(200).header("Content-Length", "0").body(Vec::new()).expect("resposta válida"));
         }
@@ -1000,6 +975,7 @@ mod tests {
 
     /// Um projeto de teste: pastas e arquivos com nomes que misturam caixa, mais um `.git` na raiz e outro na subpasta.
     fn fixture(tag: &str) -> Tmp {
+        crate::ide::midia::teste::registrar();
         let tmp = Tmp::new("orq-files", tag);
         let root = &tmp.0;
         for dir in ["Zeta", "alfa", "Beta", ".git", "sub/.git", "sub/dentro"] {

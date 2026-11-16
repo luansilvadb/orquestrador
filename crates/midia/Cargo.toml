@@ -10,10 +10,11 @@ name = "orquestrador_midia"
 orquestrador-core = { path = "../core" }
 orquestrador-ui = { path = "../ui" }
 gpui-kit = "=0.9.1"
-# Estático e só LGPL: ver README.md e preparar-ffmpeg.ps1.
-ffmpeg-next = { version = "=9.1.0", default-features = false, features = ["codec", "format", "filter", "software-resampling", "software-scaling", "static"] }
+# Compartilhado e só LGPL, DLLs copiadas pelo build.rs: ver README.md e preparar-ffmpeg.ps1.
+ffmpeg-next = { version = "=9.1.0", default-features = false, features = ["codec", "format", "filter", "software-resampling", "software-scaling"] }
 cpal = "0.18"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+# Sem `avif`: o `image` só decodifica AVIF com `avif-native` (dav1d nativo).
+image = { version = "0.25", default-features = false, features = ["bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp", "rayon"] }
 smallvec = "1"
 png = "0.18"
 raw-window-handle = "0.6"

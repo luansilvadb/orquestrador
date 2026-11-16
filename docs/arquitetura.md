@@ -11,7 +11,7 @@ App nativo em Rust: a interface em GPUI (com o Kit vendorizado em `vendor/`) e a
 | `crates/ui` | Tema, recursos embutidos (ícones, fontes), widgets comuns, avisos, colagem pt-BR, quebra `pretty` e o `interface.json`. |
 | `crates/arvore` | Árvore de arquivos com as decorações do Git. |
 | `crates/editor` | Área central: abas, grupos, editor, realce, formatação, Markdown, comparação, recuperação e abrir rápido. |
-| `crates/midia` | Aba de mídia: imagem, áudio e vídeo com FFmpeg estático, e picture-in-picture. |
+| `crates/midia` | Aba de mídia: imagem, áudio e vídeo com FFmpeg (DLLs LGPL), e picture-in-picture. |
 | `crates/pesquisa` | Pesquisa e substituição nos arquivos. |
 | `crates/git` | Tela Git: alterações, histórico, grafo, diff e conflito. |
 | `crates/hunks` | Cálculo puro dos blocos do Git para preparar e tirar do preparo. |

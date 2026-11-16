@@ -338,6 +338,8 @@ fn esc_no_arrasto_entre_grupos_nao_move(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn pre_carregar_le_antes_de_abrir(cx: &mut TestAppContext) {
+    // Sem o `orquestrador-midia`, a tabela de teste do core diz o que é mídia.
+    orquestrador_core::ide::midia::teste::registrar();
     let tmp = Tmp::new("pre");
     let (j, a) = montar(cx, &tmp.raiz(), Rc::default());
     com(cx, j, &a, |a, w, cx| a.pre_carregar("src/a.ts", w, cx));
