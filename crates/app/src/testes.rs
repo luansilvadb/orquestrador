@@ -33,6 +33,8 @@ fn montar(cx: &mut TestAppContext, tmp: &Tmp) -> (WindowHandle<Root>, Entity<Ban
     let (backend, _tx, eventos) =
         Backend::com(exes, places, tmp.0.join("config.json"), Some(tmp.0.join("interface.json")));
     let backend = Rc::new(backend);
+    // Abrir o painel Terminal cria um shell de verdade: as threads do PTY e do core acordam tarefas da janela, como no app.
+    cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::tema::aplicar(cx);
@@ -283,6 +285,8 @@ fn bancada_sem_janela(cx: &mut TestAppContext, tmp: &Tmp) -> Entity<Bancada> {
     let (backend, _tx, eventos) =
         Backend::com(exes, places, tmp.0.join("config.json"), Some(tmp.0.join("interface.json")));
     let backend = Rc::new(backend);
+    // Abrir o painel Terminal cria um shell de verdade: as threads do PTY e do core acordam tarefas da janela, como no app.
+    cx.executor().allow_parking();
     cx.update(|cx| cx.new(|cx| Bancada::new(backend, eventos, Vec::new(), cx)))
 }
 

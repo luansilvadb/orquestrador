@@ -1,14 +1,20 @@
-//! Player de áudio e vídeo: uma thread por arquivo lê e decodifica com o FFmpeg (DLLs, só LGPL), o áudio sai pelo
-//! `cpal` e marca o relógio, e a UI pega o quadro de vídeo cuja hora chegou. Sem saída de áudio (ou sem faixa de áudio),
-//! o relógio é o do sistema. Soltar o `Player` para a thread, que fecha o arquivo, o decodificador e o stream de áudio.
-use ffmpeg_next as ff;
-use std::collections::VecDeque;
+//! Player de áudio e vídeo pelo Media Engine do Windows (o motor do `<video>`): numa thread por arquivo ele lê,
+//! decodifica, sincroniza e toca o áudio; a thread copia cada quadro novo da GPU para BGRA e a UI pega o último.
+//! Soltar o `Player` para a thread, que desliga o motor.
+use crate::mf;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, Once};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+use windows::core::{implement, Interface, BSTR, HRESULT};
+use windows::Win32::Foundation::{HMODULE, RECT, S_OK};
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+use windows::Win32::Media::MediaFoundation::*;
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 
 /// Quadro de vídeo já em BGRA, sem preenchimento entre linhas.
 pub struct Quadro {
@@ -44,25 +50,27 @@ pub struct Estado {
 }
 
 enum Comando {
+    Tocar,
+    Pausar,
     Buscar(f64),
+    Volume(f32),
+    Mudo(bool),
     Velocidade(f64),
 }
 
+/// Relógio da UI: os comandos o movem na hora; tocando, a thread o acerta pela posição do motor.
 struct Relogio {
     tocando: bool,
     /// Posição da mídia em `em`.
     pos: f64,
     em: Instant,
     velocidade: f64,
-    /// O áudio marca o relógio; parado por falta de amostras não avança.
-    pelo_audio: bool,
-    faminto: bool,
     terminou: bool,
 }
 
 impl Relogio {
     fn agora(&self) -> f64 {
-        if self.tocando && !self.faminto {
+        if self.tocando {
             self.pos + self.em.elapsed().as_secs_f64() * self.velocidade
         } else {
             self.pos
@@ -75,25 +83,14 @@ impl Relogio {
     }
 }
 
-struct Bloco {
-    pts: f64,
-    /// Segundos de mídia por quadro de saída (a velocidade dividida pela taxa do dispositivo).
-    passo: f64,
-    amostras: Vec<f32>,
-    lido: usize,
-    geracao: u64,
-}
-
 struct Comum {
     info: Mutex<Info>,
     relogio: Mutex<Relogio>,
-    quadros: Mutex<VecDeque<Quadro>>,
-    audio: Mutex<VecDeque<Bloco>>,
+    /// Último quadro ainda não entregue à UI.
+    quadro: Mutex<Option<Quadro>>,
     volume: AtomicU32,
     mudo: AtomicBool,
     geracao: AtomicU64,
-    /// A leitura chegou ao fim e os decodificadores esvaziaram.
-    fim: AtomicBool,
     parar: AtomicBool,
     /// Tamanho em pixels de tela da área do vídeo (largura << 32 | altura); 0 enquanto não desenhou.
     alvo: AtomicU64,
@@ -109,17 +106,14 @@ pub struct Player {
     thread: Option<JoinHandle<()>>,
 }
 
-/// Áudio decodificado sai sempre em estéreo f32; o `cpal` espalha nos canais do dispositivo.
-const CANAIS: usize = 2;
-/// Teto das filas: meio segundo de áudio e alguns quadros de vídeo (o vídeo cresce até `MAX_QUADROS` se o áudio passar fome).
-const AUDIO_ALVO: f64 = 0.5;
-const QUADROS_ALVO: usize = 4;
-const MAX_QUADROS: usize = 24;
+/// Intervalo da thread entre olhadas no motor (quadro novo, posição, fim).
+const PASSO: Duration = Duration::from_millis(4);
+/// Depois de uma busca, quanto esperar pelo quadro do alvo antes de aceitar outro.
+const PRAZO_DA_BUSCA: Duration = Duration::from_millis(500);
 
-static INICIAR: Once = Once::new();
-static ATIVOS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static ATIVOS: AtomicUsize = AtomicUsize::new(0);
 
-/// Threads de decodificação vivas no processo (cada uma segura arquivo, decodificadores e a saída de áudio).
+/// Threads de reprodução vivas no processo (cada uma segura o arquivo e o motor).
 pub fn decodificadores_ativos() -> usize {
     ATIVOS.load(SeqCst)
 }
@@ -139,29 +133,9 @@ impl Drop for Viva {
     }
 }
 
-/// Abre o contêiner (e acha os fluxos). O `File` do Rust abre com FILE_SHARE_DELETE: renomear ou apagar o arquivo com
-/// a aba aberta funciona, como no protocolo `orq-media`, que abria o arquivo a cada pedaço. O nome só ajuda o FFmpeg a
-/// adivinhar o formato.
-pub(crate) fn abrir_entrada(caminho: &Path) -> Result<ff::format::context::Input, String> {
-    iniciar_ffmpeg();
-    let erro = |e: &dyn std::fmt::Display| format!("Não foi possível abrir o arquivo: {e}");
-    let arquivo = std::fs::File::open(caminho).map_err(|e| erro(&e))?;
-    let io = ff::format::context::StreamIo::from_read_seek(arquivo).map_err(|e| erro(&e))?;
-    let nome = caminho.file_name().map(|n| n.to_string_lossy().into_owned());
-    ff::format::input_from_stream(io, nome.as_deref(), None).map_err(|e| erro(&e))
-}
-
-pub fn iniciar_ffmpeg() {
-    INICIAR.call_once(|| {
-        let _ = ff::init();
-        ff::util::log::set_level(ff::util::log::Level::Quiet);
-    });
-}
-
 impl Player {
     /// Abre o arquivo noutra thread; nasce parado na posição 0, com volume 1.
     pub fn abrir(caminho: &Path) -> Player {
-        iniciar_ffmpeg();
         let mut p = Player::vazio();
         let (comandos, recebe) = mpsc::channel();
         p.comandos = comandos;
@@ -171,7 +145,7 @@ impl Player {
             .name("midia-decodificador".into())
             .spawn(move || {
                 let _viva = Viva::new();
-                if let Err(e) = Decodificador::rodar(&caminho, &c, recebe) {
+                if let Err(e) = rodar(&caminho, &c, recebe) {
                     let mut info = travar(&c.info);
                     info.erro = Some(e);
                     info.pronto = true;
@@ -180,7 +154,7 @@ impl Player {
             .ok();
         if p.thread.is_none() {
             let mut info = travar(&p.comum.info);
-            info.erro = Some("A thread de decodificação não iniciou.".into());
+            info.erro = Some("A thread de reprodução não iniciou.".into());
             info.pronto = true;
         }
         p
@@ -189,21 +163,11 @@ impl Player {
     fn vazio() -> Player {
         let comum = Arc::new(Comum {
             info: Mutex::new(Info::default()),
-            relogio: Mutex::new(Relogio {
-                tocando: false,
-                pos: 0.,
-                em: Instant::now(),
-                velocidade: 1.,
-                pelo_audio: false,
-                faminto: false,
-                terminou: false,
-            }),
-            quadros: Mutex::new(VecDeque::new()),
-            audio: Mutex::new(VecDeque::new()),
+            relogio: Mutex::new(Relogio { tocando: false, pos: 0., em: Instant::now(), velocidade: 1., terminou: false }),
+            quadro: Mutex::new(None),
             volume: AtomicU32::new(1f32.to_bits()),
             mudo: AtomicBool::new(false),
             geracao: AtomicU64::new(0),
-            fim: AtomicBool::new(false),
             parar: AtomicBool::new(false),
             alvo: AtomicU64::new(0),
         });
@@ -250,6 +214,7 @@ impl Player {
         r.fixar(pos);
         r.tocando = true;
         r.terminou = false;
+        let _ = self.comandos.send(Comando::Tocar);
     }
 
     pub fn pausar(&self) {
@@ -257,6 +222,7 @@ impl Player {
         let pos = r.agora();
         r.fixar(pos);
         r.tocando = false;
+        let _ = self.comandos.send(Comando::Pausar);
     }
 
     pub fn buscar(&self, segundos: f64) {
@@ -267,20 +233,23 @@ impl Player {
             let mut r = travar(&self.comum.relogio);
             r.fixar(alvo);
             r.terminou = false;
-            r.faminto = r.pelo_audio;
         }
-        travar(&self.comum.quadros).retain(|q| q.geracao >= g);
-        travar(&self.comum.audio).retain(|b| b.geracao >= g);
-        self.comum.fim.store(false, SeqCst);
+        let mut q = travar(&self.comum.quadro);
+        if q.as_ref().is_some_and(|q| q.geracao < g) {
+            *q = None;
+        }
+        drop(q);
         let _ = self.comandos.send(Comando::Buscar(alvo));
     }
 
     pub fn definir_volume(&self, volume: f32) {
-        self.comum.volume.store(volume.clamp(0., 1.).to_bits(), SeqCst);
+        let v = volume.clamp(0., 1.);
+        self.comum.volume.store(v.to_bits(), SeqCst);
+        let _ = self.comandos.send(Comando::Volume(v));
     }
 
-    /// Área do vídeo na tela, em pixels físicos. Vídeo bem menor que a área sai já ampliado do swscale (bilinear, como o
-    /// Chromium): ampliado pela GPU, a borda do quadro borraria com o vizinho do atlas. Devolve se mudou.
+    /// Área do vídeo na tela, em pixels físicos. Vídeo bem menor que a área sai já ampliado do motor: ampliado pela
+    /// GPU do GPUI, a borda do quadro borraria com o vizinho do atlas. Devolve se mudou.
     pub fn definir_alvo(&self, largura: u32, altura: u32) -> bool {
         let novo = (u64::from(largura) << 32) | u64::from(altura);
         self.comum.alvo.swap(novo, SeqCst) != novo
@@ -288,70 +257,24 @@ impl Player {
 
     pub fn definir_mudo(&self, mudo: bool) {
         self.comum.mudo.store(mudo, SeqCst);
+        let _ = self.comandos.send(Comando::Mudo(mudo));
     }
 
-    /// Velocidade de reprodução (o `atempo` do FFmpeg mantém o tom). Recomeça a decodificação na posição atual.
+    /// Velocidade de reprodução; o motor mantém o tom.
     pub fn definir_velocidade(&self, velocidade: f64) {
         let v = velocidade.clamp(0.25, 4.);
-        let pos = {
-            let mut r = travar(&self.comum.relogio);
-            let pos = r.agora();
-            r.fixar(pos);
-            r.velocidade = v;
-            pos
-        };
-        let _ = self.comandos.send(Comando::Velocidade(v));
-        let terminou = travar(&self.comum.relogio).terminou;
-        if !terminou {
-            self.buscar(pos);
-        }
-    }
-
-    /// Avança a máquina: marca o fim e devolve o quadro que deve estar na tela agora, se mudou. `sem_quadro` pede o primeiro
-    /// quadro disponível mesmo parado (abertura e busca).
-    pub fn quadro(&self, sem_quadro: bool) -> Option<Quadro> {
-        let g = self.comum.geracao.load(SeqCst);
-        let (agora, tocando) = {
-            let r = travar(&self.comum.relogio);
-            (r.agora(), r.tocando)
-        };
-        let mut fila = travar(&self.comum.quadros);
-        while fila.front().is_some_and(|q| q.geracao != g) {
-            fila.pop_front();
-        }
-        let mut escolhido = None;
-        if tocando {
-            while fila.front().is_some_and(|q| q.pts <= agora) {
-                escolhido = fila.pop_front();
-            }
-        }
-        if escolhido.is_none() && sem_quadro {
-            escolhido = fila.pop_front();
-        }
-        let vazia = fila.is_empty();
-        drop(fila);
-        self.verificar_fim(vazia, agora);
-        escolhido
-    }
-
-    fn verificar_fim(&self, quadros_vazios: bool, agora: f64) {
-        if !self.comum.fim.load(SeqCst) || !quadros_vazios {
-            return;
-        }
-        let audio_vazio = travar(&self.comum.audio).is_empty();
-        let dur = travar(&self.comum.info).duracao;
         let mut r = travar(&self.comum.relogio);
-        if !r.tocando || !audio_vazio {
-            return;
-        }
-        // Sem áudio, o relógio do sistema corre até a duração antes de parar no último quadro.
-        if !r.pelo_audio && dur.is_some_and(|d| agora < d) {
-            return;
-        }
-        let fim = dur.unwrap_or(agora);
-        r.fixar(fim);
-        r.tocando = false;
-        r.terminou = true;
+        let pos = r.agora();
+        r.fixar(pos);
+        r.velocidade = v;
+        let _ = self.comandos.send(Comando::Velocidade(v));
+    }
+
+    /// O quadro novo desde a última chamada, se houver. O motor só entrega quadro quando ele muda (tocando, ao abrir e
+    /// depois de uma busca); `_sem_quadro` fica pela interface antiga.
+    pub fn quadro(&self, _sem_quadro: bool) -> Option<Quadro> {
+        let g = self.comum.geracao.load(SeqCst);
+        travar(&self.comum.quadro).take().filter(|q| q.geracao == g)
     }
 }
 
@@ -364,298 +287,130 @@ impl Drop for Player {
     }
 }
 
-struct Saida {
-    _stream: cpal::Stream,
-    taxa: u32,
+/// O que o motor avisa pela `IMFMediaEngineNotify`, lido pela thread do player.
+#[derive(Default)]
+struct Eventos {
+    metadados: AtomicBool,
+    fim: AtomicBool,
+    erro: Mutex<Option<HRESULT>>,
 }
 
-/// Abre a saída padrão; o callback consome a fila de blocos, aplica o volume e marca o relógio.
-fn abrir_saida(comum: &Arc<Comum>) -> Option<Saida> {
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-    let disp = cpal::default_host().default_output_device()?;
-    let conf = disp.default_output_config().ok()?;
-    let formato = conf.sample_format();
-    let conf: cpal::StreamConfig = conf.into();
-    let taxa = conf.sample_rate;
-    let canais = conf.channels as usize;
-    let c = comum.clone();
-    let erro = |e: cpal::Error| eprintln!("áudio: {e}");
-    macro_rules! stream {
-        ($t:ty) => {
-            disp.build_output_stream(
-                conf.clone(),
-                move |dados: &mut [$t], _: &cpal::OutputCallbackInfo| {
-                    preencher(&c, canais, dados.len() / canais.max(1), |i, v| {
-                        dados[i] = <$t as cpal::FromSample<f32>>::from_sample_(v)
-                    })
-                },
-                erro,
-                None,
-            )
+#[implement(IMFMediaEngineNotify)]
+struct Notificacao(Arc<Eventos>);
+
+impl IMFMediaEngineNotify_Impl for Notificacao_Impl {
+    fn EventNotify(&self, evento: u32, _param1: usize, param2: u32) -> windows::core::Result<()> {
+        match MF_MEDIA_ENGINE_EVENT(evento as i32) {
+            MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA => self.0.metadados.store(true, SeqCst),
+            MF_MEDIA_ENGINE_EVENT_ENDED => self.0.fim.store(true, SeqCst),
+            MF_MEDIA_ENGINE_EVENT_ERROR => *travar(&self.0.erro) = Some(HRESULT(param2 as i32)),
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// Device D3D11 do motor (decodificação e escala na GPU) e o contexto que copia o quadro para a CPU.
+struct Gpu {
+    contexto: ID3D11DeviceContext,
+    device: ID3D11Device,
+    gerente: IMFDXGIDeviceManager,
+}
+
+impl Gpu {
+    /// Placa de vídeo; sem ela (ou sem decodificação nela), o WARP do Windows.
+    fn nova() -> Result<Gpu, String> {
+        let video = D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        let tentativas: [(D3D_DRIVER_TYPE, D3D11_CREATE_DEVICE_FLAG); 3] = [
+            (D3D_DRIVER_TYPE_HARDWARE, video),
+            (D3D_DRIVER_TYPE_WARP, video),
+            (D3D_DRIVER_TYPE_WARP, D3D11_CREATE_DEVICE_BGRA_SUPPORT),
+        ];
+        let mut ultimo = String::new();
+        for (tipo, flags) in tentativas {
+            let (mut device, mut contexto) = (None, None);
+            // SAFETY: saídas locais; o device vive no `Gpu`.
+            let r = unsafe { D3D11CreateDevice(None, tipo, HMODULE::default(), flags, None, D3D11_SDK_VERSION, Some(&mut device), None, Some(&mut contexto)) };
+            match (r, device, contexto) {
+                (Ok(()), Some(device), Some(contexto)) => return Gpu::com(device, contexto),
+                (Err(e), ..) => ultimo = e.message(),
+                _ => {}
+            }
+        }
+        Err(format!("Sem Direct3D 11 para o vídeo: {ultimo}"))
+    }
+
+    fn com(device: ID3D11Device, contexto: ID3D11DeviceContext) -> Result<Gpu, String> {
+        let erro = |e: windows::core::Error| e.message();
+        // SAFETY: o motor usa o device de outras threads; a proteção multithread é exigida para o gerente DXGI.
+        unsafe {
+            let _ = device.cast::<ID3D11Multithread>().map_err(erro)?.SetMultithreadProtected(true);
+            let (mut token, mut gerente) = (0u32, None);
+            MFCreateDXGIDeviceManager(&mut token, &mut gerente).map_err(erro)?;
+            let gerente = gerente.ok_or("Sem gerente DXGI.")?;
+            gerente.ResetDevice(&device, token).map_err(erro)?;
+            Ok(Gpu { contexto, device, gerente })
+        }
+    }
+}
+
+/// Textura em que o motor desenha o quadro e a cópia legível pela CPU, no tamanho de saída.
+struct Destino {
+    tamanho: (u32, u32),
+    alvo: ID3D11Texture2D,
+    leitura: ID3D11Texture2D,
+}
+
+impl Destino {
+    fn novo(gpu: &Gpu, (w, h): (u32, u32)) -> windows::core::Result<Destino> {
+        let mut desc = D3D11_TEXTURE2D_DESC {
+            Width: w,
+            Height: h,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
         };
-    }
-    let stream = match formato {
-        cpal::SampleFormat::F32 => stream!(f32),
-        cpal::SampleFormat::I16 => stream!(i16),
-        cpal::SampleFormat::U16 => stream!(u16),
-        cpal::SampleFormat::I32 => stream!(i32),
-        cpal::SampleFormat::F64 => stream!(f64),
-        _ => return None,
-    }
-    .ok()?;
-    stream.play().ok()?;
-    Some(Saida { _stream: stream, taxa })
-}
-
-fn preencher(c: &Comum, canais: usize, quadros: usize, mut escrever: impl FnMut(usize, f32)) {
-    let tocando = travar(&c.relogio).tocando;
-    let ganho = if c.mudo.load(SeqCst) { 0. } else { f32::from_bits(c.volume.load(SeqCst)) };
-    let g = c.geracao.load(SeqCst);
-    let mut pos = None;
-    let mut faltou = false;
-    {
-        let mut fila = travar(&c.audio);
-        for i in 0..quadros {
-            let mut lr = [0f32; CANAIS];
-            if tocando {
-                while fila.front().is_some_and(|b| b.geracao != g || b.lido >= b.amostras.len()) {
-                    fila.pop_front();
-                }
-                match fila.front_mut() {
-                    Some(b) => {
-                        lr.copy_from_slice(&b.amostras[b.lido..b.lido + CANAIS]);
-                        b.lido += CANAIS;
-                        pos = Some(b.pts + (b.lido / CANAIS) as f64 * b.passo);
-                    }
-                    None => faltou = true,
-                }
-            }
-            for k in 0..canais {
-                let v = match (canais, k) {
-                    (1, _) => (lr[0] + lr[1]) * 0.5,
-                    (_, 0) => lr[0],
-                    (_, 1) => lr[1],
-                    _ => 0.,
-                };
-                escrever(i * canais + k, v * ganho);
-            }
+        let (mut alvo, mut leitura) = (None, None);
+        // SAFETY: descrições válidas; saídas locais.
+        unsafe {
+            gpu.device.CreateTexture2D(&desc, None, Some(&mut alvo))?;
+            desc.Usage = D3D11_USAGE_STAGING;
+            desc.BindFlags = 0;
+            desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+            gpu.device.CreateTexture2D(&desc, None, Some(&mut leitura))?;
         }
+        let falta = || windows::core::Error::from(windows::Win32::Foundation::E_FAIL);
+        Ok(Destino { tamanho: (w, h), alvo: alvo.ok_or_else(falta)?, leitura: leitura.ok_or_else(falta)? })
     }
-    if !tocando {
-        return;
-    }
-    let mut r = travar(&c.relogio);
-    if !r.tocando || c.geracao.load(SeqCst) != g {
-        return;
-    }
-    if let Some(p) = pos {
-        r.fixar(p);
-        r.faminto = false;
-    } else if faltou {
-        let p = r.agora();
-        r.fixar(p);
-        r.faminto = true;
+
+    /// Desenha o quadro atual do motor e lê os pixels.
+    fn copiar(&self, gpu: &Gpu, motor: &IMFMediaEngine) -> windows::core::Result<Vec<u8>> {
+        let (w, h) = self.tamanho;
+        let rect = RECT { left: 0, top: 0, right: w as i32, bottom: h as i32 };
+        // SAFETY: texturas do mesmo device; o mapeamento é desfeito antes de sair.
+        unsafe {
+            motor.TransferVideoFrame(&self.alvo, None, &rect, None)?;
+            gpu.contexto.CopyResource(&self.leitura, &self.alvo);
+            let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+            gpu.contexto.Map(&self.leitura, 0, D3D11_MAP_READ, 0, Some(&mut m))?;
+            let linha = w as usize * 4;
+            let mut bgra = Vec::with_capacity(linha * h as usize);
+            for y in 0..h as usize {
+                let origem = m.pData.cast::<u8>().add(y * m.RowPitch as usize);
+                bgra.extend_from_slice(std::slice::from_raw_parts(origem, linha));
+            }
+            gpu.contexto.Unmap(&self.leitura, 0);
+            Ok(bgra)
+        }
     }
 }
 
-struct Decodificador {
-    entrada: ff::format::context::Input,
-    video: Option<Video>,
-    audio: Option<Audio>,
-    descartar_ate: f64,
-    geracao: u64,
-}
-
-struct Video {
-    indice: usize,
-    base: f64,
-    dec: ff::decoder::Video,
-    escala: Option<(ff::software::scaling::Context, ChaveEscala)>,
-    saida: (u32, u32),
-    convertido: ff::frame::Video,
-    quadro: ff::frame::Video,
-}
-
-/// Formato e tamanho de entrada e tamanho de saída que o contexto do swscale atende.
-type ChaveEscala = (ff::format::Pixel, u32, u32, u32, u32);
-
-struct Audio {
-    indice: usize,
-    base: f64,
-    dec: ff::decoder::Audio,
-    taxa: u32,
-    reamostra: Option<ff::software::resampling::Context>,
-    tempo: Option<Tempo>,
-    velocidade: f64,
-    quadro: ff::frame::Audio,
-    convertido: ff::frame::Audio,
-}
-
-/// `atempo` com a posição de mídia da saída contada à parte (a saída do filtro não carrega a hora da mídia).
-struct Tempo {
-    grafo: ff::filter::Graph,
-    pos: Option<f64>,
-}
-
-impl Decodificador {
-    fn rodar(caminho: &Path, comum: &Arc<Comum>, comandos: Receiver<Comando>) -> Result<(), String> {
-        let entrada = abrir_entrada(caminho)?;
-        let duracao = (entrada.duration() > 0).then(|| entrada.duration() as f64 / f64::from(ff::ffi::AV_TIME_BASE));
-        let video = match entrada.streams().best(ff::media::Type::Video) {
-            Some(s) if s.disposition().contains(ff::format::stream::Disposition::ATTACHED_PIC) => None,
-            Some(s) => Some(Video::novo(&s)?),
-            None => None,
-        };
-        let saida = match entrada.streams().best(ff::media::Type::Audio) {
-            Some(_) => abrir_saida(comum),
-            None => None,
-        };
-        let audio = match (entrada.streams().best(ff::media::Type::Audio), &saida) {
-            (Some(s), Some(saida)) => Some(Audio::novo(&s, saida.taxa)?),
-            _ => None,
-        };
-        let tem_audio = entrada.streams().best(ff::media::Type::Audio).is_some();
-        if video.is_none() && !tem_audio {
-            return Err("O arquivo não tem áudio nem vídeo.".into());
-        }
-        {
-            let mut info = travar(&comum.info);
-            info.duracao = duracao;
-            info.video = video.as_ref().map(|v| v.saida);
-            info.tem_audio = tem_audio;
-            info.pronto = true;
-        }
-        travar(&comum.relogio).pelo_audio = audio.is_some();
-        let mut d = Decodificador { entrada, video, audio, descartar_ate: 0., geracao: 0 };
-        let mut decodificou = false;
-        loop {
-            if comum.parar.load(SeqCst) {
-                return Ok(());
-            }
-            let mut espera = Duration::ZERO;
-            if d.cheio(comum) || comum.fim.load(SeqCst) {
-                espera = Duration::from_millis(5);
-            }
-            let cmd = if espera.is_zero() {
-                comandos.try_recv().map_err(|_| RecvTimeoutError::Timeout)
-            } else {
-                comandos.recv_timeout(espera)
-            };
-            match cmd {
-                Ok(Comando::Buscar(t)) => {
-                    d.buscar(t, comum);
-                    continue;
-                }
-                Ok(Comando::Velocidade(v)) => {
-                    if let Some(a) = d.audio.as_mut() {
-                        a.velocidade = v;
-                        a.tempo = None;
-                    }
-                    continue;
-                }
-                Err(RecvTimeoutError::Disconnected) => return Ok(()),
-                Err(RecvTimeoutError::Timeout) => {}
-            }
-            if !espera.is_zero() {
-                continue;
-            }
-            match d.ler(comum) {
-                Ok(true) => decodificou = true,
-                Ok(false) => {}
-                Err(e) if !decodificou => return Err(e),
-                Err(_) => {}
-            }
-        }
-    }
-
-    fn cheio(&self, c: &Comum) -> bool {
-        let segundos_audio: f64 = travar(&c.audio).iter().map(|b| (b.amostras.len() - b.lido) as f64 / CANAIS as f64 * b.passo).sum();
-        let quadros = travar(&c.quadros).len();
-        let audio_cheio = self.audio.is_none() || segundos_audio >= AUDIO_ALVO;
-        let video_cheio = self.video.is_none() || quadros >= QUADROS_ALVO;
-        // Fila de vídeo cheia com o áudio com fome: lê mais (até o teto) para o relógio do áudio não parar.
-        (audio_cheio && video_cheio) || quadros >= MAX_QUADROS || (self.audio.is_none() && video_cheio)
-    }
-
-    fn buscar(&mut self, t: f64, c: &Comum) {
-        self.geracao = c.geracao.load(SeqCst);
-        self.descartar_ate = t;
-        let ts = (t * f64::from(ff::ffi::AV_TIME_BASE)) as i64;
-        let _ = self.entrada.seek(ts, ..ts);
-        if let Some(v) = self.video.as_mut() {
-            v.dec.flush();
-        }
-        if let Some(a) = self.audio.as_mut() {
-            a.dec.flush();
-            a.tempo = None;
-        }
-        c.fim.store(false, SeqCst);
-    }
-
-    /// Lê um pacote e decodifica. `Ok(true)` quando saiu algum quadro ou amostra; no fim, esvazia os decodificadores.
-    fn ler(&mut self, c: &Comum) -> Result<bool, String> {
-        let pacote = self.entrada.packets().next();
-        let Some((stream, pacote)) = pacote else {
-            if let Some(v) = self.video.as_mut() {
-                let _ = v.dec.send_eof();
-            }
-            if let Some(a) = self.audio.as_mut() {
-                let _ = a.dec.send_eof();
-            }
-            self.colher(c)?;
-            c.fim.store(true, SeqCst);
-            return Ok(false);
-        };
-        let i = stream.index();
-        if let Some(v) = self.video.as_mut().filter(|v| v.indice == i) {
-            v.dec.send_packet(&pacote).map_err(|e| format!("Vídeo ilegível: {e}"))?;
-        } else if let Some(a) = self.audio.as_mut().filter(|a| a.indice == i) {
-            a.dec.send_packet(&pacote).map_err(|e| format!("Áudio ilegível: {e}"))?;
-        } else {
-            return Ok(false);
-        }
-        self.colher(c)
-    }
-
-    fn colher(&mut self, c: &Comum) -> Result<bool, String> {
-        let mut saiu = false;
-        let g = self.geracao;
-        let alvo = c.alvo.load(SeqCst);
-        let alvo = ((alvo >> 32) as u32, alvo as u32);
-        if let Some(v) = self.video.as_mut() {
-            while v.dec.receive_frame(&mut v.quadro).is_ok() {
-                saiu = true;
-                let pts = v.quadro.timestamp().map(|t| t as f64 * v.base).unwrap_or(self.descartar_ate);
-                if pts + 1e-3 < self.descartar_ate {
-                    continue;
-                }
-                if let Some(q) = v.converter(pts, g, alvo)? {
-                    travar(&c.quadros).push_back(q);
-                }
-            }
-        }
-        if let Some(a) = self.audio.as_mut() {
-            while a.dec.receive_frame(&mut a.quadro).is_ok() {
-                saiu = true;
-                let pts = a.quadro.timestamp().map(|t| t as f64 * a.base).unwrap_or(self.descartar_ate);
-                for mut bloco in a.converter(pts, g)? {
-                    // Corta o começo que fica antes do alvo da busca.
-                    if bloco.pts < self.descartar_ate {
-                        let pular = (((self.descartar_ate - bloco.pts) / bloco.passo) as usize).min(bloco.amostras.len() / CANAIS);
-                        bloco.pts += pular as f64 * bloco.passo;
-                        bloco.amostras.drain(..pular * CANAIS);
-                    }
-                    if !bloco.amostras.is_empty() {
-                        travar(&c.audio).push_back(bloco);
-                    }
-                }
-            }
-        }
-        Ok(saiu)
-    }
-}
-
-/// Teto da ampliação pelo swscale, para o custo por quadro não crescer com a tela.
+/// Teto da ampliação pelo motor, para o custo da cópia por quadro não crescer com a tela.
 const MAX_AMPLIADO: (u32, u32) = (1920, 1080);
 
 /// Ampliado para caber no alvo (sem passar de `MAX_AMPLIADO`) quando o alvo é ao menos 1,25 vez maior; senão, o tamanho de exibição.
@@ -669,184 +424,175 @@ fn tamanho_saida(exibe: (u32, u32), alvo: (u32, u32)) -> (u32, u32) {
     (((w * fator).round() as u32).max(1), ((h * fator).round() as u32).max(1))
 }
 
-fn base(s: &ff::format::stream::Stream) -> f64 {
-    f64::from(s.time_base())
-}
-
-impl Video {
-    fn novo(s: &ff::format::stream::Stream) -> Result<Video, String> {
-        let ctx = ff::codec::context::Context::from_parameters(s.parameters()).map_err(|e| e.to_string())?;
-        let dec = ctx.decoder().video().map_err(|e| format!("Formato de vídeo não suportado: {e}"))?;
-        let (w, h) = (dec.width(), dec.height());
-        if w == 0 || h == 0 {
-            return Err("Vídeo sem dimensões.".into());
-        }
-        let sar = dec.aspect_ratio();
-        let largura = if sar.numerator() > 0 && sar.denominator() > 0 && sar.numerator() != sar.denominator() {
-            ((f64::from(w) * f64::from(sar)).round() as u32).max(1)
-        } else {
-            w
-        };
-        Ok(Video {
-            indice: s.index(),
-            base: base(s),
-            dec,
-            escala: None,
-            saida: (largura, h),
-            convertido: ff::frame::Video::empty(),
-            quadro: ff::frame::Video::empty(),
-        })
-    }
-
-    /// Converte para BGRA no tamanho de exibição; o contexto do swscale só é refeito se a entrada mudar.
-    fn converter(&mut self, pts: f64, geracao: u64, alvo: (u32, u32)) -> Result<Option<Quadro>, String> {
-        let q = &self.quadro;
-        if q.width() == 0 || q.height() == 0 {
-            return Ok(None);
-        }
-        // Tamanho de exibição: a proporção de pixel aplicada à largura (se o quadro muda de tamanho no meio, vale o novo).
-        let exibe = if q.width() == self.dec.width() && q.height() == self.dec.height() { self.saida } else { (q.width(), q.height()) };
-        let (w, h) = tamanho_saida(exibe, alvo);
-        let chave = (q.format(), q.width(), q.height(), w, h);
-        if self.escala.as_ref().map(|e| e.1) != Some(chave) {
-            let ctx = ff::software::scaling::Context::get(
-                chave.0,
-                chave.1,
-                chave.2,
-                ff::format::Pixel::BGRA,
-                w,
-                h,
-                ff::software::scaling::Flags::BILINEAR
-                    | ff::software::scaling::Flags::ACCURATE_RND
-                    | ff::software::scaling::Flags::FULL_CHR_H_INT,
-            )
-            .map_err(|e| e.to_string())?;
-            self.escala = Some((ctx, chave));
-            // O destino reaproveitado tem o tamanho velho; o swscale recusa e o quadro se perderia.
-            self.convertido = ff::frame::Video::empty();
-        }
-        let (ctx, _) = self.escala.as_mut().expect("escala criada acima");
-        ctx.run(q, &mut self.convertido).map_err(|e| e.to_string())?;
-        let passo = self.convertido.stride(0);
-        let dados = self.convertido.data(0);
-        let linha = w as usize * 4;
-        let bgra = if passo == linha {
-            dados[..linha * h as usize].to_vec()
-        } else {
-            let mut bgra = Vec::with_capacity(linha * h as usize);
-            for y in 0..h as usize {
-                bgra.extend_from_slice(&dados[y * passo..y * passo + linha]);
-            }
-            bgra
-        };
-        Ok(Some(Quadro { pts, largura: w, altura: h, bgra, geracao }))
+/// Mensagem de falha do motor: a extensão da Store que falta, quando é isso; senão, o erro do Windows.
+fn mensagem_de_erro(caminho: &Path, hr: HRESULT) -> String {
+    match mf::extensao_que_falta(caminho) {
+        Some(ext) => format!("O Windows não tem decodificador para este formato. Instale \u{201c}{ext}\u{201d} na Microsoft Store."),
+        None => format!("Não foi possível abrir o arquivo: {}", windows::core::Error::from(hr).message()),
     }
 }
 
-impl Audio {
-    fn novo(s: &ff::format::stream::Stream, taxa: u32) -> Result<Audio, String> {
-        let ctx = ff::codec::context::Context::from_parameters(s.parameters()).map_err(|e| e.to_string())?;
-        let dec = ctx.decoder().audio().map_err(|e| format!("Formato de áudio não suportado: {e}"))?;
-        Ok(Audio {
-            indice: s.index(),
-            base: base(s),
-            dec,
-            taxa,
-            reamostra: None,
-            tempo: None,
-            velocidade: 1.,
-            quadro: ff::frame::Audio::empty(),
-            convertido: ff::frame::Audio::empty(),
-        })
+/// Thread do player: sessão MF, GPU e motor; desliga o motor antes de soltar a sessão.
+fn rodar(caminho: &Path, c: &Arc<Comum>, comandos: Receiver<Comando>) -> Result<(), String> {
+    let _sessao = mf::Sessao::iniciar()?;
+    let gpu = Gpu::nova()?;
+    let eventos = Arc::new(Eventos::default());
+    let motor = criar_motor(&gpu, &eventos)?;
+    let r = tocar_arquivo(caminho, c, &comandos, &gpu, &motor, &eventos);
+    // SAFETY: o motor não é mais usado depois daqui.
+    unsafe {
+        let _ = motor.Shutdown();
     }
+    r
+}
 
-    fn converter(&mut self, pts: f64, geracao: u64) -> Result<Vec<Bloco>, String> {
-        let q = &mut self.quadro;
-        let mut layout = q.channel_layout();
-        if layout.is_empty() || layout.channels() != i32::from(q.channels()) {
-            layout = ff::ChannelLayout::default(i32::from(q.channels()));
-            q.set_channel_layout(layout);
+fn criar_motor(gpu: &Gpu, eventos: &Arc<Eventos>) -> Result<IMFMediaEngine, String> {
+    let erro = |e: windows::core::Error| format!("Media Engine indisponível: {}", e.message());
+    let notificacao: IMFMediaEngineNotify = Notificacao(eventos.clone()).into();
+    // SAFETY: chamadas COM com a sessão da thread.
+    unsafe {
+        let fabrica: IMFMediaEngineClassFactory = CoCreateInstance(&CLSID_MFMediaEngineClassFactory, None, CLSCTX_INPROC_SERVER).map_err(erro)?;
+        let mut atributos = None;
+        MFCreateAttributes(&mut atributos, 3).map_err(erro)?;
+        let atributos = atributos.ok_or("Sem atributos.")?;
+        atributos.SetUnknown(&MF_MEDIA_ENGINE_CALLBACK, &notificacao).map_err(erro)?;
+        atributos.SetUnknown(&MF_MEDIA_ENGINE_DXGI_MANAGER, &gpu.gerente).map_err(erro)?;
+        atributos.SetUINT32(&MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM.0 as u32).map_err(erro)?;
+        fabrica.CreateInstance(0, &atributos).map_err(erro)
+    }
+}
+
+fn tocar_arquivo(caminho: &Path, c: &Comum, comandos: &Receiver<Comando>, gpu: &Gpu, motor: &IMFMediaEngine, eventos: &Eventos) -> Result<(), String> {
+    let erro = |e: windows::core::Error| format!("Não foi possível abrir o arquivo: {}", e.message());
+    let bs = mf::abrir(caminho)?;
+    let url = BSTR::from(caminho.to_string_lossy().as_ref());
+    // SAFETY: chamadas COM com a sessão da thread.
+    unsafe {
+        motor.SetPreload(MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC).map_err(erro)?;
+        motor.cast::<IMFMediaEngineEx>().map_err(erro)?.SetSourceFromByteStream(&bs, &url).map_err(erro)?;
+    }
+    loop {
+        if c.parar.load(SeqCst) {
+            return Ok(());
         }
-        let estereo = ff::ChannelLayout::default(CANAIS as i32);
-        let refazer = self.reamostra.as_ref().is_none_or(|r| {
-            let e = r.input();
-            e.format != q.format() || e.rate != q.rate() || e.channel_layout != layout
+        if let Some(hr) = *travar(&eventos.erro) {
+            return Err(mensagem_de_erro(caminho, hr));
+        }
+        if eventos.metadados.load(SeqCst) {
+            break;
+        }
+        std::thread::sleep(PASSO);
+    }
+    // SAFETY: metadados carregados; consultas sem efeito colateral.
+    let (duracao, video, tem_audio) = unsafe {
+        let d = motor.GetDuration();
+        let duracao = (d.is_finite() && d > 0.).then_some(d);
+        let video = motor.HasVideo().as_bool().then(|| {
+            let (mut w, mut h, mut px, mut py) = (0u32, 0u32, 0u32, 0u32);
+            let _ = motor.GetNativeVideoSize(Some(&mut w), Some(&mut h));
+            let _ = motor.GetVideoAspectRatio(Some(&mut px), Some(&mut py));
+            // A proporção que o motor dá é a da imagem (4:3, 16:9), já com a do pixel aplicada.
+            let largura = if px > 0 && py > 0 { ((f64::from(h) * f64::from(px) / f64::from(py)).round() as u32).max(1) } else { w };
+            (largura, h)
         });
-        if refazer {
-            let r = ff::software::resampling::Context::get(
-                q.format(),
-                layout,
-                q.rate(),
-                ff::format::Sample::F32(ff::format::sample::Type::Packed),
-                estereo,
-                self.taxa,
-            )
-            .map_err(|e| e.to_string())?;
-            self.reamostra = Some(r);
-        }
-        let r = self.reamostra.as_mut().expect("reamostrador criado acima");
-        // O `run` só aloca a saída vazia, com o tamanho do quadro de entrada: reaproveitada, ela corta os quadros maiores
-        // que o primeiro (o de Vorbis e o de Opus é curto) e o áudio sai picotado e adiantado. Cabe o que o swr vai devolver.
-        // SAFETY: o contexto é válido enquanto `r` vive.
-        let cabe = unsafe { ff::ffi::swr_get_out_samples(r.as_mut_ptr(), q.samples() as i32) }.max(1) as usize;
-        self.convertido = ff::frame::Audio::new(ff::format::Sample::F32(ff::format::sample::Type::Packed), cabe, estereo);
-        r.run(q, &mut self.convertido).map_err(|e| e.to_string())?;
-        let n = self.convertido.samples() * CANAIS;
-        if n == 0 {
-            return Ok(Vec::new());
-        }
-        let amostras: Vec<f32> = bytemuck_f32(self.convertido.data(0), n);
-        let passo_normal = 1. / f64::from(self.taxa);
-        if (self.velocidade - 1.).abs() < 1e-6 {
-            return Ok(vec![Bloco { pts, passo: passo_normal, amostras, lido: 0, geracao }]);
-        }
-        if self.tempo.is_none() {
-            self.tempo = Some(Tempo::novo(self.taxa, self.velocidade)?);
-        }
-        let t = self.tempo.as_mut().expect("tempo criado acima");
-        if t.pos.is_none() {
-            t.pos = Some(pts);
-        }
-        let mut entrada = ff::frame::Audio::new(
-            ff::format::Sample::F32(ff::format::sample::Type::Packed),
-            amostras.len() / CANAIS,
-            ff::ChannelLayout::default(CANAIS as i32),
-        );
-        entrada.set_rate(self.taxa);
-        entrada.data_mut(0)[..amostras.len() * 4].copy_from_slice(f32_bytes(&amostras));
-        t.grafo.get("in").expect("abuffer").source().add(&entrada).map_err(|e| e.to_string())?;
-        let mut blocos = Vec::new();
-        let mut saida = ff::frame::Audio::empty();
-        let passo = self.velocidade / f64::from(self.taxa);
-        while t.grafo.get("out").expect("abuffersink").sink().frame(&mut saida).is_ok() {
-            let n = saida.samples() * CANAIS;
-            let pos = t.pos.unwrap_or(pts);
-            blocos.push(Bloco { pts: pos, passo, amostras: bytemuck_f32(saida.data(0), n), lido: 0, geracao });
-            t.pos = Some(pos + saida.samples() as f64 * passo);
-        }
-        Ok(blocos)
+        (duracao, video.filter(|v| v.0 > 0 && v.1 > 0), motor.HasAudio().as_bool())
+    };
+    if video.is_none() && !tem_audio {
+        return Err("O arquivo não tem áudio nem vídeo.".into());
     }
-}
-
-impl Tempo {
-    fn novo(taxa: u32, velocidade: f64) -> Result<Tempo, String> {
-        let mut grafo = ff::filter::Graph::new();
-        let args = format!("time_base=1/{taxa}:sample_rate={taxa}:sample_fmt=flt:channel_layout=stereo");
-        let erro = |e: ff::Error| format!("atempo: {e}");
-        grafo.add(&ff::filter::find("abuffer").ok_or("abuffer ausente")?, "in", &args).map_err(erro)?;
-        grafo.add(&ff::filter::find("abuffersink").ok_or("abuffersink ausente")?, "out", "").map_err(erro)?;
-        let spec = format!("atempo={velocidade},aformat=sample_fmts=flt:sample_rates={taxa}:channel_layouts=stereo");
-        grafo.output("in", 0).map_err(erro)?.input("out", 0).map_err(erro)?.parse(&spec).map_err(erro)?;
-        grafo.validate().map_err(erro)?;
-        Ok(Tempo { grafo, pos: None })
+    {
+        let mut info = travar(&c.info);
+        info.duracao = duracao;
+        info.video = video;
+        info.tem_audio = tem_audio;
+        info.pronto = true;
     }
-}
-
-fn bytemuck_f32(bytes: &[u8], n: usize) -> Vec<f32> {
-    bytes[..n * 4].as_chunks::<4>().0.iter().map(|b| f32::from_ne_bytes(*b)).collect()
-}
-
-fn f32_bytes(v: &[f32]) -> &[u8] {
-    // SAFETY: f32 não tem padding e qualquer padrão de bits é válido como u8.
-    unsafe { std::slice::from_raw_parts(v.as_ptr().cast::<u8>(), std::mem::size_of_val(v)) }
+    // SAFETY: chamadas COM com a sessão da thread.
+    unsafe {
+        let _ = motor.SetVolume(f64::from(f32::from_bits(c.volume.load(SeqCst))));
+        let _ = motor.SetMuted(c.mudo.load(SeqCst));
+    }
+    let mut geracao = c.geracao.load(SeqCst);
+    let mut destino: Option<Destino> = None;
+    let mut busca: Option<(f64, Instant)> = None;
+    // Posição do último quadro copiado.
+    let mut ultimo: Option<f64> = None;
+    loop {
+        if c.parar.load(SeqCst) {
+            return Ok(());
+        }
+        let mut cmd = match comandos.recv_timeout(PASSO) {
+            Ok(cmd) => Some(cmd),
+            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            Err(RecvTimeoutError::Timeout) => None,
+        };
+        while let Some(atual) = cmd {
+            // SAFETY: chamadas COM com a sessão da thread.
+            unsafe {
+                let _ = match atual {
+                    Comando::Tocar => motor.Play(),
+                    Comando::Pausar => motor.Pause(),
+                    Comando::Buscar(t) => {
+                        geracao = c.geracao.load(SeqCst);
+                        busca = Some((t, Instant::now()));
+                        motor.SetCurrentTime(t)
+                    }
+                    Comando::Volume(v) => motor.SetVolume(f64::from(v)),
+                    Comando::Mudo(m) => motor.SetMuted(m),
+                    Comando::Velocidade(v) => motor.SetDefaultPlaybackRate(v).and_then(|_| motor.SetPlaybackRate(v)),
+                };
+            }
+            cmd = comandos.try_recv().ok();
+        }
+        // SAFETY: consultas ao motor com a sessão da thread.
+        let (agora, parado, buscando) = unsafe { (motor.GetCurrentTime(), motor.IsPaused().as_bool(), motor.IsSeeking().as_bool()) };
+        {
+            let mut r = travar(&c.relogio);
+            if eventos.fim.swap(false, SeqCst) {
+                r.fixar(duracao.unwrap_or(agora));
+                r.tocando = false;
+                r.terminou = true;
+            } else if r.tocando && !parado && !buscando {
+                r.fixar(agora);
+            }
+        }
+        let Some(exibe) = video else { continue };
+        let mut pts = 0i64;
+        // SAFETY: o `windows` trata S_FALSE (sem quadro novo) como sucesso; o HRESULT cru separa os dois.
+        let novo = unsafe { (Interface::vtable(motor).OnVideoStreamTick)(Interface::as_raw(motor), &mut pts) } == S_OK;
+        let alvo = c.alvo.load(SeqCst);
+        let tamanho = tamanho_saida(exibe, ((alvo >> 32) as u32, alvo as u32));
+        let pts = if novo {
+            let pts = pts as f64 / 1e7;
+            // Quadro de antes da busca que chegou depois dela (o primeiro do arquivo, por exemplo): fica de fora até o
+            // motor mostrar o do alvo, ou até o prazo, se a busca não cair exata.
+            if let Some((alvo, desde)) = busca {
+                if (pts - alvo).abs() > 0.25 && desde.elapsed() < PRAZO_DA_BUSCA {
+                    continue;
+                }
+            }
+            busca = None;
+            pts
+        } else {
+            // Sem quadro novo, o atual é refeito quando muda o tamanho de saída ou quando a busca cai nele (o motor não
+            // repete o quadro ao buscar a posição em que já está).
+            let Some(ultimo) = ultimo else { continue };
+            let mesma_posicao = busca.is_some_and(|(alvo, _)| (alvo - ultimo).abs() < 0.05);
+            if !mesma_posicao && destino.as_ref().is_some_and(|d| d.tamanho == tamanho) {
+                continue;
+            }
+            if mesma_posicao {
+                busca = None;
+            }
+            ultimo
+        };
+        if destino.as_ref().is_none_or(|d| d.tamanho != tamanho) {
+            destino = Destino::novo(gpu, tamanho).ok();
+        }
+        let Some(d) = destino.as_ref() else { continue };
+        if let Ok(bgra) = d.copiar(gpu, motor) {
+            ultimo = Some(pts);
+            *travar(&c.quadro) = Some(Quadro { pts, largura: tamanho.0, altura: tamanho.1, bgra, geracao });
+        }
+    }
 }

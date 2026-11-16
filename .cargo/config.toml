@@ -2,15 +2,8 @@
 # O Oniguruma (via `syntect`) marca os símbolos como `dllexport` no MSVC e o linker avisa que criou `.lib`/`.exp`
 # para cada executável; com ONIG_STATIC a `onig_sys` os compila como estáticos. Só para o alvo MSVC (sintaxe `/D`).
 CFLAGS_x86_64_pc_windows_msvc = "/DONIG_STATIC"
-# FFmpeg compartilhado (LGPL) e libclang do `orquestrador-midia`, em `ferramentas/` (crates/midia/preparar-ffmpeg.ps1).
-# `force` faz prevalecer sobre variáveis antigas da máquina.
-FFMPEG_DIR = { value = "ferramentas/ffmpeg", relative = true, force = true }
-LIBCLANG_PATH = { value = "ferramentas/libclang/clang/native", relative = true, force = true }
 
 [alias]
 # Tarefas do projeto em Rust (crates/xtask): `cargo xtask ajuda`.
 xtask = "run --quiet --package xtask --"
 
-# Executa testes, `cargo run` e exemplos com `ferramentas\ffmpeg\bin` no início do PATH, onde o cargo puser o exe.
-[target.x86_64-pc-windows-msvc]
-runner = ".cargo/executar.cmd"

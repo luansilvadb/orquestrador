@@ -68,32 +68,6 @@ jobs:
           cargo xtask release check-notes $version $previous
           if ($LASTEXITCODE -ne 0) { throw "As notas de docs/releases/v$version.md não servem para publicar." }
 
-      # FFmpeg compartilhado (LGPL) do orquestrador-midia: o cache guarda o zip baixado e o libclang.
-      - name: Cache do FFmpeg e do libclang
-        id: cache-ffmpeg
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ferramentas\ffmpeg.zip
-            ferramentas\libclang
-          key: ffmpeg-${{ runner.os }}-${{ hashFiles('crates/midia/preparar-ffmpeg.ps1') }}
-
-      - name: Preparar o FFmpeg e o libclang
-        shell: pwsh
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          & pwsh crates/midia/preparar-ffmpeg.ps1
-
-      # Salvo logo após a preparação, para não depender do sucesso dos testes.
-      - name: Salvar o cache do FFmpeg e do libclang
-        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ferramentas\ffmpeg.zip
-            ferramentas\libclang
-          key: ${{ steps.cache-ffmpeg.outputs.cache-primary-key }}
-
       # Cache do target, aquecido em main por aquecer-release.yml (cache criado numa tag não é lido por outras tags).
       # Cada workspace tem target próprio: a limpeza do rust-cache apaga do target o que não é dependência do seu workspace.
       # Salvo mesmo se um passo posterior falhar, para o rerun da mesma tag reaproveitar.
@@ -101,6 +75,7 @@ jobs:
         with:
           shared-key: release
           cache-bin: 'false'
+          cache-workspace-crates: 'true'
           cache-on-failure: 'true'
           workspaces: |
             . -> target

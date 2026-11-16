@@ -1,10 +1,8 @@
-//! Decodificação de cada formato aceito pela aba, com arquivos gerados pelo FFmpeg da build (encoders nativos LGPL) ou pela
-//! fixture do mock (WebM VP8). Formatos sem encoder LGPL nativo (MP3, VP9, H.264 sem Media Foundation) conferem o
-//! decodificador e o demuxer nativos.
+//! Decodificação de cada formato aceito pela aba, com as fixtures de `tests/fixtures`. Formatos que dependem de uma
+//! extensão da Microsoft Store (Ogg, Opus, VP8) pulam onde ela falta.
 mod comum;
 
-use comum::{gerar, pcm, planar, Tmp, Video};
-use ffmpeg_next as ff;
+use comum::{copiar, Tmp};
 use orquestrador_midia::player::{Estado, Player};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -23,12 +21,15 @@ fn esperar(player: &Player, limite: Duration, cond: impl Fn(&Estado) -> bool) ->
 }
 
 /// Abre, confere duração, tamanho e o primeiro quadro, toca um pouco e confere que avança.
-fn conferir(caminho: &Path, duracao: f64, video: Option<(u32, u32)>, tem_audio: bool) {
+fn conferir(caminho: &Path, video: Option<(u32, u32)>, tem_audio: bool) {
+    if !comum::decodifica(caminho) {
+        return;
+    }
     let p = Player::abrir(caminho);
     let e = esperar(&p, Duration::from_secs(10), |e| e.info.pronto);
     assert_eq!(e.info.erro, None, "{}", caminho.display());
     let d = e.info.duracao.expect("duração");
-    assert!((d - duracao).abs() < 0.15, "{}: duração {d}", caminho.display());
+    assert!((d - 2.).abs() < 0.15, "{}: duração {d}", caminho.display());
     assert_eq!(e.info.video, video, "{}", caminho.display());
     assert_eq!(e.info.tem_audio, tem_audio, "{}", caminho.display());
     assert!(!e.tocando && e.posicao == 0., "não toca sozinho");
@@ -53,57 +54,20 @@ fn conferir(caminho: &Path, duracao: f64, video: Option<(u32, u32)>, tem_audio: 
 }
 
 #[test]
-fn wav_pcm() {
+fn audio_de_cada_formato() {
     let _s = comum::serial();
-    let tmp = Tmp::new("wav");
-    let c = tmp.caminho("tom.wav");
-    gerar(&c, None, Some(pcm()), None, 2.).unwrap();
-    conferir(&c, 2., None, true);
+    let tmp = Tmp::new("audio");
+    for nome in ["tom.wav", "tom.flac", "tom.mp3", "tom.m4a", "tom.ogg", "tom.oga", "tom.opus"] {
+        conferir(&copiar(&tmp, nome, nome), None, true);
+    }
 }
 
 #[test]
-fn flac() {
+fn video_h264_com_audio_em_cada_conteiner() {
     let _s = comum::serial();
-    let tmp = Tmp::new("flac");
-    let c = tmp.caminho("tom.flac");
-    let a = comum::Audio { encoder: "flac", formato: ff::format::Sample::I16(ff::format::sample::Type::Packed), taxa: 44100 };
-    gerar(&c, None, Some(a), None, 2.).unwrap();
-    conferir(&c, 2., None, true);
-}
-
-#[test]
-fn ogg_vorbis_e_oga_opus() {
-    let _s = comum::serial();
-    let tmp = Tmp::new("ogg");
-    let c = tmp.caminho("tom.ogg");
-    gerar(&c, Some("ogg"), Some(planar("vorbis", 44100)), None, 2.).unwrap();
-    conferir(&c, 2., None, true);
-    let c = tmp.caminho("tom.oga");
-    gerar(&c, Some("ogg"), Some(planar("opus", 48000)), None, 2.).unwrap();
-    conferir(&c, 2., None, true);
-}
-
-#[test]
-fn m4a_aac() {
-    let _s = comum::serial();
-    let tmp = Tmp::new("m4a");
-    let c = tmp.caminho("tom.m4a");
-    gerar(&c, Some("ipod"), Some(planar("aac", 44100)), None, 2.).unwrap();
-    conferir(&c, 2., None, true);
-}
-
-fn mpeg4() -> Video {
-    Video { encoder: "mpeg4", pixel: ff::format::Pixel::YUV420P, largura: 64, altura: 48, fps: 10 }
-}
-
-#[test]
-fn mp4_m4v_mov_com_audio() {
-    let _s = comum::serial();
-    let tmp = Tmp::new("mp4");
-    for (nome, muxer) in [("clipe.mp4", "mp4"), ("clipe.m4v", "mp4"), ("clipe.mov", "mov")] {
-        let c = tmp.caminho(nome);
-        gerar(&c, Some(muxer), Some(planar("aac", 44100)), Some(mpeg4()), 2.).unwrap();
-        conferir(&c, 2., Some((64, 48)), true);
+    let tmp = Tmp::new("video");
+    for nome in ["clipe.mp4", "clipe.m4v", "clipe.mov", "clipe.mkv", "clipe.avi"] {
+        conferir(&copiar(&tmp, nome, nome), Some((64, 48)), true);
     }
 }
 
@@ -111,58 +75,14 @@ fn mp4_m4v_mov_com_audio() {
 fn webm_vp8_do_mock() {
     let _s = comum::serial();
     let tmp = Tmp::new("webm");
-    let c = comum::copiar(&tmp, "clipe.webm", "clipe.webm");
-    conferir(&c, 2., Some((64, 48)), false);
-}
-
-/// H.264 pelo decodificador nativo; o arquivo vem do encoder do Media Foundation do Windows (fora do FFmpeg) quando existe.
-#[test]
-fn h264_nativo() {
-    let _s = comum::serial();
-    orquestrador_midia::player::iniciar_ffmpeg();
-    let tmp = Tmp::new("h264");
-    let c = tmp.caminho("clipe.mp4");
-    let v = Video { encoder: "h264_mf", pixel: ff::format::Pixel::NV12, largura: 64, altura: 48, fps: 10 };
-    match gerar(&c, Some("mp4"), None, Some(v), 2.) {
-        Ok(()) => conferir(&c, 2., Some((64, 48)), false),
-        Err(e) => eprintln!("h264_mf indisponível ({e}); só o decodificador é conferido"),
-    }
-}
-
-/// Cada formato aceito tem demuxer e decodificador nativos (sem `lib*`), e a build não tem nada GPL nem nonfree.
-#[test]
-fn decodificadores_nativos_e_licenca() {
-    let _s = comum::serial();
-    orquestrador_midia::player::iniciar_ffmpeg();
-    use ff::codec::Id;
-    for id in [Id::MP3, Id::PCM_S16LE, Id::VORBIS, Id::OPUS, Id::FLAC, Id::AAC, Id::H264, Id::HEVC, Id::MPEG4, Id::VP8, Id::VP9, Id::AV1, Id::PRORES] {
-        let d = ff::decoder::find(id);
-        let nome = d.map(|d| d.name().to_string());
-        // AV1 só tem decodificador por hardware ou libdav1d; fica de fora da exigência.
-        if id == Id::AV1 {
-            continue;
-        }
-        let nome = nome.unwrap_or_else(|| panic!("sem decodificador para {id:?}"));
-        assert!(!nome.starts_with("lib"), "{id:?} usa biblioteca externa: {nome}");
-    }
-    for demuxer in ["mp3", "wav", "ogg", "flac", "aac", "mov", "matroska"] {
-        let nome = std::ffi::CString::new(demuxer).unwrap();
-        // SAFETY: consulta estática de tabela, sem estado.
-        let achou = unsafe { !ff::ffi::av_find_input_format(nome.as_ptr()).is_null() };
-        assert!(achou, "sem demuxer {demuxer}");
-    }
-    let licenca = unsafe { std::ffi::CStr::from_ptr(ff::ffi::avcodec_license()) }.to_string_lossy().into_owned();
-    assert!(licenca.contains("LGPL"), "licença do avcodec: {licenca}");
-    let conf = unsafe { std::ffi::CStr::from_ptr(ff::ffi::avcodec_configuration()) }.to_string_lossy().into_owned();
-    assert!(!conf.contains("--enable-gpl") && !conf.contains("--enable-nonfree"), "{conf}");
+    conferir(&copiar(&tmp, "clipe.webm", "clipe.webm"), Some((64, 48)), false);
 }
 
 #[test]
 fn busca_e_fim() {
     let _s = comum::serial();
     let tmp = Tmp::new("busca");
-    let c = tmp.caminho("clipe.mp4");
-    gerar(&c, Some("mp4"), Some(planar("aac", 44100)), Some(mpeg4()), 2.).unwrap();
+    let c = copiar(&tmp, "clipe.mp4", "clipe.mp4");
     let p = Player::abrir(&c);
     esperar(&p, Duration::from_secs(10), |e| e.info.pronto);
     p.buscar(1.);
@@ -191,8 +111,7 @@ fn busca_e_fim() {
 fn volume_mudo_e_velocidade() {
     let _s = comum::serial();
     let tmp = Tmp::new("vol");
-    let c = tmp.caminho("tom.wav");
-    gerar(&c, None, Some(pcm()), None, 3.).unwrap();
+    let c = copiar(&tmp, "tom.wav", "tom.wav");
     let p = Player::abrir(&c);
     esperar(&p, Duration::from_secs(10), |e| e.info.pronto);
     p.definir_volume(0.25);
@@ -223,11 +142,22 @@ fn erros_de_abertura() {
 }
 
 #[test]
+fn renomear_e_apagar_com_o_arquivo_aberto() {
+    let _s = comum::serial();
+    let tmp = Tmp::new("renomear");
+    let c = copiar(&tmp, "tom.wav", "tom.wav");
+    let p = Player::abrir(&c);
+    esperar(&p, Duration::from_secs(10), |e| e.info.pronto);
+    let novo = tmp.caminho("tom-novo.wav");
+    std::fs::rename(&c, &novo).expect("renomear aberto");
+    std::fs::remove_file(&novo).expect("apagar aberto");
+}
+
+#[test]
 fn soltar_para_a_thread() {
     let _s = comum::serial();
     let tmp = Tmp::new("soltar");
-    let c = tmp.caminho("tom.wav");
-    gerar(&c, None, Some(pcm()), None, 2.).unwrap();
+    let c = copiar(&tmp, "tom.wav", "tom.wav");
     let antes = orquestrador_midia::player::decodificadores_ativos();
     let p = Player::abrir(&c);
     p.tocar();

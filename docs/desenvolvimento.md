@@ -5,15 +5,6 @@
 1. Visual Studio Build Tools com a carga "Desenvolvimento para desktop com C++" (MSVC e Windows SDK).
 2. Rust pelo [rustup](https://rustup.rs), toolchain `stable-x86_64-pc-windows-msvc`, com `clippy`.
 3. Git.
-4. FFmpeg compartilhado (LGPL) e libclang, usados pelo `orquestrador-midia`:
-
-   ```powershell
-   pwsh crates/midia/preparar-ffmpeg.ps1
-   ```
-
-   O script baixa o FFmpeg LGPL pré-compilado (URL e SHA-256 fixos) e o libclang, tudo em `ferramentas/`, ignorada pelo git.
-   O `[env]` do `.cargo/config.toml` define `FFMPEG_DIR` e `LIBCLANG_PATH`; o `build.rs` do `orquestrador-midia` copia as DLLs
-   para `target/`. Rodar de novo só confere.
 
 ## Rodar e testar
 
@@ -58,7 +49,7 @@ testa ponta a ponta, sem tocar na instalação real, a atualização a partir do
 
 ## CI
 
-`.github/workflows/ci.yml` roda a cada push em `main` e em pull request: no Windows, `cargo test --workspace` e o clippy; em
-Ubuntu e macOS, só `cargo check -p orquestrador-core --all-targets`. O workflow de release não repete os testes: exige essa CI
+`.github/workflows/ci.yml` roda a cada push em `main` e em pull request: no Windows, `cargo test --workspace` e o clippy em jobs
+paralelos, com o Media Foundation instalado pelo `Server-Media-Foundation`; em Ubuntu e macOS, só `cargo check -p orquestrador-core --all-targets`. O workflow de release não repete os testes: exige essa CI
 verde para o SHA da tag antes de publicar. `.github/workflows/aquecer-release.yml` compila em `main` o que a release compila,
 para o cache de compilação que a release restaura.

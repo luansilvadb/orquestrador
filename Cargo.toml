@@ -4,7 +4,7 @@ members = ["crates/core", "crates/ui", "crates/app", "crates/editor", "crates/pe
 
 # Versão única do app: `agents/mcp.rs` anuncia a do pacote core.
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 
 [profile.dev]
@@ -12,16 +12,6 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
-
-# O build script do `ffmpeg-sys-next` roda o bindgen na thread principal (pilha de 1 MiB no Windows); em opt-level 0
-# a recursão do bindgen sobre os cabeçalhos do FFmpeg estoura a pilha (STATUS_STACK_OVERFLOW). `RUST_MIN_STACK` não
-# resolve: só vale para threads criadas por `std::thread`. Otimizado, os quadros encolhem e cabem.
-[profile.dev.package.bindgen]
-opt-level = 3
-
-# No release os build scripts e suas dependências usam `build-override` (opt-level 0): mesmo estouro.
-[profile.release.package.bindgen]
-opt-level = 3
 
 # Cópias alteradas de crates de terceiros (ver vendor/README.md). Dependência por caminho conta como local e ganharia
 # a depuração do perfil, estourando o PDB do link no Windows (LNK1140).

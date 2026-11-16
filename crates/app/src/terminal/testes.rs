@@ -53,15 +53,6 @@ fn falsos() -> Option<(PathBuf, PathBuf)> {
         .flatten()
         .find(|d| d.join("examples").join("fake_cli.exe").is_file() && d.join("orquestrador.exe").is_file())?;
     let (fake, app) = (pasta.join("examples").join("fake_cli.exe"), pasta.join("orquestrador.exe"));
-    // O app roda neto do PTY, cujo PATH o portable-pty refaz do registro sem o FFmpeg do runner: as DLLs vão ao lado.
-    if let Some(dir) = option_env!("FFMPEG_DIR") {
-        for dll in std::fs::read_dir(PathBuf::from(dir).join("bin")).ok()?.flatten() {
-            let destino = pasta.join(dll.file_name());
-            if dll.path().extension().is_some_and(|e| e.eq_ignore_ascii_case("dll")) && !destino.is_file() {
-                std::fs::copy(dll.path(), &destino).ok()?;
-            }
-        }
-    }
     Some((fake, app))
 }
 

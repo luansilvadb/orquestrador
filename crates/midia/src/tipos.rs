@@ -1,42 +1,75 @@
-//! O que é mídia: os decodificadores do crate `image` e do FFmpeg, registrados no core (`ide::midia`), que é a regra única.
-use ffmpeg_next as ff;
+//! O que é mídia: os decodificadores do crate `image` e do Media Foundation do Windows, registrados no core
+//! (`ide::midia`), que é a regra única.
+use crate::mf;
 use orquestrador_core::ide::midia::{self, Decodificadores};
 use std::collections::HashMap;
-use std::ffi::{c_char, c_void, CStr};
 use std::path::Path;
 use std::sync::LazyLock;
+use windows::core::{HSTRING, PWSTR};
+use windows::Win32::Foundation::ERROR_SUCCESS;
+use windows::Win32::Media::MediaFoundation::{MFMediaType_Audio, MFMediaType_Video};
+use windows::Win32::System::Registry::*;
 
 pub use orquestrador_core::ide::midia::TipoMidia;
 
 struct Formatos;
 
-/// Extensão de cada demuxer e muxer do FFmpeg (o muxer cobre o `wav`, o `ts` e o `opus`, que o demuxer acha pelo
-/// conteúdo), com o primeiro MIME que algum deles declara.
-static AV: LazyLock<HashMap<String, Option<&'static str>>> = LazyLock::new(|| {
-    crate::player::iniciar_ffmpeg();
-    let texto = |p: *const c_char| (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_str().ok()).flatten();
-    let mut mapa: HashMap<String, Option<&'static str>> = HashMap::new();
-    let mut juntar = |exts: Option<&'static str>, mime: Option<&'static str>| {
-        // O de vídeo vence: o Matroska declara `audio/webm` antes de `video/webm`.
-        let peso = |m: &Option<&str>| m.map_or(0, |m| if m.starts_with("video/") { 2 } else { 1 });
-        let mimes = || mime.into_iter().flat_map(|m| m.split(',')).map(str::trim);
-        let mime = mimes().find(|m| m.starts_with("video/")).or_else(|| mimes().find(|m| m.starts_with("audio/")));
-        for e in exts.into_iter().flat_map(|e| e.split(',')).map(|e| e.trim().to_ascii_lowercase()).filter(|e| !e.is_empty()) {
-            let m = mapa.entry(e).or_default();
-            if peso(&mime) > peso(m) {
-                *m = mime;
-            }
-        }
-    };
-    // SAFETY: as tabelas de formatos são estáticas; as strings vivem até o fim do processo.
+/// Subchaves de `raiz\caminho`.
+fn subchaves(raiz: HKEY, caminho: &str) -> Vec<String> {
+    let mut chave = HKEY::default();
+    // SAFETY: chave aberta só para leitura e fechada no fim; buffers locais.
     unsafe {
-        let mut op: *mut c_void = std::ptr::null_mut();
-        while let Some(f) = ff::ffi::av_demuxer_iterate(&mut op).as_ref() {
-            juntar(texto(f.extensions), texto(f.mime_type));
+        if RegOpenKeyExW(raiz, &HSTRING::from(caminho), None, KEY_READ, &mut chave) != ERROR_SUCCESS {
+            return Vec::new();
         }
-        let mut op: *mut c_void = std::ptr::null_mut();
-        while let Some(f) = ff::ffi::av_muxer_iterate(&mut op).as_ref() {
-            juntar(texto(f.extensions), texto(f.mime_type));
+        let mut nomes = Vec::new();
+        let mut buf = [0u16; 256];
+        for i in 0.. {
+            let mut n = buf.len() as u32;
+            if RegEnumKeyExW(chave, i, Some(PWSTR(buf.as_mut_ptr())), &mut n, None, None, None, None) != ERROR_SUCCESS {
+                break;
+            }
+            nomes.push(String::from_utf16_lossy(&buf[..n as usize]));
+        }
+        let _ = RegCloseKey(chave);
+        nomes
+    }
+}
+
+/// Valor de texto `valor` em `raiz\chave`.
+fn valor(raiz: HKEY, chave: &str, valor: &str) -> Option<String> {
+    let mut buf = [0u16; 256];
+    let mut bytes = (buf.len() * 2) as u32;
+    // SAFETY: buffer local com o tamanho informado em bytes.
+    let r = unsafe { RegGetValueW(raiz, &HSTRING::from(chave), &HSTRING::from(valor), RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr().cast()), Some(&mut bytes)) };
+    if r != ERROR_SUCCESS {
+        return None;
+    }
+    let n = (bytes as usize / 2).saturating_sub(1);
+    Some(String::from_utf16_lossy(&buf[..n]))
+}
+
+/// Extensão (sem ponto, minúsculas) de cada formato que o Media Foundation abre (os byte stream handlers) ou que o
+/// Windows percebe como áudio ou vídeo, com o MIME de áudio ou vídeo do `Content Type`, se houver.
+static AV: LazyLock<HashMap<String, Option<&'static str>>> = LazyLock::new(|| {
+    let ext = |chave: &str| {
+        let e = chave.strip_prefix('.')?.to_ascii_lowercase();
+        (!e.is_empty() && e.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).then_some(e)
+    };
+    let mime = |chave: &str| -> Option<&'static str> {
+        let m = valor(HKEY_CLASSES_ROOT, chave, "Content Type")?.to_ascii_lowercase();
+        (m.starts_with("audio/") || m.starts_with("video/")).then(|| &*Box::leak(m.into_boxed_str()))
+    };
+    let mut mapa = HashMap::new();
+    for chave in subchaves(HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows Media Foundation\ByteStreamHandlers") {
+        if let Some(e) = ext(&chave) {
+            mapa.insert(e, mime(&chave));
+        }
+    }
+    for chave in subchaves(HKEY_CLASSES_ROOT, "").into_iter().filter(|c| c.starts_with('.')) {
+        let Some(e) = ext(&chave).filter(|e| !mapa.contains_key(e)) else { continue };
+        if valor(HKEY_CLASSES_ROOT, &chave, "PerceivedType").is_some_and(|p| p.eq_ignore_ascii_case("audio") || p.eq_ignore_ascii_case("video")) {
+            mapa.insert(e, mime(&chave));
         }
     }
     mapa
@@ -56,15 +89,10 @@ impl Decodificadores for Formatos {
         if midia::texto(caminho) {
             return None;
         }
-        let entrada = crate::player::abrir_entrada(caminho).ok()?;
-        let decodifica = |s: &ff::format::stream::Stream| ff::decoder::find(s.parameters().id()).is_some();
-        let video = entrada.streams().filter(|s| s.parameters().medium() == ff::media::Type::Video).any(|s| {
-            !s.disposition().contains(ff::format::stream::Disposition::ATTACHED_PIC) && decodifica(&s)
-        });
-        let audio = entrada.streams().filter(|s| s.parameters().medium() == ff::media::Type::Audio).any(|s| decodifica(&s));
-        if video {
+        let fluxos = mf::em_sessao(|| mf::fluxos(caminho)).ok()?;
+        if fluxos.iter().any(|f| f.0 == MFMediaType_Video) {
             Some(TipoMidia::Video)
-        } else if audio {
+        } else if fluxos.iter().any(|f| f.0 == MFMediaType_Audio) {
             Some(TipoMidia::Audio)
         } else {
             None
@@ -110,10 +138,12 @@ mod testes {
         for n in ["a/logo.PNG", "x.ico", "x.tiff", "x.tga", "x.qoi", "x.jpeg"] {
             assert_eq!(ext(n), Some(TipoMidia::Imagem), "{n}");
         }
-        for n in ["tom.wav", "x.mp3", "x.opus", "x.flac"] {
+        for n in ["tom.wav", "x.mp3", "x.flac", "x.m4a"] {
             assert_eq!(ext(n), Some(TipoMidia::Audio), "{n}");
         }
-        // Sem MIME de áudio: até sondar, conta como vídeo.
+        // O Opus depende da Web Media Extensions; sem ela, a extensão não é conhecida.
+        assert!(matches!(ext("x.opus"), Some(TipoMidia::Audio) | None));
+        // MIME de vídeo, ou nenhum: até sondar, conta como vídeo.
         for n in ["clipe.webm", "x.mov", "x.mkv", "x.avi", "x.ts"] {
             assert_eq!(ext(n), Some(TipoMidia::Video), "{n}");
         }

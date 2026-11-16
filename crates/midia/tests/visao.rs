@@ -2,7 +2,7 @@
 //! `VisaoMidia::new`, `trocar_caminho`, `definir_visivel` e soltar a entidade.
 mod comum;
 
-use comum::{copiar, gerar, pcm, Tmp};
+use comum::{copiar, Tmp};
 use gpui_kit::{px, Entity, TestAppContext, VisualTestContext};
 use orquestrador_midia::{player, TipoMidia, VisaoMidia};
 use std::path::PathBuf;
@@ -73,8 +73,7 @@ fn imagem_abre_decodifica_e_alterna_ajustar_e_tamanho_real(cx: &mut TestAppConte
 fn audio_nao_toca_sozinho_e_toca_e_pausa_pelo_gesto(cx: &mut TestAppContext) {
     let _s = comum::serial();
     let tmp = Tmp::new("audio");
-    let c = tmp.caminho("tom.wav");
-    gerar(&c, None, Some(pcm()), None, 2.).unwrap();
+    let c = copiar(&tmp, "tom.wav", "tom.wav");
     let (v, cx) = abrir(cx, c);
     esperar(cx, &v, |v| v.estado_reproducao().is_some_and(|e| e.info.pronto));
     let e = v.read_with(cx, |v, _| v.estado_reproducao().unwrap());
@@ -101,8 +100,7 @@ fn audio_nao_toca_sozinho_e_toca_e_pausa_pelo_gesto(cx: &mut TestAppContext) {
 fn audio_busca_volume_e_pausa_ao_sair_da_vista_e_ao_fechar(cx: &mut TestAppContext) {
     let _s = comum::serial();
     let tmp = Tmp::new("audio2");
-    let c = tmp.caminho("tom.wav");
-    gerar(&c, None, Some(pcm()), None, 2.).unwrap();
+    let c = copiar(&tmp, "tom.wav", "tom.wav");
     let antes = player::decodificadores_ativos();
     let (v, cx) = abrir(cx, c);
     esperar(cx, &v, |v| v.estado_reproducao().is_some_and(|e| e.info.pronto));
@@ -195,8 +193,7 @@ fn imagem_e_audio_renomeados_recarregam(cx: &mut TestAppContext) {
     esperar(cx, &v, |v| v.tamanho() == Some((32, 32)));
     assert_eq!(v.read_with(cx, |v, _| v.caminho().to_path_buf()), nova);
 
-    let tom = tmp.caminho("tom.wav");
-    gerar(&tom, None, Some(pcm()), None, 2.).unwrap();
+    let tom = copiar(&tmp, "tom.wav", "tom.wav");
     v.update(cx, |v, cx| v.trocar_caminho(tom.clone(), cx));
     esperar(cx, &v, |v| v.estado_reproducao().is_some_and(|e| e.info.pronto));
     let novo = tmp.caminho("tom-novo.wav");
@@ -211,7 +208,7 @@ fn imagem_e_audio_renomeados_recarregam(cx: &mut TestAppContext) {
 fn video_decodifica_cabe_no_painel_nao_toca_sozinho_e_toca_e_pausa_pelo_gesto(cx: &mut TestAppContext) {
     let _s = comum::serial();
     let tmp = Tmp::new("video");
-    let c = copiar(&tmp, "clipe.webm", "clipe.webm");
+    let c = copiar(&tmp, "clipe.mp4", "clipe.mp4");
     let (v, cx) = abrir(cx, c);
     esperar(cx, &v, |v| v.tamanho().is_some());
     esperar(cx, &v, |_| true);
@@ -253,7 +250,7 @@ fn video_decodifica_cabe_no_painel_nao_toca_sozinho_e_toca_e_pausa_pelo_gesto(cx
 fn video_pausa_ao_sair_da_vista_e_ao_fechar(cx: &mut TestAppContext) {
     let _s = comum::serial();
     let tmp = Tmp::new("video2");
-    let c = copiar(&tmp, "clipe.webm", "clipe.webm");
+    let c = copiar(&tmp, "clipe.mp4", "clipe.mp4");
     let antes = player::decodificadores_ativos();
     let (v, cx) = abrir(cx, c);
     esperar(cx, &v, |v| v.tamanho().is_some());
@@ -301,8 +298,7 @@ fn video_com_falha_de_leitura_ou_bytes_invalidos_mostra_aviso(cx: &mut TestAppCo
 fn atalhos_do_controle(cx: &mut TestAppContext) {
     let _s = comum::serial();
     let tmp = Tmp::new("atalhos");
-    let c = tmp.caminho("tom.wav");
-    gerar(&c, None, Some(pcm()), None, 2.).unwrap();
+    let c = copiar(&tmp, "tom.wav", "tom.wav");
     let (v, cx) = abrir(cx, c);
     esperar(cx, &v, |v| v.estado_reproducao().is_some_and(|e| e.info.pronto));
     cx.update(|window, cx| {
@@ -336,7 +332,7 @@ fn pairar(pcx: &mut VisualTestContext, botao: &'static str) -> gpui_kit::Point<g
 fn picture_in_picture_abre_pausa_volta_e_fecha_com_a_aba(cx: &mut TestAppContext) {
     let _s = comum::serial();
     let tmp = Tmp::new("pip");
-    let c = copiar(&tmp, "clipe.webm", "clipe.webm");
+    let c = copiar(&tmp, "clipe.mp4", "clipe.mp4");
     let antes = player::decodificadores_ativos();
     let janelas = cx.update(|cx| cx.windows().len());
     let (v, cx) = abrir(cx, c);

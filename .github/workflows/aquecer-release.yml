@@ -27,35 +27,12 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Cache do FFmpeg e do libclang
-        id: cache-ffmpeg
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ferramentas\ffmpeg.zip
-            ferramentas\libclang
-          key: ffmpeg-${{ runner.os }}-${{ hashFiles('crates/midia/preparar-ffmpeg.ps1') }}
-
-      - name: Preparar o FFmpeg e o libclang
-        shell: pwsh
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          & pwsh crates/midia/preparar-ffmpeg.ps1
-
-      - name: Salvar o cache do FFmpeg e do libclang
-        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ferramentas\ffmpeg.zip
-            ferramentas\libclang
-          key: ${{ steps.cache-ffmpeg.outputs.cache-primary-key }}
-
       # Mesma configuração do release.yml.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: release
           cache-bin: 'false'
+          cache-workspace-crates: 'true'
           workspaces: |
             . -> target
             crates/app/empacotamento/assinador -> target

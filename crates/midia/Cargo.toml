@@ -10,9 +10,6 @@ name = "orquestrador_midia"
 orquestrador-core = { path = "../core" }
 orquestrador-ui = { path = "../ui" }
 gpui-kit = "=0.9.1"
-# Compartilhado e só LGPL, DLLs no PATH pelo runner (.cargo/executar.cmd): ver README.md e preparar-ffmpeg.ps1.
-ffmpeg-next = { version = "=9.1.0", default-features = false, features = ["codec", "format", "filter", "software-resampling", "software-scaling"] }
-cpal = "0.18"
 # Sem `avif`: o `image` só decodifica AVIF com `avif-native` (dav1d nativo).
 image = { version = "0.25", default-features = false, features = ["bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp", "rayon"] }
 smallvec = "1"
@@ -21,6 +18,22 @@ raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# Media Foundation (Media Engine) e Direct3D 11 do próprio Windows: áudio e vídeo sem bibliotecas externas.
+# O `windows-core` direto é exigido pelo `#[implement]`.
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Registry",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
 
 [dev-dependencies]
 gpui-kit = { version = "=0.9.1", features = ["test-support"] }

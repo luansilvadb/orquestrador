@@ -1,5 +1,5 @@
 //! O que abre na aba de mídia e como: a única regra para o core (IPC e protocolo `orq-media`), o editor e o
-//! `orquestrador-midia`. O core não decodifica nada: quem conhece os formatos (o crate `image` e o FFmpeg) se registra
+//! `orquestrador-midia`. O core não decodifica nada: quem conhece os formatos (o crate `image` e o Media Foundation do Windows) se registra
 //! em [`registrar`], e sem registro nada é mídia.
 use std::io::Read;
 use std::path::Path;
@@ -50,8 +50,8 @@ pub fn por_extensao(caminho: &Path) -> Option<TipoMidia> {
     Some(if mime.is_some_and(|m| m.starts_with("audio/")) { TipoMidia::Audio } else { TipoMidia::Video })
 }
 
-/// O tipo do arquivo. Imagem pela extensão; texto (o `.txt` tem demuxer) não é mídia; áudio e vídeo pelos fluxos que o
-/// FFmpeg acha, com ou sem extensão conhecida. Extensão de demuxer que não abre segue pelo [`por_extensao`]: a aba mostra o erro.
+/// O tipo do arquivo. Imagem pela extensão; texto não é mídia; áudio e vídeo pelos fluxos que o
+/// Media Foundation acha, com ou sem extensão conhecida. Extensão de demuxer que não abre segue pelo [`por_extensao`]: a aba mostra o erro.
 pub fn classificar(caminho: &Path) -> Option<TipoMidia> {
     let r = registro()?;
     let pelo_nome = por_extensao(caminho);
