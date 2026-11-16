@@ -8,6 +8,7 @@ pub mod caminhos;
 pub mod colagem;
 pub mod estado;
 pub mod faixa;
+pub mod gatilho;
 pub mod icones_arquivo;
 pub mod janela;
 pub mod lista;
@@ -17,5 +18,6 @@ pub mod tema;
 pub mod widgets;
 
 pub use icones_arquivo::icone_arquivo;
+pub use gatilho::Gatilho;
 pub use faixa::{Aba, ArrastoAba, EstadoFaixa, FaixaAbas, MoverAba};
 pub use lista::{EstadoLista, ItemLista, ListaAbas};

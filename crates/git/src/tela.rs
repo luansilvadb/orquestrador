@@ -181,7 +181,8 @@ pub struct TelaGit {
     /// Itens da última lista desenhada: mudando, as alturas são medidas de novo sem perder a rolagem.
     itens_lista: RefCell<Vec<Item>>,
     branch_aberto: bool,
-    sobre_branch: bool,
+    sobre_branch: orquestrador_ui::Gatilho,
+    sobre_modo: orquestrador_ui::Gatilho,
     branches: Option<Branches>,
     erro_branch: String,
     nome_branch: Entity<InputState>,
@@ -273,7 +274,8 @@ impl TelaGit {
             lista: ListState::new(0, ListAlignment::Top, px(200.)),
             itens_lista: RefCell::default(),
             branch_aberto: false,
-            sobre_branch: false,
+            sobre_branch: Default::default(),
+            sobre_modo: Default::default(),
             branches: None,
             erro_branch: String::new(),
             nome_branch,
@@ -819,7 +821,7 @@ impl TelaGit {
     fn cabecalho_branch(&self, s: &Status, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let titulo = format!("{} a enviar, {} a receber", comum::commits(s.ahead), comum::commits(s.behind));
         let seta = |c: &'static str| icone(c, 12., descricao());
-        let botao_branch = div()
+        let botao_branch = self.sobre_branch.marcar(div()
             .id("branch")
             .flex()
             .flex_1()
@@ -834,11 +836,10 @@ impl TelaGit {
             .child(icone("icons/git-branch.svg", 14., cor::text_primary()))
             .child(div().min_w_0().truncate().font_family(tema::FONTE_MONO).text_size(px(13.)).child(s.branch.clone()))
             .tooltip_texto(format!("Branch atual: {}. Trocar ou criar uma branch", s.branch))
-            .on_hover(cx.listener(|this, h: &bool, _, _| this.sobre_branch = *h))
             .on_click(cx.listener(|this, _, w, cx| {
                 let abrir = !this.branch_aberto;
                 this.abrir_branches(abrir, w, cx)
-            }));
+            })));
         div()
             .flex()
             .flex_col()
@@ -909,7 +910,7 @@ impl TelaGit {
             .border_color(cor::hairline())
             .occlude()
             .on_mouse_down_out(cx.listener(|this, _, w, cx| {
-                if !this.sobre_branch {
+                if !this.sobre_branch.sobre() {
                     this.abrir_branches(false, w, cx)
                 }
             }));
@@ -1047,7 +1048,7 @@ impl TelaGit {
                     .on_click(cx.listener(move |this, _, w, cx| this.commitar(modo, w, cx))),
             )
             .child(div().my(px(5.)).w(px(1.)).bg(frente).opacity(0.4))
-            .child(
+            .child(self.sobre_modo.marcar(
                 div()
                     .id("modo-commit")
                     .flex()
@@ -1063,7 +1064,7 @@ impl TelaGit {
                         this.menu_modo = !this.menu_modo;
                         cx.notify();
                     })),
-            );
+            ));
         let menu = self.menu_modo.then(|| {
             let item = |m: ModoCommit, cx: &mut Context<Self>| {
                 div()
@@ -1100,8 +1101,10 @@ impl TelaGit {
                         .border_color(cor::hairline())
                         .occlude()
                         .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.menu_modo = false;
-                            cx.notify();
+                            if !this.sobre_modo.sobre() {
+                                this.menu_modo = false;
+                                cx.notify();
+                            }
                         }))
                         .child(item(ModoCommit::Commit, cx))
                         .child(item(ModoCommit::CommitPush, cx)),

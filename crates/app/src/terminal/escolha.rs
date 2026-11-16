@@ -86,6 +86,7 @@ pub struct FormEscolha {
     /// Sem cancelar, Esc, clique fora e o X não fecham: só confirmar.
     pub cancelavel: bool,
     pub aberto: Option<Campo>,
+    gatilhos: [orquestrador_ui::Gatilho; 2],
     pub ocupado: bool,
     pub erro: Option<String>,
     pub foco: FocusHandle,
@@ -113,6 +114,7 @@ impl FormEscolha {
             rotulo_confirmar: rotulo_confirmar.into(),
             cancelavel,
             aberto: None,
+            gatilhos: Default::default(),
             ocupado: false,
             erro: None,
             foco: cx.focus_handle(),
@@ -239,7 +241,7 @@ impl FormEscolha {
         div()
             .relative()
             .w_full()
-            .child(
+            .child(self.gatilhos[campo as usize].marcar(
                 div()
                     .id(id)
                     .flex()
@@ -258,7 +260,7 @@ impl FormEscolha {
                     }))
                     .child(div().flex_1().truncate().when(mono, |d| d.font_family(super::vista::FONTE)).child(texto))
                     .child(ui::icone(if aberto { "icons/chevron-up.svg" } else { "icons/chevron-down.svg" }, 14., cor::text_secondary())),
-            )
+            ))
             .when(aberto, |d| {
                 let mut lista = div()
                     .id(SharedString::from(format!("{id}-lista")))
@@ -272,9 +274,11 @@ impl FormEscolha {
                     .bg(cor::raised_black())
                     .border_1()
                     .border_color(gpui_kit::rgba(0xffffff26))
-                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                        this.aberto = None;
-                        cx.notify();
+                    .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
+                        if !this.gatilhos[campo as usize].sobre() {
+                            this.aberto = None;
+                            cx.notify();
+                        }
                     }));
                 for (valor, rotulo, mono) in itens {
                     let marcado = valor == atual;

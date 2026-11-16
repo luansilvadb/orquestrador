@@ -16,6 +16,7 @@ struct Interno {
     destacada: Cell<Option<usize>>,
     foco: FocusHandle,
     anterior: RefCell<Option<FocusHandle>>,
+    gatilho: crate::Gatilho,
 }
 
 /// Estado de tela de uma lista; guarde um por lista na entidade dona.
@@ -29,6 +30,7 @@ impl EstadoLista {
             destacada: Cell::new(None),
             foco: cx.focus_handle(),
             anterior: RefCell::new(None),
+            gatilho: crate::Gatilho::default(),
         }))
     }
 
@@ -204,7 +206,7 @@ impl RenderOnce for ListaAbas {
             }
             cx.notify(vista);
         });
-        let gatilho = gatilho.relative().test_support();
+        let gatilho = estado.0.gatilho.marcar(gatilho).relative().test_support();
         if !estado.aberta() {
             return self.base.child(gatilho);
         }
@@ -262,8 +264,10 @@ impl RenderOnce for ListaAbas {
             .on_mouse_down_out({
                 let e = estado.clone();
                 move |_, _, cx| {
-                    e.fechar();
-                    cx.notify(vista);
+                    if !e.0.gatilho.sobre() {
+                        e.fechar();
+                        cx.notify(vista);
+                    }
                 }
             });
         for (i, item) in self.itens.into_iter().enumerate() {
@@ -354,5 +358,41 @@ impl RenderOnce for ListaAbas {
                 .size_0()
                 .child(deferred(anchored().anchor(canto).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(1)),
         ))
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+    use gpui_kit::{Context, Modifiers, Render, TestAppContext};
+
+    struct Vista(EstadoLista);
+
+    impl Render for Vista {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let item = ItemLista::new("a", div(), "a", |_, _| {});
+            div().size_full().child(
+                ListaAbas::new("lista", &self.0, vec![item]).gatilho(botao_lista("g", 1).debug_selector(|| "gatilho".into())),
+            )
+        }
+    }
+
+    #[gpui_kit::test]
+    fn clicar_no_gatilho_alterna_o_menu(cx: &mut TestAppContext) {
+        let (vista, cx) = cx.add_window_view(|_, cx| Vista(EstadoLista::new(cx)));
+        cx.run_until_parked();
+        let centro = cx.debug_bounds("gatilho").expect("gatilho").center();
+        let aberta = |cx: &mut gpui_kit::VisualTestContext| vista.read_with(cx, |v, _| v.0.aberta());
+        cx.simulate_mouse_move(centro, None, Modifiers::none());
+        cx.simulate_click(centro, Modifiers::none());
+        assert!(aberta(cx), "o clique no gatilho abre");
+        cx.simulate_click(centro, Modifiers::none());
+        assert!(!aberta(cx), "o segundo clique no gatilho fecha e o menu segue fechado");
+        cx.simulate_click(centro, Modifiers::none());
+        assert!(aberta(cx));
+        let fora = centro + gpui_kit::point(px(0.), px(300.));
+        cx.simulate_mouse_move(fora, None, Modifiers::none());
+        cx.simulate_click(fora, Modifiers::none());
+        assert!(!aberta(cx), "o clique fora fecha");
     }
 }
