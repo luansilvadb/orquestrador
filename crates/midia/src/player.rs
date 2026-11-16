@@ -832,7 +832,7 @@ impl Tempo {
 }
 
 fn bytemuck_f32(bytes: &[u8], n: usize) -> Vec<f32> {
-    bytes[..n * 4].chunks_exact(4).map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]])).collect()
+    bytes[..n * 4].as_chunks::<4>().0.iter().map(|b| f32::from_ne_bytes(*b)).collect()
 }
 
 fn f32_bytes(v: &[f32]) -> &[u8] {

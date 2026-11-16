@@ -194,7 +194,7 @@ pub fn chave_local_storage(k: &[u8]) -> Option<(String, String)> {
 pub fn texto_chromium(b: &[u8]) -> Option<String> {
     match b.split_first()? {
         (0, r) if r.len() % 2 == 0 => {
-            String::from_utf16(&r.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect::<Vec<_>>()).ok()
+            String::from_utf16(&r.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect::<Vec<_>>()).ok()
         }
         (1, r) => Some(r.iter().map(|&c| c as char).collect()),
         _ => None,
