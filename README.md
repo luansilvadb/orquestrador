@@ -23,9 +23,9 @@ Requisitos:
 2. No painel do Orquestrador, à direita, clique em `Abrir terminal`, escolha ferramenta, modelo e esforço, e converse com ele até fechar o objetivo.
 3. Quando ele delega, cada executor ganha uma aba. A resposta volta sozinha ao orquestrador quando o executor termina.
 
-O passo a passo está em [uso](docs/uso.md), a tela em [interface](docs/interface.md) e a delegação em [delegação](docs/delegacao.md).
+O passo a passo e a configuração estão em [uso](docs/uso.md), o comportamento da tela em [interface](docs/interface.md) e as decisões da delegação em [delegação](docs/delegacao.md).
 
-> **Atenção:** os executores têm permissão total na pasta do projeto (Claude em `bypassPermissions`, Codex sem sandbox), e o orquestrador faz stage e commit dentro da alçada dele e consulta você antes de push. Abra só pastas em que você confia. Limites, exceções e o que foi medido estão em [limites de segurança](docs/seguranca.md).
+> **Atenção:** os executores têm permissão total na pasta do projeto (Claude em `bypassPermissions`, Codex sem sandbox), e o orquestrador faz stage e commit dentro da alçada dele e consulta você antes de push. Abra só pastas em que você confia. Os limites estão em [limites de segurança](docs/seguranca.md).
 
 ## Desenvolvimento
 
@@ -34,11 +34,11 @@ cargo run -p orquestrador-app
 cargo test --workspace
 ```
 
-Preparação da máquina, testes, lint e empacotamento em [desenvolvimento](docs/desenvolvimento.md).
+Preparação da máquina, testes com CLIs reais e empacotamento em [desenvolvimento](docs/desenvolvimento.md).
 
 ## Contribuir
 
-- Antes de mudar o código, leia [arquitetura](docs/arquitetura.md) para saber onde cada parte fica.
+- Antes de mudar o código, leia [arquitetura](docs/arquitetura.md): regras que o compilador não impõe e decisões de projeto.
 - Mudanças nas permissões dos agentes pedem cuidado. As permissões ficam só em `cli.rs` e a regra de cada papel só em `roles.rs`. O resumo está em [limites de segurança](docs/seguranca.md).
 - Para publicar uma versão, siga [atualização e release](docs/atualizacao.md).
 
@@ -47,11 +47,12 @@ Preparação da máquina, testes, lint e empacotamento em [desenvolvimento](docs
 | Documento | Conteúdo |
 | --- | --- |
 | [uso](docs/uso.md) | Passo a passo, aviso de Git ausente, configuração e teto de executores |
-| [interface](docs/interface.md) | Telas, painéis, editor, pesquisa, Git e terminal |
-| [delegação](docs/delegacao.md) | Como o orquestrador delega e limites |
-| [limites de segurança](docs/seguranca.md) | Permissões dos agentes e o Git do painel |
-| [atualização e release](docs/atualizacao.md) | Atualização automática, chave de assinatura e publicação |
-| [arquitetura](docs/arquitetura.md) | Mapa dos arquivos do código |
-| [desenvolvimento](docs/desenvolvimento.md) | Preparar a máquina, build, testes e empacotamento |
-| [design system](docs/design-system.md) | Design system (Lobe UI) do app |
-| [notas de release](docs/releases/README.md) | Modelo das notas e checklist de release |
+| [interface](docs/interface.md) | Comportamento das telas, painéis, editor, mídia, pesquisa, Git e terminais |
+| [delegação](docs/delegacao.md) | Decisões, limites aceitos e medições da delegação |
+| [limites de segurança](docs/seguranca.md) | Permissões e alçada dos agentes, Git do painel, CLIs na abertura e rede |
+| [atualização e release](docs/atualizacao.md) | Decisões, limites e medições da atualização automática, chave de assinatura e publicação |
+| [arquitetura](docs/arquitetura.md) | Regras que o compilador não impõe e decisões de projeto |
+| [desenvolvimento](docs/desenvolvimento.md) | Preparar a máquina, testes com CLIs reais e empacotamento |
+| [design system](docs/design-system.md) | Referência visual e regras de componentes |
+| [desempenho do GPUI](docs/desempenho-gpui.md) | Medições de latência de digitação e RAM do terminal |
+| [notas de release](docs/releases/README.md) | Política de versão, modelo das notas e checklist de release |

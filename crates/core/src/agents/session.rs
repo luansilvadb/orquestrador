@@ -366,8 +366,7 @@ pub mod tests {
             "Chegou 2027-02-01: remova a limpeza das regras órfãs do Codex. Em session.rs: `is_marker`, `marker`, \
              `is_legacy_rule`, `command_for`, `JUSTIFICATION`, `rule`, o campo `Places.codex_rules` e o laço de regras \
              em `recover_orphans`, mais os testes deles (`regra_orfa_so_sai_com_prova`, \
-             `regra_com_git_e_skills_sai_como_orfa_pela_primeira_linha`) e este teste. Tire também a menção em \
-             docs/seguranca.md (e em docs/arquitetura.md)."
+             `regra_com_git_e_skills_sai_como_orfa_pela_primeira_linha`) e este teste."
         );
     }
 

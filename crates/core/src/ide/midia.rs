@@ -1,4 +1,4 @@
-//! O que abre na aba de mídia e como: a única regra para o core (IPC e protocolo `orq-media`), o editor e o
+//! O que abre na aba de mídia e como: a única regra para o core (IPC e leitura do disco), o editor e o
 //! `orquestrador-midia`. O core não decodifica nada: quem conhece os formatos (o crate `image` e o Media Foundation do Windows) se registra
 //! em [`registrar`], e sem registro nada é mídia.
 use std::io::Read;

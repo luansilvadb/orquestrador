@@ -6,36 +6,14 @@
 2. Rust pelo [rustup](https://rustup.rs), toolchain `stable-x86_64-pc-windows-msvc`, com `clippy`.
 3. Git.
 
-## Rodar e testar
+## Testes com CLIs reais
 
-```powershell
-cargo run -p orquestrador-app                               # abre o app (orquestrador.exe), sem atualização nem instância única
-cargo test --workspace                                      # testes; os CLIs são simulados por crates/app/examples/fake_cli.rs
-cargo clippy --workspace --all-targets -- -D warnings       # lint
-cargo build --workspace --release
-```
+Ficam ignorados porque chamam o Claude Code e o Codex instalados.
 
-No build de debug, o portão não instala nem atualiza os CLIs: só localiza `claude.exe` e `codex.exe` (`ORQ_CLAUDE_EXE` e
-`ORQ_CODEX_EXE` à frente; detalhes em [atualização](atualizacao.md)). A instância única vale só no release, então o build de
-desenvolvimento coexiste com o app instalado.
-
-Testes que chamam CLIs reais ficam ignorados:
-
-- `crates/app/tests/lote.rs` fala com o servidor MCP real (`orquestrador.exe --mcp`) por JSON-RPC, com CLIs falsos.
-- `crates/app/tests/real.rs` faz o ciclo com os CLIs reais: defina `ORQ_REAL_REPO` e `ORQ_REAL=codex,claude` e rode
+- Ciclo de lote, num repositório Git descartável: defina `ORQ_REAL_REPO` e `ORQ_REAL=codex,claude` (orquestrador,executor) e rode
   `cargo test -p orquestrador-app --test real -- --ignored --nocapture`.
-- `crates/core/tests/colagem.rs` sobe o Claude Code ou o Codex reais (`ORQ_PASTE=claude` ou `codex`):
-  `cargo test -p orquestrador-core --test colagem -- --ignored --nocapture --test-threads=1`. `colar_imagem` lê a imagem do
-  clipboard.
-
-## Tarefas
-
-`cargo xtask ajuda` lista as tarefas:
-
-- `release <subcomando>`: regras do fluxo de release ([atualização e release](atualizacao.md)).
-- `limpar-target`: `cargo clean` quando `target` passa de 30 GB (`ORQUESTRADOR_TARGET_MAX_GB`).
-- `medir`: medição de desempenho ([desempenho do GPUI](desempenho-gpui.md)).
-- `despejar`: gerador de saída para as medições.
+- Colagem de imagem: ponha uma imagem no clipboard, defina `ORQ_PASTE=claude` ou `codex` e rode
+  `cargo test -p orquestrador-core --test colagem -- --ignored --nocapture --test-threads=1`.
 
 ## Empacotar
 
@@ -44,12 +22,4 @@ cargo install cargo-packager --version 0.11.8 --locked
 pwsh crates/app/empacotamento/empacotar.ps1 -Versao X.Y.Z -Chave <caminho ou conteúdo da chave privada>
 ```
 
-Saída em `target\pacote\` (ver [atualização](atualizacao.md#empacotamento)). `pwsh crates/app/empacotamento/e2e.ps1`
-testa ponta a ponta, sem tocar na instalação real, a atualização a partir do updater da 0.1.48.
-
-## CI
-
-`.github/workflows/ci.yml` roda a cada push em `main` e em pull request: no Windows, `cargo test --workspace` e o clippy em jobs
-paralelos, com o Media Foundation instalado pelo `Server-Media-Foundation`; em Ubuntu e macOS, só `cargo check -p orquestrador-core --all-targets`. O workflow de release não repete os testes: exige essa CI
-verde para o SHA da tag antes de publicar. `.github/workflows/aquecer-release.yml` compila em `main` o que a release compila,
-para o cache de compilação que a release restaura.
+`pwsh crates/app/empacotamento/e2e.ps1` testa a atualização ponta a ponta sem tocar na instalação real.

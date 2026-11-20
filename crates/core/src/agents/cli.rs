@@ -116,7 +116,7 @@ pub fn orchestrator_settings(app: &str) -> String {
 }
 
 /// O servidor MCP do orquestrador pela configuração do Codex, só para este processo: o app em modo `--mcp`, com a
-/// pasta da sessão. `approve` libera as três ferramentas: medido no Codex 0.162.1, sem ele toda chamada MCP é
+/// pasta da sessão. `approve` libera as duas ferramentas: medido no Codex 0.162.1, sem ele toda chamada MCP é
 /// negada com `approval_policy` `never`, e os outros valores não liberam; se o bypass de `codex_base` o dispensa
 /// não foi medido, então fica. O prazo cobre a espera de 14 minutos de uma chamada.
 fn codex_mcp(app: &str, dir: &str) -> Vec<String> {

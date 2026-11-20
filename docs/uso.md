@@ -2,24 +2,23 @@
 
 ## Visão geral
 
-Um app nativo para Windows (Rust e GPUI) que põe CLIs de IA para trabalhar em papéis separados sobre a pasta de um projeto, de preferência um repositório Git. Cada CLI tem uma aba no painel do Orquestrador, à direita da tela principal, com o terminal dele ao vivo. O orquestrador alinha o objetivo com o usuário, lê o projeto, delega, faz stage e commit do trabalho da sessão e consulta o usuário antes de push; os executores recebem as tarefas, cada um na sua aba, e trabalham na pasta do projeto em paralelo. As ferramentas `claude` e `codex` podem ocupar qualquer um dos dois papéis.
+Um app nativo para Windows (Rust e GPUI) que põe CLIs de IA para trabalhar em papéis separados sobre a pasta de um projeto, de preferência um repositório Git. O orquestrador alinha o objetivo com o usuário, lê o projeto, delega, faz stage e commit do trabalho da sessão e consulta o usuário antes de push; os executores recebem as tarefas e trabalham na pasta do projeto em paralelo. As ferramentas `claude` e `codex` podem ocupar qualquer um dos dois papéis.
 
 ## Como se usa
 
-1. Abra o app. Antes do uso, ele confere a versão e atualiza sozinho se houver uma nova, e depois instala ou atualiza `claude` e `codex` ([atualização](atualizacao.md)). Na primeira vez de cada CLI, o login é pedido no terminal dele. Depois, reabre os projetos da última vez, na mesma ordem e com a mesma aba ativa, se as pastas ainda existirem; sem projetos anteriores, abre sem projeto. Nenhum Orquestrador inicia sozinho. Use `+` na barra de título ou o menu Arquivo para abrir outra pasta; uma pasta já aberta foca a aba existente. Uma pasta dentro de um repositório abre a raiz dele; se for subpasta, um aviso mostra a raiz. Uma pasta fora de repositório abre sem os recursos de Git (ver [interface](interface.md)).
-
-2. No painel do Orquestrador, à direita da tela principal, sem orquestrador aberto, clique em `Abrir terminal` e escolha ferramenta, modelo e esforço do orquestrador; a última escolha já vem marcada. Sem Git na pasta, a janela avisa que o que os executores mudarem não fica registrado e não pode ser desfeito pelo Git, e diz o que fazer conforme o caso: inicializar o repositório no painel Git, instalar o Git ou abrir a raiz do repositório. O aviso não bloqueia. Há um só orquestrador, e é no terminal dele que você conversa com ele; os executores só mostram o que fazem.
+1. Ao abrir, o app confere a versão e atualiza sozinho se houver uma nova, e depois instala ou atualiza `claude` e `codex` ([atualização](atualizacao.md)); na primeira vez de cada CLI, o login é pedido no terminal dele. Enquanto isso, por trás dessa verificação, os projetos da última vez reabrem, na mesma ordem e com a mesma aba ativa, se as pastas ainda existirem. Nenhum orquestrador inicia sozinho. Uma pasta dentro de um repositório abre a raiz dele; uma pasta fora de repositório abre sem os recursos de Git (ver [interface](interface.md)).
+2. Há um só orquestrador por projeto, e é no terminal dele que você conversa; os executores só mostram o que fazem. Sem Git na pasta, o que os executores mudarem não fica registrado e não pode ser desfeito pelo Git.
 3. Converse com o orquestrador e feche o objetivo.
-4. Na primeira delegação, uma aba de executor aparece e espera a escolha de ferramenta, modelo e esforço; a aba ativa não muda. Os executores seguintes abrem sozinhos com essa escolha. O botão `Executores`, na barra da aba do orquestrador, mostra a escolha e deixa trocá-la; a troca vale para os próximos deste projeto. Cada projeto aberto tem a própria escolha; a última feita em qualquer um só vem marcada no formulário.
-5. O orquestrador delega um lote e fica ocupado até todos voltarem. Cada executor tem uma aba com a tela completa do CLI, somente leitura, ligada ao orquestrador. Acima do teto de simultâneos, os excedentes ficam na fila. O teto não é ajustado à mão: o app o calcula (ver [configuração](#configuração)), e a fila anda sozinha quando a memória livre volta.
-6. Quando um executor termina a rodada, a resposta dele volta sozinha ao orquestrador e a aba dele fecha sozinha. O botão `parar` interrompe só aquele executor; o orquestrador recebe `interrompido pelo usuário` no lugar da resposta.
-7. Fechar o app com alterações não salvas abre a confirmação: Salvar, Descartar ou Cancelar. Com terminais vivos, a confirmação também encerra todos, inclusive os shells do painel Terminal. Shells e CLIs não voltam na próxima abertura; abas, layout e alterações do editor voltam. Os rascunhos sem projeto também são recuperados.
+4. Na primeira delegação de cada sessão do orquestrador, o app pede ferramenta, modelo e esforço dos executores; a última escolha feita vem marcada. Os executores seguintes da sessão usam essa escolha, que o botão `Executores` troca para os próximos.
+5. O orquestrador delega um lote e fica ocupado até todos voltarem. Acima do teto de simultâneos, os excedentes ficam na fila. O teto não é ajustado à mão (ver [configuração](#configuração)), e a fila anda sozinha quando a memória livre volta.
+6. A resposta de cada executor volta sozinha ao orquestrador. O botão `parar` interrompe só aquele executor; o orquestrador recebe `interrompido pelo usuário` no lugar da resposta.
+7. Fechar o app com terminais vivos encerra todos, inclusive os shells do painel Terminal. Shells e CLIs não voltam na próxima abertura; abas, layout e alterações não salvas do editor voltam, inclusive os rascunhos sem projeto.
 
-No Explorer, `Abrir com Orquestrador` abre qualquer arquivo; `Abrir pasta no Orquestrador` abre a pasta selecionada ou a pasta atual. Em Propriedades > Abre com > Alterar, o app aparece para extensões de texto e código; escolha-o ali para torná-lo padrão. Se já estiver aberto, a solicitação chega à mesma janela.
+O instalador põe o app no Abrir com do Explorer para extensões de texto e código sem torná-lo padrão. Com o app aberto, um arquivo ou pasta aberto pelo Explorer chega à mesma janela.
 
 ## Configuração
 
-A última escolha de cada papel fica em `%LOCALAPPDATA%\orquestrador\config.json`. As abas abertas, a aba ativa e até 10 projetos recentes ficam em `%LOCALAPPDATA%\orquestrador\interface.json`; fechar a última aba limpa a lista aberta e mantém os recentes.
+A última escolha de cada papel fica em `%LOCALAPPDATA%\orquestrador\config.json`. As abas abertas, a aba ativa, até 10 projetos recentes, as medidas dos painéis e o histórico da pesquisa ficam em `%LOCALAPPDATA%\orquestrador\interface.json`; fechar a última aba limpa a lista aberta e mantém os recentes.
 
 ```json
 {
@@ -28,11 +27,6 @@ A última escolha de cada papel fica em `%LOCALAPPDATA%\orquestrador\config.json
 }
 ```
 
-Não há mais ajuste de simultâneos. O teto é automático e vem de duas medidas do computador, calculadas ao abrir o app (`crates/core/src/core/capacity.rs`):
+Modelo e esforço vazios deixam o CLI usar seus padrões. Um JSON ilegível ou valor inválido é um erro; não há fallback silencioso para os padrões. Uma chave `maxParallel` de versões antigas é ignorada e some do arquivo no próximo salvamento.
 
-- **CPU:** metade das CPUs lógicas, de 1 a 16. Lida uma vez, ao abrir o app.
-- **Memória física:** a RAM total, menos 2 GiB reservados ao sistema e ao app, dá um executor por GiB. A memória livre agora dá as vagas: o que sobra depois da mesma reserva de 2 GiB, um executor por GiB. O commit disponível também limita: cada executor novo pede 2 GiB, depois de 2 GiB reservados; se não puder ser lido, vale só a RAM. Executor aberto há menos de 15 s ainda não alocou, então desconta 1 GiB da RAM livre e 2 GiB do commit. O teto de cada passe é o menor entre o da CPU, o da RAM total e os executores já vivos mais as vagas da RAM livre e do commit. Se nada está vivo, um executor pode começar mesmo sem vaga, para a fila não parar.
-
-Isso é um orçamento aproximado, não uma medida do peso de cada tarefa. Executor que já roda nunca é parado nem reiniciado por falta de memória: o teto só deixa de abrir novos. A fila é reavaliada a cada 200 ms, enquanto houver nó esperando. Se CPU ou memória não puderem ser lidas, o teto cai para 2, e o app abre do mesmo jeito. Uma chave `maxParallel` de versões antigas é ignorada e some do arquivo no próximo salvamento.
-
-Modelo e esforço vazios deixam o CLI usar seus padrões. Esforços aceitos: Claude `low`, `medium`, `high`, `xhigh`, `max`; Codex os mesmos e `ultra`. O nome do modelo deve corresponder a `^[A-Za-z0-9][A-Za-z0-9._:/@+\[\]-]*$`. Um JSON ilegível ou valor inválido é um erro; não há fallback silencioso para os padrões.
+O teto de simultâneos é automático (`crates/core/src/core/capacity.rs`): a CPU é lida uma vez, ao abrir o app, e a RAM e o commit a cada passe da fila, na mesma leitura. É um orçamento aproximado, não uma medida do peso de cada tarefa. Executor que já roda nunca é parado nem reiniciado por falta de memória: o teto só deixa de abrir novos. Se nada está vivo, um executor começa mesmo sem vaga, para a fila não parar. Se a memória não puder ser lida, o teto é o menor entre 2 e o da CPU, e o app abre do mesmo jeito.

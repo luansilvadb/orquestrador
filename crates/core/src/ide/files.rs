@@ -197,8 +197,8 @@ fn read_media_path(file: &Path, label: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-// Vídeo e áudio não passam pela IPC: o protocolo `orq-media` serve pedaços (HTTP Range) lidos do disco sob demanda,
-// porque costumam passar de `MAX_MEDIA`.
+// Vídeo e áudio não passam pela IPC, porque costumam passar de `MAX_MEDIA`: o player os lê do disco pelo Media Foundation,
+// e `serve_stream` serve pedaços (HTTP Range) lidos sob demanda.
 /// Maior pedaço de vídeo ou áudio numa resposta: intervalo aberto ou maior é cortado aqui, e o arquivo nunca vai inteiro para a memória.
 pub(crate) const MAX_STREAM_CHUNK: u64 = 4 * 1_048_576;
 

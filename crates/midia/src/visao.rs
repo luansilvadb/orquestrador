@@ -456,7 +456,7 @@ impl VisaoMidia {
                 Corpo::Imagem(Imagem { fonte: FonteImagem::Lendo, real: false, _carga: carga })
             }
             Some(t) => {
-                // As mesmas regras do protocolo `orq-media` (caminho absoluto, extensão de áudio ou vídeo).
+                // As regras de `stream_path_at` (caminho absoluto, extensão de áudio ou vídeo); o Media Foundation lê do disco.
                 let player = match orquestrador_core::ide::files::stream_path_at(&caminho) {
                     Ok(c) => Player::abrir(&c),
                     Err((_, e)) => Player::com_erro(e),
