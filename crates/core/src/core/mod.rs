@@ -9,7 +9,7 @@ use crate::agents::cli::{self, Exes};
 use crate::agents::delegate;
 use crate::agents::session::{self, Places, Session};
 use crate::config::{self, Choice, Options};
-use crate::core::capacity::{Global, Resources};
+use crate::core::capacity::{Global, Grant, Resources};
 use crate::core::pty::{write_to, Buffer, Shared, Term, WeakWriter};
 use crate::ide::files;
 use crate::ide::git;
@@ -408,7 +408,7 @@ impl Core {
         let started = created.and_then(|_| {
             let spawn = cli::orchestrator(&inner.exes, &choice, &project, &session);
             inner.slots.remove(ORCHESTRATOR);
-            self.spawn(&mut inner, ORCHESTRATOR, &spawn, Some((cols, rows)))
+            self.spawn(&mut inner, ORCHESTRATOR, &spawn, Some((cols, rows)), None)
         });
         if let Err(e) = started {
             session::remove_dir(&session.dir);
@@ -446,7 +446,7 @@ impl Core {
         inner.slots.remove(id);
         let mut started = Err("Ainda não suportado neste sistema.".to_string());
         for program in crate::platform::SHELLS {
-            started = self.spawn(&mut inner, id, &cli::shell(program, &dir), Some((cols, rows))).map(|_| program);
+            started = self.spawn(&mut inner, id, &cli::shell(program, &dir), Some((cols, rows)), None).map(|_| program);
             if started.is_ok() {
                 break;
             }
@@ -591,12 +591,9 @@ impl Core {
 
     fn teardown(&self, inner: &mut Inner) {
         inner.epoch += 1;
-        self.capacity.cancel_owner(&self.owner);
-        for _ in 0..inner.nodes.iter().filter(|n| n.info.state == NodeState::Running).count() {
-            self.capacity.release();
-        }
         // Os shells não pertencem à sessão: saem daqui e só `shutdown` os mata.
         inner.slots.retain(|id, _| is_shell(id));
+        self.capacity.cancel_owner(&self.owner);
         inner.nodes.clear();
         inner.batches.clear();
         inner.seen.clear();
@@ -606,7 +603,9 @@ impl Core {
         }
     }
 
-    fn spawn(&self, inner: &mut Inner, id: &str, spawn: &cli::Spawn, size: Option<(u16, u16)>) -> Result<(), String> {
+    fn spawn(
+        &self, inner: &mut Inner, id: &str, spawn: &cli::Spawn, size: Option<(u16, u16)>, grant: Option<Grant>,
+    ) -> Result<(), String> {
         inner.counter += 1;
         let gen = inner.counter;
         let slot = inner.slots.entry(id.to_string()).or_insert_with(|| Slot::new(gen));
@@ -617,14 +616,21 @@ impl Core {
         let (out, data_id) = (self.term_out.clone(), id.to_string());
         let (core, exit_id) = (self.clone(), id.to_string());
         let gap = if is_interactive(id) { pty::INTERACTIVE_GAP } else { pty::READ_ONLY_GAP };
+        let start_marker = grant.as_ref().map(Grant::start_marker);
         let term = Term::spawn(
             spawn,
             slot.size,
             gap,
             slot.buffer.clone(),
             move |seq, bytes| out(&data_id, seq, bytes),
-            move |code| core.on_exit(&exit_id, gen, code),
+            move |code| {
+                core.on_exit(&exit_id, gen, code);
+                drop(grant);
+            },
         )?;
+        if let Some(start_marker) = start_marker {
+            start_marker.started();
+        }
         {
             // Quem saiu já não tem `Weak` vivo: sai da tabela aqui, no próximo início.
             let mut writers = self.writers.lock().unwrap_or_else(|e| e.into_inner());
@@ -763,7 +769,7 @@ impl Core {
                     if is_new || before != NodeState::Queued {
                         self.announce(&inner.nodes[i].info, is_new);
                     }
-                    self.request_start(&id);
+                    self.request_start(&id, &inner.nodes[i].info.batch);
                     continue;
                 }
             if is_new || inner.nodes[i].info.state != before {
@@ -772,40 +778,33 @@ impl Core {
         }
     }
 
-    fn request_start(&self, id: &str) {
+    fn request_start(&self, id: &str, batch: &str) {
         let inner = Arc::downgrade(&self.inner);
         let (emit, term_out, writers) = (self.emit.clone(), self.term_out.clone(), self.writers.clone());
         let owner = self.owner.clone();
         let capacity = Arc::downgrade(&self.capacity);
         let config_lock = self.config_lock.clone();
         let job = id.to_string();
-        self.capacity.request(&self.owner, id, move || {
-            let Some(inner) = inner.upgrade() else {
-                if let Some(capacity) = capacity.upgrade() { capacity.release(); }
-                return;
-            };
-            let Some(capacity) = capacity.upgrade() else { return };
-            let core = Core { inner, emit, term_out, writers, capacity: capacity.clone(), config_lock, owner };
-            if !matches!(core.start_granted(&job), Ok(true)) {
-                capacity.release();
-            }
+        self.capacity.request(&self.owner, batch, id, move |grant| {
+            let (Some(inner), Some(capacity)) = (inner.upgrade(), capacity.upgrade()) else { return };
+            let core = Core { inner, emit, term_out, writers, capacity, config_lock, owner };
+            core.start_granted(&job, grant);
         });
     }
 
-    fn start_granted(&self, id: &str) -> Result<bool, String> {
-        let mut inner = self.lock()?;
+    fn start_granted(&self, id: &str, grant: Grant) {
+        let Ok(mut inner) = self.lock() else { return };
         let Some(i) = inner.nodes.iter()
-            .position(|n| n.info.id == id && n.info.state == NodeState::Queued) else { return Ok(false) };
-        let Some(choice) = inner.choice.clone() else { return Ok(false) };
+            .position(|n| n.info.id == id && n.info.state == NodeState::Queued) else { return };
+        let Some(choice) = inner.choice.clone() else { return };
         inner.nodes[i].info.state = NodeState::Running;
         inner.nodes[i].info.choice = Some(choice.clone());
         self.announce(&inner.nodes[i].info, false);
-        if let Err(why) = self.start(&mut inner, i, &choice) {
+        if let Err(why) = self.start(&mut inner, i, &choice, grant) {
             self.finish_quiet(
                 &mut inner, i, NodeState::Failed, Outcome { text: why, exit: "não iniciou".into(), ok: false },
             );
         }
-        Ok(true)
     }
 
     fn announce(&self, node: &ExecutorNode, is_new: bool) {
@@ -816,7 +815,7 @@ impl Core {
         }
     }
 
-    fn start(&self, inner: &mut Inner, i: usize, choice: &Choice) -> Result<(), String> {
+    fn start(&self, inner: &mut Inner, i: usize, choice: &Choice, grant: Grant) -> Result<(), String> {
         let (id, dir, mut prompt) = (inner.nodes[i].info.id.clone(), inner.nodes[i].dir.clone(), inner.nodes[i].prompt.clone());
         let project = inner.project.clone().unwrap_or_default();
         let io = |e: std::io::Error| format!("Não foi possível preparar o executor em {}: {e}", dir.display());
@@ -831,7 +830,7 @@ impl Core {
         if let Some(settings) = settings {
             std::fs::write(dir.join("settings.json"), settings).map_err(io)?;
         }
-        self.spawn(inner, &id, &spawn, None)
+        self.spawn(inner, &id, &spawn, None, Some(grant))
     }
 
     fn finish(&self, inner: &mut Inner, i: usize, state: NodeState, outcome: Outcome) {
@@ -840,17 +839,15 @@ impl Core {
     }
 
     /// Estado final de um nó: avisa o frontend, tira o slot (o processo morre com ele e a tela some), guarda
-    /// o resultado no lote e, se era o último, entrega o lote. Não mexe na fila (quem chama decide), nem tira o
-    /// nó de `inner.nodes`: quem percorre os nós por índice é o laço do `pump`, que faz essa limpeza depois.
+    /// o resultado no lote e, se era o último, entrega o lote. Cancela a solicitação de vaga pendente.
+    /// O laço do `pump` remove o nó de `inner.nodes` depois.
     fn finish_quiet(&self, inner: &mut Inner, i: usize, state: NodeState, outcome: Outcome) {
-        let was_running = inner.nodes[i].info.state == NodeState::Running;
         let node = &mut inner.nodes[i].info;
         node.state = state;
         let (id, batch, index) = (node.id.clone(), node.batch.clone(), node.index);
         self.announce(&inner.nodes[i].info, false);
         inner.slots.remove(&id);
         self.capacity.cancel(&self.owner, &id);
-        if was_running { self.capacity.release(); }
         if let Some(b) = inner.batches.iter_mut().find(|b| b.id == batch) {
             b.outcomes[index] = Some(outcome);
         }

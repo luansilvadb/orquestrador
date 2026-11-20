@@ -101,7 +101,8 @@ fn tools() -> Value {
                         "type": "array",
                         "items": { "type": "string" },
                         "minItems": 1,
-                        "description": "Uma tarefa por item, com o texto completo dela. Os executores do lote trabalham ao mesmo tempo.",
+                        "maxItems": delegate::MAX_TASKS_PER_BATCH,
+                        "description": "Uma tarefa por item, com o texto completo dela. O lote reúne tarefas independentes para execução paralela conforme as vagas da fila.",
                     },
                 },
                 "required": ["tarefas"],
@@ -217,6 +218,7 @@ mod tests {
         assert!(tools.iter().all(|t| t["description"].is_string() && t["inputSchema"]["type"] == "object"));
         assert_eq!(tools[0]["inputSchema"]["required"], json!(["tarefas"]));
         assert_eq!(tools[0]["inputSchema"]["properties"]["tarefas"]["minItems"], 1);
+        assert_eq!(tools[0]["inputSchema"]["properties"]["tarefas"]["maxItems"], 1_000);
     }
 
     #[test]
@@ -258,6 +260,22 @@ mod tests {
         assert!(is_error && text.contains("Tarefa vazia"), "{text}");
         assert!(text_of(by_id(9)).1, "sem `tarefas` é erro");
         assert_eq!(std::fs::read_dir(s.join("requests")).unwrap().count(), 0, "nenhum lote publicado");
+    }
+
+    #[test]
+    fn delegar_aceita_o_teto_e_recusa_lote_maior() {
+        let s = &session("orq-mcp", "teto", true).0;
+        let mut tasks: Vec<_> = (1..=delegate::MAX_TASKS_PER_BATCH).map(|n| format!("Tarefa {n}")).collect();
+        let got = talk(&call(30, "delegar", json!({ "tarefas": tasks })), s);
+        assert_eq!(text_of(&got[0]), (RUNNING.into(), false));
+        let requests = s.join("requests");
+        let batch = std::fs::read_dir(&requests).unwrap().next().unwrap().unwrap().path();
+        assert_eq!(delegate::read_manifest(&batch).unwrap(), tasks);
+
+        tasks.push("Tarefa extra".into());
+        let got = talk(&call(31, "delegar", json!({ "tarefas": tasks })), s);
+        assert_eq!(text_of(&got[0]), ("O lote tem 1001 tarefas. O máximo por lote é 1000.".into(), true));
+        assert_eq!(std::fs::read_dir(requests).unwrap().count(), 1);
     }
 
     #[test]

@@ -63,6 +63,8 @@ impl Term {
     ) -> Result<Term, String> {
         let fail = |e: String| format!("Não foi possível iniciar `{}`: {e}", cmd.program);
         let pair = native_pty_system().openpty(size(cols, rows)).map_err(|e| fail(e.to_string()))?;
+        let mut reader = pair.master.try_clone_reader().map_err(|e| fail(e.to_string()))?;
+        let mut writer = pair.master.take_writer().map_err(|e| fail(e.to_string()))?;
         let mut builder = CommandBuilder::new(&cmd.program);
         builder.args(&cmd.args);
         builder.cwd(&cmd.cwd);
@@ -73,8 +75,6 @@ impl Term {
         drop(pair.slave);
         let job = child.process_id().and_then(Job::adopt);
         let killer = child.clone_killer();
-        let mut reader = pair.master.try_clone_reader().map_err(|e| fail(e.to_string()))?;
-        let mut writer = pair.master.take_writer().map_err(|e| fail(e.to_string()))?;
         // Medido: o ConPTY abre pedindo a posição do cursor (ESC[6n) e o CLI não desenha nada
         // enquanto ninguém responde. Quem responde é o app, porque o teclado do frontend não
         // chega aos executores e o bloco pode nem estar montado; o pedido é tirado da saída para

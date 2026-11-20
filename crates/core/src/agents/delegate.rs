@@ -35,10 +35,19 @@ pub fn check_session(session: &Path) -> Result<(), String> {
 /// O manifesto de um lote: as tarefas, na ordem, num arquivo só. O app lê este arquivo de uma vez, então um lote
 /// não pode ser aceito pela metade.
 pub const MANIFEST: &str = "tarefas.json";
+pub(super) const MAX_TASKS_PER_BATCH: usize = 1_000;
+
+fn check_batch_size(count: usize) -> Result<(), String> {
+    if count > MAX_TASKS_PER_BATCH {
+        return Err(format!("O lote tem {count} tarefas. O máximo por lote é {MAX_TASKS_PER_BATCH}."));
+    }
+    Ok(())
+}
 
 /// Publica as tarefas como um lote novo, na ordem em que vieram, exatamente como vieram. O manifesto é o único
 /// arquivo do lote e vai junto com a pasta, publicada por renomeação.
 pub fn publish(session: &Path, tasks: &[String]) -> Result<String, String> {
+    check_batch_size(tasks.len())?;
     if tasks.is_empty() {
         return Err("Nenhuma tarefa: `tarefas` precisa ter pelo menos um texto.".into());
     }
@@ -56,13 +65,13 @@ pub fn publish(session: &Path, tasks: &[String]) -> Result<String, String> {
     Ok(id)
 }
 
-/// Lê o manifesto de um lote publicado. Devolve a razão quando o arquivo não abre, não é uma lista de textos ou tem
-/// tarefa vazia: quem chama recusa o lote inteiro, porque nenhuma tarefa roda sem o lote completo.
+/// Lê e valida o manifesto de um lote publicado. Quem chama recusa o lote inteiro se houver erro.
 pub fn read_manifest(batch: &Path) -> Result<Vec<String>, String> {
     let file = batch.join(MANIFEST);
     let bytes = std::fs::read(&file).map_err(|e| format!("não foi possível abrir {}: {e}", file.display()))?;
     let tasks: Vec<String> =
         serde_json::from_slice(&bytes).map_err(|e| format!("o manifesto não é uma lista de textos: {e}"))?;
+    check_batch_size(tasks.len())?;
     if tasks.is_empty() {
         return Err("o lote chegou sem tarefas".into());
     }
@@ -111,7 +120,7 @@ pub fn wait(session: &Path, id: &str, window: Duration) -> Result<Waited, String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::session;
+    use crate::testutil::{session, write};
 
     #[test]
     fn lote_sai_inteiro_e_renomeado_com_o_texto_exato() {
@@ -126,6 +135,19 @@ mod tests {
         assert_eq!(names, [MANIFEST], "o manifesto é o único arquivo do lote");
         let names: Vec<String> = std::fs::read_dir(dir.join("requests")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(names, [id]);
+    }
+
+    #[test]
+    fn manifesto_gravado_diretamente_respeita_o_teto() {
+        let dir = &session("orq-delegar", "teto", true).0;
+        let batch = dir.join("requests").join("direto");
+        let mut tasks: Vec<_> = (1..=MAX_TASKS_PER_BATCH).map(|n| format!("Tarefa {n}")).collect();
+        write(&batch, MANIFEST, serde_json::to_vec(&tasks).unwrap());
+        assert_eq!(read_manifest(&batch).unwrap(), tasks);
+
+        tasks.push("Tarefa extra".into());
+        write(&batch, MANIFEST, serde_json::to_vec(&tasks).unwrap());
+        assert_eq!(read_manifest(&batch).unwrap_err(), "O lote tem 1001 tarefas. O máximo por lote é 1000.");
     }
 
     #[test]
