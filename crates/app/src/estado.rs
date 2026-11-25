@@ -46,3 +46,15 @@ impl Secao for Paineis {
         limpa(&mut self.altura_terminal, tema::TERMINAL_MIN);
     }
 }
+
+/// Os textos dos avisos de PATH que o usuário já dispensou no portão com "Continuar"; o mesmo texto não volta.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AvisosDispensados {
+    pub path: Vec<String>,
+}
+
+impl Secao for AvisosDispensados {
+    const NOME: &'static str = "avisosDispensados";
+    const VERSAO: u32 = 1;
+}

@@ -9,7 +9,8 @@ use gpui_kit::{
     Pixels, Window,
 };
 use crate::atualizacao::Fase;
-use orquestrador_core::clis::{Andamento, Passo};
+use crate::estado::AvisosDispensados;
+use orquestrador_core::clis::{Andamento, Aviso, Passo};
 use std::time::Instant;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -19,7 +20,7 @@ pub enum Portao {
     Pronto,
     Falhou(String),
     /// Os CLIs estão prontos, mas algo não bloqueante falhou; o uso espera o "Continuar".
-    Aviso(String),
+    Aviso(Vec<Aviso>),
 }
 
 impl Portao {
@@ -84,7 +85,8 @@ pub fn progresso(p: &Portao) -> Option<f32> {
 }
 
 /// A rodada numa thread: atualização e depois CLIs; o andamento chega por `avisar`, e o fim traz os caminhos ou o erro.
-pub fn garantir(avisar: async_channel::Sender<Portao>, exes: orquestrador_core::agents::cli::Exes) {
+/// `dispensados` são os avisos de PATH já dispensados, que não voltam.
+pub fn garantir(avisar: async_channel::Sender<Portao>, exes: orquestrador_core::agents::cli::Exes, dispensados: AvisosDispensados) {
     std::thread::spawn(move || {
         let progresso = avisar.clone();
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -98,7 +100,7 @@ pub fn garantir(avisar: async_channel::Sender<Portao>, exes: orquestrador_core::
         let fim = match r {
             Ok(Ok(g)) => {
                 exes.set(g.caminhos);
-                fim_com_avisos(g.avisos)
+                fim_com_avisos(g.avisos, &dispensados)
             }
             Ok(Err(msg)) => Portao::Falhou(msg),
             Err(_) => Portao::Falhou("A verificação dos CLIs parou inesperadamente.".into()),
@@ -107,13 +109,27 @@ pub fn garantir(avisar: async_channel::Sender<Portao>, exes: orquestrador_core::
     });
 }
 
-/// O estado depois do sucesso: sem avisos, liberado; com avisos, a tela os mostra até o "Continuar".
-pub fn fim_com_avisos(avisos: Vec<String>) -> Portao {
+/// O estado depois do sucesso: tira os avisos de PATH de texto já dispensado (os de `update` ficam sempre); sem avisos
+/// restantes, liberado; com avisos, a tela os mostra até o "Continuar".
+pub fn fim_com_avisos(mut avisos: Vec<Aviso>, dispensados: &AvisosDispensados) -> Portao {
+    avisos.retain(|a| !matches!(a, Aviso::Path(t) if dispensados.path.contains(t)));
     if avisos.is_empty() {
         Portao::Pronto
     } else {
-        Portao::Aviso(avisos.join("\n\n"))
+        Portao::Aviso(avisos)
     }
+}
+
+/// Os dispensados depois do "Continuar": os de antes mais os textos de PATH mostrados.
+pub fn dispensar(mut dispensados: AvisosDispensados, mostrados: &[Aviso]) -> AvisosDispensados {
+    for a in mostrados {
+        if let Aviso::Path(t) = a {
+            if !dispensados.path.contains(t) {
+                dispensados.path.push(t.clone());
+            }
+        }
+    }
+    dispensados
 }
 
 /// A tela do portão sobre tudo, menos os controles da janela; `tentar` refaz a rodada depois de uma falha e
@@ -132,7 +148,7 @@ pub fn tela(
         _ => None,
     };
     let aviso = match p {
-        Portao::Aviso(m) => Some(m.clone()),
+        Portao::Aviso(avisos) => Some(avisos.iter().map(Aviso::texto).collect::<Vec<_>>().join("\n\n")),
         _ => None,
     };
     let parada = falha.is_some();
@@ -371,7 +387,7 @@ impl Abertura {
 
     fn rodar(&mut self, cx: &mut gpui_kit::Context<Self>) {
         let (tx, rx) = async_channel::unbounded();
-        garantir(tx, self.exes.clone());
+        garantir(tx, self.exes.clone(), orquestrador_ui::estado::ler::<AvisosDispensados>(cx));
         self._tarefa = Some(cx.spawn(async move |this: gpui_kit::WeakEntity<Self>, cx| {
             while let Ok(estado) = rx.recv().await {
                 if this.update(cx, |a, cx| {
@@ -395,9 +411,11 @@ impl Abertura {
         }
     }
 
-    /// "Continuar": só depois de um aviso; libera o uso.
+    /// "Continuar": só depois de um aviso; guarda os avisos de PATH mostrados e libera o uso.
     pub fn continuar(&mut self, cx: &mut gpui_kit::Context<Self>) {
-        if matches!(self.estado, Portao::Aviso(_)) {
+        if let Portao::Aviso(mostrados) = &self.estado {
+            let antes = orquestrador_ui::estado::ler::<AvisosDispensados>(cx);
+            orquestrador_ui::estado::gravar(&dispensar(antes, mostrados), cx);
             self.estado = Portao::Pronto;
             cx.notify();
         }
@@ -462,11 +480,40 @@ mod testes {
 
     #[test]
     fn aviso_mostra_o_texto_e_so_sem_avisos_libera() {
-        assert_eq!(fim_com_avisos(vec![]), Portao::Pronto);
-        let p = fim_com_avisos(vec!["a".into(), "b".into()]);
-        assert_eq!(p, Portao::Aviso("a\n\nb".into()));
+        let nada = AvisosDispensados::default();
+        assert_eq!(fim_com_avisos(vec![], &nada), Portao::Pronto);
+        let avisos = vec![Aviso::Path("a".into()), Aviso::Update("b".into())];
+        let p = fim_com_avisos(avisos.clone(), &nada);
+        assert_eq!(p, Portao::Aviso(avisos));
         assert_eq!(textos(&p), ("Os CLIs estão prontos, com um aviso.".to_string(), vec![]));
         assert_eq!(progresso(&p), None, "sem barra");
+    }
+
+    fn dispensados(textos: &[&str]) -> AvisosDispensados {
+        AvisosDispensados { path: textos.iter().map(|t| t.to_string()).collect() }
+    }
+
+    #[test]
+    fn aviso_de_path_ja_dispensado_some_e_sem_restantes_libera() {
+        assert_eq!(fim_com_avisos(vec![Aviso::Path("negado".into())], &dispensados(&["negado"])), Portao::Pronto);
+    }
+
+    #[test]
+    fn aviso_de_path_com_motivo_novo_aparece() {
+        let novo = vec![Aviso::Path("outro motivo".into())];
+        assert_eq!(fim_com_avisos(novo.clone(), &dispensados(&["negado"])), Portao::Aviso(novo));
+    }
+
+    #[test]
+    fn aviso_de_update_nunca_e_filtrado() {
+        let p = fim_com_avisos(vec![Aviso::Path("x".into()), Aviso::Update("x".into())], &dispensados(&["x"]));
+        assert_eq!(p, Portao::Aviso(vec![Aviso::Update("x".into())]));
+    }
+
+    #[test]
+    fn continuar_guarda_os_textos_de_path() {
+        let mostrados = [Aviso::Path("b".into()), Aviso::Update("u".into()), Aviso::Path("a".into())];
+        assert_eq!(dispensar(dispensados(&["a"]), &mostrados), dispensados(&["a", "b"]));
     }
 
     #[test]

@@ -2,8 +2,9 @@
 //! instalador oficial), conferido com `--version`, instalado pelo script oficial se faltar ou não responder, e
 //! atualizado com `update`. Lida a versão, e antes do `update`, se a pasta do exe não está no PATH (o instalador do
 //! Claude avisa e não põe), ela vai para o PATH do usuário; como o app usa o caminho absoluto e o PATH só serve ao
-//! terminal, a falha ao gravar vira aviso, não bloqueio. Os dois correm em paralelo; qualquer outra falha mantém o uso
-//! bloqueado. A máquina (PATH,
+//! terminal, a falha ao gravar vira aviso, não bloqueio. Com a versão lida, a falha do `update` também vira aviso: a
+//! versão instalada segue em uso e a próxima abertura tenta de novo. Os dois correm em paralelo; CLI ausente com
+//! instalação falha e `--version` que falha mesmo depois de reinstalar mantêm o uso bloqueado. A máquina (PATH,
 //! arquivos e comandos) entra por `Maquina`, para os testes não tocarem na rede nem na instalação.
 use crate::platform;
 use serde::Serialize;
@@ -148,11 +149,28 @@ pub struct Caminhos {
     pub codex: String,
 }
 
+/// Um aviso que não bloqueia o uso, com a origem.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Aviso {
+    /// A pasta do CLI não pôde ir para o PATH do usuário.
+    Path(String),
+    /// O `update` falhou; a versão instalada segue em uso.
+    Update(String),
+}
+
+impl Aviso {
+    pub fn texto(&self) -> &str {
+        match self {
+            Aviso::Path(t) | Aviso::Update(t) => t,
+        }
+    }
+}
+
 /// O resultado da abertura: os caminhos e os avisos que não bloqueiam o uso.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Garantidos {
     pub caminhos: Caminhos,
-    pub avisos: Vec<String>,
+    pub avisos: Vec<Aviso>,
 }
 
 /// `claude.exe`/`codex.exe` na primeira pasta do PATH que o tiver, senão no local do instalador oficial.
@@ -247,8 +265,8 @@ fn instalar(m: &dyn Maquina, cli: Cli) -> Result<PathBuf, String> {
 }
 
 /// Garante um CLI: localiza (ou instala), confere a versão (reinstala uma vez se ela falhar), põe no PATH e atualiza.
-/// Devolve o exe e, se o PATH não pôde ser gravado, o aviso.
-fn garantir(m: &dyn Maquina, cli: Cli, avisar: &dyn Fn(Andamento)) -> Result<(PathBuf, Option<String>), String> {
+/// Devolve o exe e os avisos (PATH, depois `update`).
+fn garantir(m: &dyn Maquina, cli: Cli, avisar: &dyn Fn(Andamento)) -> Result<(PathBuf, Vec<Aviso>), String> {
     let passo = |step, version: Option<&String>| avisar(Andamento { step, version: version.cloned() });
     passo(Passo::Checking, None);
     let (mut exe, mut instalado) = (localizar(m, cli), false);
@@ -271,15 +289,22 @@ fn garantir(m: &dyn Maquina, cli: Cli, avisar: &dyn Fn(Andamento)) -> Result<(Pa
             })?
         }
     };
-    let aviso = garantir_no_path(m, cli, &exe).err();
+    let mut avisos: Vec<Aviso> = garantir_no_path(m, cli, &exe).err().map(Aviso::Path).into_iter().collect();
     passo(Passo::Updating, Some(&lida));
-    com_sucesso(m, &exe, &["update"], &[], PRAZO_UPDATE).map_err(|motivo| format!("{}: `update` falhou: {motivo}.", cli.nome()))?;
+    if let Err(motivo) = com_sucesso(m, &exe, &["update"], &[], PRAZO_UPDATE) {
+        avisos.push(Aviso::Update(format!(
+            "{}: `update` falhou: {motivo}. A versão instalada {lida} segue em uso; o app tenta atualizar de novo na \
+             próxima abertura.",
+            cli.nome()
+        )));
+    }
     passo(Passo::Ready, Some(&lida));
-    Ok((exe, aviso))
+    Ok((exe, avisos))
 }
 
 /// Os dois CLIs em paralelo. `avisar` recebe o andamento dos dois (Claude, Codex) a cada mudança de passo. Se os
-/// dois falharem, a mensagem traz os dois motivos. No sucesso, os avisos vêm na ordem Claude, Codex.
+/// dois falharem, a mensagem traz os dois motivos. No sucesso, os avisos vêm na ordem Claude, Codex, e em cada
+/// um PATH e depois `update`.
 pub fn garantir_todos(m: &dyn Maquina, avisar: impl Fn(Andamento, Andamento) + Sync) -> Result<Garantidos, String> {
     let estado = Mutex::new([Andamento::INICIO, Andamento::INICIO]);
     let um = |i: usize, cli: Cli| {
@@ -509,26 +534,65 @@ mod tests {
         assert!(!m.rodou().iter().any(|c| c.ends_with("codex.exe update")));
     }
 
-    #[test]
-    fn update_com_codigo_diferente_de_zero_falha() {
-        let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
-        m.responde(&format!("{PADRAO_CLAUDE} update"), &[Resposta::Codigo(1, "Failed to check for updates")]);
-        assert_eq!(rodar(&m).0.unwrap_err(), "Claude Code: `update` falhou: saiu com código 1: Failed to check for updates.");
+    fn aviso_de_update(cli: &str, motivo: &str, versao: &str) -> Aviso {
+        Aviso::Update(format!(
+            "{cli}: `update` falhou: {motivo}. A versão instalada {versao} segue em uso; o app tenta atualizar de novo na \
+             próxima abertura."
+        ))
+    }
+
+    /// Roda, confere que os dois terminaram em `Ready` com a versão e devolve os avisos.
+    fn avisos_com_ready(m: &Falsa) -> Vec<Aviso> {
+        let (r, andamento) = rodar_com_avisos(m);
+        let fim = andamento.last().unwrap();
+        assert_eq!(fim.0, Andamento { step: Passo::Ready, version: Some("2.1.325".into()) });
+        assert_eq!(fim.1, Andamento { step: Passo::Ready, version: Some("0.169.0".into()) });
+        r.unwrap().avisos
     }
 
     #[test]
-    fn update_que_estoura_o_prazo_falha() {
+    fn update_com_codigo_diferente_de_zero_vira_aviso() {
+        let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
+        m.responde(&format!("{PADRAO_CLAUDE} update"), &[Resposta::Codigo(1, "Failed to check for updates")]);
+        assert_eq!(avisos_com_ready(&m), [aviso_de_update("Claude Code", "saiu com código 1: Failed to check for updates", "2.1.325")]);
+    }
+
+    #[test]
+    fn update_que_estoura_o_prazo_vira_aviso() {
         let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
         m.responde(&format!("{PADRAO_CODEX} update"), &[Resposta::Estoura]);
-        assert_eq!(rodar(&m).0.unwrap_err(), "Codex: `update` falhou: não terminou em 15 min: baixando....");
+        assert_eq!(avisos_com_ready(&m), [aviso_de_update("Codex", "não terminou em 15 min: baixando...", "0.169.0")]);
+    }
+
+    #[test]
+    fn update_que_nao_inicia_vira_aviso() {
+        let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
+        m.responde(&format!("{PADRAO_CODEX} update"), &[Resposta::NaoInicia]);
+        assert_eq!(avisos_com_ready(&m), [aviso_de_update("Codex", "não iniciou (arquivo não encontrado)", "0.169.0")]);
+    }
+
+    #[test]
+    fn os_dois_com_aviso_em_ordem() {
+        let m = Falsa { falha_no_path: Some("Acesso negado"), ..Falsa::nova() }.com(PADRAO_CLAUDE).com(PADRAO_CODEX);
+        m.responde(&format!("{PADRAO_CLAUDE} update"), &[Resposta::Codigo(2, "")]);
+        m.responde(&format!("{PADRAO_CODEX} update"), &[Resposta::Codigo(4, "")]);
+        let avisos = avisos_com_ready(&m);
+        let origem: Vec<(bool, &str)> =
+            avisos.iter().map(|a| (matches!(a, Aviso::Path(_)), a.texto().split(':').next().unwrap())).collect();
+        assert_eq!(origem, [(true, "Claude Code"), (false, "Claude Code"), (true, "Codex"), (false, "Codex")]);
+        assert_eq!(avisos[1], aviso_de_update("Claude Code", "saiu com código 2", "2.1.325"));
+        assert_eq!(avisos[3], aviso_de_update("Codex", "saiu com código 4", "0.169.0"));
     }
 
     #[test]
     fn os_dois_falham_e_a_mensagem_traz_os_dois() {
-        let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
-        m.responde(&format!("{PADRAO_CLAUDE} update"), &[Resposta::Codigo(2, "")]);
-        m.responde(&format!("{PADRAO_CODEX} update"), &[Resposta::Codigo(4, "")]);
-        assert_eq!(rodar(&m).0.unwrap_err(), "Claude Code: `update` falhou: saiu com código 2. Codex: `update` falhou: saiu com código 4.");
+        let m = Falsa::nova();
+        m.responde(&format!("{PS} {}", Cli::Claude.script()), &[Resposta::Codigo(2, "")]);
+        m.responde(&format!("{PS} {}", Cli::Codex.script()), &[Resposta::Codigo(4, "")]);
+        assert_eq!(
+            rodar(&m).0.unwrap_err(),
+            "Claude Code: a instalação falhou: saiu com código 2. Codex: a instalação falhou: saiu com código 4."
+        );
     }
 
     #[test]
@@ -622,11 +686,11 @@ mod tests {
         assert_eq!(g.caminhos, Caminhos { claude: PADRAO_CLAUDE.into(), codex: PADRAO_CODEX.into() });
         assert_eq!(
             g.avisos,
-            [format!(
+            [Aviso::Path(format!(
                 "Claude Code: não foi possível pôr {PASTA_CLAUDE} no PATH do usuário: Acesso negado. O app funciona \
                  normalmente; só o comando no terminal fica sem o atalho. Para resolver à mão, acrescente essa pasta ao \
                  Path do usuário em Variáveis de ambiente e reabra o terminal."
-            )]
+            ))]
         );
         assert!(m.rodou().contains(&format!("{PADRAO_CLAUDE} update")), "o update roda mesmo assim");
         assert_eq!(andamento.last().unwrap().0.step, Passo::Ready);
@@ -636,7 +700,7 @@ mod tests {
     fn update_que_falha_ja_deixou_a_pasta_gravada() {
         let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
         m.responde(&format!("{PADRAO_CLAUDE} update"), &[Resposta::Codigo(1, "")]);
-        rodar(&m).0.unwrap_err();
+        assert_eq!(rodar_com_avisos(&m).0.unwrap().avisos.len(), 1);
         assert!(m.postas().contains(&PathBuf::from(PASTA_CLAUDE)));
     }
 
