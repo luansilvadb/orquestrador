@@ -4,7 +4,7 @@ members = ["crates/core", "crates/ui", "crates/app", "crates/editor", "crates/pe
 
 # Versão única do app: `agents/mcp.rs` anuncia a do pacote core.
 [workspace.package]
-version = "0.2.7"
+version = "0.2.8"
 edition = "2021"
 
 [profile.dev]
