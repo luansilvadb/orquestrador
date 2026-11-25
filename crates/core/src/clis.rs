@@ -1,11 +1,7 @@
-//! Os dois CLIs na abertura: depois de o app estar em dia, cada um é localizado (PATH do registro, depois o local do
-//! instalador oficial), conferido com `--version`, instalado pelo script oficial se faltar ou não responder, e
-//! atualizado com `update`. Lida a versão, e antes do `update`, se a pasta do exe não está no PATH (o instalador do
-//! Claude avisa e não põe), ela vai para o PATH do usuário; como o app usa o caminho absoluto e o PATH só serve ao
-//! terminal, a falha ao gravar vira aviso, não bloqueio. Com a versão lida, a falha do `update` também vira aviso: a
-//! versão instalada segue em uso e a próxima abertura tenta de novo. Os dois correm em paralelo; CLI ausente com
-//! instalação falha e `--version` que falha mesmo depois de reinstalar mantêm o uso bloqueado. A máquina (PATH,
-//! arquivos e comandos) entra por `Maquina`, para os testes não tocarem na rede nem na instalação.
+//! Os dois CLIs na abertura, em paralelo: localizar (PATH do registro, depois o local do instalador oficial), conferir
+//! com `--version`, instalar pelo script oficial se faltar ou não responder, pôr a pasta no PATH do usuário e rodar
+//! `update`. Falha de PATH ou de `update` vira aviso; CLI ausente ou `--version` quebrado bloqueia. A máquina entra por
+//! `Maquina`, para os testes não tocarem na rede nem na instalação.
 use crate::platform;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -97,8 +93,8 @@ pub trait Maquina: Sync {
     fn powershell(&self) -> Option<PathBuf>;
     /// Roda sem janela, com entrada vazia e prazo; a saída junta stdout e stderr.
     fn rodar(&self, programa: &Path, args: &[&str], env: &[(&str, &str)], prazo: Duration) -> Execucao;
-    /// Acrescenta a pasta ao PATH do usuário; o erro é o motivo.
-    fn por_no_path(&self, pasta: &Path) -> Result<(), String>;
+    /// Acrescenta a pasta ao PATH do usuário; o erro traz o código do SO e o motivo.
+    fn por_no_path(&self, pasta: &Path) -> Result<(), FalhaNoPath>;
 }
 
 /// A máquina de verdade.
@@ -137,9 +133,16 @@ impl Maquina for Real {
         }
     }
 
-    fn por_no_path(&self, pasta: &Path) -> Result<(), String> {
-        platform::por_no_path_do_usuario(pasta).map_err(|e| e.to_string())
+    fn por_no_path(&self, pasta: &Path) -> Result<(), FalhaNoPath> {
+        platform::por_no_path_do_usuario(pasta).map_err(|e| FalhaNoPath { codigo: e.raw_os_error(), mensagem: e.to_string() })
     }
+}
+
+/// A falha ao gravar o PATH: o código do SO, quando houver, e a mensagem.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FalhaNoPath {
+    pub codigo: Option<i32>,
+    pub mensagem: String,
 }
 
 /// Os caminhos resolvidos dos dois CLIs.
@@ -152,16 +155,34 @@ pub struct Caminhos {
 /// Um aviso que não bloqueia o uso, com a origem.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Aviso {
-    /// A pasta do CLI não pôde ir para o PATH do usuário.
-    Path(String),
+    /// A pasta do CLI não pôde ir para o PATH do usuário. `chave` (pasta normalizada e código do SO) identifica a falha
+    /// sem depender da redação do texto.
+    Path { cli: Cli, chave: String, texto: String },
     /// O `update` falhou; a versão instalada segue em uso.
     Update(String),
 }
 
 impl Aviso {
+    /// O aviso do `update` que falhou com `motivo`, com a `versao` instalada.
+    pub fn update(cli: Cli, motivo: &str, versao: &str) -> Aviso {
+        Aviso::Update(format!(
+            "{}: `update` falhou: {motivo}. A versão instalada {versao} segue em uso; o app tenta atualizar de novo na \
+             próxima abertura.",
+            cli.nome()
+        ))
+    }
+
     pub fn texto(&self) -> &str {
         match self {
-            Aviso::Path(t) | Aviso::Update(t) => t,
+            Aviso::Path { texto: t, .. } | Aviso::Update(t) => t,
+        }
+    }
+
+    /// Do aviso que o usuário dispensa: a origem (o exe do CLI) e a chave; `None` para o que só notifica.
+    pub fn dispensa(&self) -> Option<(&'static str, &str)> {
+        match self {
+            Aviso::Path { cli, chave, .. } => Some((cli.exe(), chave)),
+            Aviso::Update(_) => None,
         }
     }
 }
@@ -215,26 +236,24 @@ fn minutos(prazo: Duration) -> String {
     if prazo.as_secs() >= 60 { format!("{} min", prazo.as_secs() / 60) } else { format!("{} s", prazo.as_secs()) }
 }
 
-/// Mesma pasta, ignorando a caixa e a barra final.
-fn mesma_pasta(a: &Path, b: &Path) -> bool {
-    let limpa = |p: &Path| p.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
-    limpa(a) == limpa(b)
-}
-
-/// Põe a pasta do exe no PATH do usuário se ela ainda não estiver no PATH; o erro é o texto do aviso.
-fn garantir_no_path(m: &dyn Maquina, cli: Cli, exe: &Path) -> Result<(), String> {
+/// Põe a pasta do exe no PATH do usuário se ela ainda não estiver no PATH; o erro é o aviso.
+fn garantir_no_path(m: &dyn Maquina, cli: Cli, exe: &Path) -> Result<(), Aviso> {
     let Some(pasta) = exe.parent() else { return Ok(()) };
-    if m.pastas_do_path().iter().any(|p| mesma_pasta(p, pasta)) {
+    let alvo = platform::normalizar_pasta(&pasta.to_string_lossy());
+    if m.pastas_do_path().iter().any(|p| platform::normalizar_pasta(&p.to_string_lossy()) == alvo) {
         return Ok(());
     }
-    m.por_no_path(pasta).map_err(|motivo| {
-        format!(
+    m.por_no_path(pasta).map_err(|falha| {
+        let motivo = &falha.mensagem;
+        let texto = format!(
             "{}: não foi possível pôr {} no PATH do usuário: {motivo}. O app funciona normalmente; só o comando no \
              terminal fica sem o atalho. Para resolver à mão, acrescente essa pasta ao Path do usuário em Variáveis de \
              ambiente e reabra o terminal.",
             cli.nome(),
             pasta.display()
-        )
+        );
+        let codigo = falha.codigo.map_or_else(|| "sem-codigo".into(), |c| c.to_string());
+        Aviso::Path { cli, chave: format!("{alvo}|{codigo}"), texto }
     })
 }
 
@@ -289,14 +308,10 @@ fn garantir(m: &dyn Maquina, cli: Cli, avisar: &dyn Fn(Andamento)) -> Result<(Pa
             })?
         }
     };
-    let mut avisos: Vec<Aviso> = garantir_no_path(m, cli, &exe).err().map(Aviso::Path).into_iter().collect();
+    let mut avisos: Vec<Aviso> = garantir_no_path(m, cli, &exe).err().into_iter().collect();
     passo(Passo::Updating, Some(&lida));
     if let Err(motivo) = com_sucesso(m, &exe, &["update"], &[], PRAZO_UPDATE) {
-        avisos.push(Aviso::Update(format!(
-            "{}: `update` falhou: {motivo}. A versão instalada {lida} segue em uso; o app tenta atualizar de novo na \
-             próxima abertura.",
-            cli.nome()
-        )));
+        avisos.push(Aviso::update(cli, &motivo, &lida));
     }
     passo(Passo::Ready, Some(&lida));
     Ok((exe, avisos))
@@ -437,9 +452,9 @@ mod tests {
                 Resposta::NaoInicia => Execucao::NaoIniciou("arquivo não encontrado".into()),
             }
         }
-        fn por_no_path(&self, pasta: &Path) -> Result<(), String> {
+        fn por_no_path(&self, pasta: &Path) -> Result<(), FalhaNoPath> {
             if let Some(motivo) = self.falha_no_path {
-                return Err(motivo.into());
+                return Err(FalhaNoPath { codigo: Some(5), mensagem: motivo.into() });
             }
             self.postas.lock().unwrap().push(pasta.into());
             Ok(())
@@ -447,7 +462,7 @@ mod tests {
     }
 
     /// Roda a etapa e devolve o resultado e os avisos.
-    /// Exige que nenhum aviso de PATH tenha saído; `rodar_com_avisos` os devolve.
+    /// Exige que nenhum aviso tenha saído; `rodar_com_avisos` os devolve.
     fn rodar(m: &Falsa) -> (Result<Caminhos, String>, Vec<(Andamento, Andamento)>) {
         let (r, andamento) = rodar_com_avisos(m);
         let r = r.map(|g| {
@@ -534,13 +549,6 @@ mod tests {
         assert!(!m.rodou().iter().any(|c| c.ends_with("codex.exe update")));
     }
 
-    fn aviso_de_update(cli: &str, motivo: &str, versao: &str) -> Aviso {
-        Aviso::Update(format!(
-            "{cli}: `update` falhou: {motivo}. A versão instalada {versao} segue em uso; o app tenta atualizar de novo na \
-             próxima abertura."
-        ))
-    }
-
     /// Roda, confere que os dois terminaram em `Ready` com a versão e devolve os avisos.
     fn avisos_com_ready(m: &Falsa) -> Vec<Aviso> {
         let (r, andamento) = rodar_com_avisos(m);
@@ -551,24 +559,23 @@ mod tests {
     }
 
     #[test]
-    fn update_com_codigo_diferente_de_zero_vira_aviso() {
-        let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
-        m.responde(&format!("{PADRAO_CLAUDE} update"), &[Resposta::Codigo(1, "Failed to check for updates")]);
-        assert_eq!(avisos_com_ready(&m), [aviso_de_update("Claude Code", "saiu com código 1: Failed to check for updates", "2.1.325")]);
-    }
-
-    #[test]
-    fn update_que_estoura_o_prazo_vira_aviso() {
-        let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
-        m.responde(&format!("{PADRAO_CODEX} update"), &[Resposta::Estoura]);
-        assert_eq!(avisos_com_ready(&m), [aviso_de_update("Codex", "não terminou em 15 min: baixando...", "0.169.0")]);
-    }
-
-    #[test]
-    fn update_que_nao_inicia_vira_aviso() {
-        let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
-        m.responde(&format!("{PADRAO_CODEX} update"), &[Resposta::NaoInicia]);
-        assert_eq!(avisos_com_ready(&m), [aviso_de_update("Codex", "não iniciou (arquivo não encontrado)", "0.169.0")]);
+    fn update_que_falha_vira_aviso() {
+        let casos = [
+            (Cli::Claude, Resposta::Codigo(1, "Failed to check for updates"), "saiu com código 1: Failed to check for updates"),
+            (Cli::Codex, Resposta::Estoura, "não terminou em 15 min: baixando..."),
+            (Cli::Codex, Resposta::NaoInicia, "não iniciou (arquivo não encontrado)"),
+        ];
+        for (cli, resposta, motivo) in casos {
+            let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
+            let (exe, versao) = if cli == Cli::Claude { (PADRAO_CLAUDE, "2.1.325") } else { (PADRAO_CODEX, "0.169.0") };
+            m.responde(&format!("{exe} update"), &[resposta]);
+            assert_eq!(avisos_com_ready(&m), [Aviso::update(cli, motivo, versao)], "{motivo}");
+        }
+        assert_eq!(
+            Aviso::update(Cli::Codex, "saiu com código 4", "0.169.0").texto(),
+            "Codex: `update` falhou: saiu com código 4. A versão instalada 0.169.0 segue em uso; o app tenta atualizar de \
+             novo na próxima abertura."
+        );
     }
 
     #[test]
@@ -578,10 +585,10 @@ mod tests {
         m.responde(&format!("{PADRAO_CODEX} update"), &[Resposta::Codigo(4, "")]);
         let avisos = avisos_com_ready(&m);
         let origem: Vec<(bool, &str)> =
-            avisos.iter().map(|a| (matches!(a, Aviso::Path(_)), a.texto().split(':').next().unwrap())).collect();
+            avisos.iter().map(|a| (matches!(a, Aviso::Path { .. }), a.texto().split(':').next().unwrap())).collect();
         assert_eq!(origem, [(true, "Claude Code"), (false, "Claude Code"), (true, "Codex"), (false, "Codex")]);
-        assert_eq!(avisos[1], aviso_de_update("Claude Code", "saiu com código 2", "2.1.325"));
-        assert_eq!(avisos[3], aviso_de_update("Codex", "saiu com código 4", "0.169.0"));
+        assert_eq!(avisos[1], Aviso::update(Cli::Claude, "saiu com código 2", "2.1.325"));
+        assert_eq!(avisos[3], Aviso::update(Cli::Codex, "saiu com código 4", "0.169.0"));
     }
 
     #[test]
@@ -652,22 +659,26 @@ mod tests {
     }
 
     #[test]
-    fn pasta_no_path_com_outra_caixa_ou_barra_final_nao_grava() {
-        // Direto em `garantir_no_path`: com `/` no PATH, `localizar` acharia o exe por essa entrada.
-        let casos = [
-            (r"c:\users\U\.LOCAL\bin".to_string(), PADRAO_CLAUDE),
-            (format!(r"{PASTA_CLAUDE}\"), PADRAO_CLAUDE),
-            (format!("{PASTA_CODEX}/"), PADRAO_CODEX),
-        ];
-        for (no_path, exe) in casos {
-            let m = Falsa { path: vec![PathBuf::from(&no_path)], ..Falsa::default() };
-            let cli = if exe == PADRAO_CLAUDE { Cli::Claude } else { Cli::Codex };
-            garantir_no_path(&m, cli, Path::new(exe)).unwrap();
-            assert!(m.postas().is_empty(), "{no_path}");
-        }
+    fn pasta_no_path_normalizada_nao_grava() {
+        // Direto em `garantir_no_path`; os casos da normalização ficam com `platform::normalizar_pasta`.
+        let m = Falsa { path: vec![PathBuf::from(r"c:\users\U\.LOCAL\bin\")], ..Falsa::default() };
+        garantir_no_path(&m, Cli::Claude, Path::new(PADRAO_CLAUDE)).unwrap();
+        assert!(m.postas().is_empty());
         let m = Falsa { path: vec![PathBuf::from(r"C:\Users\u\.local")], ..Falsa::default() };
         garantir_no_path(&m, Cli::Claude, Path::new(PADRAO_CLAUDE)).unwrap();
         assert_eq!(m.postas(), [PathBuf::from(PASTA_CLAUDE)]);
+    }
+
+    #[test]
+    fn chave_do_aviso_de_path_e_a_pasta_normalizada_e_o_codigo() {
+        let chave = |exe: &str| {
+            let m = Falsa { falha_no_path: Some("x"), ..Falsa::default() };
+            garantir_no_path(&m, Cli::Claude, Path::new(exe)).unwrap_err().dispensa().map(|(o, c)| (o, c.to_string()))
+        };
+        let esperada = Some(("claude.exe", format!("{}|5", PASTA_CLAUDE.to_lowercase())));
+        assert_eq!(chave(PADRAO_CLAUDE), esperada);
+        assert_eq!(chave(&PADRAO_CLAUDE.to_uppercase()), esperada, "a caixa não importa");
+        assert_eq!(Aviso::update(Cli::Claude, "m", "1").dispensa(), None);
     }
 
     #[test]
@@ -686,11 +697,15 @@ mod tests {
         assert_eq!(g.caminhos, Caminhos { claude: PADRAO_CLAUDE.into(), codex: PADRAO_CODEX.into() });
         assert_eq!(
             g.avisos,
-            [Aviso::Path(format!(
-                "Claude Code: não foi possível pôr {PASTA_CLAUDE} no PATH do usuário: Acesso negado. O app funciona \
-                 normalmente; só o comando no terminal fica sem o atalho. Para resolver à mão, acrescente essa pasta ao \
-                 Path do usuário em Variáveis de ambiente e reabra o terminal."
-            ))]
+            [Aviso::Path {
+                cli: Cli::Claude,
+                chave: format!("{}|5", PASTA_CLAUDE.to_lowercase()),
+                texto: format!(
+                    "Claude Code: não foi possível pôr {PASTA_CLAUDE} no PATH do usuário: Acesso negado. O app \
+                     funciona normalmente; só o comando no terminal fica sem o atalho. Para resolver à mão, acrescente \
+                     essa pasta ao Path do usuário em Variáveis de ambiente e reabra o terminal."
+                ),
+            }]
         );
         assert!(m.rodou().contains(&format!("{PADRAO_CLAUDE} update")), "o update roda mesmo assim");
         assert_eq!(andamento.last().unwrap().0.step, Passo::Ready);
@@ -702,11 +717,5 @@ mod tests {
         m.responde(&format!("{PADRAO_CLAUDE} update"), &[Resposta::Codigo(1, "")]);
         assert_eq!(rodar_com_avisos(&m).0.unwrap().avisos.len(), 1);
         assert!(m.postas().contains(&PathBuf::from(PASTA_CLAUDE)));
-    }
-
-    #[test]
-    fn sem_falha_nenhum_aviso() {
-        let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
-        assert!(rodar_com_avisos(&m).0.unwrap().avisos.is_empty());
     }
 }

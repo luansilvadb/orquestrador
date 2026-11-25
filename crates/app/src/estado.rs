@@ -47,14 +47,15 @@ impl Secao for Paineis {
     }
 }
 
-/// Os textos dos avisos de PATH que o usuário já dispensou no portão com "Continuar"; o mesmo texto não volta.
+/// Os avisos que o usuário já dispensou no portão com "Continuar": por origem (`claude.exe`, `codex.exe`), a chave do
+/// último dispensado (`Aviso::dispensa`); o aviso com a mesma chave não volta.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AvisosDispensados {
-    pub path: Vec<String>,
+    pub chaves: std::collections::BTreeMap<String, String>,
 }
 
 impl Secao for AvisosDispensados {
     const NOME: &'static str = "avisosDispensados";
-    const VERSAO: u32 = 1;
+    const VERSAO: u32 = 2;
 }

@@ -508,6 +508,46 @@ fn portao_na_fase_clis_mostra_as_linhas_sem_tentar_de_novo(cx: &mut TestAppConte
     assert!(shells(cx, &t).is_empty());
 }
 
+#[gpui_kit::test]
+fn update_que_falhou_vira_notificacao_depois_do_continuar(cx: &mut TestAppContext) {
+    use super::portao::{Abertura, Portao};
+    use orquestrador_core::clis::{Aviso, Cli};
+    use orquestrador_ui::avisos;
+    let tmp = Tmp::new("notificacao");
+    let (janela, b) = montar(cx, &tmp, exes_padrao());
+    let abertura = cx.update(|cx| b.read(cx).terminais.read(cx).abertura.clone());
+    let path = Aviso::Path { cli: Cli::Claude, chave: r"c:\x|5".into(), texto: "sem PATH".into() };
+    abertura.update(cx, |a: &mut Abertura, cx| {
+        a.chegou(Portao::Aviso(vec![path, Aviso::Update("u1".into()), Aviso::Update("u2".into())]), cx);
+    });
+    assert!(cx.update(|cx| avisos::visiveis(cx)).is_empty(), "nada antes do Continuar");
+    desenhar(cx, janela);
+    cx.update_window(janela.into(), |_, window, cx| window.click("portao-continuar", cx)).expect("janela");
+    assert!(abertura.read_with(cx, |a, _| a.pronto()));
+    let titulos = |cx: &mut TestAppContext| cx.update(|cx| avisos::visiveis(cx).iter().map(|a| a.titulo.to_string()).collect::<Vec<_>>());
+    assert_eq!(titulos(cx), ["u1", "u2"], "empilhadas, na ordem");
+    // Fecha pelo id, o que o clique na notificação faria.
+    cx.update(|cx| avisos::fechar(0, cx));
+    assert_eq!(titulos(cx), ["u2"], "fechar tira só aquela");
+    cx.executor().advance_clock(Duration::from_millis(super::portao::NOTIFICACAO_MS - 100));
+    assert_eq!(titulos(cx), ["u2"]);
+    cx.executor().advance_clock(Duration::from_millis(200));
+    assert!(titulos(cx).is_empty(), "some sozinha");
+}
+
+#[gpui_kit::test]
+fn so_update_libera_na_hora_com_as_notificacoes(cx: &mut TestAppContext) {
+    use super::portao::{Abertura, Portao};
+    use orquestrador_core::clis::Aviso;
+    let tmp = Tmp::new("so-update");
+    let (_janela, b) = montar(cx, &tmp, exes_padrao());
+    let abertura = cx.update(|cx| b.read(cx).terminais.read(cx).abertura.clone());
+    abertura.update(cx, |a: &mut Abertura, cx| a.chegou(Portao::Aviso(vec![Aviso::Update("u".into())]), cx));
+    assert!(abertura.read_with(cx, |a, _| a.pronto()));
+    let titulos: Vec<String> = cx.update(|cx| orquestrador_ui::avisos::visiveis(cx).iter().map(|a| a.titulo.to_string()).collect());
+    assert_eq!(titulos, ["u"]);
+}
+
 /// O fluxo inteiro com o CLI falso: abrir o orquestrador, escolher, ver os executores em abas aguardando a escolha, escolher
 /// e ver as abas fecharem com o lote entregue.
 #[gpui_kit::test]

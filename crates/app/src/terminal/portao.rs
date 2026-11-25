@@ -10,7 +10,7 @@ use gpui_kit::{
 };
 use crate::atualizacao::Fase;
 use crate::estado::AvisosDispensados;
-use orquestrador_core::clis::{Andamento, Aviso, Passo};
+use orquestrador_core::clis::{Andamento, Aviso, Cli, Passo};
 use std::time::Instant;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -85,7 +85,7 @@ pub fn progresso(p: &Portao) -> Option<f32> {
 }
 
 /// A rodada numa thread: atualização e depois CLIs; o andamento chega por `avisar`, e o fim traz os caminhos ou o erro.
-/// `dispensados` são os avisos de PATH já dispensados, que não voltam.
+/// `dispensados` são os avisos já dispensados, que não voltam.
 pub fn garantir(avisar: async_channel::Sender<Portao>, exes: orquestrador_core::agents::cli::Exes, dispensados: AvisosDispensados) {
     std::thread::spawn(move || {
         let progresso = avisar.clone();
@@ -109,27 +109,52 @@ pub fn garantir(avisar: async_channel::Sender<Portao>, exes: orquestrador_core::
     });
 }
 
-/// O estado depois do sucesso: tira os avisos de PATH de texto já dispensado (os de `update` ficam sempre); sem avisos
-/// restantes, liberado; com avisos, a tela os mostra até o "Continuar".
-pub fn fim_com_avisos(mut avisos: Vec<Aviso>, dispensados: &AvisosDispensados) -> Portao {
-    avisos.retain(|a| !matches!(a, Aviso::Path(t) if dispensados.path.contains(t)));
-    if avisos.is_empty() {
-        Portao::Pronto
-    } else {
-        Portao::Aviso(avisos)
-    }
+/// Quanto a notificação do `update` que falhou fica à vista, se não for fechada antes.
+pub const NOTIFICACAO_MS: u64 = 8000;
+
+/// A notificação discreta de um aviso de `update`.
+pub fn notificacao(texto: &str) -> orquestrador_ui::avisos::Aviso {
+    orquestrador_ui::avisos::Aviso::alerta(texto.to_string(), NOTIFICACAO_MS)
 }
 
-/// Os dispensados depois do "Continuar": os de antes mais os textos de PATH mostrados.
+/// O estado depois do sucesso: saem os avisos com a chave já dispensada para aquela origem; sem nenhum, liberado. Os
+/// dispensáveis que sobram esperam o "Continuar" na tela; os de `update` viram notificação quando o uso é liberado.
+pub fn fim_com_avisos(avisos: Vec<Aviso>, dispensados: &AvisosDispensados) -> Portao {
+    let restantes: Vec<Aviso> = avisos
+        .into_iter()
+        .filter(|a| a.dispensa().is_none_or(|(origem, chave)| dispensados.chaves.get(origem).map(String::as_str) != Some(chave)))
+        .collect();
+    if restantes.is_empty() { Portao::Pronto } else { Portao::Aviso(restantes) }
+}
+
+/// Os dispensados depois do "Continuar": a chave de cada aviso mostrado substitui a anterior da mesma origem.
 pub fn dispensar(mut dispensados: AvisosDispensados, mostrados: &[Aviso]) -> AvisosDispensados {
-    for a in mostrados {
-        if let Aviso::Path(t) = a {
-            if !dispensados.path.contains(t) {
-                dispensados.path.push(t.clone());
-            }
-        }
+    for (origem, chave) in mostrados.iter().filter_map(Aviso::dispensa) {
+        dispensados.chaves.insert(origem.to_string(), chave.to_string());
     }
     dispensados
+}
+
+/// O quadro de texto do portão, com o fundo e a borda no tom de `tom`.
+fn quadro(id: &'static str, tom: Hsla, texto: String) -> impl IntoElement {
+    div()
+        .id(id)
+        .text_left()
+        .px(px(12.))
+        .py(px(8.))
+        .rounded(tema::RAIO_SM)
+        .bg(tom.opacity(0x1f as f32 / 255.))
+        .border_1()
+        .border_color(tom.opacity(0x66 as f32 / 255.))
+        .text_size(tema::TEXTO_BODY)
+        .child(texto)
+}
+
+/// Um botão primário centralizado.
+fn botao_central(id: &'static str, rotulo: &'static str, acao: impl Fn(&mut Window, &mut App) + 'static) -> impl IntoElement {
+    div().flex().justify_center().child(
+        ui::botao(id, rotulo, Variante::Primario, false).on_click(move |_, window, cx| acao(window, cx)).test_support(),
+    )
 }
 
 /// A tela do portão sobre tudo, menos os controles da janela; `tentar` refaz a rodada depois de uma falha e
@@ -147,13 +172,17 @@ pub fn tela(
         Portao::Falhou(m) => Some(m.clone()),
         _ => None,
     };
+    // Só os dispensáveis; os de `update` viram notificação depois do "Continuar".
     let aviso = match p {
-        Portao::Aviso(avisos) => Some(avisos.iter().map(Aviso::texto).collect::<Vec<_>>().join("\n\n")),
+        Portao::Aviso(avisos) => {
+            Some(avisos.iter().filter(|a| a.dispensa().is_some()).map(Aviso::texto).collect::<Vec<_>>().join("\n\n"))
+        }
         _ => None,
     };
-    let parada = falha.is_some();
+    // Esperando o clique (falha ou aviso), a marca para e a tela não redesenha; só a falha apaga o centro.
+    let marca = Marca { parada: falha.is_some() || aviso.is_some(), erro: falha.is_some() };
     let barra = progresso(p);
-    let marca = canvas(|_, _, _| (), move |b, _, window, _| pintar_marca(b, inicio, parada, window)).size(px(64.)).mx_auto().mb(px(4.));
+    let marca = canvas(|_, _, _| (), move |b, _, window, _| pintar_marca(b, inicio, marca, window)).size(px(64.)).mx_auto().mb(px(4.));
     let topo = div()
         .id("portao-topo")
         .window_control_area(gpui_kit::WindowControlArea::Drag)
@@ -201,52 +230,14 @@ pub fn tela(
                     .w_full()
                     .rounded(px(2.))
                     .bg(cor::hairline())
-                    .child(div().h_full().w(gpui_kit::relative(f)).rounded(px(2.)).bg(gpui_kit::rgb(0xf5a524))),
+                    .child(div().h_full().w(gpui_kit::relative(f)).rounded(px(2.)).bg(cor::signal_warning())),
             )
         })
         .when_some(falha, |d, m| {
-            d.child(
-                div()
-                    .id("portao-erro")
-                    .text_left()
-                    .px(px(12.))
-                    .py(px(8.))
-                    .rounded(tema::RAIO_SM)
-                    .bg(gpui_kit::rgba(0xf4416c1f))
-                    .border_1()
-                    .border_color(gpui_kit::rgba(0xf4416c66))
-                    .text_size(tema::TEXTO_BODY)
-                    .child(m),
-            )
-            .child(
-                div().flex().justify_center().child(
-                    ui::botao("portao-tentar", "Tentar novamente", Variante::Primario, false)
-                        .on_click(move |_, window, cx| tentar(window, cx))
-                        .test_support(),
-                ),
-            )
+            d.child(quadro("portao-erro", cor::signal_error(), m)).child(botao_central("portao-tentar", "Tentar novamente", tentar))
         })
         .when_some(aviso, |d, m| {
-            d.child(
-                div()
-                    .id("portao-aviso")
-                    .text_left()
-                    .px(px(12.))
-                    .py(px(8.))
-                    .rounded(tema::RAIO_SM)
-                    .bg(gpui_kit::rgba(0xf5a5241f))
-                    .border_1()
-                    .border_color(gpui_kit::rgba(0xf5a52466))
-                    .text_size(tema::TEXTO_BODY)
-                    .child(m),
-            )
-            .child(
-                div().flex().justify_center().child(
-                    ui::botao("portao-continuar", "Continuar", Variante::Primario, false)
-                        .on_click(move |_, window, cx| continuar(window, cx))
-                        .test_support(),
-                ),
-            )
+            d.child(quadro("portao-aviso", cor::signal_warning(), m)).child(botao_central("portao-continuar", "Continuar", continuar))
         });
     deferred(
         anchored().position(point(px(0.), px(0.))).child(
@@ -302,7 +293,14 @@ fn quadros(t: f32, chaves: &[(f32, f32)]) -> f32 {
 
 const CICLO: f32 = 2400.;
 
-fn pintar_marca(b: Bounds<Pixels>, inicio: Instant, parada: bool, window: &mut Window) {
+/// Como a marca aparece: `parada` congela os ramos abertos e não pede outro quadro; `erro` apaga o centro laranja.
+#[derive(Clone, Copy)]
+struct Marca {
+    parada: bool,
+    erro: bool,
+}
+
+fn pintar_marca(b: Bounds<Pixels>, inicio: Instant, Marca { parada, erro }: Marca, window: &mut Window) {
     let ms = if parada { 0. } else { inicio.elapsed().as_secs_f32() * 1000. };
     let escala = f32::from(b.size.width) / 200.;
     let p = |x: f32, y: f32| point(b.origin.x + px((x - 28.) * escala), b.origin.y + px((y - 28.) * escala));
@@ -347,7 +345,7 @@ fn pintar_marca(b: Bounds<Pixels>, inicio: Instant, parada: bool, window: &mut W
             circulo(window, (x, y), 23. * esc, tinta.opacity(op));
         }
     }
-    let pop = (ms / 360.).min(1.);
+    let pop = if erro { 0. } else if parada { 1. } else { (ms / 360.).min(1.) };
     let batida = if parada || ms < 360. { 1. } else { quadros(((ms - 360.) % CICLO) / CICLO, &[(0., 1.), (0.08, 1.1), (0.20, 1.), (1., 1.)]) };
     let laranja: Hsla = gpui_kit::rgb(0xf5a524).into();
     circulo(window, hub, 36.5 * (0.4 + 0.6 * suave(pop)) * batida, laranja.opacity(suave(pop)));
@@ -367,6 +365,15 @@ pub struct Abertura {
 impl Abertura {
     pub fn new(exes: orquestrador_core::agents::cli::Exes, cx: &mut gpui_kit::Context<Self>) -> Self {
         let mut a = Abertura { estado: Portao::inicial(), inicio: Instant::now(), exes, _tarefa: None };
+        // Só no debug: as notificações de `update` que falhou, para conferir sem rodar os CLIs.
+        if cfg!(debug_assertions) && std::env::var("ORQ_PORTAO").as_deref() == Ok("notificacao") {
+            let avisos = vec![
+                Aviso::update(Cli::Claude, "saiu com código 1", "2.1.325"),
+                Aviso::update(Cli::Codex, "não terminou em 15 min", "0.169.0"),
+            ];
+            a.chegou(fim_com_avisos(avisos, &AvisosDispensados::default()), cx);
+            return a;
+        }
         // Só no debug, como o `?update=clis` do app simulado: a fase dos CLIs parada, para conferir a tela.
         if cfg!(debug_assertions) && std::env::var("ORQ_PORTAO").as_deref() == Ok("clis") {
             a.estado = Portao::Clis {
@@ -389,17 +396,32 @@ impl Abertura {
         let (tx, rx) = async_channel::unbounded();
         garantir(tx, self.exes.clone(), orquestrador_ui::estado::ler::<AvisosDispensados>(cx));
         self._tarefa = Some(cx.spawn(async move |this: gpui_kit::WeakEntity<Self>, cx| {
-            while let Ok(estado) = rx.recv().await {
-                if this.update(cx, |a, cx| {
-                    a.estado = estado;
-                    cx.notify();
-                })
+            while let Ok(chegada) = rx.recv().await {
+                if this.update(cx, |a, cx| a.chegou(chegada, cx))
                 .is_err()
                 {
                     break;
                 }
             }
         }));
+    }
+
+    /// Um estado novo da rodada; um aviso sem nada para dispensar libera o uso na hora.
+    pub(crate) fn chegou(&mut self, estado: Portao, cx: &mut gpui_kit::Context<Self>) {
+        self.estado = estado;
+        if matches!(&self.estado, Portao::Aviso(avisos) if avisos.iter().all(|a| a.dispensa().is_none())) {
+            self.liberar(cx);
+        }
+        cx.notify();
+    }
+
+    /// Passa a `Pronto`; os avisos de `update` do estado viram notificação.
+    fn liberar(&mut self, cx: &mut gpui_kit::Context<Self>) {
+        if let Portao::Aviso(avisos) = std::mem::replace(&mut self.estado, Portao::Pronto) {
+            for a in avisos.iter().filter(|a| a.dispensa().is_none()) {
+                orquestrador_ui::avisos::mostrar(notificacao(a.texto()), cx);
+            }
+        }
     }
 
     /// "Tentar novamente": só depois de uma falha.
@@ -411,12 +433,12 @@ impl Abertura {
         }
     }
 
-    /// "Continuar": só depois de um aviso; guarda os avisos de PATH mostrados e libera o uso.
+    /// "Continuar": só depois de um aviso; guarda as chaves dos mostrados e libera o uso.
     pub fn continuar(&mut self, cx: &mut gpui_kit::Context<Self>) {
         if let Portao::Aviso(mostrados) = &self.estado {
             let antes = orquestrador_ui::estado::ler::<AvisosDispensados>(cx);
             orquestrador_ui::estado::gravar(&dispensar(antes, mostrados), cx);
-            self.estado = Portao::Pronto;
+            self.liberar(cx);
             cx.notify();
         }
     }
@@ -478,42 +500,57 @@ mod testes {
         assert_eq!(Portao::inicial(), Portao::Pronto, "o teste roda no build de desenvolvimento");
     }
 
+    fn path(cli: Cli, chave: &str, texto: &str) -> Aviso {
+        Aviso::Path { cli, chave: chave.into(), texto: texto.into() }
+    }
+
+    const CHAVE: &str = r"c:\users\u\.local\bin|5";
+
     #[test]
-    fn aviso_mostra_o_texto_e_so_sem_avisos_libera() {
+    fn sem_aviso_libera_e_com_path_o_update_vai_junto() {
         let nada = AvisosDispensados::default();
         assert_eq!(fim_com_avisos(vec![], &nada), Portao::Pronto);
-        let avisos = vec![Aviso::Path("a".into()), Aviso::Update("b".into())];
-        let p = fim_com_avisos(avisos.clone(), &nada);
-        assert_eq!(p, Portao::Aviso(avisos));
+        let (a, u) = (path(Cli::Claude, CHAVE, "a"), Aviso::Update("b".into()));
+        let p = fim_com_avisos(vec![a.clone(), u.clone()], &nada);
+        assert_eq!(p, Portao::Aviso(vec![a, u.clone()]));
         assert_eq!(textos(&p), ("Os CLIs estão prontos, com um aviso.".to_string(), vec![]));
         assert_eq!(progresso(&p), None, "sem barra");
+        assert_eq!(fim_com_avisos(vec![u.clone()], &nada), Portao::Aviso(vec![u]), "o `update` nunca é filtrado");
     }
 
-    fn dispensados(textos: &[&str]) -> AvisosDispensados {
-        AvisosDispensados { path: textos.iter().map(|t| t.to_string()).collect() }
-    }
-
-    #[test]
-    fn aviso_de_path_ja_dispensado_some_e_sem_restantes_libera() {
-        assert_eq!(fim_com_avisos(vec![Aviso::Path("negado".into())], &dispensados(&["negado"])), Portao::Pronto);
+    fn dispensado(a: &Aviso) -> AvisosDispensados {
+        dispensar(AvisosDispensados::default(), std::slice::from_ref(a))
     }
 
     #[test]
-    fn aviso_de_path_com_motivo_novo_aparece() {
-        let novo = vec![Aviso::Path("outro motivo".into())];
-        assert_eq!(fim_com_avisos(novo.clone(), &dispensados(&["negado"])), Portao::Aviso(novo));
+    fn mesma_chave_com_outro_texto_e_filtrada() {
+        let d = dispensado(&path(Cli::Claude, CHAVE, "Acesso negado"));
+        assert_eq!(fim_com_avisos(vec![path(Cli::Claude, CHAVE, "Access is denied")], &d), Portao::Pronto);
     }
 
     #[test]
-    fn aviso_de_update_nunca_e_filtrado() {
-        let p = fim_com_avisos(vec![Aviso::Path("x".into()), Aviso::Update("x".into())], &dispensados(&["x"]));
-        assert_eq!(p, Portao::Aviso(vec![Aviso::Update("x".into())]));
+    fn outra_chave_ou_outro_cli_aparece() {
+        let d = dispensado(&path(Cli::Claude, CHAVE, "x"));
+        for novo in [
+            path(Cli::Claude, r"c:\users\u\.local\bin|1314", "x"),
+            path(Cli::Claude, r"c:\users\u\.local\bin|sem-codigo", "x"),
+            path(Cli::Claude, r"c:\outra|5", "x"),
+            path(Cli::Codex, CHAVE, "x"),
+        ] {
+            assert_eq!(fim_com_avisos(vec![novo.clone()], &d), Portao::Aviso(vec![novo]));
+        }
     }
 
     #[test]
-    fn continuar_guarda_os_textos_de_path() {
-        let mostrados = [Aviso::Path("b".into()), Aviso::Update("u".into()), Aviso::Path("a".into())];
-        assert_eq!(dispensar(dispensados(&["a"]), &mostrados), dispensados(&["a", "b"]));
+    fn um_registro_por_cli_e_dispensar_de_novo_substitui() {
+        let primeiro = path(Cli::Claude, CHAVE, "x");
+        let segundo = path(Cli::Claude, r"c:\outra|5", "x");
+        let codex = path(Cli::Codex, CHAVE, "x");
+        let d = dispensar(dispensado(&primeiro), &[segundo.clone(), Aviso::Update("u".into()), codex]);
+        assert_eq!(d.chaves.len(), 2);
+        assert_eq!((d.chaves["claude.exe"].as_str(), d.chaves["codex.exe"].as_str()), (r"c:\outra|5", CHAVE));
+        assert_eq!(fim_com_avisos(vec![primeiro.clone()], &d), Portao::Aviso(vec![primeiro]), "o anterior saiu");
+        assert_eq!(fim_com_avisos(vec![segundo], &d), Portao::Pronto);
     }
 
     #[test]

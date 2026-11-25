@@ -254,95 +254,87 @@ pub fn pasta_pessoal() -> PathBuf {
 /// As pastas do PATH como o registro guarda agora: o de máquina e depois o de usuário, com `%...%` expandido. O PATH
 /// do processo fica velho depois de uma instalação feita com o app aberto.
 pub fn pastas_do_path_registrado() -> Vec<PathBuf> {
-    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
-    let maquina = valor_do_registro(HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment", "Path");
-    let usuario = valor_do_registro(HKEY_CURRENT_USER, "Environment", "Path");
-    [maquina, usuario]
-        .into_iter()
-        .flatten()
-        .flat_map(|path| path.split(';').map(|p| p.trim().trim_matches('"').to_string()).collect::<Vec<_>>())
-        .filter(|p| !p.is_empty())
-        .map(PathBuf::from)
-        .collect()
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    let ler = |raiz, chave| valor_do_registro(raiz, chave, "Path", RRF_RT_REG_SZ).ok().flatten().map(|(_, v)| v);
+    let maquina = ler(HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment");
+    let usuario = ler(HKEY_CURRENT_USER, "Environment");
+    [maquina, usuario].iter().flatten().flat_map(|v| super::itens_do_path(v)).map(PathBuf::from).collect()
 }
 
-/// Um valor texto do registro. Sem `RRF_NOEXPAND`, o `RegGetValueW` já expande o `REG_EXPAND_SZ`.
-fn valor_do_registro(raiz: windows_sys::Win32::System::Registry::HKEY, chave: &str, nome: &str) -> Option<String> {
-    use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
+/// Um valor texto do registro e o tipo dele, nos tipos que `filtro` (`RRF_*`) aceita; `Ok(None)` se não existe. Sem
+/// `RRF_NOEXPAND`, o `RegGetValueW` já expande o `REG_EXPAND_SZ`.
+fn valor_do_registro(
+    raiz: windows_sys::Win32::System::Registry::HKEY,
+    chave: &str,
+    nome: &str,
+    filtro: windows_sys::Win32::System::Registry::REG_ROUTINE_FLAGS,
+) -> io::Result<Option<(u32, String)>> {
+    use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+    use windows_sys::Win32::System::Registry::RegGetValueW;
     let (chave, nome) = (wide(OsStr::new(chave)), wide(OsStr::new(nome)));
-    let mut bytes = 0u32;
+    let (mut tipo, mut bytes) = (0u32, 0u32);
+    let existe = |r| match r {
+        0 => Ok(true),
+        ERROR_FILE_NOT_FOUND => Ok(false),
+        r => Err(io::Error::from_raw_os_error(r as i32)),
+    };
     // SAFETY: chave e nome terminam em zero; a primeira chamada só mede, a segunda escreve no máximo `bytes`.
     unsafe {
-        if RegGetValueW(raiz, chave.as_ptr(), nome.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), std::ptr::null_mut(), &mut bytes) != 0 {
-            return None;
+        if !existe(RegGetValueW(raiz, chave.as_ptr(), nome.as_ptr(), filtro, &mut tipo, std::ptr::null_mut(), &mut bytes))? {
+            return Ok(None);
         }
         let mut dados = vec![0u16; (bytes as usize).div_ceil(2) + 1];
         bytes = (dados.len() * 2) as u32;
-        if RegGetValueW(raiz, chave.as_ptr(), nome.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), dados.as_mut_ptr().cast(), &mut bytes) != 0 {
-            return None;
+        if !existe(RegGetValueW(raiz, chave.as_ptr(), nome.as_ptr(), filtro, &mut tipo, dados.as_mut_ptr().cast(), &mut bytes))? {
+            return Ok(None);
         }
         let fim = dados.iter().position(|&c| c == 0).unwrap_or(dados.len());
-        Some(String::from_utf16_lossy(&dados[..fim]))
+        Ok(Some((tipo, String::from_utf16_lossy(&dados[..fim]))))
     }
 }
 
 /// Acrescenta `pasta` ao fim do `HKCU\Environment\Path` e avisa as outras janelas. O valor é lido cru, para os
 /// `%vars%` ficarem como estão, e gravado com o tipo que tinha; se não existia, nasce `REG_EXPAND_SZ`.
 pub fn por_no_path_do_usuario(pasta: &Path) -> io::Result<()> {
-    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, LPARAM};
+    use windows_sys::Win32::Foundation::LPARAM;
     use windows_sys::Win32::System::Registry::{
-        RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_EXPAND_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+        RegSetKeyValueW, HKEY_CURRENT_USER, REG_EXPAND_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE};
     // Claude e Codex chegam aqui em threads paralelas; sem a trava, um ler-e-regravar apagaria a pasta do outro.
     static TRAVA: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _trava = TRAVA.lock().unwrap_or_else(|e| e.into_inner());
-    let (chave, nome) = (wide(OsStr::new("Environment")), wide(OsStr::new("Path")));
-    let filtro = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
-    let (mut tipo, mut bytes) = (0u32, 0u32);
-    // SAFETY: chave e nome terminam em zero; a primeira chamada só mede, a segunda escreve no máximo `bytes`.
-    let atual = unsafe {
-        match RegGetValueW(HKEY_CURRENT_USER, chave.as_ptr(), nome.as_ptr(), filtro, &mut tipo, std::ptr::null_mut(), &mut bytes) {
-            0 => {
-                let mut dados = vec![0u16; (bytes as usize).div_ceil(2) + 1];
-                bytes = (dados.len() * 2) as u32;
-                let r = RegGetValueW(HKEY_CURRENT_USER, chave.as_ptr(), nome.as_ptr(), filtro, &mut tipo, dados.as_mut_ptr().cast(), &mut bytes);
-                if r != 0 {
-                    return Err(io::Error::from_raw_os_error(r as i32));
-                }
-                let fim = dados.iter().position(|&c| c == 0).unwrap_or(dados.len());
-                Some(String::from_utf16_lossy(&dados[..fim]))
-            }
-            ERROR_FILE_NOT_FOUND => None,
-            r => return Err(io::Error::from_raw_os_error(r as i32)),
-        }
-    };
     let pasta = pasta.to_string_lossy();
-    let limpa = |s: &str| s.trim().trim_matches('"').trim().trim_end_matches(['\\', '/']).to_lowercase();
-    if atual.as_deref().is_some_and(|v| v.split(';').any(|item| limpa(item) == limpa(&pasta))) {
-        return Ok(());
-    }
-    let novo = match &atual {
-        Some(v) if !v.trim().is_empty() => format!("{};{pasta}", v.trim_end_matches(';')),
-        _ => pasta.to_string(),
-    };
-    if atual.is_none() {
-        tipo = REG_EXPAND_SZ;
-    }
-    let dados = wide(OsStr::new(&novo));
-    // SAFETY: `dados` termina em zero e o tamanho passado em bytes é o do vetor inteiro.
-    let r = unsafe {
-        RegSetKeyValueW(HKEY_CURRENT_USER, chave.as_ptr(), nome.as_ptr(), tipo, dados.as_ptr().cast(), (dados.len() * 2) as u32)
-    };
-    if r != 0 {
-        return Err(io::Error::from_raw_os_error(r as i32));
-    }
     let ambiente = wide(OsStr::new("Environment"));
-    let mut resultado = 0usize;
-    // SAFETY: `ambiente` termina em zero e vive até o fim da chamada; uma janela travada só faz esperar o prazo.
-    unsafe {
-        SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, ambiente.as_ptr() as LPARAM, SMTO_ABORTIFHUNG, 5000, &mut resultado);
+    {
+        let _trava = TRAVA.lock().unwrap_or_else(|e| e.into_inner());
+        let atual = valor_do_registro(HKEY_CURRENT_USER, "Environment", "Path", RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND)?;
+        let alvo = super::normalizar_pasta(&pasta);
+        if atual.as_ref().is_some_and(|(_, v)| super::itens_do_path(v).any(|item| super::normalizar_pasta(item) == alvo)) {
+            return Ok(());
+        }
+        let (tipo, novo) = match atual {
+            Some((tipo, v)) if !v.trim().is_empty() => (tipo, format!("{};{pasta}", v.trim_end_matches(';'))),
+            Some((tipo, _)) => (tipo, pasta.to_string()),
+            None => (REG_EXPAND_SZ, pasta.to_string()),
+        };
+        let (nome, dados) = (wide(OsStr::new("Path")), wide(OsStr::new(&novo)));
+        // SAFETY: os três terminam em zero e o tamanho passado em bytes é o do vetor `dados` inteiro.
+        let r = unsafe {
+            RegSetKeyValueW(HKEY_CURRENT_USER, ambiente.as_ptr(), nome.as_ptr(), tipo, dados.as_ptr().cast(), (dados.len() * 2) as u32)
+        };
+        if r != 0 {
+            return Err(io::Error::from_raw_os_error(r as i32));
+        }
     }
+    // Fora da trava e numa thread solta, para uma janela travada não atrasar o portão. Síncrono de propósito: com
+    // ponteiro no `lParam`, as funções assíncronas recusam mensagens abaixo de `WM_USER`.
+    std::thread::spawn(move || {
+        let mut resultado = 0usize;
+        // SAFETY: `ambiente` termina em zero e é da thread até o fim da chamada; uma janela travada só faz esperar o prazo.
+        unsafe {
+            SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, ambiente.as_ptr() as LPARAM, SMTO_ABORTIFHUNG, 5000, &mut resultado);
+        }
+    });
     Ok(())
 }
 

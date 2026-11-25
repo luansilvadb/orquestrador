@@ -1,8 +1,8 @@
 //! Avisos curtos: no alto e no meio da
 //! janela, com o topo a 43 px, largura do texto até 560 px, fundo
 //! `raised_black`, borda de 1 px, raio de 8 px, 8 px por 12 px de respiro e o ícone do tipo a 8 px do título de 13 px.
-//! Os mais novos ficam embaixo, 8 px entre eles. Qualquer tela chama [`mostrar`]; a bancada desenha [`camada`] uma vez,
-//! por cima de tudo.
+//! Os mais novos ficam embaixo, 8 px entre eles; cada um some no fim do tempo dele ou antes, com um clique, sem tomar o
+//! foco. Qualquer tela chama [`mostrar`]; a bancada desenha [`camada`] uma vez, por cima de tudo.
 use crate::tema::{self, cor};
 use crate::widgets::icone;
 use gpui_kit::{div, prelude::*, px, AnyElement, App, FontWeight, Global, Hsla, SharedString, Window};
@@ -59,12 +59,15 @@ pub fn mostrar(aviso: Aviso, cx: &mut App) {
     cx.refresh_windows();
     cx.spawn(async move |cx| {
         cx.background_executor().timer(duracao).await;
-        cx.update(|cx| {
-            cx.default_global::<Fila>().itens.retain(|(i, _)| *i != id);
-            cx.refresh_windows();
-        });
+        cx.update(|cx| fechar(id, cx));
     })
     .detach();
+}
+
+/// Tira o aviso antes do tempo (o clique nele); `id` é a ordem de chegada, desde 0.
+pub fn fechar(id: u64, cx: &mut App) {
+    cx.default_global::<Fila>().itens.retain(|(i, _)| *i != id);
+    cx.refresh_windows();
 }
 
 /// Os avisos à vista, do mais antigo ao mais novo (para testes e para quem quiser conferir).
@@ -83,17 +86,20 @@ fn icone_e_cor(tipo: TipoAviso) -> (&'static str, Hsla) {
 
 /// A camada dos avisos: posição absoluta sobre a janela inteira, sem pegar o ponteiro fora dos avisos.
 pub fn camada(window: &mut Window, cx: &mut App) -> AnyElement {
-    let itens = visiveis(cx);
+    let itens: Vec<(u64, Aviso)> = cx.try_global::<Fila>().map(|f| f.itens.clone()).unwrap_or_default();
     if itens.is_empty() {
         return div().into_any_element();
     }
     let mut coluna = div().flex().flex_col().items_center().gap(px(8.)).w_full().max_w(px(560.));
     // A largura que sobra ao título: a coluna menos o respiro, a borda e o ícone com o vão.
     let largura = (560f32).min(f32::from(window.viewport_size().width) - 32.) - 24. - 2. - 16. - 8.;
-    for aviso in itens {
+    for (id, aviso) in itens {
         let (caminho, tom) = icone_e_cor(aviso.tipo);
         coluna = coluna.child(
             div()
+                .id(("aviso", id as usize))
+                .cursor_pointer()
+                .on_click(move |_, _, cx| fechar(id, cx))
                 .flex()
                 .items_center()
                 .gap(px(8.))

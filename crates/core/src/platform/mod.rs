@@ -26,6 +26,16 @@ pub use other::{
     sem_janela, set_files, situacao_do_processo, snapshot, spawn_com_prazo, start_time, symlink_arquivo, Job, SHELLS,
 };
 
+/// Uma pasta na forma de comparar: sem espaços nem aspas em volta, sem a barra final (`\` ou `/`) e em minúsculas.
+pub fn normalizar_pasta(p: &str) -> String {
+    p.trim().trim_matches('"').trim().trim_end_matches(['\\', '/']).to_lowercase()
+}
+
+/// Os itens de um valor de PATH: divididos por `;`, sem espaços nem aspas em volta e sem os vazios.
+pub fn itens_do_path(valor: &str) -> impl Iterator<Item = &str> {
+    valor.split(';').map(|p| p.trim().trim_matches('"').trim()).filter(|p| !p.is_empty())
+}
+
 /// Os arquivos no clipboard: os caminhos, na ordem, e se foram recortados (`cut`) ou copiados. `paths` vem vazio quando
 /// o clipboard não tem arquivos.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -55,4 +65,24 @@ pub enum ErroShell {
     Recusada,
     /// Este sistema ainda não faz a operação.
     NaoSuportado,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pasta_normalizada_ignora_caixa_barra_final_aspas_e_espacos() {
+        let base = normalizar_pasta(r"C:\Users\u\.local\bin");
+        for variante in [r"c:\users\U\.LOCAL\bin", r"C:\Users\u\.local\bin\", r"C:\Users\u\.local\bin/", r#" "C:\Users\u\.local\bin\" "#] {
+            assert_eq!(normalizar_pasta(variante), base, "{variante}");
+        }
+        assert_ne!(normalizar_pasta(r"C:\Users\u\.local"), base);
+    }
+
+    #[test]
+    fn itens_do_path_sem_vazios_nem_aspas() {
+        let itens: Vec<&str> = itens_do_path(r#"C:\a;; "C:\b c" ;C:\d\;"#).collect();
+        assert_eq!(itens, [r"C:\a", r"C:\b c", r"C:\d\"]);
+    }
 }
