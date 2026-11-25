@@ -1,6 +1,7 @@
 //! Os dois CLIs na abertura: depois de o app estar em dia, cada um é localizado (PATH do registro, depois o local do
 //! instalador oficial), conferido com `--version`, instalado pelo script oficial se faltar ou não responder, e
-//! atualizado com `update`. Os dois correm em paralelo; qualquer falha mantém o uso bloqueado. A máquina (PATH,
+//! atualizado com `update`. Se a pasta do exe não está no PATH (o instalador do Claude avisa e não põe), ela vai para
+//! o PATH do usuário. Os dois correm em paralelo; qualquer falha mantém o uso bloqueado. A máquina (PATH,
 //! arquivos e comandos) entra por `Maquina`, para os testes não tocarem na rede nem na instalação.
 use crate::platform;
 use serde::Serialize;
@@ -93,6 +94,8 @@ pub trait Maquina: Sync {
     fn powershell(&self) -> Option<PathBuf>;
     /// Roda sem janela, com entrada vazia e prazo; a saída junta stdout e stderr.
     fn rodar(&self, programa: &Path, args: &[&str], env: &[(&str, &str)], prazo: Duration) -> Execucao;
+    /// Acrescenta a pasta ao PATH do usuário; o erro é o motivo.
+    fn por_no_path(&self, pasta: &Path) -> Result<(), String>;
 }
 
 /// A máquina de verdade.
@@ -129,6 +132,10 @@ impl Maquina for Real {
                 }
             }
         }
+    }
+
+    fn por_no_path(&self, pasta: &Path) -> Result<(), String> {
+        platform::por_no_path_do_usuario(pasta).map_err(|e| e.to_string())
     }
 }
 
@@ -179,6 +186,22 @@ fn fim(saida: &str) -> String {
 
 fn minutos(prazo: Duration) -> String {
     if prazo.as_secs() >= 60 { format!("{} min", prazo.as_secs() / 60) } else { format!("{} s", prazo.as_secs()) }
+}
+
+/// Mesma pasta, ignorando a caixa e a barra final.
+fn mesma_pasta(a: &Path, b: &Path) -> bool {
+    let limpa = |p: &Path| p.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+    limpa(a) == limpa(b)
+}
+
+/// Põe a pasta do exe no PATH do usuário se ela ainda não estiver no PATH.
+fn garantir_no_path(m: &dyn Maquina, cli: Cli, exe: &Path) -> Result<(), String> {
+    let Some(pasta) = exe.parent() else { return Ok(()) };
+    if m.pastas_do_path().iter().any(|p| mesma_pasta(p, pasta)) {
+        return Ok(());
+    }
+    m.por_no_path(pasta)
+        .map_err(|motivo| format!("{}: não foi possível pôr {} no PATH do usuário: {motivo}.", cli.nome(), pasta.display()))
 }
 
 /// Roda e devolve a saída se terminou com código 0; senão, o motivo.
@@ -233,6 +256,7 @@ fn garantir(m: &dyn Maquina, cli: Cli, avisar: &dyn Fn(Andamento)) -> Result<Pat
     };
     passo(Passo::Updating, Some(&lida));
     com_sucesso(m, &exe, &["update"], &[], PRAZO_UPDATE).map_err(|motivo| format!("{}: `update` falhou: {motivo}.", cli.nome()))?;
+    garantir_no_path(m, cli, &exe)?;
     passo(Passo::Ready, Some(&lida));
     Ok(exe)
 }
@@ -277,6 +301,10 @@ mod tests {
         /// Respostas por `programa args`; cada chamada consome a primeira da fila, e a última se repete.
         respostas: Mutex<HashMap<String, Vec<Resposta>>>,
         rodou: Mutex<Vec<String>>,
+        /// As pastas postas no PATH do usuário.
+        postas: Mutex<Vec<PathBuf>>,
+        /// Se `Some`, gravar no PATH falha com este motivo.
+        falha_no_path: Option<&'static str>,
     }
 
     #[derive(Clone)]
@@ -320,6 +348,10 @@ mod tests {
         fn rodou(&self) -> Vec<String> {
             self.rodou.lock().unwrap().clone()
         }
+
+        fn postas(&self) -> Vec<PathBuf> {
+            self.postas.lock().unwrap().clone()
+        }
     }
 
     impl Maquina for Falsa {
@@ -361,6 +393,13 @@ mod tests {
                 Resposta::Estoura => Execucao::Estourou("baixando...".into()),
                 Resposta::NaoInicia => Execucao::NaoIniciou("arquivo não encontrado".into()),
             }
+        }
+        fn por_no_path(&self, pasta: &Path) -> Result<(), String> {
+            if let Some(motivo) = self.falha_no_path {
+                return Err(motivo.into());
+            }
+            self.postas.lock().unwrap().push(pasta.into());
+            Ok(())
         }
     }
 
@@ -494,5 +533,64 @@ mod tests {
         let vazia = Falsa { respostas: Mutex::new(HashMap::new()), ..Falsa::nova() };
         assert_eq!(localizar_sem_rodar(&vazia, None, None), Caminhos { claude: "claude.exe".into(), codex: "codex.exe".into() });
         assert!(m.rodou().is_empty() && vazia.rodou().is_empty());
+        assert!(m.postas().is_empty() && vazia.postas().is_empty(), "o debug não grava o PATH");
+    }
+
+    const PASTA_CLAUDE: &str = r"C:\Users\u\.local\bin";
+    const PASTA_CODEX: &str = r"C:\Users\u\AppData\Local\Programs\OpenAI\Codex\bin";
+
+    #[test]
+    fn achado_so_no_local_padrao_poe_a_pasta_no_path_uma_vez() {
+        let m = Falsa::nova().com(PADRAO_CLAUDE).com(PADRAO_CODEX);
+        rodar(&m).0.unwrap();
+        let mut postas = m.postas();
+        postas.sort();
+        assert_eq!(postas, [PathBuf::from(PASTA_CLAUDE), PathBuf::from(PASTA_CODEX)]);
+    }
+
+    #[test]
+    fn achado_no_path_nao_grava() {
+        let m = Falsa { path: vec![PathBuf::from(r"C:\npm")], ..Falsa::nova() }.com(r"C:\npm\claude.exe").com(r"C:\npm\codex.exe");
+        for exe in ["claude", "codex"] {
+            m.responde(&format!(r"C:\npm\{exe}.exe --version"), &[Resposta::Ok("1.0.0")]);
+            m.responde(&format!(r"C:\npm\{exe}.exe update"), &[Resposta::Ok("")]);
+        }
+        rodar(&m).0.unwrap();
+        assert!(m.postas().is_empty());
+    }
+
+    #[test]
+    fn pasta_no_path_com_outra_caixa_ou_barra_final_nao_grava() {
+        // Direto em `garantir_no_path`: com `/` no PATH, `localizar` acharia o exe por essa entrada.
+        let casos = [
+            (r"c:\users\U\.LOCAL\bin".to_string(), PADRAO_CLAUDE),
+            (format!(r"{PASTA_CLAUDE}\"), PADRAO_CLAUDE),
+            (format!("{PASTA_CODEX}/"), PADRAO_CODEX),
+        ];
+        for (no_path, exe) in casos {
+            let m = Falsa { path: vec![PathBuf::from(&no_path)], ..Falsa::default() };
+            let cli = if exe == PADRAO_CLAUDE { Cli::Claude } else { Cli::Codex };
+            garantir_no_path(&m, cli, Path::new(exe)).unwrap();
+            assert!(m.postas().is_empty(), "{no_path}");
+        }
+        let m = Falsa { path: vec![PathBuf::from(r"C:\Users\u\.local")], ..Falsa::default() };
+        garantir_no_path(&m, Cli::Claude, Path::new(PADRAO_CLAUDE)).unwrap();
+        assert_eq!(m.postas(), [PathBuf::from(PASTA_CLAUDE)]);
+    }
+
+    #[test]
+    fn instalado_agora_fora_do_path_grava() {
+        let m = Falsa::nova().com(PADRAO_CODEX);
+        rodar(&m).0.unwrap();
+        assert!(m.postas().contains(&PathBuf::from(PASTA_CLAUDE)));
+    }
+
+    #[test]
+    fn falha_ao_gravar_o_path_vira_erro() {
+        let path = vec![PathBuf::from(PASTA_CODEX)];
+        let m = Falsa { path, falha_no_path: Some("Acesso negado"), ..Falsa::nova() }.com(PADRAO_CLAUDE).com(PADRAO_CODEX);
+        let (r, avisos) = rodar(&m);
+        assert_eq!(r.unwrap_err(), format!("Claude Code: não foi possível pôr {PASTA_CLAUDE} no PATH do usuário: Acesso negado."));
+        assert!(avisos.iter().all(|a| a.0.step != Passo::Ready));
     }
 }

@@ -2,7 +2,7 @@
 
 ## Atualização automática
 
-Decisão do dono: o portão de abertura é bloqueante por inteiro. Sem internet o app não abre, e `claude` e `codex` são exigidos e atualizados para a última versão a cada abertura, sem faixa de versão fixada.
+Decisão do dono: o portão de abertura é bloqueante por inteiro. Sem internet o app não abre, e `claude` e `codex` são exigidos e atualizados para a última versão a cada abertura, sem faixa de versão fixada. Quando o instalador oficial deixa a pasta do CLI fora do PATH do usuário, o portão a acrescenta, para `claude` e `codex` funcionarem em qualquer terminal.
 
 O repositório é público, então o app baixa a release sem token. Se ele virar privado, a atualização automática para e a distribuição precisa mudar.
 

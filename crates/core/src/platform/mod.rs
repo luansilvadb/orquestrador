@@ -13,7 +13,7 @@ mod other;
 pub use windows::{
     abrir_para_gravar, abrir_pasta_no_explorador, clear_if_same, cli_do_processo, copiar_ou_mover, em_uso,
     ja_existe, local_padrao_do_cli, mandar_para_lixeira, memoria, mover_sem_substituir, open_url, pastas_do_path_registrado,
-    powershell_do_sistema,
+    por_no_path_do_usuario, powershell_do_sistema,
     pasta_local_do_usuario, pasta_pessoal, revelar_no_explorador,
     sem_janela, set_files, situacao_do_processo, snapshot, spawn_com_prazo, start_time, symlink_arquivo, Job, SHELLS,
 };
@@ -21,7 +21,7 @@ pub use windows::{
 pub use other::{
     abrir_para_gravar, abrir_pasta_no_explorador, clear_if_same, cli_do_processo, copiar_ou_mover, em_uso,
     ja_existe, local_padrao_do_cli, mandar_para_lixeira, memoria, mover_sem_substituir, open_url, pastas_do_path_registrado,
-    powershell_do_sistema,
+    por_no_path_do_usuario, powershell_do_sistema,
     pasta_local_do_usuario, pasta_pessoal, revelar_no_explorador,
     sem_janela, set_files, situacao_do_processo, snapshot, spawn_com_prazo, start_time, symlink_arquivo, Job, SHELLS,
 };

@@ -286,6 +286,66 @@ fn valor_do_registro(raiz: windows_sys::Win32::System::Registry::HKEY, chave: &s
     }
 }
 
+/// Acrescenta `pasta` ao fim do `HKCU\Environment\Path` e avisa as outras janelas. O valor é lido cru, para os
+/// `%vars%` ficarem como estão, e gravado com o tipo que tinha; se não existia, nasce `REG_EXPAND_SZ`.
+pub fn por_no_path_do_usuario(pasta: &Path) -> io::Result<()> {
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, LPARAM};
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_EXPAND_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE};
+    // Claude e Codex chegam aqui em threads paralelas; sem a trava, um ler-e-regravar apagaria a pasta do outro.
+    static TRAVA: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _trava = TRAVA.lock().unwrap_or_else(|e| e.into_inner());
+    let (chave, nome) = (wide(OsStr::new("Environment")), wide(OsStr::new("Path")));
+    let filtro = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
+    let (mut tipo, mut bytes) = (0u32, 0u32);
+    // SAFETY: chave e nome terminam em zero; a primeira chamada só mede, a segunda escreve no máximo `bytes`.
+    let atual = unsafe {
+        match RegGetValueW(HKEY_CURRENT_USER, chave.as_ptr(), nome.as_ptr(), filtro, &mut tipo, std::ptr::null_mut(), &mut bytes) {
+            0 => {
+                let mut dados = vec![0u16; (bytes as usize).div_ceil(2) + 1];
+                bytes = (dados.len() * 2) as u32;
+                let r = RegGetValueW(HKEY_CURRENT_USER, chave.as_ptr(), nome.as_ptr(), filtro, &mut tipo, dados.as_mut_ptr().cast(), &mut bytes);
+                if r != 0 {
+                    return Err(io::Error::from_raw_os_error(r as i32));
+                }
+                let fim = dados.iter().position(|&c| c == 0).unwrap_or(dados.len());
+                Some(String::from_utf16_lossy(&dados[..fim]))
+            }
+            ERROR_FILE_NOT_FOUND => None,
+            r => return Err(io::Error::from_raw_os_error(r as i32)),
+        }
+    };
+    let pasta = pasta.to_string_lossy();
+    let limpa = |s: &str| s.trim().trim_matches('"').trim().trim_end_matches(['\\', '/']).to_lowercase();
+    if atual.as_deref().is_some_and(|v| v.split(';').any(|item| limpa(item) == limpa(&pasta))) {
+        return Ok(());
+    }
+    let novo = match &atual {
+        Some(v) if !v.trim().is_empty() => format!("{};{pasta}", v.trim_end_matches(';')),
+        _ => pasta.to_string(),
+    };
+    if atual.is_none() {
+        tipo = REG_EXPAND_SZ;
+    }
+    let dados = wide(OsStr::new(&novo));
+    // SAFETY: `dados` termina em zero e o tamanho passado em bytes é o do vetor inteiro.
+    let r = unsafe {
+        RegSetKeyValueW(HKEY_CURRENT_USER, chave.as_ptr(), nome.as_ptr(), tipo, dados.as_ptr().cast(), (dados.len() * 2) as u32)
+    };
+    if r != 0 {
+        return Err(io::Error::from_raw_os_error(r as i32));
+    }
+    let ambiente = wide(OsStr::new("Environment"));
+    let mut resultado = 0usize;
+    // SAFETY: `ambiente` termina em zero e vive até o fim da chamada; uma janela travada só faz esperar o prazo.
+    unsafe {
+        SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, ambiente.as_ptr() as LPARAM, SMTO_ABORTIFHUNG, 5000, &mut resultado);
+    }
+    Ok(())
+}
+
 /// Onde o instalador oficial põe cada CLI: `%USERPROFILE%\.local\bin` (Claude) e
 /// `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` (Codex), medido no Claude Code 2.1.325 e no Codex 0.169.0.
 pub fn local_padrao_do_cli(exe: &str) -> Option<PathBuf> {

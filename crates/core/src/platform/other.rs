@@ -148,3 +148,8 @@ pub fn local_padrao_do_cli(_exe: &str) -> Option<PathBuf> {
 pub fn powershell_do_sistema() -> Option<PathBuf> {
     None
 }
+
+/// Sem registro de ambiente: o PATH fica com quem instalou.
+pub fn por_no_path_do_usuario(_pasta: &Path) -> io::Result<()> {
+    Ok(())
+}
