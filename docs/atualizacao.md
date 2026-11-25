@@ -2,7 +2,7 @@
 
 ## Atualização automática
 
-Decisão do dono: o portão de abertura é bloqueante por inteiro. Sem internet o app não abre, e `claude` e `codex` são exigidos e atualizados para a última versão a cada abertura, sem faixa de versão fixada. Quando o instalador oficial deixa a pasta do CLI fora do PATH do usuário, o portão a acrescenta, para `claude` e `codex` funcionarem em qualquer terminal.
+Decisão do dono: o portão de abertura é bloqueante por inteiro. Sem internet o app não abre, e `claude` e `codex` são exigidos e atualizados para a última versão a cada abertura, sem faixa de versão fixada. Quando o instalador oficial deixa a pasta do CLI fora do PATH do usuário, o portão a acrescenta logo depois de ler a versão, antes do `update`, para `claude` e `codex` funcionarem em qualquer terminal. Como o app usa o caminho absoluto e o PATH é só conveniência, a falha ao gravar não bloqueia: vira um aviso na tela do portão, com um botão Continuar. Terminais abertos dentro de um app que já estava rodando antes da gravação (por exemplo, o terminal integrado do VS Code) herdam o PATH antigo até esse app ser reiniciado; o terminal do próprio orquestrador não, porque o portable-pty remonta o ambiente, inclusive o Path, pelo registro a cada terminal aberto.
 
 O repositório é público, então o app baixa a release sem token. Se ele virar privado, a atualização automática para e a distribuição precisa mudar.
 

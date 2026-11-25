@@ -18,6 +18,8 @@ pub enum Portao {
     Clis { claude: Andamento, codex: Andamento },
     Pronto,
     Falhou(String),
+    /// Os CLIs estão prontos, mas algo não bloqueante falhou; o uso espera o "Continuar".
+    Aviso(String),
 }
 
 impl Portao {
@@ -66,6 +68,7 @@ pub fn textos(p: &Portao) -> (String, Vec<String>) {
             ("Preparando os CLIs…", vec![linha_do_cli("Claude Code", claude), linha_do_cli("Codex", codex)])
         }
         Portao::Falhou(_) => ("Não foi possível atualizar. O uso fica bloqueado até a atualização dar certo.", vec![]),
+        Portao::Aviso(_) => ("Os CLIs estão prontos, com um aviso.", vec![]),
         Portao::Pronto => ("", vec![]),
     };
     (status.to_string(), linhas)
@@ -93,9 +96,9 @@ pub fn garantir(avisar: async_channel::Sender<Portao>, exes: orquestrador_core::
             })
         }));
         let fim = match r {
-            Ok(Ok(caminhos)) => {
-                exes.set(caminhos);
-                Portao::Pronto
+            Ok(Ok(g)) => {
+                exes.set(g.caminhos);
+                fim_com_avisos(g.avisos)
             }
             Ok(Err(msg)) => Portao::Falhou(msg),
             Err(_) => Portao::Falhou("A verificação dos CLIs parou inesperadamente.".into()),
@@ -104,12 +107,32 @@ pub fn garantir(avisar: async_channel::Sender<Portao>, exes: orquestrador_core::
     });
 }
 
-/// A tela do portão sobre tudo, menos os controles da janela; `tentar` refaz a rodada depois de uma falha.
-pub fn tela(p: &Portao, inicio: Instant, window: &mut Window, tentar: impl Fn(&mut Window, &mut App) + 'static) -> impl IntoElement {
+/// O estado depois do sucesso: sem avisos, liberado; com avisos, a tela os mostra até o "Continuar".
+pub fn fim_com_avisos(avisos: Vec<String>) -> Portao {
+    if avisos.is_empty() {
+        Portao::Pronto
+    } else {
+        Portao::Aviso(avisos.join("\n\n"))
+    }
+}
+
+/// A tela do portão sobre tudo, menos os controles da janela; `tentar` refaz a rodada depois de uma falha e
+/// `continuar` libera o uso depois de um aviso.
+pub fn tela(
+    p: &Portao,
+    inicio: Instant,
+    window: &mut Window,
+    tentar: impl Fn(&mut Window, &mut App) + 'static,
+    continuar: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     let janela = window.viewport_size();
     let (status, linhas) = textos(p);
     let falha = match p {
         Portao::Falhou(m) => Some(m.clone()),
+        _ => None,
+    };
+    let aviso = match p {
+        Portao::Aviso(m) => Some(m.clone()),
         _ => None,
     };
     let parada = falha.is_some();
@@ -183,6 +206,28 @@ pub fn tela(p: &Portao, inicio: Instant, window: &mut Window, tentar: impl Fn(&m
                 div().flex().justify_center().child(
                     ui::botao("portao-tentar", "Tentar novamente", Variante::Primario, false)
                         .on_click(move |_, window, cx| tentar(window, cx))
+                        .test_support(),
+                ),
+            )
+        })
+        .when_some(aviso, |d, m| {
+            d.child(
+                div()
+                    .id("portao-aviso")
+                    .text_left()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .rounded(tema::RAIO_SM)
+                    .bg(gpui_kit::rgba(0xf5a5241f))
+                    .border_1()
+                    .border_color(gpui_kit::rgba(0xf5a52466))
+                    .text_size(tema::TEXTO_BODY)
+                    .child(m),
+            )
+            .child(
+                div().flex().justify_center().child(
+                    ui::botao("portao-continuar", "Continuar", Variante::Primario, false)
+                        .on_click(move |_, window, cx| continuar(window, cx))
                         .test_support(),
                 ),
             )
@@ -349,6 +394,14 @@ impl Abertura {
             cx.notify();
         }
     }
+
+    /// "Continuar": só depois de um aviso; libera o uso.
+    pub fn continuar(&mut self, cx: &mut gpui_kit::Context<Self>) {
+        if matches!(self.estado, Portao::Aviso(_)) {
+            self.estado = Portao::Pronto;
+            cx.notify();
+        }
+    }
 }
 
 impl Render for Abertura {
@@ -357,9 +410,18 @@ impl Render for Abertura {
             return div().into_any_element();
         }
         let eu = cx.entity().downgrade();
-        tela(&self.estado, self.inicio, window, move |_, cx| {
-            let _ = eu.update(cx, |a, cx| a.tentar(cx));
-        })
+        let eu2 = eu.clone();
+        tela(
+            &self.estado,
+            self.inicio,
+            window,
+            move |_, cx| {
+                let _ = eu.update(cx, |a, cx| a.tentar(cx));
+            },
+            move |_, cx| {
+                let _ = eu2.update(cx, |a, cx| a.continuar(cx));
+            },
+        )
         .into_any_element()
     }
 }
@@ -396,6 +458,15 @@ mod testes {
     fn falha_bloqueia_com_o_motivo_e_desenvolvimento_libera() {
         assert!(textos(&Portao::Falhou("x".into())).0.starts_with("Não foi possível atualizar"));
         assert_eq!(Portao::inicial(), Portao::Pronto, "o teste roda no build de desenvolvimento");
+    }
+
+    #[test]
+    fn aviso_mostra_o_texto_e_so_sem_avisos_libera() {
+        assert_eq!(fim_com_avisos(vec![]), Portao::Pronto);
+        let p = fim_com_avisos(vec!["a".into(), "b".into()]);
+        assert_eq!(p, Portao::Aviso("a\n\nb".into()));
+        assert_eq!(textos(&p), ("Os CLIs estão prontos, com um aviso.".to_string(), vec![]));
+        assert_eq!(progresso(&p), None, "sem barra");
     }
 
     #[test]
